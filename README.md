@@ -8,14 +8,33 @@ currently, the current available zig version is `0.16.0`.
 
 for vulkan, you need the sdk (and subsequently the validation headers if enabled, which would be yes by default). 
 
-# example
+# add to project
+to use this with the zig build system, import as so:
+```bash
+zig fetch --save git+https://github.com/eggyengine/eggy
+```
+
+and then in `build.zig`:
 ```zig
-pub fn main() !void {
+const eggy = b.dependency("eggy", .{
+    .target = target,
+    .optimize = optimize,
+});
+
+exe.root_module.addImport("eggy", eggy.module("eggy"));
+```
+
+# basic usage
+```zig
+const std = @import("std");
+const eggy = @import("eggy");
+
+pub fn main(init: std.process.Init) !void {
     // your app is defined here
     var app = eggy.EggyApp(&.{
         // modules here
     })
-    .init(std.heap.page_allocator, .{
+    .init(init, .{
         // any eggy-based options
     });
 
@@ -25,4 +44,36 @@ pub fn main() !void {
     // let it rip
     app.run();
 }
+```
+
+a module is defined as a struct of some sort. this is an extremely basic one:
+```zig
+struct {
+    pub const schedules = .{ .update = &.{print_hello} };
+
+    // pub const sub_modules = &.{};
+}
+
+// a pointer to an eggy.Context is required for any function that is a schedule
+fn print_hello(ctx: *eggy.Context) !void {
+    std.debug.print("Hello eggy!", .{});
+}
+```
+
+which can be directly embedded into your app or kept as a constant:
+```zig
+var app = eggy.EggyApp(&.{
+    struct {
+        pub const schedules = .{ .update = &.{print_hello} };
+    },
+});
+```
+
+or
+```zig
+const MyModule = struct {
+    pub const schedules = .{ .update = &.{print_hello} };
+};
+
+var app = eggy.EggyApp(&.{MyModule});
 ```

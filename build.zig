@@ -11,7 +11,7 @@ pub fn build(b: *std.Build) void {
     });
 
     const vulkan = b.dependency("vulkan", .{
-        .registry = b.path("../../deps/vk.xml"),
+        .registry = b.path("deps/vk.xml"),
     }).module("vulkan-zig");
 
     const zigimg = b.dependency("zigimg", .{
@@ -42,4 +42,12 @@ pub fn build(b: *std.Build) void {
     const run_tests = b.addRunArtifact(tests);
     const test_step = b.step("test", "Run eggy unit tests");
     test_step.dependOn(&run_tests.step);
+
+    const run_cmd = b.addSystemCommand(&.{ b.graph.zig_exe, "build", "run" });
+    run_cmd.setCwd(b.path("demo"));
+    if (b.args) |args| {
+        run_cmd.addArgs(args);
+    }
+    const run_step = b.step("run", "Build and run the demo");
+    run_step.dependOn(&run_cmd.step);
 }

@@ -4,10 +4,6 @@
     .fingerprint = 0x6341317037f3695f,
     .minimum_zig_version = "0.16.0",
     .dependencies = .{
-        .teenygltf = .{
-            .path = "../teenygltf",
-        },
-
         .vulkan = .{
             .url = "git+https://github.com/Snektron/vulkan-zig#6d77ac2a9b25c8940d493b2f7739c639c4842482",
             .hash = "vulkan-0.0.0-r7Ytx7l9AwCsebml5bToJyyr67VASs0-7UszmWKVXNb7",
@@ -19,6 +15,10 @@
         .zigimg = .{
             .url = "git+https://github.com/zigimg/zigimg.git#c7e81a13bff1cf4c5b7f085a8360f9d551143d40",
             .hash = "zigimg-0.1.0-8_eo2uScFwCnpzB1Y2n_jf3euDfMEeCLxJE_E5_W5BNe",
+        },
+        .teenygltf = .{
+            .url = "git+https://github.com/eggyengine/teenygltf#4a117af5bd5028f2c1fdaa3a9228208a21400c6a",
+            .hash = "teenygltf-0.0.0-GTCGCn8RAAB-FNW5mzO-FnetkqvGOBhe0uWtVw45Y_zZ",
         },
     },
     .paths = .{

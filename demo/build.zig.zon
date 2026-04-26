@@ -5,10 +5,7 @@
     .minimum_zig_version = "0.16.0",
     .dependencies = .{
         .eggy = .{
-            .path = "../eggy",
-        },
-        .build_shaders = .{
-            .path = "../../build",
+            .path = "..",
         },
     },
     .paths = .{
