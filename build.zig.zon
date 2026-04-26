@@ -1,0 +1,29 @@
+.{
+    .name = .eggy,
+    .version = "0.0.0",
+    .fingerprint = 0x6341317037f3695f,
+    .minimum_zig_version = "0.16.0",
+    .dependencies = .{
+        .teenygltf = .{
+            .path = "../teenygltf",
+        },
+
+        .vulkan = .{
+            .url = "git+https://github.com/Snektron/vulkan-zig#6d77ac2a9b25c8940d493b2f7739c639c4842482",
+            .hash = "vulkan-0.0.0-r7Ytx7l9AwCsebml5bToJyyr67VASs0-7UszmWKVXNb7",
+        },
+        .sdl3 = .{
+            .url = "git+https://codeberg.org/7Games/zig-sdl3#40c2e4b579aa556db37a502c936426aa1c8b5c95",
+            .hash = "sdl3-0.2.0-NmT1Q0mFJwBi9kZmArzh2rfJ_mFshydV0zPGULVlpACc",
+        },
+        .zigimg = .{
+            .url = "git+https://github.com/zigimg/zigimg.git#c7e81a13bff1cf4c5b7f085a8360f9d551143d40",
+            .hash = "zigimg-0.1.0-8_eo2uScFwCnpzB1Y2n_jf3euDfMEeCLxJE_E5_W5BNe",
+        },
+    },
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "src",
+    },
+}

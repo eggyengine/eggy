@@ -1,0 +1,9 @@
+zig-out
+.zig-cache
+zig-pkg
+
+*.spv
+
+# when doing the vulkan tutorial, its easier to see the c++ code in the editor
+sample.cpp
+examples/testing

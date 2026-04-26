@@ -1,0 +1,19 @@
+.{
+    .name = .game,
+    .version = "0.0.0",
+    .fingerprint = 0x232b318c69a92aad,
+    .minimum_zig_version = "0.16.0",
+    .dependencies = .{
+        .eggy = .{
+            .path = "../eggy",
+        },
+        .build_shaders = .{
+            .path = "../../build",
+        },
+    },
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "src",
+    },
+}
