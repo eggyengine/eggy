@@ -24,6 +24,11 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
+    const emath = b.dependency("eggenvector", .{
+        .target = target,
+        .optimize = optimize,
+    });
+
     const eggy_module = b.addModule("eggy", .{
         .root_source_file = b.path("src/eggy.zig"),
         .target = target,
@@ -34,6 +39,7 @@ pub fn build(b: *std.Build) void {
     eggy_module.addImport("sdl3", sdl3.module("sdl3"));
     eggy_module.addImport("zigimg", zigimg.module("zigimg"));
     eggy_module.addImport("teenygltf", teenygltf.module("teenygltf"));
+    eggy_module.addImport("eggenvector", emath.module("eggenvector"));
 
     const tests = b.addTest(.{
         .root_module = eggy_module,

@@ -1,4 +1,4 @@
-const math = @import("../math.zig");
+const math = @import("eggenvector");
 
 pub const Colour = struct {
     r: f32 = 0.0,

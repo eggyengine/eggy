@@ -7,7 +7,7 @@ const signal = @import("signal.zig");
 pub const ecs = @import("ecs.zig");
 pub const Context = @import("ctx.zig").Context;
 pub const module = @import("mod.zig");
-pub const math = @import("math.zig");
+pub const math = @import("eggenvector");
 pub const mem = @import("mem.zig");
 pub const colour = @import("utils/colour.zig");
 

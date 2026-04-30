@@ -20,6 +20,10 @@
             .url = "git+https://github.com/eggyengine/teenygltf#4a117af5bd5028f2c1fdaa3a9228208a21400c6a",
             .hash = "teenygltf-0.0.0-GTCGCn8RAAB-FNW5mzO-FnetkqvGOBhe0uWtVw45Y_zZ",
         },
+        .eggenvector = .{
+            .url = "git+https://github.com/eggyengine/eggenvector#9877a9ba332dd63aa8654267259a99c6502066b0",
+            .hash = "eggenvector-0.0.0-UyZb9L8qAQC0RBeoVAuyQz6UnDAjp5BKFfIfRIdeDCUd",
+        },
     },
     .paths = .{
         "build.zig",

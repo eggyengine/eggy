@@ -5,7 +5,7 @@ const texture = @import("texture.zig");
 const vk = @import("vulkan");
 const colour = @import("../utils/colour.zig");
 const std = @import("std");
-const math = @import("../math.zig");
+const math = @import("eggenvector");
 
 
 /// Image layout states.
