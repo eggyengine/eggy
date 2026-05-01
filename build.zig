@@ -8,16 +8,25 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
         .c_sdl_preferred_linkage = .static,
+        .ext_image = true,
+        // .image_enable_bmp = true,
+        // .image_enable_gif = true,
+        // .image_enable_jpg = true,
+        // .image_enable_lbm = true,
+        // .image_enable_pcx = true,
+        // .image_enable_png = true,
+        // .image_enable_pnm = true,
+        // .image_enable_qoi = true,
+        // .image_enable_svg = true,
+        // .image_enable_tga = true,
+        // .image_enable_xcf = true,
+        // .image_enable_xpm = true,
+        // .image_enable_xv = true,
     });
 
     const vulkan = b.dependency("vulkan", .{
         .registry = b.path("deps/vk.xml"),
     }).module("vulkan-zig");
-
-    const zigimg = b.dependency("zigimg", .{
-        .target = target,
-        .optimize = optimize,
-    });
 
     const teenygltf = b.dependency("teenygltf", .{
         .target = target,
@@ -37,7 +46,6 @@ pub fn build(b: *std.Build) void {
 
     eggy_module.addImport("vulkan", vulkan);
     eggy_module.addImport("sdl3", sdl3.module("sdl3"));
-    eggy_module.addImport("zigimg", zigimg.module("zigimg"));
     eggy_module.addImport("teenygltf", teenygltf.module("teenygltf"));
     eggy_module.addImport("eggenvector", emath.module("eggenvector"));
 

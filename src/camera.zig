@@ -12,7 +12,7 @@ pub const Camera3D = struct {
     aspect: f32 = 16.0 / 9.0,
     near: f32 = 0.1,
     far: f32 = 100.0,
-    
+
     view: math.Mat4 = math.identity(f32, 4),
     proj: math.Mat4 = math.identity(f32, 4),
 

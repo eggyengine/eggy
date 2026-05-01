@@ -9,7 +9,7 @@ const vk = rendering.vk;
 const file = @embedFile("image.png");
 
 pub fn main(init: std.process.Init) !void {
-    var app = try eggy.EggyApp(&.{ eggy.module.DefaultModule(.{}, eggy.module.rendering.vulkan.EggyVulkanInterface), struct {
+    var app = try eggy.EggyApp(&.{ eggy.module.DefaultModule(.{ .windowing_options = .{ .window_flags = .{ .resizable = true, .maximized = true } } }, eggy.module.rendering.vulkan.EggyVulkanInterface), struct {
         pub const schedules = .{ .update = &.{escape_to_quit} };
     }, VKModule }).init(init, .{});
     defer app.deinit();
@@ -69,7 +69,7 @@ pub const Vertex = struct {
 };
 
 pub const VKModule = struct {
-    const vertices = [_]Vertex {
+    const vertices = [_]Vertex{
         .{
             .position = eggy.math.Vec3.init(-0.5, -0.5, 0.0),
             .colour = eggy.colour.Colour.from_f32(1.0, 0.0, 0.0),
@@ -112,11 +112,8 @@ pub const VKModule = struct {
             .tex_coord = eggy.math.Vec2.init(1.0, 1.0),
         },
     };
-    const indices = [_]u16 {
-        0, 1, 2, 2, 3, 0,
-        4, 5, 6, 6, 7, 4
-    };
-    
+    const indices = [_]u16{ 0, 1, 2, 2, 3, 0, 4, 5, 6, 6, 7, 4 };
+
     pipeline: pipeline.Pipeline = undefined,
     start_time: i128 = 0,
 
@@ -162,7 +159,7 @@ pub const VKModule = struct {
         self.sampler = try rendering.texture.Sampler.init(vulkan, .{});
 
         try self.depth_texture.init(vulkan);
-        
+
         var builder = pipeline.Pipeline.builder(vulkan, ctx.allocator, "main pipeline");
         defer builder.deinit();
         self.pipeline = try builder
@@ -192,24 +189,15 @@ pub const VKModule = struct {
     pub fn update(self: *@This(), ctx: *eggy.Context) !void {
         const vulkan = ctx.world.getResource(eggy.module.rendering.vulkan.EggyVulkanInterface) orelse return;
         const currentTime: i128 = @intCast(std.Io.Clock.now(.awake, ctx.proc_init.io).nanoseconds);
-        
+
         const time: f32 = @as(f32, @floatFromInt(currentTime - self.start_time)) / 1_000_000_000.0;
 
         self.ubo.model = eggy.math.Quat.identity().rotate(time * std.math.degreesToRadians(90.0), eggy.math.Vec3.unit_z).toMatrix();
-        self.ubo.view = eggy.math.lookAt(
-            eggy.math.Vec3.init(2.0, 2.0, 2.0),
-            eggy.math.Vec3.zero,
-            eggy.math.Vec3.unit_z
-        );
-        const aspect: f32 = @as(f32, @floatFromInt(vulkan.swapchain.swapchain_extent.width)) / 
-                            @as(f32, @floatFromInt(vulkan.swapchain.swapchain_extent.height));
+        self.ubo.view = eggy.math.lookAt(eggy.math.Vec3.init(2.0, 2.0, 2.0), eggy.math.Vec3.zero, eggy.math.Vec3.unit_z);
+        const aspect: f32 = @as(f32, @floatFromInt(vulkan.swapchain.swapchain_extent.width)) /
+            @as(f32, @floatFromInt(vulkan.swapchain.swapchain_extent.height));
         // std.log.info("projection -> {d}", .{aspect});
-        self.ubo.proj = eggy.math.perspective(
-            std.math.degreesToRadians(45.0), 
-            aspect,
-            0.1,
-            10.0
-        );
+        self.ubo.proj = eggy.math.perspective(std.math.degreesToRadians(45.0), aspect, 0.1, 10.0);
 
         self.uniform_buffer.write(self.ubo);
     }
@@ -265,7 +253,7 @@ pub const VKModule = struct {
 
         const size = vulkan.window.getSize() catch .{ 0, 0 };
         const window_resized = size[0] != vulkan.swapchain.swapchain_extent.width or
-                            size[1] != vulkan.swapchain.swapchain_extent.height;
+            size[1] != vulkan.swapchain.swapchain_extent.height;
 
         const vulkan_needs_recreate = (submit_result == .swapchain_out_of_date or submit_result == .swapchain_suboptimal);
 

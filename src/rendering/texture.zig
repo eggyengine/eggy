@@ -1,10 +1,9 @@
-pub const zigimg = @import("zigimg");
-
 const std = @import("std");
 const rendering = @import("vulkan.zig");
 const cmd = @import("command.zig");
 const vk = @import("vulkan");
 const Context = @import("../ctx.zig").Context;
+const sdl = @import("sdl3");
 
 pub const TextureOptions = struct {
     label: ?[*:0]const u8 = null,
@@ -53,24 +52,29 @@ pub const Texture = struct {
 
     /// Create a texture from an image file and upload its contents.
     pub fn initFromFile(ctx: *Context, e_vulkan: *rendering.EggyVulkanInterface, file: std.Io.File, options: TextureOptions) !Texture {
-        var read_buffer: [zigimg.io.DEFAULT_BUFFER_SIZE]u8 = undefined;
-        var image = try zigimg.Image.fromFile(ctx.proc_init.gpa, ctx.proc_init.io, file, read_buffer[0..]);
-        defer image.deinit(ctx.proc_init.gpa);
+        const file_data = sdl.io_stream.Stream.FsFileData{
+            .file = file,
+            .io = ctx.proc_init.io,
+            // position idk what it does
+        };
+        const stream = try sdl.io_stream.Stream.initFromFsFile(&file_data);
+        const image = try sdl.image.loadIo(stream, true);
         return initFromImage(e_vulkan, &image, options);
     }
 
     /// Create a texture from embedded/in-memory image data and upload its contents.
-    pub fn initFromMemory(ctx: *Context, e_vulkan: *rendering.EggyVulkanInterface, data: []const u8, options: TextureOptions) !Texture {
-        var image = try zigimg.Image.fromMemory(ctx.proc_init.gpa, data);
-        defer image.deinit(ctx.proc_init.gpa);
+    pub fn initFromMemory(_: *Context, e_vulkan: *rendering.EggyVulkanInterface, data: []const u8, options: TextureOptions) !Texture {
+        const stream = try sdl.io_stream.Stream.initFromConstMem(data);
+        var image = try sdl.image.loadIo(stream, true);
+        defer image.deinit();
         return initFromImage(e_vulkan, &image, options);
     }
 
     /// Create a texture from a decoded zigimg Image and upload its contents.
-    fn initFromImage(e_vulkan: *rendering.EggyVulkanInterface, image: *zigimg.Image, options: TextureOptions) !Texture {
-        try image.convert(e_vulkan.allocator, .rgba32);
-        var self = try init(e_vulkan, @intCast(image.width), @intCast(image.height), options);
-        try self.write(image.rawBytes());
+    fn initFromImage(e_vulkan: *rendering.EggyVulkanInterface, image: *sdl.surface.Surface, options: TextureOptions) !Texture {
+        const image2 = try image.convertFormat(.packed_rgba_8_8_8_8);
+        var self = try init(e_vulkan, @intCast(image2.getWidth()), @intCast(image2.getHeight()), options);
+        try self.write(image2.getPixels() orelse return error.NotFound);
         return self;
     }
 
@@ -95,7 +99,7 @@ pub const Texture = struct {
     }
 
     fn createImage(self: *@This(), format: vk.Format, image_size: vk.Extent3D, tiling: vk.ImageTiling, usage: vk.ImageUsageFlags, properties: vk.MemoryPropertyFlags, label: ?[*:0]const u8) !void {
-        const image_create_info = vk.ImageCreateInfo {
+        const image_create_info = vk.ImageCreateInfo{
             .initial_layout = .undefined,
             .image_type = .@"2d",
             .format = format,
@@ -112,7 +116,7 @@ pub const Texture = struct {
         rendering.vkSetName(self.e_vulkan.device, vk.Image, self.texture, label);
 
         const mem_requirements = self.e_vulkan.device.getImageMemoryRequirements(self.texture);
-        const mem_alloc_info = vk.MemoryAllocateInfo {
+        const mem_alloc_info = vk.MemoryAllocateInfo{
             .allocation_size = mem_requirements.size,
             .memory_type_index = rendering.buffer.findMemoryType(self.e_vulkan, mem_requirements.memory_type_bits, properties) orelse return error.NoSuitableMemoryType,
         };
@@ -146,7 +150,7 @@ pub const TextureViewOptions = struct {
     };
 
     label: ?[*:0]const u8 = null,
-    /// If this is not set, it will inherit from the Texture provided, or use a fallback. 
+    /// If this is not set, it will inherit from the Texture provided, or use a fallback.
     format: ?vk.Format = null,
     view_type: vk.ImageViewType = .@"2d",
     components: vk.ComponentMapping = .{ .r = .identity, .g = .identity, .b = .identity, .a = .identity },
@@ -165,9 +169,9 @@ pub const TextureViewOptions = struct {
 
 pub const TextureView = struct {
     e_vulkan: *rendering.EggyVulkanInterface,
-    /// The original texture the view is binded to. 
-    /// 
-    /// If set to `null`, likely means the value was binded to a lower-level Texture such as Swapchain. 
+    /// The original texture the view is binded to.
+    ///
+    /// If set to `null`, likely means the value was binded to a lower-level Texture such as Swapchain.
     texture: ?*Texture = null,
 
     image_view: vk.ImageView,
@@ -208,7 +212,7 @@ pub const SamplerOptions = struct {
     address_mode_w: vk.SamplerAddressMode = .repeat,
     mip_lod_bias: f32 = 0.0,
     anisotropy_enable: bool = true,
-    /// If `max_anisotropy` is null, default is set to the maximum physical device limit. 
+    /// If `max_anisotropy` is null, default is set to the maximum physical device limit.
     max_anisotropy: ?f32 = null,
     compare_enable: bool = false,
     compare_op: vk.CompareOp = .always,
@@ -258,9 +262,7 @@ pub const Sampler = struct {
     }
 };
 
-const SupportedFormat = error {
-    NoSuitableCandidate
-};
+const SupportedFormat = error{NoSuitableCandidate};
 
 pub fn findSupportedFormat(e_vulkan: *rendering.EggyVulkanInterface, candidates: []const vk.Format, tiling: vk.ImageTiling, features: vk.FormatFeatureFlags) !vk.Format {
     for (candidates) |format| {
@@ -292,9 +294,9 @@ pub const Extension = struct {
 
             const options: rendering.texture.TextureOptions = .{
                 .format = try rendering.texture.findSupportedFormat(
-                    e_vulkan, 
-                    &.{ .d32_sfloat, .d32_sfloat_s8_uint, .d24_unorm_s8_uint }, 
-                    .optimal, 
+                    e_vulkan,
+                    &.{ .d32_sfloat, .d32_sfloat_s8_uint, .d24_unorm_s8_uint },
+                    .optimal,
                     .{ .depth_stencil_attachment_bit = true },
                 ),
                 .usage = .{ .depth_stencil_attachment_bit = true },
@@ -313,13 +315,13 @@ pub const Extension = struct {
 
         pub fn format(self: *@This()) vk.Format {
             return self.depth_texture.options.format;
-        } 
+        }
 
         pub fn deinit(self: *@This()) void {
             self.e_vulkan.await() catch {};
 
             self.depth_texture.deinit();
             self.depth_view.deinit();
-        } 
+        }
     };
 };

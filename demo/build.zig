@@ -17,12 +17,13 @@ pub fn build(b: *std.Build) void {
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/main.zig"),
             .target = target,
-            .optimize = .ReleaseSafe, // until zigimg is fixed
+            .optimize = optimize, // until zigimg is fixed
             .imports = &.{
                 .{ .name = "eggy", .module = eggy_dep.module("eggy") },
             },
         }),
     });
+    exe.use_llvm = true;
 
     exe.step.dependOn(shader_step);
     b.installArtifact(exe);
