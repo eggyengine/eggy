@@ -1,8 +1,0 @@
-id: 61y5sqa9nisvkde7q56nocvx3zwtj4o5ay9c2gzhmcypfhow
-name: eggy
-main: eggy.zig
-license: MIT
-description: a data-driven rendering engine
-min_zig_version: 0.16.0
-min_zigmod_version: r96
-dependencies:

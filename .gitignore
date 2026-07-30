@@ -1,13 +1,3 @@
-zig-out
 .zig-cache
+zig-out
 zig-pkg
-
-*.spv
-
-# when doing the vulkan tutorial, its easier to see the c++ code in the editor
-sample.cpp
-examples/testing
-.zigmod
-deps.zig
-files.zig
-zigmod.lock
