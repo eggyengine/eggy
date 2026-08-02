@@ -4,11 +4,21 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
+    const slang = b.dependency("slang", .{});
+    const install_slang = b.addInstallDirectory(.{
+        .source_dir = slang.path("bin"),
+        .install_dir = .bin,
+        .install_subdir = "",
+    });
+    b.getInstallStep().dependOn(&install_slang.step);
+
     const exe_mod = b.createModule(.{
         .root_source_file = b.path("src/main.zig"),
         .target = target,
         .optimize = optimize,
     });
+    exe_mod.addLibraryPath(slang.path("lib"));
+    exe_mod.linkSystemLibrary("slang", .{});
 
     // vitellus
     {
@@ -17,7 +27,7 @@ pub fn build(b: *std.Build) void {
             .optimize = optimize,
 
             .enable_dxc = true,
-            .enable_spirv_cross = true,
+            .@"enable_spirv-cross" = true,
         });
 
         exe_mod.addImport("vitellus", vitellus.module("vitellus"));
@@ -75,6 +85,7 @@ pub fn build(b: *std.Build) void {
         const run_step = b.step("run", "Run the app");
 
         const run_cmd = b.addRunArtifact(exe);
+        run_cmd.addPathDir(slang.path("bin").getPath(b));
         run_step.dependOn(&run_cmd.step);
 
         run_cmd.step.dependOn(b.getInstallStep());
@@ -99,6 +110,7 @@ pub fn build(b: *std.Build) void {
         });
 
         const run_mod_tests = b.addRunArtifact(mod_tests);
+        run_mod_tests.addPathDir(slang.path("bin").getPath(b));
 
         const exe_tests = b.addTest(.{
             .root_module = exe_mod,
@@ -106,6 +118,7 @@ pub fn build(b: *std.Build) void {
         });
 
         const run_exe_tests = b.addRunArtifact(exe_tests);
+        run_exe_tests.addPathDir(slang.path("bin").getPath(b));
 
         const test_step = b.step("test", "Run tests");
         test_step.dependOn(&run_mod_tests.step);

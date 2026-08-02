@@ -5,6 +5,8 @@ const zigimg = @import("zigimg");
 const emath = @import("eggenvector");
 const camera = @import("camera.zig");
 
+const slangc = @import("shaders/slangc.zig");
+
 const width = 1280;
 const height = 720;
 
@@ -27,6 +29,8 @@ const vertices = [_]Vertex{
 };
 
 const indices = [_]u16{ 0, 1, 2, 2, 3, 0 };
+
+const triangle_slang_code = @embedFile("shaders/triangle.slang");
 
 pub fn main(init: std.process.Init) !void {
     defer sdl3.shutdown();
@@ -77,20 +81,18 @@ pub fn main(init: std.process.Init) !void {
     const vertex_shader = try vit.Shader.init(device, .{
         .label = "triangle vertex shader",
         .stage = .vertex,
-        .source = vit.SPIRVShaderModule.init(.{
-            .code = @embedFile("shaders/compiled/triangle.vsMain.spv"),
-            .entry_point = "vsMain",
-        }),
+        .source = slangc.SlangShaderModule.init(.{ .code = triangle_slang_code, .entry_point = "vsMain" }),
     });
     defer vertex_shader.deinit();
 
     const fragment_shader = try vit.Shader.init(device, .{
         .label = "triangle fragment shader",
         .stage = .fragment,
-        .source = vit.SPIRVShaderModule.init(.{
-            .code = @embedFile("shaders/compiled/triangle.psMain.spv"),
-            .entry_point = "psMain",
-        }),
+        // .source = vit.SPIRVShaderModule.init(.{
+        //     .code = @embedFile("shaders/compiled/triangle.psMain.spv"),
+        //     .entry_point = "psMain",
+        // }),
+        .source = slangc.SlangShaderModule.init(.{ .code = triangle_slang_code, .entry_point = "psMain" }),
     });
 
     defer fragment_shader.deinit();
@@ -354,4 +356,5 @@ fn printEnumList(values: anytype) void {
 
 test {
     _ = @import("camera.zig");
+    _ = slangc;
 }
