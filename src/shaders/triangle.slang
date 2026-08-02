@@ -17,6 +17,10 @@ struct Scene {
 [[vk::binding(0, 0)]]
 ConstantBuffer<Scene> scene;
 
+float rand(float2 co) {
+    return frac(sin(dot(co, float2(12.9898, 78.233))) * 43758.5453);
+}
+
 [shader("vertex")]
 VertexOutput vsMain(VertexInput input) {
     VertexOutput output;
@@ -33,8 +37,4 @@ VertexOutput vsMain(VertexInput input) {
 float4 psMain(VertexOutput input) : SV_Target0 {
     float noise = rand(input.position.xy + input.uv);
     return float4(noise, noise, noise, 1.0);
-}
-
-float rand(float2 co) {
-    return frac(sin(dot(co, float2(12.9898, 78.233))) * 43758.5453);
 }

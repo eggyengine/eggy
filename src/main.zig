@@ -81,20 +81,23 @@ pub fn main(init: std.process.Init) !void {
     const vertex_shader = try vit.Shader.init(device, .{
         .label = "triangle vertex shader",
         .stage = .vertex,
-        .source = slangc.SlangShaderModule.init(.{ .code = triangle_slang_code, .entry_point = "vsMain" }),
+        .source = slangc.SlangShaderModule.init(.{
+            .code = triangle_slang_code,
+            .entry_point = "vsMain",
+            // .source_path = "triangle.slang",
+        }),
     });
     defer vertex_shader.deinit();
 
     const fragment_shader = try vit.Shader.init(device, .{
         .label = "triangle fragment shader",
         .stage = .fragment,
-        // .source = vit.SPIRVShaderModule.init(.{
-        //     .code = @embedFile("shaders/compiled/triangle.psMain.spv"),
-        //     .entry_point = "psMain",
-        // }),
-        .source = slangc.SlangShaderModule.init(.{ .code = triangle_slang_code, .entry_point = "psMain" }),
+        .source = slangc.SlangShaderModule.init(.{
+            .code = triangle_slang_code,
+            .entry_point = "psMain",
+            // .source_path = "triangle.slang",
+        }),
     });
-
     defer fragment_shader.deinit();
 
     const vertex_buffer = try vit.Buffer.init(device, .{

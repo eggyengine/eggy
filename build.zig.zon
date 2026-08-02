@@ -20,9 +20,9 @@
             .url = "git+https://github.com/eggyengine/vitellus.git#f6bbee92f822241285dfd820424bc97d13170a98",
             .hash = "vitellus-0.1.0-JC2CjBQeSwAFz9La2GpJ7SnNGOSE0P4B8cLkT9SOZFV2",
         },
-        .slang = .{
-            .url = "https://github.com/shader-slang/slang/releases/download/v2026.14.1/slang-2026.14.1-windows-x86_64.zip",
-            .hash = "N-V-__8AACuUYwjCSfbzWxwktgLrLXFqIuBTsxmmtDv4lzkx",
+        .slangc = .{
+            .url = "https://github.com/shader-slang/slang/archive/refs/tags/v2026.14.1.tar.gz",
+            .hash = "N-V-__8AAAY-PANE2lldP10gcCRHfuwDNQgk6BIdPTTTjRFt",
         },
     },
     .paths = .{

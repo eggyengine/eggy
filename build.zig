@@ -1,15 +1,27 @@
 const std = @import("std");
+const slang_build = @import("build/slang.zig");
 
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
-    const slang = b.dependency("slang", .{});
+    const slangc_dep = b.dependency("slangc", .{});
+    const slang = slang_build.add(b, .{
+        .source = slangc_dep.path(""),
+        .target = target,
+        .optimize = optimize,
+    });
+
+    const slang_bin = slang.bin(b);
+    const slang_lib = slang.lib(b);
+    const slang_include = slang.include(b);
+
     const install_slang = b.addInstallDirectory(.{
-        .source_dir = slang.path("bin"),
+        .source_dir = slang_bin,
         .install_dir = .bin,
         .install_subdir = "",
     });
+    install_slang.step.dependOn(slang.step);
     b.getInstallStep().dependOn(&install_slang.step);
 
     const exe_mod = b.createModule(.{
@@ -17,17 +29,18 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
-    exe_mod.addLibraryPath(slang.path("lib"));
+    exe_mod.addIncludePath(slang_include);
+    exe_mod.addLibraryPath(slang_lib);
     exe_mod.linkSystemLibrary("slang", .{});
+    if (target.result.os.tag != .windows) {
+        exe_mod.addRPath(slang_lib);
+    }
 
     // vitellus
     {
         const vitellus = b.dependency("vitellus", .{
             .target = target,
             .optimize = optimize,
-
-            .enable_dxc = true,
-            .@"enable_spirv-cross" = true,
         });
 
         exe_mod.addImport("vitellus", vitellus.module("vitellus"));
@@ -70,6 +83,7 @@ pub fn build(b: *std.Build) void {
             .name = "eggy",
             .root_module = exe_mod,
         });
+        exe_check.step.dependOn(slang.step);
         const check = b.step("check", "Check if eggy compiles");
         check.dependOn(&exe_check.step);
     }
@@ -80,12 +94,15 @@ pub fn build(b: *std.Build) void {
             .name = "eggy",
             .root_module = exe_mod,
         });
+        exe.step.dependOn(slang.step);
 
         b.installArtifact(exe);
         const run_step = b.step("run", "Run the app");
 
         const run_cmd = b.addRunArtifact(exe);
-        run_cmd.addPathDir(slang.path("bin").getPath(b));
+        // Shared libs are installed beside the exe; also keep the build prefix
+        // on the loader path for uninstalled `zig build run`.
+        run_cmd.addPathDir(slang_bin.getPath(b));
         run_step.dependOn(&run_cmd.step);
 
         run_cmd.step.dependOn(b.getInstallStep());
@@ -108,20 +125,25 @@ pub fn build(b: *std.Build) void {
             .root_module = exe_mod,
             .test_runner = test_runner,
         });
+        mod_tests.step.dependOn(slang.step);
 
         const run_mod_tests = b.addRunArtifact(mod_tests);
-        run_mod_tests.addPathDir(slang.path("bin").getPath(b));
+        run_mod_tests.addPathDir(slang_bin.getPath(b));
 
         const exe_tests = b.addTest(.{
             .root_module = exe_mod,
             .test_runner = test_runner,
         });
+        exe_tests.step.dependOn(slang.step);
 
         const run_exe_tests = b.addRunArtifact(exe_tests);
-        run_exe_tests.addPathDir(slang.path("bin").getPath(b));
+        run_exe_tests.addPathDir(slang_bin.getPath(b));
 
         const test_step = b.step("test", "Run tests");
         test_step.dependOn(&run_mod_tests.step);
         test_step.dependOn(&run_exe_tests.step);
     }
+
+    const slang_step = b.step("slang", "Build Slang from source");
+    slang_step.dependOn(slang.step);
 }
