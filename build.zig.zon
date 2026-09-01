@@ -1,0 +1,26 @@
+.{
+    .name = .eggy,
+    .version = "0.1.0",
+    .fingerprint = 0x634131700cbdf8dd, // Changing this has security and trust implications.
+    .minimum_zig_version = "0.16.0",
+    .dependencies = .{
+        .sdl3 = .{
+            .url = "git+https://codeberg.org/7Games/zig-sdl3?ref=v0.2.2#83c694024f23cbacfa36fcd8fca1c57d4957203e",
+            .hash = "sdl3-0.2.2-NmT1Q-2jKQBa4uSXUwuVwdmXpXe-eYwim7Wkyx531v6O",
+        },
+        .vitellus = .{
+            .url = "git+https://github.com/eggyengine/vitellus#c02449b2b574af57f4bcbec54e9280102e4ca9fa",
+            .hash = "vitellus-0.1.0-JC2CjBGyBwBl_UNlRxidr-heoaBt3gUL0DOAK28eT3wt",
+        },
+        .eggenvector = .{
+            .url = "git+https://github.com/eggyengine/eggenvector#49046e371a8791ed3483e80326d779eedd0c181e",
+            .hash = "eggenvector-0.0.0-UyZb9C7sAQBBRR526yoYPHubwq9etR7eLFT5chA31KkX",
+        },
+    },
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "packages",
+        "src",
+    },
+}
