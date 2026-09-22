@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const vit = @import("vitellus");
 
 pub const Graphics = struct {
@@ -9,10 +10,10 @@ pub const Graphics = struct {
     swapchain: vit.Swapchain,
     commands: vit.CommandPool,
 
-    pub fn init(i: std.process.Init, window: vit.windowing.sdl3.Sdl3Window) !@This() {
-        const instance = try vit.Instance.init(i.gpa, .{
-            .backend = .{ .vulkan = true }, // todo: get other graphics APIs to work maybe
-            .validation = .core,
+    pub fn init(allocator: std.mem.Allocator, window: vit.windowing.sdl3.Sdl3Window) !@This() {
+        const instance = try vit.Instance.init(allocator, .{
+            .backend = .{ .vulkan = true },
+            .validation = if (builtin.abi.isAndroid()) .none else .core,
         });
         errdefer instance.deinit();
 
