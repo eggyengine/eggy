@@ -29,8 +29,7 @@ pub fn quit(app_state: ?*AppState, result: sdl3.AppResult) void {
     if (app_state) |state| state.deinit();
 }
 
-// SDLActivity looks up this symbol in libmain.so.
-export fn SDL_main(argc: c_int, argv: [*c][*c]u8) callconv(.c) c_int {
+fn androidMain(argc: c_int, argv: [*c][*c]u8) callconv(.c) c_int {
     return sdl3.c.SDL_EnterAppMainCallbacks(
         argc,
         argv,
@@ -39,4 +38,10 @@ export fn SDL_main(argc: c_int, argv: [*c][*c]u8) callconv(.c) c_int {
         @ptrCast(&sdl3.main_callbacks.SDL_AppEvent),
         @ptrCast(&sdl3.main_callbacks.SDL_AppQuit),
     );
+}
+
+comptime {
+    if (builtin.abi.isAndroid()) {
+        @export(&androidMain, .{ .name = "SDL_main" });
+    }
 }

@@ -44,8 +44,8 @@ pub const Game = struct {
     }
 
     pub fn iterate(self: *Game) !sdl3.AppResult {
-        _ = self.fps_capper.delay();
-        try self.m_graphics.frame();
+        const dt = self.fps_capper.delay();
+        try self.m_graphics.frame(dt);
         return .run;
     }
 
