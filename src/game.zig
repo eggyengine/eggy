@@ -52,8 +52,8 @@ pub const Game = struct {
             };
             if (quit) break;
 
-            _ = capper.delay();
-            try self.m_graphics.frame();
+            const dt = capper.delay();
+            try self.m_graphics.frame(dt);
         }
     }
 };
