@@ -9,5 +9,6 @@ pub const Editor = @import("game.zig").Game;
 test {
     _ = @import("graphics.zig");
     _ = @import("ui_demo.zig");
+    _ = @import("accessibility.zig");
     _ = @import("weeoui");
 }

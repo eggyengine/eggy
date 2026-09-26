@@ -54,6 +54,10 @@
             .url = "git+https://github.com/tseli0s/nvdialog#721bf6ff623833cd507b42b63424c0e5e57e2525",
             .hash = "N-V-__8AAEuUDgBPfreH-NaCz_VkqQhUzodVDBJwMy7xG76s",
         },
+        .accesskit_c = .{
+            .url = "https://github.com/AccessKit/accesskit-c/releases/download/0.23.0/accesskit-c-0.23.0.zip",
+            .hash = "N-V-__8AAEFGZhErLHq9UH3Pw21WPLBLfjYaqLIboPjbQHTB",
+        },
     },
     .paths = .{
         "build.zig",

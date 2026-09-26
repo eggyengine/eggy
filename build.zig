@@ -24,13 +24,25 @@ pub fn build(b: *std.Build) void {
     fragment_compile.addFileArg(b.path("src/shaders/ui.slang"));
     fragment_compile.addArgs(&.{ "-target", "spirv", "-entry", "fragmentMain", "-stage", "fragment", "-o" });
     const fragment_spv = fragment_compile.addOutputFileArg("ui.frag.spv");
+    const viewport_vertex_compile = b.addSystemCommand(&.{host_compiler.getPath(b)});
+    viewport_vertex_compile.addFileArg(b.path("src/shaders/viewport3d.slang"));
+    viewport_vertex_compile.addArgs(&.{ "-target", "spirv", "-entry", "vertexMain", "-stage", "vertex", "-o" });
+    const viewport_vertex_spv = viewport_vertex_compile.addOutputFileArg("viewport3d.vert.spv");
+    const viewport_fragment_compile = b.addSystemCommand(&.{host_compiler.getPath(b)});
+    viewport_fragment_compile.addFileArg(b.path("src/shaders/viewport3d.slang"));
+    viewport_fragment_compile.addArgs(&.{ "-target", "spirv", "-entry", "fragmentMain", "-stage", "fragment", "-o" });
+    const viewport_fragment_spv = viewport_fragment_compile.addOutputFileArg("viewport3d.frag.spv");
     const shader_files = b.addWriteFiles();
     _ = shader_files.addCopyFile(vertex_spv, "ui.vert.spv");
     _ = shader_files.addCopyFile(fragment_spv, "ui.frag.spv");
+    _ = shader_files.addCopyFile(viewport_vertex_spv, "viewport3d.vert.spv");
+    _ = shader_files.addCopyFile(viewport_fragment_spv, "viewport3d.frag.spv");
     const shader_module = b.createModule(.{
         .root_source_file = shader_files.add("root.zig",
             \\pub const vertex = @embedFile("ui.vert.spv");
             \\pub const fragment = @embedFile("ui.frag.spv");
+            \\pub const viewport_vertex = @embedFile("viewport3d.vert.spv");
+            \\pub const viewport_fragment = @embedFile("viewport3d.frag.spv");
         ),
         .target = target,
         .optimize = optimize,
@@ -53,6 +65,7 @@ pub fn build(b: *std.Build) void {
     const emath = b.dependency("eggenvector", .{ .target = target, .optimize = optimize });
     const weeoui = b.dependency("weeoui", .{ .target = target, .optimize = optimize });
     const nvdialog = b.dependency("nvdialog", .{});
+    const accesskit = b.dependency("accesskit_c", .{});
     const fatal_dialog = b.createModule(.{ .root_source_file = b.path("src/fatal_dialog.zig"), .target = target, .optimize = optimize, .link_libc = true });
     fatal_dialog.addIncludePath(nvdialog.path("include"));
     fatal_dialog.addIncludePath(nvdialog.path("src"));
@@ -159,6 +172,48 @@ pub fn build(b: *std.Build) void {
     engine.addImport("ui_shaders", shader_module);
     engine.addImport("sdl3", sdl3.module("sdl3"));
     engine.addImport("vitellus_sdl3", sdl_adapter);
+    engine.addIncludePath(accesskit.path("include"));
+    engine.link_libc = true;
+    const accesskit_library = switch (target.result.os.tag) {
+        .linux => switch (target.result.cpu.arch) {
+            .x86_64 => "lib/linux/x86_64/static/libaccesskit.a",
+            .x86 => "lib/linux/x86/static/libaccesskit.a",
+            else => @panic("AccessKit C 0.23.0 has no bundled Linux library for this architecture"),
+        },
+        .windows => switch (target.result.cpu.arch) {
+            .x86_64 => if (target.result.abi == .msvc) "lib/windows/x86_64/msvc/shared/accesskit.lib" else "lib/windows/x86_64/mingw/shared/libaccesskit.a",
+            .aarch64 => "lib/windows/arm64/msvc/shared/accesskit.lib",
+            else => @panic("AccessKit C 0.23.0 has no bundled Windows library for this architecture"),
+        },
+        .macos => switch (target.result.cpu.arch) {
+            .x86_64 => "lib/macos/x86_64/static/libaccesskit.a",
+            .aarch64 => "lib/macos/arm64/static/libaccesskit.a",
+            else => @panic("AccessKit C 0.23.0 has no bundled macOS library for this architecture"),
+        },
+        else => @panic("AccessKit is supported only on desktop Linux, macOS, and Windows"),
+    };
+    engine.addObjectFile(accesskit.path(accesskit_library));
+    if (target.result.os.tag == .windows) {
+        const dll = switch (target.result.cpu.arch) {
+            .x86_64 => if (target.result.abi == .msvc) "lib/windows/x86_64/msvc/shared/accesskit.dll" else "lib/windows/x86_64/mingw/shared/accesskit.dll",
+            .aarch64 => "lib/windows/arm64/msvc/shared/accesskit.dll",
+            else => unreachable,
+        };
+        b.getInstallStep().dependOn(&b.addInstallFileWithDir(accesskit.path(dll), .bin, "accesskit.dll").step);
+    }
+    switch (target.result.os.tag) {
+        .linux => {
+            engine.linkSystemLibrary("m", .{});
+            engine.linkSystemLibrary("unwind", .{});
+        },
+        .windows => {},
+        .macos => {
+            inline for (.{ "AppKit", "Foundation", "CoreFoundation" }) |framework| engine.linkFramework(framework, .{});
+            engine.linkSystemLibrary("objc", .{});
+            engine.linkSystemLibrary("c++", .{});
+        },
+        else => unreachable,
+    }
 
     const exe = b.addExecutable(.{
         .name = "eggy",
@@ -194,6 +249,18 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&slang_tests.step);
     const dialog_tests = b.addRunArtifact(b.addTest(.{ .root_module = fatal_dialog, .use_llvm = true }));
     test_step.dependOn(&dialog_tests.step);
+    const viewport_tests_module = b.createModule(.{
+        .root_source_file = b.path("src/viewport3d.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    viewport_tests_module.addImport("vitellus", vitellus.module("vitellus"));
+    viewport_tests_module.addImport("weeoui", weeoui.module("weeoui"));
+    viewport_tests_module.addImport("sdl3", sdl3.module("sdl3"));
+    viewport_tests_module.addImport("ui_shaders", shader_module);
+    const viewport_tests = b.addRunArtifact(b.addTest(.{ .root_module = viewport_tests_module, .use_llvm = true }));
+    test_step.dependOn(&viewport_tests.step);
+    b.step("test-viewport", "Run 3D preview tests").dependOn(&viewport_tests.step);
 }
 
 fn defaultMacSdk(b: *std.Build) ?[]const u8 {
@@ -203,7 +270,9 @@ fn defaultMacSdk(b: *std.Build) ?[]const u8 {
 
 fn addMacSdk(b: *std.Build, mod: *std.Build.Module) void {
     const sysroot = b.sysroot orelse return;
+    mod.addSystemIncludePath(.{ .cwd_relative = b.pathJoin(&.{ sysroot, "usr/include" }) });
     mod.addSystemFrameworkPath(.{ .cwd_relative = b.pathJoin(&.{ sysroot, "System/Library/Frameworks" }) });
+    mod.addLibraryPath(.{ .cwd_relative = "/usr/lib" });
 }
 
 fn slangDependency(b: *std.Build, os: std.Target.Os.Tag, arch: std.Target.Cpu.Arch) ?*std.Build.Dependency {

@@ -3,6 +3,7 @@ const vit = @import("vitellus");
 const sdl_adapter = @import("vitellus_sdl3");
 const ui = @import("weeoui");
 const ui_demo = @import("ui_demo.zig");
+const viewport3d = @import("viewport3d.zig");
 const shaders = @import("ui_shaders");
 const vert_spv = shaders.vertex;
 const frag_spv = shaders.fragment;
@@ -22,6 +23,7 @@ pub const Graphics = struct {
     vertices: vit.Buffer,
     pipeline_layout: vit.PipelineLayout,
     pipeline: vit.GraphicsPipeline,
+    preview: viewport3d.Preview,
     theme: ui.Theme = .{},
     demo: ui_demo.Demo = .{},
     font: ui.Font,
@@ -107,7 +109,9 @@ pub const Graphics = struct {
             .layout = pipeline_layout,
         });
         errdefer pipeline.deinit();
-        var result: @This() = .{ .allocator = allocator, .viewport = viewport, .instance = instance, .adapter = adapter, .device = device, .queue = queue, .swapchain = swapchain, .commands = commands, .color_format = colorFormat(caps.formats[0]), .window_extent = extent, .vertices = vertices, .pipeline_layout = pipeline_layout, .pipeline = pipeline, .font = font, .font_texture = font_texture, .font_view = font_view, .font_sampler = font_sampler, .font_layout = font_layout, .font_group = font_group };
+        var preview = try viewport3d.Preview.init(device, colorFormat(caps.formats[0]), extent);
+        errdefer preview.deinit();
+        var result: @This() = .{ .allocator = allocator, .viewport = viewport, .instance = instance, .adapter = adapter, .device = device, .queue = queue, .swapchain = swapchain, .commands = commands, .color_format = colorFormat(caps.formats[0]), .window_extent = extent, .vertices = vertices, .pipeline_layout = pipeline_layout, .pipeline = pipeline, .preview = preview, .font = font, .font_texture = font_texture, .font_view = font_view, .font_sampler = font_sampler, .font_layout = font_layout, .font_group = font_group };
         try result.demo.relayout(allocator, viewport, &result.font);
         return result;
     }
@@ -119,6 +123,7 @@ pub const Graphics = struct {
         const requested = vit.Extent2D{ .width = @intCast(pixels.@"0"), .height = @intCast(pixels.@"1") };
         if (requested.width != self.window_extent.width or requested.height != self.window_extent.height) {
             try self.queue.waitIdle();
+            try self.preview.resize(self.device, requested);
             try self.swapchain.resize(requested);
             self.window_extent = requested;
         }
@@ -139,6 +144,7 @@ pub const Graphics = struct {
 
     pub fn deinit(self: *@This()) void {
         self.queue.waitIdle() catch {};
+        self.preview.deinit();
         self.pipeline.deinit();
         self.pipeline_layout.deinit();
         self.font_group.deinit();
@@ -199,6 +205,7 @@ pub const Graphics = struct {
         cmd.setVertexBuffer(0, self.vertices, 0);
         cmd.draw(@intCast(canvas.len), 1, 0, 0);
         cmd.endRenderPass();
+        try self.preview.draw(cmd, acquired.view, self.demo.scene_viewport, self.demo.scene_clip, self.viewport, info.extent, canvas.srgb_target);
         try cmd.barrier(&.{.{ .texture_view = .{ .view = acquired.view, .before = .color_attachment, .after = .present } }});
         try cmd.finish();
         try self.queue.submit(.{ .command_buffers = &.{cmd} });
