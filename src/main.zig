@@ -1,7 +1,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const eggy = @import("eggy");
-const sdl3 = eggy.vit.windowing.sdl3.sdl;
+const sdl3 = eggy.sdl_adapter.sdl;
 
 comptime {
     _ = sdl3.main_callbacks;

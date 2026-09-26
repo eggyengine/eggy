@@ -1,6 +1,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const vit = @import("vitellus");
+const sdl_adapter = @import("vitellus_sdl3");
 const math = @import("eggenvector");
 
 const vert_spv = @embedFile("shaders/cube.vert.spv");
@@ -52,7 +53,7 @@ pub const Graphics = struct {
     pipeline: vit.GraphicsPipeline,
     angle: f32 = 0,
 
-    pub fn init(allocator: std.mem.Allocator, window: vit.windowing.sdl3.Sdl3Window) !@This() {
+    pub fn init(allocator: std.mem.Allocator, window: sdl_adapter.Sdl3Window) !@This() {
         const instance = try vit.Instance.init(allocator, .{
             .backend = .{ .vulkan = true },
             .validation = if (builtin.abi.isAndroid()) .none else .core,
@@ -198,7 +199,7 @@ pub const Graphics = struct {
         };
     }
 
-    pub fn syncSize(self: *@This(), window: vit.windowing.sdl3.Sdl3Window) !void {
+    pub fn syncSize(self: *@This(), window: sdl_adapter.Sdl3Window) !void {
         const size = try window.window.getSizeInPixels();
         if (size.@"0" == 0 or size.@"1" == 0) return;
         const requested = vit.Extent2D{ .width = @intCast(size.@"0"), .height = @intCast(size.@"1") };

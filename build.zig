@@ -75,6 +75,13 @@ pub fn build(b: *std.Build) void {
             .optimize = library_optimize,
             .c_sdl_preferred_linkage = sdl_linkage,
         });
+        const sdl_adapter = b.createModule(.{
+            .root_source_file = vitellus.path("src/windowing/sdl3.zig"),
+            .target = target,
+            .optimize = library_optimize,
+        });
+        sdl_adapter.addImport("vitellus", vitellus.module("vitellus"));
+        sdl_adapter.addImport("sdl3", sdl3.module("sdl3"));
 
         const engine = b.createModule(.{
             .root_source_file = b.path("src/root.zig"),
@@ -84,6 +91,7 @@ pub fn build(b: *std.Build) void {
         engine.addImport("vitellus", vitellus.module("vitellus"));
         engine.addImport("eggenvector", emath.module("eggenvector"));
         engine.addImport("sdl3", sdl3.module("sdl3"));
+        engine.addImport("vitellus_sdl3", sdl_adapter);
 
         const root_module = b.createModule(.{
             .root_source_file = b.path("src/main.zig"),
@@ -134,5 +142,4 @@ pub fn build(b: *std.Build) void {
         adb_start.step.dependOn(&adb_install.step);
         run_step.dependOn(&adb_start.step);
     }
-
 }

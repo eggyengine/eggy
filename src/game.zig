@@ -1,7 +1,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
-const vit = @import("vitellus");
-const sdl3 = vit.windowing.sdl3.sdl;
+const sdl_adapter = @import("vitellus_sdl3");
+const sdl3 = sdl_adapter.sdl;
 
 const graphics = @import("graphics.zig");
 
@@ -10,7 +10,7 @@ const width = 640;
 const height = 480;
 
 pub const Game = struct {
-    window: vit.windowing.sdl3.Sdl3Window,
+    window: sdl_adapter.Sdl3Window,
     init_flags: sdl3.InitFlags,
     m_graphics: graphics.Graphics,
     fps_capper: sdl3.extras.FramerateCapper(f32),
@@ -26,7 +26,7 @@ pub const Game = struct {
 
         const window_w: usize = if (builtin.abi.isAndroid()) 1280 else width;
         const window_h: usize = if (builtin.abi.isAndroid()) 720 else height;
-        const window: vit.windowing.sdl3.Sdl3Window = .init(try sdl3.video.Window.init("eggy", window_w, window_h, .{
+        const window: sdl_adapter.Sdl3Window = .init(try sdl3.video.Window.init("eggy", window_w, window_h, .{
             .vulkan = true,
             .resizable = true,
             .fullscreen = builtin.abi.isAndroid(),
