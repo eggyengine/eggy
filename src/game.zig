@@ -141,7 +141,7 @@ pub const Game = struct {
             .mouse_button_down => |button| {
                 if (button.button == .left) {
                     const scale = self.m_graphics.demo.ui_scale;
-                    self.m_graphics.demo.pointerDownAt(button.x / scale, button.y / scale, &self.m_graphics.font);
+                    self.m_graphics.demo.pointerDownWithClicks(button.x / scale, button.y / scale, &self.m_graphics.font, button.clicks);
                     try self.m_graphics.syncSize(self.window);
                     try self.m_graphics.relayoutDemo();
                     publish = true;

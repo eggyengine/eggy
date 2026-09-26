@@ -22,6 +22,7 @@ Tab and Shift+Tab move focus in opposite directions; Enter/Space activate
 buttons, arrows navigate radio groups, tabs, and open menus, and Escape closes
 popups or the modal dialog. Text fields support pointer selection, Shift/Ctrl
 navigation, clipboard shortcuts, undo/redo, UTF-8 input, and SDL IME preedit.
+Double-click selects a word; triple-click selects a textarea line.
 AccessKit can set field values and selections as well as activate controls.
 Wheel input scrolls the pane under the pointer before the main gallery; the
 file attachment opens SDL's native file picker. The gallery includes a

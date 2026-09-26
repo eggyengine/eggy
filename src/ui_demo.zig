@@ -498,6 +498,9 @@ pub const Demo = struct {
         self.pointerDownAt(x, y, null);
     }
     pub fn pointerDownAt(self: *Demo, x: f32, y: f32, font: ?*const ui.Font) void {
+        self.pointerDownWithClicks(x, y, font, 1);
+    }
+    pub fn pointerDownWithClicks(self: *Demo, x: f32, y: f32, font: ?*const ui.Font, clicks: u8) void {
         self.pointer_x = x;
         self.pointer_y = y;
         if (!self.dialog_open and self.scroll.pointerDown(x, y)) return;
@@ -545,7 +548,10 @@ pub const Demo = struct {
                             .scroll_x = self.editing_scroll_x[field],
                             .scroll_y = self.editing_scroll_y[field],
                         }, x, y, false);
-                        self.dragging_text = true;
+                        if (clicks >= 3) {
+                            if (self.focusId() == 301) element.selectLine() else element.selectAll();
+                        } else if (clicks == 2) element.selectWord();
+                        self.dragging_text = clicks <= 1;
                     };
                     self.activate();
                 },
@@ -1604,6 +1610,34 @@ test "AccessKit text updates preserve Unicode selection and editing contracts" {
     try std.testing.expect(!demo.accessibilitySetValue(300, "one\ntwo"));
     try std.testing.expect(demo.accessibilitySetValue(300, "Ready"));
     try std.testing.expectEqualStrings("Ready", demo.editable[0].text.text());
+}
+
+test "multi-click text selection is reflected in AccessKit" {
+    var font = try ui.Font.init(std.testing.allocator, ui.default_font, 32);
+    defer font.deinit();
+    var demo: Demo = .{};
+    const viewport = ui.Rect{ .x = 0, .y = 0, .w = 900, .h = 675 };
+    try demo.relayout(std.testing.allocator, viewport, &font);
+    demo.scroll.ensureVisible(demo.controls[demo.indexOf(300).?]);
+    try demo.relayout(std.testing.allocator, viewport, &font);
+    const project = demo.controls[demo.indexOf(300).?];
+    demo.pointerDownWithClicks(project.x + 24, project.center().y, &font, 2);
+    try std.testing.expectEqualStrings("Eggy", demo.selectedText().?);
+    try std.testing.expect(!demo.dragging_text);
+
+    try std.testing.expect(demo.accessibilitySetValue(301, "first\nsecond"));
+    try demo.relayout(std.testing.allocator, viewport, &font);
+    demo.scroll.ensureVisible(demo.controls[demo.indexOf(301).?]);
+    try demo.relayout(std.testing.allocator, viewport, &font);
+    const area = ui.text_edit.inputContentRect(demo.controls[demo.indexOf(301).?]);
+    demo.pointerDownWithClicks(area.x + 16, area.y + 12, &font, 3);
+    try std.testing.expectEqualStrings("first\n", demo.selectedText().?);
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const snapshot = try demo.accessibilitySnapshot(arena.allocator(), viewport, &font);
+    const selection = snapshotNode(snapshot, 301).?.text_selection.?;
+    try std.testing.expectEqual(@as(usize, 0), selection.anchor);
+    try std.testing.expectEqual(@as(usize, 6), selection.focus);
 }
 
 test "gallery filters commands, navigates dates, shows tooltip and swaps sidebar views" {
