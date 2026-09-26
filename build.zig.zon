@@ -16,6 +16,36 @@
         .weeoui = .{
             .path = "src/weeoui",
         },
+        .slang_linux_x86_64 = .{
+            .url = "https://github.com/shader-slang/slang/releases/download/v2026.18.2/slang-2026.18.2-linux-x86_64-glibc-2.27.tar.gz",
+            .hash = "N-V-__8AAH3yDgYqqGBLvoh4QTjTv4hpCFUVHNgMR_5II71O",
+            .lazy = true,
+        },
+        .slang_linux_aarch64 = .{
+            .url = "https://github.com/shader-slang/slang/releases/download/v2026.18.2/slang-2026.18.2-linux-aarch64-glibc-2.28.tar.gz",
+            .hash = "N-V-__8AAAV29gWb1jw0YUrdW7pbbHlb0lBzBcWb9mPiHNuK",
+            .lazy = true,
+        },
+        .slang_macos_x86_64 = .{
+            .url = "https://github.com/shader-slang/slang/releases/download/v2026.18.2/slang-2026.18.2-macos-x86_64.tar.gz",
+            .hash = "N-V-__8AAKCstwWs6UAFWNvaHuAPYQLXp7nPMdIboKo1Fil5",
+            .lazy = true,
+        },
+        .slang_macos_aarch64 = .{
+            .url = "https://github.com/shader-slang/slang/releases/download/v2026.18.2/slang-2026.18.2-macos-aarch64.tar.gz",
+            .hash = "N-V-__8AACiX6QtufbUqgh_ns17jlXnwJ8_55T4TZkC0jjL3",
+            .lazy = true,
+        },
+        .slang_windows_x86_64 = .{
+            .url = "https://github.com/shader-slang/slang/releases/download/v2026.18.2/slang-2026.18.2-windows-x86_64.tar.gz",
+            .hash = "N-V-__8AAE2gXQoXLYOhpg6VsbE4HEQqZV8KrQ28jnm0VQ59",
+            .lazy = true,
+        },
+        .slang_windows_aarch64 = .{
+            .url = "https://github.com/shader-slang/slang/releases/download/v2026.18.2/slang-2026.18.2-windows-aarch64.tar.gz",
+            .hash = "N-V-__8AAIfjWAWBNzou2HBmyAbmWAoe54OCubGldRHN7-5r",
+            .lazy = true,
+        },
         .eggenvector = .{
             .url = "git+https://github.com/eggyengine/eggenvector#49046e371a8791ed3483e80326d779eedd0c181e",
             .hash = "eggenvector-0.0.0-UyZb9C7sAQBBRR526yoYPHubwq9etR7eLFT5chA31KkX",

@@ -1,37 +1,16 @@
 const std = @import("std");
 const vit = @import("vitellus");
 const sdl_adapter = @import("vitellus_sdl3");
-const math = @import("eggenvector");
+const ui = @import("weeoui");
+const ui_demo = @import("ui_demo.zig");
+const shaders = @import("ui_shaders");
+const vert_spv = shaders.vertex;
+const frag_spv = shaders.fragment;
 
-const vert_spv = @embedFile("shaders/cube.vert.spv");
-const frag_spv = @embedFile("shaders/cube.frag.spv");
-
-const Vertex = extern struct {
-    pos: [3]f32,
-    color: [3]f32,
-};
-
-const cube_vertices = [_]Vertex{
-    .{ .pos = .{ -0.5, -0.5, -0.5 }, .color = .{ 0.90, 0.22, 0.21 } },
-    .{ .pos = .{ 0.5, -0.5, -0.5 }, .color = .{ 0.18, 0.80, 0.44 } },
-    .{ .pos = .{ 0.5, 0.5, -0.5 }, .color = .{ 0.20, 0.60, 0.86 } },
-    .{ .pos = .{ -0.5, 0.5, -0.5 }, .color = .{ 0.95, 0.77, 0.06 } },
-    .{ .pos = .{ -0.5, -0.5, 0.5 }, .color = .{ 0.61, 0.35, 0.71 } },
-    .{ .pos = .{ 0.5, -0.5, 0.5 }, .color = .{ 0.90, 0.49, 0.13 } },
-    .{ .pos = .{ 0.5, 0.5, 0.5 }, .color = .{ 0.20, 0.29, 0.37 } },
-    .{ .pos = .{ -0.5, 0.5, 0.5 }, .color = .{ 0.93, 0.94, 0.95 } },
-};
-
-const cube_indices = [_]u16{
-    0, 1, 2, 2, 3, 0,
-    4, 5, 6, 6, 7, 4,
-    4, 0, 3, 3, 7, 4,
-    1, 5, 6, 6, 2, 1,
-    3, 2, 6, 6, 7, 3,
-    4, 5, 1, 1, 0, 4,
-};
-
+const max_vertices = 30000;
 pub const Graphics = struct {
+    allocator: std.mem.Allocator,
+    viewport: ui.Rect,
     instance: vit.Instance,
     adapter: vit.Adapter,
     device: vit.Device,
@@ -39,44 +18,36 @@ pub const Graphics = struct {
     swapchain: vit.Swapchain,
     commands: vit.CommandPool,
     color_format: vit.Format,
-    depth: vit.Texture,
-    depth_view: vit.TextureView,
-    depth_extent: vit.Extent2D,
     window_extent: vit.Extent2D,
     vertices: vit.Buffer,
-    indices: vit.Buffer,
-    uniforms: vit.Buffer,
-    bind_layout: vit.BindGroupLayout,
-    bind_group: vit.BindGroup,
     pipeline_layout: vit.PipelineLayout,
     pipeline: vit.GraphicsPipeline,
-    angle: f32 = 0,
+    demo: ui_demo.Demo = .{},
+    font: ui.Font,
+    font_texture: vit.Texture,
+    font_view: vit.TextureView,
+    font_sampler: vit.Sampler,
+    font_layout: vit.BindGroupLayout,
+    font_group: vit.BindGroup,
+    font_needs_barrier: bool = true,
 
     pub fn init(allocator: std.mem.Allocator, window: sdl_adapter.Sdl3Window) !@This() {
-        const instance = try vit.Instance.init(allocator, .{
-            .backend = .{ .vulkan = true },
-            .validation = .core,
-        });
+        const instance = try vit.Instance.init(allocator, .{ .backend = .{ .vulkan = true }, .validation = .core });
         errdefer instance.deinit();
-
         const adapter = try vit.Adapter.init(instance, .{ .label = "vitellus adapter" });
         errdefer adapter.deinit();
-
         const device = try vit.Device.init(adapter, .{ .label = "vitellus device" });
         errdefer device.deinit();
-
-        const queue = try vit.Queue.init(device, .{ .label = "vitellus graphics queue", .kind = .graphics });
+        const queue = try vit.Queue.init(device, .{ .label = "graphics queue", .kind = .graphics });
         errdefer queue.deinit();
-
         const commands = try vit.CommandPool.init(device, .{ .kind = .graphics });
         errdefer commands.deinit();
-
         const caps = try adapter.surfaceCapabilities(instance.allocator, try window.asWindow());
         defer caps.deinit();
-        if (caps.formats.len == 0 or caps.present_modes.len == 0 or caps.composite_alpha.len == 0)
-            return error.NoSurfaceCapabilities;
-
+        if (caps.formats.len == 0 or caps.present_modes.len == 0 or caps.composite_alpha.len == 0) return error.NoSurfaceCapabilities;
         const size = try window.window.getSizeInPixels();
+        const logical = try window.window.getSize();
+        const viewport = ui.Rect{ .x = 0, .y = 0, .w = @floatFromInt(logical.@"0"), .h = @floatFromInt(logical.@"1") };
         const extent = vit.Extent2D{ .width = @intCast(size.@"0"), .height = @intCast(size.@"1") };
         const swapchain = try vit.Swapchain.init(adapter, .{
             .label = "swapchain",
@@ -89,146 +60,93 @@ pub const Graphics = struct {
             .composite_alpha = caps.composite_alpha[0],
         });
         errdefer swapchain.deinit();
-
-        const color_format = colorFormat(caps.formats[0]);
-        const depth, const depth_view = try createDepth(device, swapchain.info().extent);
-        errdefer {
-            depth_view.deinit();
-            depth.deinit();
-        }
-
         const vertices = try vit.Buffer.init(device, .{
-            .label = "cube vertices",
-            .size = @sizeOf(@TypeOf(cube_vertices)),
+            .label = "ui vertices",
+            .size = max_vertices * @sizeOf(ui.Vertex),
             .usage = .{ .vertex = true },
-            .initial_data = std.mem.asBytes(&cube_vertices),
-        });
-        errdefer vertices.deinit();
-
-        const indices = try vit.Buffer.init(device, .{
-            .label = "cube indices",
-            .size = @sizeOf(@TypeOf(cube_indices)),
-            .usage = .{ .index = true },
-            .initial_data = std.mem.asBytes(&cube_indices),
-        });
-        errdefer indices.deinit();
-
-        const uniforms = try vit.Buffer.init(device, .{
-            .label = "cube uniforms",
-            .size = 64,
-            .usage = .{ .uniform = true },
             .memory = .upload,
         });
-        errdefer uniforms.deinit();
-
-        const vs = try vit.Shader.init(device, .{
-            .label = "cube vert",
-            .stage = .vertex,
-            .source = vit.SPIRVShaderModule.init(.{ .code = vert_spv }),
-        });
+        errdefer vertices.deinit();
+        var font = try ui.Font.init(allocator, ui.default_font, 32);
+        errdefer font.deinit();
+        if (viewport.w > 0) font.dpi_scale = @as(f32, @floatFromInt(extent.width)) / viewport.w;
+        const font_texture = try vit.Texture.init(device, .{ .label = "ui font", .width = ui.atlas_width, .height = ui.atlas_height, .format = .r8_unorm, .usage = .{ .sampled = true }, .initial_data = font.pixels });
+        errdefer font_texture.deinit();
+        const font_view = try vit.TextureView.init(device, .{ .texture = font_texture });
+        errdefer font_view.deinit();
+        const font_sampler = try vit.Sampler.init(device, .{ .address_u = .clamp_to_edge, .address_v = .clamp_to_edge });
+        errdefer font_sampler.deinit();
+        const font_layout = try vit.BindGroupLayout.init(device, .{ .entries = &.{
+            .{ .binding = 0, .kind = .{ .sampled_texture = .{} }, .visibility = .{ .fragment = true } },
+            .{ .binding = 1, .kind = .{ .sampler = .filtering }, .visibility = .{ .fragment = true } },
+        } });
+        errdefer font_layout.deinit();
+        const font_group = try vit.BindGroup.init(device, .{ .layout = font_layout, .entries = &.{
+            .{ .binding = 0, .resource = .{ .texture_view = font_view } },
+            .{ .binding = 1, .resource = .{ .sampler = font_sampler } },
+        } });
+        errdefer font_group.deinit();
+        const vs = try vit.Shader.init(device, .{ .label = "ui vert", .stage = .vertex, .source = vit.SPIRVShaderModule.init(.{ .code = vert_spv }) });
         defer vs.deinit();
-        const fs = try vit.Shader.init(device, .{
-            .label = "cube frag",
-            .stage = .fragment,
-            .source = vit.SPIRVShaderModule.init(.{ .code = frag_spv }),
-        });
+        const fs = try vit.Shader.init(device, .{ .label = "ui frag", .stage = .fragment, .source = vit.SPIRVShaderModule.init(.{ .code = frag_spv }) });
         defer fs.deinit();
-
-        const bind_layout = try vit.BindGroupLayout.init(device, .{
-            .label = "cube uniforms",
-            .entries = &.{.{
-                .binding = 0,
-                .kind = .{ .buffer = .{ .kind = .uniform, .min_size = 64 } },
-                .visibility = .{ .vertex = true },
-            }},
-        });
-        errdefer bind_layout.deinit();
-
-        const bind_group = try vit.BindGroup.init(device, .{
-            .label = "cube uniforms",
-            .layout = bind_layout,
-            .entries = &.{.{
-                .binding = 0,
-                .resource = .{ .buffer = .{ .buffer = uniforms, .size = 64 } },
-            }},
-        });
-        errdefer bind_group.deinit();
-
-        const pipeline_layout = try vit.PipelineLayout.init(device, .{
-            .label = "cube pipeline layout",
-            .bind_group_layouts = &.{bind_layout},
-        });
+        const pipeline_layout = try vit.PipelineLayout.init(device, .{ .label = "ui layout", .bind_group_layouts = &.{font_layout} });
         errdefer pipeline_layout.deinit();
-
         const pipeline = try vit.GraphicsPipeline.init(device, .{
-            .label = "cube pipeline",
+            .label = "ui pipeline",
             .vertex = vs,
             .fragment = fs,
-            .vertex_buffers = &.{.{
-                .stride = @sizeOf(Vertex),
-                .attributes = &.{
-                    .{ .location = 0, .format = .float32x3, .offset = 0 },
-                    .{ .location = 1, .format = .float32x3, .offset = @offsetOf(Vertex, "color") },
-                },
-            }},
-            .color_targets = &.{.{ .format = color_format }},
-            .depth_stencil = .{ .format = .d32_float },
+            .vertex_buffers = &.{.{ .stride = @sizeOf(ui.Vertex), .attributes = &.{
+                .{ .location = 0, .format = .float32x2, .offset = 0 },
+                .{ .location = 1, .format = .float32x4, .offset = @offsetOf(ui.Vertex, "color") },
+                .{ .location = 2, .format = .float32x2, .offset = @offsetOf(ui.Vertex, "uv") },
+            } }},
+            .color_targets = &.{.{ .format = colorFormat(caps.formats[0]), .blend = .{ .color = .{ .source = .src_alpha, .destination = .one_minus_src_alpha }, .alpha = .{ .source = .one, .destination = .one_minus_src_alpha } } }},
+            .raster = .{ .cull_mode = .none },
             .layout = pipeline_layout,
         });
-
-        return .{
-            .instance = instance,
-            .adapter = adapter,
-            .device = device,
-            .queue = queue,
-            .swapchain = swapchain,
-            .commands = commands,
-            .color_format = color_format,
-            .depth = depth,
-            .depth_view = depth_view,
-            .depth_extent = swapchain.info().extent,
-            .window_extent = extent,
-            .vertices = vertices,
-            .indices = indices,
-            .uniforms = uniforms,
-            .bind_layout = bind_layout,
-            .bind_group = bind_group,
-            .pipeline_layout = pipeline_layout,
-            .pipeline = pipeline,
-        };
+        errdefer pipeline.deinit();
+        var result: @This() = .{ .allocator = allocator, .viewport = viewport, .instance = instance, .adapter = adapter, .device = device, .queue = queue, .swapchain = swapchain, .commands = commands, .color_format = colorFormat(caps.formats[0]), .window_extent = extent, .vertices = vertices, .pipeline_layout = pipeline_layout, .pipeline = pipeline, .font = font, .font_texture = font_texture, .font_view = font_view, .font_sampler = font_sampler, .font_layout = font_layout, .font_group = font_group };
+        try result.demo.relayout(allocator, viewport, &result.font);
+        return result;
     }
 
     pub fn syncSize(self: *@This(), window: sdl_adapter.Sdl3Window) !void {
-        const size = try window.window.getSizeInPixels();
-        if (size.@"0" == 0 or size.@"1" == 0) return;
-        const requested = vit.Extent2D{ .width = @intCast(size.@"0"), .height = @intCast(size.@"1") };
+        const pixels = try window.window.getSizeInPixels();
+        const logical = try window.window.getSize();
+        if (pixels.@"0" == 0 or pixels.@"1" == 0 or logical.@"0" == 0 or logical.@"1" == 0) return;
+        const requested = vit.Extent2D{ .width = @intCast(pixels.@"0"), .height = @intCast(pixels.@"1") };
         if (requested.width != self.window_extent.width or requested.height != self.window_extent.height) {
             try self.queue.waitIdle();
             try self.swapchain.resize(requested);
             self.window_extent = requested;
         }
-        const actual = self.swapchain.info().extent;
-        if (actual.width == self.depth_extent.width and actual.height == self.depth_extent.height) return;
-        try self.queue.waitIdle();
-        const depth, const depth_view = try createDepth(self.device, actual);
-        self.depth_view.deinit();
-        self.depth.deinit();
-        self.depth = depth;
-        self.depth_view = depth_view;
-        self.depth_extent = actual;
+        const viewport = ui.Rect{ .x = 0, .y = 0, .w = @as(f32, @floatFromInt(logical.@"0")) / self.demo.ui_scale, .h = @as(f32, @floatFromInt(logical.@"1")) / self.demo.ui_scale };
+        const dpi_scale = @as(f32, @floatFromInt(requested.width)) / viewport.w;
+        if (viewport.w != self.viewport.w or viewport.h != self.viewport.h or dpi_scale != self.font.dpi_scale) {
+            self.viewport = viewport;
+            self.font.dpi_scale = dpi_scale;
+            try self.relayoutDemo();
+            self.demo.scroll.ensureVisible(self.demo.controls[self.demo.focus]);
+            try self.relayoutDemo();
+        }
+    }
+
+    pub fn relayoutDemo(self: *@This()) !void {
+        try self.demo.relayout(self.allocator, self.viewport, &self.font);
     }
 
     pub fn deinit(self: *@This()) void {
         self.queue.waitIdle() catch {};
         self.pipeline.deinit();
         self.pipeline_layout.deinit();
-        self.bind_group.deinit();
-        self.bind_layout.deinit();
-        self.uniforms.deinit();
-        self.indices.deinit();
+        self.font_group.deinit();
+        self.font_layout.deinit();
+        self.font_sampler.deinit();
+        self.font_view.deinit();
+        self.font_texture.deinit();
+        self.font.deinit();
         self.vertices.deinit();
-        self.depth_view.deinit();
-        self.depth.deinit();
         self.swapchain.deinit();
         self.commands.deinit();
         self.queue.deinit();
@@ -237,90 +155,48 @@ pub const Graphics = struct {
         self.instance.deinit();
     }
 
-    pub fn frame(self: *@This(), dt: f32) !void {
-        self.angle += dt;
+    pub fn frame(self: *@This()) !void {
         const info = self.swapchain.info();
-        const aspect = if (info.extent.height == 0)
-            1
-        else
-            @as(f32, @floatFromInt(info.extent.width)) / @as(f32, @floatFromInt(info.extent.height));
-
-        const model = math.rotationY4x4(f32, self.angle);
-        const tilt = math.rotationX4x4(f32, 0.4);
-        const model_tilt = math.multiply4x4(f32, tilt, model);
-        const view = math.lookAt(
-            math.Vec3.init(1.6, 1.3, 2.2),
-            math.Vec3.zero,
-            math.Vec3.unit_y,
-        );
-        const proj = math.perspective(std.math.pi / 4.0, aspect, 0.1, 50.0);
-        const mvp = math.multiply4x4(f32, math.multiply4x4(f32, proj, view), model_tilt);
-
-        {
-            const mapped = try self.uniforms.map(.write, .{ .size = 64 });
-            defer self.uniforms.unmap(.{ .size = 64 });
-            @memcpy(mapped[0..64], std.mem.asBytes(&mvp.data));
+        var vertex_data: [max_vertices]ui.Vertex = undefined;
+        var canvas = ui.Canvas.init(&vertex_data, &self.font);
+        canvas.pixel_scale = .{ @as(f32, @floatFromInt(info.extent.width)) / self.viewport.w, @as(f32, @floatFromInt(info.extent.height)) / self.viewport.h };
+        try self.demo.draw(self.allocator, &canvas, self.viewport);
+        for (vertex_data[0..canvas.len]) |*vertex| {
+            vertex.position[0] = 2 * vertex.position[0] / self.viewport.w - 1;
+            vertex.position[1] = 1 - 2 * vertex.position[1] / self.viewport.h;
         }
-
+        const bytes = std.mem.sliceAsBytes(vertex_data[0..canvas.len]);
+        const mapped = try self.vertices.map(.write, .{ .size = bytes.len });
+        @memcpy(mapped[0..bytes.len], bytes);
+        self.vertices.unmap(.{ .size = bytes.len });
         try self.commands.reset();
         const acquired = try self.swapchain.acquireNextImage(null);
         const cmd = try vit.CommandBuffer.init(self.commands, .{});
         defer cmd.deinit();
-
-        try cmd.barrier(&.{
-            .{ .texture_view = .{ .view = acquired.view, .before = .present, .after = .color_attachment } },
-            .{ .texture = .{ .texture = self.depth, .before = .common, .after = .depth_stencil_write } },
-        });
-        try cmd.beginRenderPass(.{
-            .color_attachments = &.{.{
-                .view = acquired.view,
-                .load_op = .clear,
-                .store_op = .store,
-                .clear_value = .{ .r = 0.07, .g = 0.08, .b = 0.10, .a = 1 },
-            }},
-            .depth_stencil_attachment = .{
-                .view = self.depth_view,
-                .depth_load_op = .clear,
-                .depth_store_op = .store,
-                .depth_clear = 1,
-            },
-        });
+        try cmd.barrier(&.{.{ .texture_view = .{ .view = acquired.view, .before = .present, .after = .color_attachment } }});
+        if (self.font_needs_barrier) {
+            try cmd.barrier(&.{.{ .texture = .{ .texture = self.font_texture, .before = .common, .after = .sampled } }});
+            self.font_needs_barrier = false;
+        }
+        try cmd.beginRenderPass(.{ .color_attachments = &.{.{
+            .view = acquired.view,
+            .load_op = .clear,
+            .store_op = .store,
+            .clear_value = .{ .r = 0.965, .g = 0.968, .b = 0.973, .a = 1 },
+        }} });
         cmd.setGraphicsPipeline(self.pipeline);
-        cmd.setViewport(.{
-            .width = @floatFromInt(info.extent.width),
-            .height = @floatFromInt(info.extent.height),
-        });
+        cmd.setBindGroup(0, self.font_group, &.{});
+        cmd.setViewport(.{ .width = @floatFromInt(info.extent.width), .height = @floatFromInt(info.extent.height) });
         cmd.setScissor(.{ .width = info.extent.width, .height = info.extent.height });
         cmd.setVertexBuffer(0, self.vertices, 0);
-        cmd.setIndexBuffer(self.indices, .uint16, 0);
-        cmd.setBindGroup(0, self.bind_group, &.{});
-        cmd.drawIndexed(cube_indices.len, 1, 0, 0, 0);
+        cmd.draw(@intCast(canvas.len), 1, 0, 0);
         cmd.endRenderPass();
-        try cmd.barrier(&.{.{
-            .texture_view = .{ .view = acquired.view, .before = .color_attachment, .after = .present },
-        }});
+        try cmd.barrier(&.{.{ .texture_view = .{ .view = acquired.view, .before = .color_attachment, .after = .present } }});
         try cmd.finish();
         try self.queue.submit(.{ .command_buffers = &.{cmd} });
         _ = try self.swapchain.present(&.{});
     }
 };
-
-fn createDepth(device: vit.Device, extent: vit.Extent2D) !struct { vit.Texture, vit.TextureView } {
-    const depth = try vit.Texture.init(device, .{
-        .label = "depth",
-        .width = extent.width,
-        .height = extent.height,
-        .format = .d32_float,
-        .usage = .{ .depth_stencil_attachment = true },
-    });
-    errdefer depth.deinit();
-    const depth_view = try vit.TextureView.init(device, .{
-        .label = "depth view",
-        .texture = depth,
-        .aspect = .depth,
-    });
-    return .{ depth, depth_view };
-}
 
 fn colorFormat(format: vit.SwapchainFormat) vit.Format {
     return switch (format) {
@@ -331,7 +207,6 @@ fn colorFormat(format: vit.SwapchainFormat) vit.Format {
         .rgba16_float => .rgba16_float,
     };
 }
-
 fn pickPresentMode(modes: []const vit.PresentMode) vit.PresentMode {
     for (modes) |mode| if (mode == .mailbox) return mode;
     for (modes) |mode| if (mode == .immediate) return mode;
