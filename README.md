@@ -19,12 +19,22 @@ separate source build before it can use this integration.
 
 The desktop demo scrolls through an interactive native component gallery.
 Tab and Shift+Tab move focus in opposite directions; Enter/Space activate
-buttons, arrows adjust sliders and the panel divider, and editable fields
-accept keyboard text. Click a control or activate it through AccessKit to
-update the same application-owned state. Wheel input scrolls the pane under
-the pointer before the main gallery; the file attachment opens SDL's native
-file picker. The gallery includes text-alignment examples, bundled Lucide
-SVG icons, and a rotating Vitellus 3D scene clipped to its viewport.
-`zig build test` checks control state, focus, nested scrolling, semantic
-snapshots, registered SDL event delivery, and 3D viewport geometry without
-opening a desktop window.
+buttons, arrows navigate radio groups, tabs, and open menus, and Escape closes
+popups or the modal dialog. Text fields support pointer selection, Shift/Ctrl
+navigation, clipboard shortcuts, undo/redo, UTF-8 input, and SDL IME preedit.
+AccessKit can set field values and selections as well as activate controls.
+Wheel input scrolls the pane under the pointer before the main gallery; the
+file attachment opens SDL's native file picker. The gallery includes a
+right-click menu, distinct popovers and hover cards, hover/focus tooltips,
+dismissible toasts, month/time navigation, optionally lined tables, animated
+loading feedback, an SVG-backed image/icon example, and a rotating Vitellus
+3D scene clipped to its viewport. Popups paint above the 3D pass and modal
+focus and accessibility are isolated from the page beneath.
+
+`zig build test` exercises the native AccessKit update and action path,
+scroll-frame budgets, widget roles, focus and pointer routing, text editing,
+overlay ordering, and viewport geometry without opening a desktop window.
+shadcn/ui's classic registry components have no first-party behavior test
+suite; they wrap Radix, Base UI, or React Aria. These Zig tests check
+applicable keyboard/accessibility behavior and portable MessageScroller
+semantics, not React hydration or browser-only tests.

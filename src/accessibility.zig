@@ -9,6 +9,13 @@ const Action = @import("ui_demo.zig").AccessibilityAction;
 const c = @cImport({
     @cInclude("accesskit.h");
 });
+const text_run_id: u64 = @as(u64, 1) << 63;
+const TextEvent = struct {
+    value: [128]u8 = undefined,
+    len: usize = 0,
+    anchor: usize = 0,
+    focus: usize = 0,
+};
 
 const Adapter = switch (builtin.os.tag) {
     .linux => c.accesskit_unix_adapter,
@@ -119,6 +126,22 @@ pub const Bridge = struct {
 
     pub fn event(self: *Self, user: sdl3.events.User, demo: *Demo) bool {
         if (user.event_type != self.event_type) return false;
+        if (user.code == @intFromEnum(Action.set_value) or user.code == @intFromEnum(Action.set_selection)) {
+            const data: *TextEvent = @ptrCast(@alignCast(user.data2 orelse {
+                std.log.warn("Missing AccessKit text event data", .{});
+                return true;
+            }));
+            defer std.heap.page_allocator.destroy(data);
+            const raw_target = @intFromPtr(user.data1 orelse return true);
+            if (raw_target > std.math.maxInt(u32)) {
+                std.log.warn("Invalid AccessKit text target: {d}", .{raw_target});
+                return true;
+            }
+            const target: u32 = @intCast(raw_target);
+            const success = if (user.code == @intFromEnum(Action.set_value)) demo.accessibilitySetValue(target, data.value[0..data.len]) else demo.accessibilitySetSelection(target, data.anchor, data.focus);
+            if (!success) std.log.warn("AccessKit text action rejected for control {d}", .{target});
+            return true;
+        }
         const raw_id = @intFromPtr(user.data1 orelse return true);
         if (raw_id > std.math.maxInt(u32)) {
             std.log.warn("Invalid AccessKit target: {d}", .{raw_id});
@@ -150,7 +173,7 @@ pub const Bridge = struct {
     fn updateTree(self: *Self, initial: bool) *c.accesskit_tree_update {
         self.lock();
         defer self.mutex.unlock();
-        const update = c.accesskit_tree_update_with_capacity_and_focus(self.snapshot.nodes.len, self.snapshot.focus) orelse @panic("AccessKit tree allocation failed");
+        const update = c.accesskit_tree_update_with_capacity_and_focus(self.snapshot.nodes.len * 2, self.snapshot.focus) orelse @panic("AccessKit tree allocation failed");
         if (initial) c.accesskit_tree_update_set_tree_info(update, c.accesskit_tree_info_new(0));
         for (self.snapshot.nodes) |source| {
             const node = c.accesskit_node_new(if (source.id == 0) c.ACCESSKIT_ROLE_WINDOW else if (source.multiline and source.role == .input) c.ACCESSKIT_ROLE_MULTILINE_TEXT_INPUT else nativeRole(source.role)) orelse @panic("AccessKit node allocation failed");
@@ -164,10 +187,13 @@ pub const Bridge = struct {
             if (source.id == 0) c.accesskit_node_set_label(node, "eggy");
             if (source.label.len != 0) c.accesskit_node_set_label_with_length(node, source.label.ptr, source.label.len);
             if (source.description.len != 0) c.accesskit_node_set_description_with_length(node, source.description.ptr, source.description.len);
+            if (source.described_by) |id| c.accesskit_node_push_described_by(node, id);
+            if (source.controls) |id| c.accesskit_node_push_controlled(node, id);
             if (source.value.len != 0) c.accesskit_node_set_value_with_length(node, source.value.ptr, source.value.len);
             if (source.disabled) c.accesskit_node_set_disabled(node);
             if (source.invalid) c.accesskit_node_set_invalid(node, c.ACCESSKIT_INVALID_TRUE);
             if (source.modal) c.accesskit_node_set_modal(node);
+            if (source.live != .off) c.accesskit_node_set_live(node, if (source.live == .polite) c.ACCESSKIT_LIVE_POLITE else c.ACCESSKIT_LIVE_ASSERTIVE);
             if (source.role == .ignored) c.accesskit_node_set_hidden(node);
             if (source.toggled) |value| c.accesskit_node_set_toggled(node, if (value) c.ACCESSKIT_TOGGLED_TRUE else c.ACCESSKIT_TOGGLED_FALSE);
             if (source.selected) |value| c.accesskit_node_set_selected(node, value);
@@ -179,6 +205,27 @@ pub const Bridge = struct {
                 if (source.role == .slider) c.accesskit_node_set_numeric_value_step(node, 0.05);
             }
             for (source.children) |child| c.accesskit_node_push_child(node, child);
+            if (source.role == .input and !source.disabled) {
+                const child_id = text_run_id | source.id;
+                const text = c.accesskit_node_new(c.ACCESSKIT_ROLE_TEXT_RUN) orelse @panic("AccessKit text run allocation failed");
+                c.accesskit_node_set_value_with_length(text, source.value.ptr, source.value.len);
+                const lengths = self.allocator.alloc(u8, source.value.len) catch @panic("AccessKit character allocation failed");
+                defer self.allocator.free(lengths);
+                var at: usize = 0;
+                var characters: usize = 0;
+                while (at < source.value.len) : (characters += 1) {
+                    const size = std.unicode.utf8ByteSequenceLength(source.value[at]) catch unreachable;
+                    lengths[characters] = size;
+                    at += size;
+                }
+                c.accesskit_node_set_character_lengths(text, characters, lengths.ptr);
+                c.accesskit_node_push_child(node, child_id);
+                c.accesskit_tree_update_push_node(update, child_id, text);
+                if (source.text_selection) |selection| c.accesskit_node_set_text_selection(node, .{
+                    .anchor = .{ .node = child_id, .character_index = std.unicode.utf8CountCodepoints(source.value[0..selection.anchor]) catch unreachable },
+                    .focus = .{ .node = child_id, .character_index = std.unicode.utf8CountCodepoints(source.value[0..selection.focus]) catch unreachable },
+                });
+            }
             if (source.actionable and !source.disabled) {
                 c.accesskit_node_add_action(node, c.ACCESSKIT_ACTION_FOCUS);
                 switch (source.role) {
@@ -186,6 +233,10 @@ pub const Bridge = struct {
                     .slider => {
                         c.accesskit_node_add_action(node, c.ACCESSKIT_ACTION_INCREMENT);
                         c.accesskit_node_add_action(node, c.ACCESSKIT_ACTION_DECREMENT);
+                    },
+                    .input => {
+                        c.accesskit_node_add_action(node, c.ACCESSKIT_ACTION_SET_VALUE);
+                        c.accesskit_node_add_action(node, c.ACCESSKIT_ACTION_SET_TEXT_SELECTION);
                     },
                     else => {},
                 }
@@ -213,24 +264,80 @@ pub const Bridge = struct {
             c.ACCESSKIT_ACTION_CLICK => .click,
             c.ACCESSKIT_ACTION_INCREMENT => .increment,
             c.ACCESSKIT_ACTION_DECREMENT => .decrement,
+            c.ACCESSKIT_ACTION_SET_VALUE => .set_value,
+            c.ACCESSKIT_ACTION_SET_TEXT_SELECTION => .set_selection,
             else => {
                 std.log.warn("Unsupported AccessKit action: {d}", .{action});
                 return;
             },
         };
         if (request.?.target_node == 0 or request.?.target_node > std.math.maxInt(u32)) return;
+        var data: ?*TextEvent = null;
+        if (code == .set_value or code == .set_selection) {
+            if (!request.?.data.has_value) {
+                std.log.warn("Missing AccessKit text action payload", .{});
+                return;
+            }
+            data = std.heap.page_allocator.create(TextEvent) catch {
+                std.log.err("Cannot allocate AccessKit text action", .{});
+                return;
+            };
+            data.?.* = .{};
+            if (code == .set_value) {
+                if (request.?.data.value.tag != c.ACCESSKIT_ACTION_DATA_VALUE) {
+                    std.log.warn("Invalid AccessKit value action data", .{});
+                    std.heap.page_allocator.destroy(data.?);
+                    return;
+                }
+                const raw_value = request.?.data.value.unnamed_0.unnamed_1.value;
+                if (raw_value == null) {
+                    std.log.warn("AccessKit value action has no text", .{});
+                    std.heap.page_allocator.destroy(data.?);
+                    return;
+                }
+                const value = std.mem.span(raw_value);
+                if (value.len > data.?.value.len) {
+                    std.log.warn("AccessKit value exceeds 128 bytes", .{});
+                    std.heap.page_allocator.destroy(data.?);
+                    return;
+                }
+                @memcpy(data.?.value[0..value.len], value);
+                data.?.len = value.len;
+            } else {
+                if (request.?.data.value.tag != c.ACCESSKIT_ACTION_DATA_SET_TEXT_SELECTION) {
+                    std.log.warn("Invalid AccessKit selection action data", .{});
+                    std.heap.page_allocator.destroy(data.?);
+                    return;
+                }
+                const selection = request.?.data.value.unnamed_0.unnamed_7.set_text_selection;
+                const child_id = text_run_id | request.?.target_node;
+                if (selection.anchor.node != child_id or selection.focus.node != child_id) {
+                    std.log.warn("AccessKit selection references another text run", .{});
+                    std.heap.page_allocator.destroy(data.?);
+                    return;
+                }
+                data.?.anchor = selection.anchor.character_index;
+                data.?.focus = selection.focus.character_index;
+            }
+        }
         sdl3.events.push(.{ .user = .{
             .common = .{ .timestamp = 0 },
             .event_type = self.event_type,
             .code = @intFromEnum(code),
             .data1 = @ptrFromInt(request.?.target_node),
-        } }) catch |err| std.log.err("Failed to queue AccessKit action: {s}", .{@errorName(err)});
+            .data2 = data,
+        } }) catch |err| {
+            if (data) |owned| std.heap.page_allocator.destroy(owned);
+            std.log.err("Failed to queue AccessKit action: {s}", .{@errorName(err)});
+        };
     }
 };
 
 fn nativeRole(role: ui.accessibility.Role) c.accesskit_role {
     return switch (role) {
         .group => c.ACCESSKIT_ROLE_GENERIC_CONTAINER,
+        .region => c.ACCESSKIT_ROLE_REGION,
+        .log => c.ACCESSKIT_ROLE_LOG,
         .label => c.ACCESSKIT_ROLE_LABEL,
         .heading => c.ACCESSKIT_ROLE_HEADING,
         .button => c.ACCESSKIT_ROLE_BUTTON,
@@ -246,6 +353,8 @@ fn nativeRole(role: ui.accessibility.Role) c.accesskit_role {
         .tab_panel => c.ACCESSKIT_ROLE_TAB_PANEL,
         .image => c.ACCESSKIT_ROLE_IMAGE,
         .alert => c.ACCESSKIT_ROLE_ALERT,
+        .status => c.ACCESSKIT_ROLE_STATUS,
+        .tooltip => c.ACCESSKIT_ROLE_TOOLTIP,
         .dialog => c.ACCESSKIT_ROLE_DIALOG,
         .alert_dialog => c.ACCESSKIT_ROLE_ALERT_DIALOG,
         .menu => c.ACCESSKIT_ROLE_MENU,
@@ -274,7 +383,7 @@ test "native AccessKit update includes Weeoui labels and app focus" {
     try std.testing.expect(std.mem.indexOf(u8, std.mem.span(debug), "Show hints") != null);
     try std.testing.expect(std.mem.indexOf(u8, std.mem.span(debug), "Details panel") != null);
     try std.testing.expect(std.mem.indexOf(u8, std.mem.span(debug), "Activity over five periods") != null);
-    try std.testing.expect(std.mem.indexOf(u8, std.mem.span(debug), "Dialog preview") != null);
+    try std.testing.expect(std.mem.indexOf(u8, std.mem.span(debug), "Open dialog") != null);
     try std.testing.expectEqual(c.ACCESSKIT_ROLE_TAB, nativeRole(.tab));
     try std.testing.expectEqual(c.ACCESSKIT_ROLE_COLUMN_HEADER, nativeRole(.column_header));
     try std.testing.expectEqual(c.ACCESSKIT_ROLE_ALERT_DIALOG, nativeRole(.alert_dialog));
@@ -299,4 +408,37 @@ test "native AccessKit update includes Weeoui labels and app focus" {
     try std.testing.expectEqual(@as(u64, 360), bridge.snapshot.focus);
     try std.testing.expect(std.mem.indexOf(u8, std.mem.span(changed_debug), "Overview panel") != null);
     try std.testing.expect(std.mem.indexOf(u8, std.mem.span(changed_debug), "Details panel") == null);
+}
+
+test "AccessKit value and selection actions reach the bounded UTF-8 editor" {
+    var font = try ui.Font.init(std.testing.allocator, ui.default_font, 32);
+    defer font.deinit();
+    var demo: Demo = .{};
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const snapshot = try demo.accessibilitySnapshot(arena.allocator(), .{ .x = 0, .y = 0, .w = 900, .h = 675 }, &font);
+    var bridge = Bridge{ .allocator = std.testing.allocator, .arena = arena, .snapshot = snapshot, .scale = 1, .event_type = @intFromEnum(sdl3.events.Type.user) + 1 };
+    const value = try std.heap.page_allocator.create(TextEvent);
+    value.* = .{};
+    @memcpy(value.value[0..4], "AéB");
+    value.len = 4;
+    const target: ?*anyopaque = @ptrFromInt(300);
+    try std.testing.expect(bridge.event(.{
+        .common = .{ .timestamp = 0 },
+        .event_type = bridge.event_type,
+        .code = @intFromEnum(Action.set_value),
+        .data1 = target,
+        .data2 = value,
+    }, &demo));
+    try std.testing.expectEqualStrings("AéB", demo.editable[0].text.text());
+    const selection = try std.heap.page_allocator.create(TextEvent);
+    selection.* = .{ .anchor = 1, .focus = 2 };
+    try std.testing.expect(bridge.event(.{
+        .common = .{ .timestamp = 0 },
+        .event_type = bridge.event_type,
+        .code = @intFromEnum(Action.set_selection),
+        .data1 = target,
+        .data2 = selection,
+    }, &demo));
+    try std.testing.expectEqualStrings("é", demo.selectedText().?);
 }

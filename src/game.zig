@@ -57,6 +57,7 @@ pub const Game = struct {
     a11y: *accessibility.Bridge,
     file_event_type: @FieldType(sdl3.events.User, "event_type"),
     text_input_active: bool = false,
+    a11y_dirty: bool = false,
     fps_capper: sdl3.extras.FramerateCapper(f32),
 
     pub fn init(i: sdl3.Init) !Game {
@@ -99,9 +100,16 @@ pub const Game = struct {
     }
 
     pub fn iterate(self: *Game) !sdl3.AppResult {
+        const previous_viewport = self.m_graphics.viewport;
+        const previous_dpi = self.m_graphics.font.dpi_scale;
         try self.m_graphics.syncSize(self.window);
+        if (!std.meta.eql(previous_viewport, self.m_graphics.viewport) or previous_dpi != self.m_graphics.font.dpi_scale) self.a11y_dirty = true;
         const dt = self.fps_capper.delay();
-        _ = dt;
+        self.m_graphics.demo.animation_phase = @mod(self.m_graphics.demo.animation_phase + @min(dt, 0.25) / 1.2, 1);
+        if (self.a11y_dirty) {
+            try self.a11y.publish(&self.m_graphics.demo, self.m_graphics.viewport, &self.m_graphics.font);
+            self.a11y_dirty = false;
+        }
         try self.m_graphics.frame();
         return .run;
     }
@@ -120,20 +128,26 @@ pub const Game = struct {
             .window_focus_lost => self.a11y.windowFocus(false),
             .mouse_motion => |motion| {
                 const scale = self.m_graphics.demo.ui_scale;
-                self.m_graphics.demo.pointerMove(motion.x / scale, motion.y / scale);
+                const old_hover = .{ self.m_graphics.demo.hover_card_open, self.m_graphics.demo.tooltip_open };
+                self.m_graphics.demo.pointerMoveAt(motion.x / scale, motion.y / scale, &self.m_graphics.font);
                 if (self.m_graphics.demo.dragging_slider) {
                     try self.m_graphics.syncSize(self.window);
                     publish = true;
-                } else if (self.m_graphics.demo.scroll.dragging != .none or self.m_graphics.demo.dragging_divider) {
-                    try self.m_graphics.relayoutDemo();
+                } else if (self.m_graphics.demo.scroll.dragging != .none or self.m_graphics.demo.dragging_divider or self.m_graphics.demo.dragging_text or old_hover[0] != self.m_graphics.demo.hover_card_open or old_hover[1] != self.m_graphics.demo.tooltip_open) {
+                    if (old_hover[0] != self.m_graphics.demo.hover_card_open or old_hover[1] != self.m_graphics.demo.tooltip_open) try self.m_graphics.relayoutDemo();
                     publish = true;
                 }
             },
             .mouse_button_down => |button| {
                 if (button.button == .left) {
                     const scale = self.m_graphics.demo.ui_scale;
-                    self.m_graphics.demo.pointerDown(button.x / scale, button.y / scale);
+                    self.m_graphics.demo.pointerDownAt(button.x / scale, button.y / scale, &self.m_graphics.font);
                     try self.m_graphics.syncSize(self.window);
+                    try self.m_graphics.relayoutDemo();
+                    publish = true;
+                } else if (button.button == .right) {
+                    const scale = self.m_graphics.demo.ui_scale;
+                    self.m_graphics.demo.pointerContextDown(button.x / scale, button.y / scale);
                     try self.m_graphics.relayoutDemo();
                     publish = true;
                 }
@@ -142,36 +156,115 @@ pub const Game = struct {
             .mouse_wheel => |wheel| {
                 const scale = self.m_graphics.demo.ui_scale;
                 self.m_graphics.demo.scrollWheel(wheel.x / scale, wheel.y / scale, wheel.scroll_x, wheel.scroll_y);
-                try self.m_graphics.relayoutDemo();
                 publish = true;
             },
             .text_input => |text| {
                 if (self.m_graphics.demo.insertText(text.text)) {
                     try self.m_graphics.relayoutDemo();
                     publish = true;
+                } else if (self.m_graphics.demo.menuTypeAhead(text.text)) {
+                    try self.m_graphics.relayoutDemo();
+                    publish = true;
                 }
             },
+            .text_editing => |text| {
+                self.m_graphics.demo.setComposition(text.text, text.start);
+                publish = true;
+            },
             .key_down => |key| {
-                if (!key.repeat) if (key.key) |code| {
-                    switch (code) {
-                        .tab => self.m_graphics.demo.next(key.mod.shiftDown()),
-                        .left => self.m_graphics.demo.adjustFocused(-1),
-                        .right => self.m_graphics.demo.adjustFocused(1),
-                        .backspace => _ = self.m_graphics.demo.backspace(),
-                        .space => if (!self.m_graphics.demo.isEditing()) self.m_graphics.demo.activate(),
-                        .return_key, .kp_enter => if (self.m_graphics.demo.isEditing()) {
-                            _ = self.m_graphics.demo.insertText("\n");
-                        } else self.m_graphics.demo.activate(),
-                        .page_down => self.m_graphics.demo.scroll.wheel(0, -self.m_graphics.viewport.h / 40),
-                        .page_up => self.m_graphics.demo.scroll.wheel(0, self.m_graphics.viewport.h / 40),
-                        .home => self.m_graphics.demo.scroll.offset.y = 0,
-                        .end => self.m_graphics.demo.scroll.offset.y = self.m_graphics.demo.scroll.content.y,
+                if (key.key) |code| {
+                    const demo = &self.m_graphics.demo;
+                    const command = if (builtin.os.tag == .macos) key.mod.guiDown() else key.mod.controlDown();
+                    const extend = key.mod.shiftDown();
+                    const word = key.mod.controlDown() or (builtin.os.tag == .macos and key.mod.altDown());
+                    const shortcut = switch (code) {
+                        .a, .z, .y, .c, .x, .v, .return_key, .kp_enter => true,
+                        else => false,
+                    };
+                    if (demo.composition_len > 0 and code != .escape and code != .tab) {
+                        // The IME owns navigation until its preedit is committed or cancelled.
+                    } else if (command and demo.isEditing() and shortcut) {
+                        switch (code) {
+                            .a => _ = demo.editKey(.select_all, false, false, &self.m_graphics.font),
+                            .z => _ = demo.editKey(if (extend) .redo else .undo, false, false, &self.m_graphics.font),
+                            .y => _ = demo.editKey(.redo, false, false, &self.m_graphics.font),
+                            .c, .x => {
+                                if (demo.selectedText()) |selection| {
+                                    var buffer: [129]u8 = undefined;
+                                    const copied = try std.fmt.bufPrintZ(&buffer, "{s}", .{selection});
+                                    try sdl3.clipboard.setText(copied);
+                                    if (code == .x) demo.cutSelection();
+                                }
+                            },
+                            .v => {
+                                if (sdl3.clipboard.hasText()) {
+                                    const copied = try sdl3.clipboard.getText();
+                                    defer sdl3.free(copied);
+                                    _ = demo.insertText(copied);
+                                } else demo.status = "Clipboard has no text.";
+                            },
+                            .return_key, .kp_enter => if (demo.focusId() == 300 or demo.focusId() == 301 or demo.focusId() == 302) demo.submitForm(),
+                            else => {},
+                        }
+                    } else if (!key.repeat or demo.isEditing()) switch (code) {
+                        .tab => if (!key.repeat) demo.next(extend),
+                        .escape => {
+                            if (demo.composition_len > 0) {
+                                demo.setComposition("", null);
+                            } else {
+                                _ = demo.dismiss();
+                            }
+                        },
+                        .left => {
+                            const moved = if (builtin.os.tag == .macos and command and demo.isEditing())
+                                demo.editKey(.home, extend, false, &self.m_graphics.font)
+                            else
+                                demo.editKey(.left, extend, word, &self.m_graphics.font);
+                            if (!moved and !demo.moveComposite(-1)) demo.adjustFocused(-1);
+                        },
+                        .right => {
+                            const moved = if (builtin.os.tag == .macos and command and demo.isEditing())
+                                demo.editKey(.end, extend, false, &self.m_graphics.font)
+                            else
+                                demo.editKey(.right, extend, word, &self.m_graphics.font);
+                            if (!moved and !demo.moveComposite(1)) demo.adjustFocused(1);
+                        },
+                        .up => {
+                            if (!demo.menuMove(-1) and !demo.editKey(.up, extend, false, &self.m_graphics.font)) _ = demo.moveComposite(-1);
+                        },
+                        .down => {
+                            if (!demo.menuMove(1) and !demo.editKey(.down, extend, false, &self.m_graphics.font)) _ = demo.moveComposite(1);
+                        },
+                        .backspace => {
+                            if (word and demo.isEditing()) _ = demo.editKey(.left, true, true, &self.m_graphics.font);
+                            if (!demo.editKey(.backspace, false, false, &self.m_graphics.font)) _ = demo.backspace();
+                        },
+                        .delete => {
+                            if (word and demo.isEditing()) _ = demo.editKey(.right, true, true, &self.m_graphics.font);
+                            _ = demo.editKey(.delete, false, false, &self.m_graphics.font);
+                        },
+                        .space => if (!demo.isEditing() and !key.repeat) demo.activate(),
+                        .return_key, .kp_enter => if (demo.composition_len == 0) {
+                            if (!demo.confirmMenu()) {
+                                if (demo.isEditing()) {
+                                    if (demo.focusId() == 301) _ = demo.insertText("\n");
+                                } else if (!key.repeat) demo.activate();
+                            }
+                        },
+                        .page_down => if (!demo.dialog_open) demo.scroll.wheel(0, -self.m_graphics.viewport.h / 40),
+                        .page_up => if (!demo.dialog_open) demo.scroll.wheel(0, self.m_graphics.viewport.h / 40),
+                        .home => {
+                            if (!demo.editKey(.home, extend, word, &self.m_graphics.font) and !demo.dialog_open) demo.scroll.offset.y = 0;
+                        },
+                        .end => {
+                            if (!demo.editKey(.end, extend, word, &self.m_graphics.font) and !demo.dialog_open) demo.scroll.offset.y = demo.scroll.content.y;
+                        },
                         else => {},
-                    }
+                    };
                     try self.m_graphics.syncSize(self.window);
                     try self.m_graphics.relayoutDemo();
                     publish = true;
-                };
+                }
             },
             .user => |user| {
                 if (user.event_type == self.file_event_type) {
@@ -192,11 +285,9 @@ pub const Game = struct {
                             self.m_graphics.demo.status = "Selected filename exceeds 128 bytes.";
                         },
                     }
-                    try self.m_graphics.relayoutDemo();
                     publish = true;
                 } else if (self.a11y.event(user, &self.m_graphics.demo)) {
                     try self.m_graphics.syncSize(self.window);
-                    try self.m_graphics.relayoutDemo();
                     publish = true;
                 }
             },
@@ -209,7 +300,7 @@ pub const Game = struct {
             sdl3.dialog.showOpenFile(FileRequest, fileSelected, request, self.window.window, null, null, false);
         }
         try self.syncTextInput();
-        if (publish) try self.a11y.publish(&self.m_graphics.demo, self.m_graphics.viewport, &self.m_graphics.font);
+        self.a11y_dirty = self.a11y_dirty or publish;
         return .run;
     }
 

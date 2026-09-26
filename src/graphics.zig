@@ -169,7 +169,7 @@ pub const Graphics = struct {
         canvas.theme = self.theme;
         canvas.srgb_target = self.color_format == .bgra8_unorm_srgb or self.color_format == .rgba8_unorm_srgb;
         canvas.pixel_scale = .{ @as(f32, @floatFromInt(info.extent.width)) / self.viewport.w, @as(f32, @floatFromInt(info.extent.height)) / self.viewport.h };
-        try self.demo.draw(self.allocator, &canvas, self.viewport);
+        const base_vertices = try self.demo.draw(self.allocator, &canvas, self.viewport);
         for (vertex_data[0..canvas.len]) |*vertex| {
             vertex.position[0] = 2 * vertex.position[0] / self.viewport.w - 1;
             vertex.position[1] = 1 - 2 * vertex.position[1] / self.viewport.h;
@@ -203,9 +203,19 @@ pub const Graphics = struct {
         cmd.setViewport(.{ .width = @floatFromInt(info.extent.width), .height = @floatFromInt(info.extent.height) });
         cmd.setScissor(.{ .width = info.extent.width, .height = info.extent.height });
         cmd.setVertexBuffer(0, self.vertices, 0);
-        cmd.draw(@intCast(canvas.len), 1, 0, 0);
+        cmd.draw(@intCast(base_vertices), 1, 0, 0);
         cmd.endRenderPass();
         try self.preview.draw(cmd, acquired.view, self.demo.scene_viewport, self.demo.scene_clip, self.viewport, info.extent, canvas.srgb_target);
+        if (canvas.len > base_vertices) {
+            try cmd.beginRenderPass(.{ .color_attachments = &.{.{ .view = acquired.view, .load_op = .load, .store_op = .store }} });
+            cmd.setGraphicsPipeline(self.pipeline);
+            cmd.setBindGroup(0, self.font_group, &.{});
+            cmd.setViewport(.{ .width = @floatFromInt(info.extent.width), .height = @floatFromInt(info.extent.height) });
+            cmd.setScissor(.{ .width = info.extent.width, .height = info.extent.height });
+            cmd.setVertexBuffer(0, self.vertices, 0);
+            cmd.draw(@intCast(canvas.len - base_vertices), 1, @intCast(base_vertices), 0);
+            cmd.endRenderPass();
+        }
         try cmd.barrier(&.{.{ .texture_view = .{ .view = acquired.view, .before = .color_attachment, .after = .present } }});
         try cmd.finish();
         try self.queue.submit(.{ .command_buffers = &.{cmd} });
