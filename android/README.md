@@ -1,1 +1,0 @@
-The editor is not expected to run on android, its more for the runtime. 

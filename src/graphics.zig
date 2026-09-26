@@ -1,5 +1,4 @@
 const std = @import("std");
-const builtin = @import("builtin");
 const vit = @import("vitellus");
 const sdl_adapter = @import("vitellus_sdl3");
 const math = @import("eggenvector");
@@ -56,7 +55,7 @@ pub const Graphics = struct {
     pub fn init(allocator: std.mem.Allocator, window: sdl_adapter.Sdl3Window) !@This() {
         const instance = try vit.Instance.init(allocator, .{
             .backend = .{ .vulkan = true },
-            .validation = if (builtin.abi.isAndroid()) .none else .core,
+            .validation = .core,
         });
         errdefer instance.deinit();
 

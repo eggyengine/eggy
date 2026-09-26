@@ -20,16 +20,11 @@
             .url = "git+https://github.com/eggyengine/eggenvector#49046e371a8791ed3483e80326d779eedd0c181e",
             .hash = "eggenvector-0.0.0-UyZb9C7sAQBBRR526yoYPHubwq9etR7eLFT5chA31KkX",
         },
-        .android = .{
-            .url = "git+https://github.com/silbinarywolf/zig-android-sdk?ref=main#0e8dfe60ec5120e99d6705ab4606079bc3160a53",
-            .hash = "android-0.3.0-7iz7Qp9IAgBlbdmEnCTne54Rn_lfHtiN3Er6HFkhn5y8",
-        },
     },
     .paths = .{
         "build.zig",
         "build.zig.zon",
         "packages",
         "src",
-        "android",
     },
 }

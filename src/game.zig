@@ -1,5 +1,3 @@
-const std = @import("std");
-const builtin = @import("builtin");
 const sdl_adapter = @import("vitellus_sdl3");
 const sdl3 = sdl_adapter.sdl;
 
@@ -16,20 +14,13 @@ pub const Game = struct {
     fps_capper: sdl3.extras.FramerateCapper(f32),
 
     pub fn init(i: sdl3.Init) !Game {
-        if (builtin.abi.isAndroid()) {
-            try sdl3.hints.set(.orientations, "LandscapeLeft LandscapeRight");
-        }
-
         const init_flags = sdl3.InitFlags{ .video = true };
         try sdl3.init(init_flags);
         errdefer sdl3.quit(init_flags);
 
-        const window_w: usize = if (builtin.abi.isAndroid()) 1280 else width;
-        const window_h: usize = if (builtin.abi.isAndroid()) 720 else height;
-        const window: sdl_adapter.Sdl3Window = .init(try sdl3.video.Window.init("eggy", window_w, window_h, .{
+        const window: sdl_adapter.Sdl3Window = .init(try sdl3.video.Window.init("eggy", width, height, .{
             .vulkan = true,
             .resizable = true,
-            .fullscreen = builtin.abi.isAndroid(),
         }));
 
         const m_graphics = try graphics.Graphics.init(i.gpa, window);
