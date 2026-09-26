@@ -5,10 +5,13 @@
     .minimum_zig_version = "0.16.0",
     .dependencies = .{
         .sdl3 = .{
-            .path = "../vitellus/vendor/zig-sdl3",
+            .path = "src/vitellus/vendor/zig-sdl3",
         },
         .vitellus = .{
-            .path = "../vitellus",
+            .path = "src/vitellus",
+        },
+        .humpty = .{
+            .path = "src/humpty",
         },
         .eggenvector = .{
             .url = "git+https://github.com/eggyengine/eggenvector#49046e371a8791ed3483e80326d779eedd0c181e",

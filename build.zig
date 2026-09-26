@@ -2,6 +2,9 @@ const std = @import("std");
 const android = @import("android");
 
 pub fn build(b: *std.Build) void {
+    const update_submodules = b.addSystemCommand(&.{ "git", "submodule", "update", "--init", "--remote", "--recursive" });
+    b.step("update-submodules", "Update submodules to their latest remote commits").dependOn(&update_submodules.step);
+
     const root_target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
     const android_targets = android.resolveTargets(b, .{
