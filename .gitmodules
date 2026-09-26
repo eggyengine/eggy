@@ -5,3 +5,7 @@
 [submodule "src/humpty"]
 	path = src/humpty
 	url = https://github.com/eggyengine/humpty.git
+[submodule "src/weeoui"]
+	path = src/weeoui
+	url = https://github.com/eggyengine/weeoui.git
+	branch = main
