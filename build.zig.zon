@@ -5,16 +5,18 @@
     .minimum_zig_version = "0.16.0",
     .dependencies = .{
         .sdl3 = .{
-            .url = "git+https://codeberg.org/7Games/zig-sdl3?ref=v0.2.2#83c694024f23cbacfa36fcd8fca1c57d4957203e",
-            .hash = "sdl3-0.2.2-NmT1Q-2jKQBa4uSXUwuVwdmXpXe-eYwim7Wkyx531v6O",
+            .path = "../vitellus/vendor/zig-sdl3",
         },
         .vitellus = .{
-            .url = "git+https://github.com/eggyengine/vitellus#c02449b2b574af57f4bcbec54e9280102e4ca9fa",
-            .hash = "vitellus-0.1.0-JC2CjBGyBwBl_UNlRxidr-heoaBt3gUL0DOAK28eT3wt",
+            .path = "../vitellus",
         },
         .eggenvector = .{
             .url = "git+https://github.com/eggyengine/eggenvector#49046e371a8791ed3483e80326d779eedd0c181e",
             .hash = "eggenvector-0.0.0-UyZb9C7sAQBBRR526yoYPHubwq9etR7eLFT5chA31KkX",
+        },
+        .android = .{
+            .url = "git+https://github.com/silbinarywolf/zig-android-sdk?ref=main#0e8dfe60ec5120e99d6705ab4606079bc3160a53",
+            .hash = "android-0.3.0-7iz7Qp9IAgBlbdmEnCTne54Rn_lfHtiN3Er6HFkhn5y8",
         },
     },
     .paths = .{
@@ -22,5 +24,6 @@
         "build.zig.zon",
         "packages",
         "src",
+        "android",
     },
 }

@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const vit = @import("vitellus");
 const math = @import("eggenvector");
 
@@ -40,6 +41,8 @@ pub const Graphics = struct {
     color_format: vit.Format,
     depth: vit.Texture,
     depth_view: vit.TextureView,
+    depth_extent: vit.Extent2D,
+    window_extent: vit.Extent2D,
     vertices: vit.Buffer,
     indices: vit.Buffer,
     uniforms: vit.Buffer,
@@ -49,10 +52,10 @@ pub const Graphics = struct {
     pipeline: vit.GraphicsPipeline,
     angle: f32 = 0,
 
-    pub fn init(i: std.process.Init, window: vit.windowing.sdl3.Sdl3Window) !@This() {
-        const instance = try vit.Instance.init(i.gpa, .{
+    pub fn init(allocator: std.mem.Allocator, window: vit.windowing.sdl3.Sdl3Window) !@This() {
+        const instance = try vit.Instance.init(allocator, .{
             .backend = .{ .vulkan = true },
-            .validation = .core,
+            .validation = if (builtin.abi.isAndroid()) .none else .core,
         });
         errdefer instance.deinit();
 
@@ -88,7 +91,7 @@ pub const Graphics = struct {
         errdefer swapchain.deinit();
 
         const color_format = colorFormat(caps.formats[0]);
-        const depth, const depth_view = try createDepth(device, extent);
+        const depth, const depth_view = try createDepth(device, swapchain.info().extent);
         errdefer {
             depth_view.deinit();
             depth.deinit();
@@ -183,6 +186,8 @@ pub const Graphics = struct {
             .color_format = color_format,
             .depth = depth,
             .depth_view = depth_view,
+            .depth_extent = swapchain.info().extent,
+            .window_extent = extent,
             .vertices = vertices,
             .indices = indices,
             .uniforms = uniforms,
@@ -193,15 +198,24 @@ pub const Graphics = struct {
         };
     }
 
-    pub fn onResize(self: *@This(), window: vit.windowing.sdl3.Sdl3Window) !void {
+    pub fn syncSize(self: *@This(), window: vit.windowing.sdl3.Sdl3Window) !void {
         const size = try window.window.getSizeInPixels();
         if (size.@"0" == 0 or size.@"1" == 0) return;
+        const requested = vit.Extent2D{ .width = @intCast(size.@"0"), .height = @intCast(size.@"1") };
+        if (requested.width != self.window_extent.width or requested.height != self.window_extent.height) {
+            try self.queue.waitIdle();
+            try self.swapchain.resize(requested);
+            self.window_extent = requested;
+        }
+        const actual = self.swapchain.info().extent;
+        if (actual.width == self.depth_extent.width and actual.height == self.depth_extent.height) return;
         try self.queue.waitIdle();
-        const extent = vit.Extent2D{ .width = @intCast(size.@"0"), .height = @intCast(size.@"1") };
-        try self.swapchain.resize(extent);
+        const depth, const depth_view = try createDepth(self.device, actual);
         self.depth_view.deinit();
         self.depth.deinit();
-        self.depth, self.depth_view = try createDepth(self.device, extent);
+        self.depth = depth;
+        self.depth_view = depth_view;
+        self.depth_extent = actual;
     }
 
     pub fn deinit(self: *@This()) void {
