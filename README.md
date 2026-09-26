@@ -27,9 +27,13 @@ Wheel input scrolls the pane under the pointer before the main gallery; the
 file attachment opens SDL's native file picker. The gallery includes a
 right-click menu, distinct popovers and hover cards, hover/focus tooltips,
 dismissible toasts, month/time navigation, optionally lined tables, animated
-loading feedback, an SVG-backed image/icon example, and a rotating Vitellus
+loading feedback, an accessible message log with add/jump actions, an
+SVG-backed image/icon example, and a rotating Vitellus
 3D scene clipped to its viewport. Popups paint above the 3D pass and modal
 focus and accessibility are isolated from the page beneath.
+Workspace provides project creation/edit actions, Dashboard shows live
+project totals and activity, and Settings edits the same preferences as
+the main controls.
 
 `zig build test` exercises the native AccessKit update and action path,
 scroll-frame budgets, widget roles, focus and pointer routing, text editing,
@@ -37,4 +41,4 @@ overlay ordering, and viewport geometry without opening a desktop window.
 shadcn/ui's classic registry components have no first-party behavior test
 suite; they wrap Radix, Base UI, or React Aria. These Zig tests check
 applicable keyboard/accessibility behavior and portable MessageScroller
-semantics, not React hydration or browser-only tests.
+geometry and follow/scroll intent semantics, not React hydration or browser-only tests.

@@ -92,7 +92,8 @@ pub const Demo = struct {
     pointer_y: f32 = -1,
     scroll: L.ScrollState = .{},
     preview_scroll: L.ScrollState = .{},
-    message_scroll: L.ScrollState = .{},
+    message_scroll: L.ScrollState = .{ .auto_scroll = true },
+    message_count: usize = 3,
     controls: [128]ui.Rect = [_]ui.Rect{.{ .x = 0, .y = 0, .w = 0, .h = 0 }} ** 128,
     scene_viewport: ui.Rect = .{ .x = 0, .y = 0, .w = 0, .h = 0 },
     scene_clip: ui.Rect = .{ .x = 0, .y = 0, .w = 0, .h = 0 },
@@ -755,17 +756,19 @@ pub const Demo = struct {
                 _ = self.dismiss();
                 self.command_open = open;
             },
-            441, 442 => {
-                self.command_highlight = id;
-                if (id == 441) {
+            441, 442, 530, 531 => {
+                if (id == 441 or id == 442) self.command_highlight = id;
+                if (id == 441 or id == 530) {
                     self.files_created += 1;
                     self.status = "New file created.";
                 } else {
                     self.folders_created += 1;
                     self.status = "New folder created.";
                 }
-                self.command_open = false;
-                self.restore_focus = 440;
+                if (id == 441 or id == 442) {
+                    self.command_open = false;
+                    self.restore_focus = 440;
+                }
             },
             443 => self.toast_visible = true,
             444 => self.toast_visible = false,
@@ -778,6 +781,16 @@ pub const Demo = struct {
                     self.file_picker_open = true;
                     self.status = "Opening file picker...";
                 }
+            },
+            498 => {
+                if (self.message_count < 8) {
+                    self.message_count += 1;
+                    self.status = "Message appended.";
+                } else self.status = "Demo transcript is full.";
+            },
+            499 => {
+                self.message_scroll.jumpToMessageEnd();
+                self.status = "Showing latest messages.";
             },
             489 => {
                 _ = self.dismiss();
@@ -799,6 +812,13 @@ pub const Demo = struct {
                     521 => "Dashboard selected.",
                     else => "Settings selected.",
                 };
+            },
+            533 => self.checked = !self.checked,
+            534 => self.enabled = !self.enabled,
+            535 => self.submitForm(),
+            536 => {
+                self.restore_focus = 300;
+                if (self.indexOf(300)) |index| self.scroll.ensureVisible(self.controls[index]);
             },
             else => std.log.warn("Unimplemented demo control: {d}", .{id}),
         }
@@ -935,6 +955,12 @@ fn build(b: L.Builder, demo: *Demo, viewport: ui.Rect, count_buf: *[20]u8, verti
 
 fn componentGallery(b: L.Builder, demo: *Demo, page_width: f32) !*L.Element {
     const W = ui.widgets;
+    const message_texts = [_][]const u8{ "One", "Two", "Three", "Four", "Five", "Six", "Seven", "Eight" };
+    var messages: [message_texts.len]*L.Element = undefined;
+    for (messages[0..demo.message_count], 0..) |*entry, i| {
+        entry.* = try W.message(b, if (i % 2 == 0) "Alice" else "Bob", message_texts[i]);
+        entry.*.id = 600 + @as(u32, @intCast(i));
+    }
     const inner_width = @max(192, page_width - 48);
     const sizes = [_][]const u8{ "Compact", "Comfortable", "Spacious" };
     var otp_len: usize = 0;
@@ -1036,11 +1062,31 @@ fn componentGallery(b: L.Builder, demo: *Demo, page_width: f32) !*L.Element {
     const sidebar = try W.sidebar(b, 172, &.{ workspace_button, dashboard_button, settings_button });
     sidebar.style.width = @min(240, inner_width);
     const sidebar_content = switch (demo.sidebar_selection) {
-        520 => try label(b, try std.fmt.allocPrint(b.allocator, "Workspace: {s}, {d} new files, {d} new folders", .{ demo.editable[0].text.text(), demo.files_created, demo.folders_created }), 15, false, true),
-        521 => try label(b, "Dashboard: activity over five periods", 15, false, true),
-        else => try label(b, "Settings: edit fields and apply changes above", 15, false, true),
+        520 => try b.card(&.{
+            try label(b, "Workspace", 20, false, false),
+            try label(b, try std.fmt.allocPrint(b.allocator, "Project: {s}", .{demo.editable[0].text.text()}), 15, false, true),
+            try b.row(&.{ try b.button(530, "New file"), try b.button(531, "New folder") }),
+            try b.button(536, "Edit project"),
+        }),
+        521 => try b.card(&.{
+            try label(b, "Dashboard: project activity", 20, false, true),
+            try label(b, try std.fmt.allocPrint(b.allocator, "{d} files, {d} folders created", .{ demo.files_created, demo.folders_created }), 15, false, true),
+            try b.chart(&.{ 5, 8, 4, 9, 6 }),
+        }),
+        else => try b.card(&.{
+            try label(b, "Settings", 20, false, false),
+            try b.node(533, .{ .height = 32 }, .{ .checkbox = .{ .label = "Show hints", .checked = demo.checked } }, &.{}),
+            try b.node(534, .{ .height = 32 }, .{ .toggle = .{ .label = "Live updates", .enabled = demo.enabled } }, &.{}),
+            try b.button(535, "Apply settings"),
+        }),
     };
-    sidebar_content.accessibility.role = .heading;
+    sidebar_content.accessibility = .{ .role = .region, .label = switch (demo.sidebar_selection) {
+        520 => "Workspace view",
+        521 => "Dashboard view",
+        else => "Settings view",
+    } };
+    if (demo.sidebar_selection == 521) sidebar_content.children[2].accessibility.label = "Project activity over five periods";
+    sidebar_content.children[0].accessibility.role = .heading;
     const image = try b.node(0, .{ .width = 64, .height = 64 }, .{ .icon = .image }, &.{});
     image.accessibility = .{ .role = .image, .label = "Lucide Image SVG" };
     const item = try W.item(b, 460, try std.fmt.allocPrint(b.allocator, "{s}{s}", .{ demo.editable[0].text.text(), if (demo.selected_item) " (opened)" else "" }), "Composable content and metadata.", try b.avatar("EC"));
@@ -1076,11 +1122,8 @@ fn componentGallery(b: L.Builder, demo: *Demo, page_width: f32) !*L.Element {
             try b.text("Scrollable fourth line"),
             try b.text("Scrollable fifth line"),
         }),
-        try W.messageScroller(b, .{ .x = 0, .y = 0, .w = @min(inner_width, 300), .h = 100 }, &demo.message_scroll, &.{
-            try W.message(b, "Alice", "One"),
-            try W.message(b, "Bob", "Two"),
-            try W.message(b, "Alice", "Three"),
-        }),
+        try W.messageScroller(b, .{ .x = 0, .y = 0, .w = @min(inner_width, 300), .h = 100 }, &demo.message_scroll, messages[0..demo.message_count]),
+        try b.row(&.{ try b.button(498, "Add message"), try b.button(499, "Jump to latest") }),
         resizable,
         try W.aspectRatio(b, 160, 1.6, &.{try b.skeleton(160, 100)}),
         try b.button(489, "Open dialog"),
@@ -1283,7 +1326,10 @@ test "gallery actions, editing, reverse focus and nested wheels update state" {
         480,
         489,
         491,
+        498...499,
         520...522,
+        530...531,
+        533...536,
         1001...1037,
         => {},
         else => return error.UnhandledControl,
@@ -1376,24 +1422,76 @@ test "3D viewport bounds follow gallery scroll and width" {
     try std.testing.expect(demo.scene_clip.w > 0 and demo.scene_clip.h > 0);
 }
 
+test "AccessKit message log follows additions until a user scrolls away" {
+    var font = try ui.Font.init(std.testing.allocator, ui.default_font, 32);
+    defer font.deinit();
+    var demo: Demo = .{};
+    const viewport = ui.Rect{ .x = 0, .y = 0, .w = 900, .h = 675 };
+    try demo.relayout(std.testing.allocator, viewport, &font);
+    try std.testing.expect(demo.message_scroll.atMessageEnd());
+    try std.testing.expect(demo.message_scroll.offset.y > 0);
+    const initial = demo.message_scroll.offset.y;
+    try std.testing.expect(demo.accessibilityAction(498, .click));
+    try demo.relayout(std.testing.allocator, viewport, &font);
+    try std.testing.expect(demo.message_scroll.offset.y > initial);
+    try std.testing.expect(demo.message_scroll.atMessageEnd());
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const snapshot = try demo.accessibilitySnapshot(arena.allocator(), viewport, &font);
+    var log_found = false;
+    var message_found = false;
+    var jump_found = false;
+    for (snapshot.nodes) |node| {
+        if (node.role == .log) {
+            log_found = true;
+            try std.testing.expect(node.live == .polite);
+        }
+        if (node.id == 603) message_found = true;
+        if (node.id == 499) {
+            jump_found = true;
+            try std.testing.expect(node.role == .button and node.actionable);
+        }
+    }
+    try std.testing.expect(log_found and message_found and jump_found);
+
+    demo.scroll.ensureVisible(demo.message_scroll.viewport);
+    try demo.relayout(std.testing.allocator, viewport, &font);
+    const pane = demo.message_scroll.viewport;
+    const outer_position = demo.scroll.offset.y;
+    demo.scrollWheel(pane.center().x, pane.center().y, 0, 1);
+    try std.testing.expectEqual(outer_position, demo.scroll.offset.y);
+    const reading_position = demo.message_scroll.offset.y;
+    try std.testing.expect(demo.accessibilityAction(498, .click));
+    try demo.relayout(std.testing.allocator, viewport, &font);
+    try std.testing.expectEqual(reading_position, demo.message_scroll.offset.y);
+    try std.testing.expect(demo.accessibilityAction(499, .click));
+    try demo.relayout(std.testing.allocator, viewport, &font);
+    try std.testing.expect(demo.message_scroll.atMessageEnd());
+    try std.testing.expect(demo.message_scroll.offset.y > reading_position);
+}
+
 test "end scrolling exposes the complete footer and bottom padding" {
     var font = try ui.Font.init(std.testing.allocator, ui.default_font, 32);
     defer font.deinit();
     var demo: Demo = .{};
-    for ([_]ui.Rect{
-        .{ .x = 0, .y = 0, .w = 900, .h = 675 },
-        .{ .x = 0, .y = 0, .w = 360, .h = 280 },
-        .{ .x = 0, .y = 0, .w = 200, .h = 200 },
-    }) |viewport| {
-        demo.scroll.offset.y = 1_000_000;
-        var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-        defer arena.deinit();
-        var count_buf: [20]u8 = undefined;
-        const root = try layoutTree(.{ .allocator = arena.allocator() }, &demo, viewport, &count_buf, &font);
-        const page = root.find(page_id).?;
-        const footer = page.children[page.children.len - 1];
-        try std.testing.expect(footer.bounds.y + footer.bounds.h + 32 <= demo.scroll.viewport.y + demo.scroll.viewport.h + 1);
-        try std.testing.expect(footer.bounds.y + footer.bounds.h > demo.scroll.viewport.y);
+    for ([_]u32{ 520, 521, 522 }) |selection| {
+        demo.sidebar_selection = selection;
+        for ([_]ui.Rect{
+            .{ .x = 0, .y = 0, .w = 900, .h = 675 },
+            .{ .x = 0, .y = 0, .w = 360, .h = 280 },
+            .{ .x = 0, .y = 0, .w = 200, .h = 200 },
+        }) |viewport| {
+            demo.scroll.offset.y = 1_000_000;
+            var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+            defer arena.deinit();
+            var count_buf: [20]u8 = undefined;
+            const root = try layoutTree(.{ .allocator = arena.allocator() }, &demo, viewport, &count_buf, &font);
+            const page = root.find(page_id).?;
+            const footer = page.children[page.children.len - 1];
+            try std.testing.expect(footer.bounds.y + footer.bounds.h + 32 <= demo.scroll.viewport.y + demo.scroll.viewport.h + 1);
+            try std.testing.expect(footer.bounds.y + footer.bounds.h > demo.scroll.viewport.y);
+        }
     }
 }
 
@@ -1561,6 +1659,53 @@ test "gallery filters commands, navigates dates, shows tooltip and swaps sidebar
     try std.testing.expect(found_dashboard);
     try std.testing.expect(demo.accessibilityAction(452, .click));
     try std.testing.expect(demo.table_lines);
+}
+
+test "AccessKit sidebar views expose working project actions and shared settings" {
+    var font = try ui.Font.init(std.testing.allocator, ui.default_font, 32);
+    defer font.deinit();
+    var demo: Demo = .{};
+    const viewport = ui.Rect{ .x = 0, .y = 0, .w = 900, .h = 675 };
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var snapshot = try demo.accessibilitySnapshot(arena.allocator(), viewport, &font);
+    try std.testing.expect(snapshotNode(snapshot, 530).?.actionable);
+    try std.testing.expect(snapshotNode(snapshot, 533) == null);
+    try std.testing.expect(demo.accessibilityAction(530, .click));
+    try std.testing.expectEqual(@as(u32, 1), demo.files_created);
+    try std.testing.expect(demo.accessibilityAction(531, .click));
+    try std.testing.expectEqual(@as(u32, 1), demo.folders_created);
+    try std.testing.expect(demo.accessibilityAction(536, .click));
+    try demo.relayout(std.testing.allocator, viewport, &font);
+    try std.testing.expectEqual(@as(u32, 300), demo.focusId());
+
+    try std.testing.expect(demo.accessibilityAction(521, .click));
+    snapshot = try demo.accessibilitySnapshot(arena.allocator(), viewport, &font);
+    try std.testing.expect(snapshotNode(snapshot, 530) == null);
+    try std.testing.expect(!demo.accessibilityAction(530, .click));
+    var dashboard_found = false;
+    var totals_found = false;
+    for (snapshot.nodes) |node| {
+        if (node.role == .region and std.mem.eql(u8, node.label, "Dashboard view")) dashboard_found = true;
+        if (node.role == .label and std.mem.indexOf(u8, node.label, "1 files, 1 folders created") != null) totals_found = true;
+    }
+    try std.testing.expect(dashboard_found and totals_found);
+
+    try std.testing.expect(demo.accessibilityAction(522, .click));
+    snapshot = try demo.accessibilitySnapshot(arena.allocator(), viewport, &font);
+    var settings_found = false;
+    for (snapshot.nodes) |node| if (node.role == .region and std.mem.eql(u8, node.label, "Settings view")) {
+        settings_found = true;
+    };
+    try std.testing.expect(settings_found);
+    try std.testing.expectEqual(true, snapshotNode(snapshot, 533).?.toggled.?);
+    try std.testing.expect(demo.accessibilityAction(533, .click));
+    try std.testing.expect(demo.accessibilityAction(534, .click));
+    snapshot = try demo.accessibilitySnapshot(arena.allocator(), viewport, &font);
+    try std.testing.expect(!snapshotNode(snapshot, 533).?.toggled.?);
+    try std.testing.expect(snapshotNode(snapshot, 534).?.toggled.?);
+    try std.testing.expect(demo.accessibilityAction(535, .click));
+    try std.testing.expectEqualStrings("Settings applied.", demo.status);
 }
 
 test "portable questionnaire keyboard rules preserve radio and tab selection and IME confirmation" {

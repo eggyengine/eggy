@@ -442,3 +442,39 @@ test "AccessKit value and selection actions reach the bounded UTF-8 editor" {
     }, &demo));
     try std.testing.expectEqualStrings("é", demo.selectedText().?);
 }
+
+test "native AccessKit events activate message and sidebar controls" {
+    var font = try ui.Font.init(std.testing.allocator, ui.default_font, 32);
+    defer font.deinit();
+    var demo: Demo = .{};
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const viewport = ui.Rect{ .x = 0, .y = 0, .w = 900, .h = 675 };
+    const snapshot = try demo.accessibilitySnapshot(arena.allocator(), viewport, &font);
+    var bridge = Bridge{ .allocator = std.testing.allocator, .arena = arena, .snapshot = snapshot, .scale = 1, .event_type = @intFromEnum(sdl3.events.Type.user) + 1 };
+    for ([_]usize{ 498, 521, 522, 533 }) |target| {
+        const requested: sdl3.events.Event = .{ .user = .{
+            .common = .{ .timestamp = 0 },
+            .event_type = bridge.event_type,
+            .code = @intFromEnum(Action.click),
+            .data1 = @ptrFromInt(target),
+        } };
+        const encoded = requested.toSdl();
+        const received = switch (sdl3.events.Event.fromSdl(encoded)) {
+            .user => |user| user,
+            else => return error.LostRegisteredEvent,
+        };
+        try std.testing.expect(bridge.event(received, &demo));
+        bridge.snapshot = try demo.accessibilitySnapshot(arena.allocator(), viewport, &font);
+    }
+    try std.testing.expectEqual(@as(usize, 4), demo.message_count);
+    try std.testing.expectEqual(@as(u32, 522), demo.sidebar_selection);
+    try std.testing.expect(!demo.checked);
+    const update = bridge.updateTree(false);
+    defer c.accesskit_tree_update_free(update);
+    const debug = c.accesskit_tree_update_debug(update) orelse return error.AccessKitDebugFailed;
+    defer c.accesskit_string_free(debug);
+    try std.testing.expect(std.mem.indexOf(u8, std.mem.span(debug), "Four") != null);
+    try std.testing.expect(std.mem.indexOf(u8, std.mem.span(debug), "Settings view") != null);
+    try std.testing.expect(std.mem.indexOf(u8, std.mem.span(debug), "Show hints") != null);
+}
