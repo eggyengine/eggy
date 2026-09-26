@@ -50,6 +50,10 @@
             .url = "git+https://github.com/eggyengine/eggenvector#49046e371a8791ed3483e80326d779eedd0c181e",
             .hash = "eggenvector-0.0.0-UyZb9C7sAQBBRR526yoYPHubwq9etR7eLFT5chA31KkX",
         },
+        .nvdialog = .{
+            .url = "git+https://github.com/tseli0s/nvdialog#721bf6ff623833cd507b42b63424c0e5e57e2525",
+            .hash = "N-V-__8AAEuUDgBPfreH-NaCz_VkqQhUzodVDBJwMy7xG76s",
+        },
     },
     .paths = .{
         "build.zig",

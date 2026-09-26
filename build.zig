@@ -6,6 +6,13 @@ pub fn build(b: *std.Build) void {
 
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
+    const macos_sdk = b.option([]const u8, "macos-sdk", "MacOSX.sdk path (default: $HOME/SDKs or --sysroot)");
+    if (target.result.os.tag == .macos and b.sysroot == null) {
+        b.sysroot = macos_sdk orelse defaultMacSdk(b) orelse {
+            std.log.err("macOS builds need --sysroot or -Dmacos-sdk pointing at a MacOSX.sdk", .{});
+            std.process.exit(1);
+        };
+    }
     const host_slang = slangDependency(b, b.graph.host.result.os.tag, b.graph.host.result.cpu.arch) orelse return;
     const target_slang = slangDependency(b, target.result.os.tag, target.result.cpu.arch) orelse return;
     const host_compiler = host_slang.path(if (b.graph.host.result.os.tag == .windows) "bin/slangc.exe" else "bin/slangc");
@@ -45,6 +52,80 @@ pub fn build(b: *std.Build) void {
     });
     const emath = b.dependency("eggenvector", .{ .target = target, .optimize = optimize });
     const weeoui = b.dependency("weeoui", .{ .target = target, .optimize = optimize });
+    const nvdialog = b.dependency("nvdialog", .{});
+    const fatal_dialog = b.createModule(.{ .root_source_file = b.path("src/fatal_dialog.zig"), .target = target, .optimize = optimize, .link_libc = true });
+    fatal_dialog.addIncludePath(nvdialog.path("include"));
+    fatal_dialog.addIncludePath(nvdialog.path("src"));
+    fatal_dialog.addIncludePath(nvdialog.path("src/impl"));
+    fatal_dialog.addIncludePath(nvdialog.path("vendor"));
+    fatal_dialog.addCSourceFiles(.{
+        .root = nvdialog.path("."),
+        .files = &.{
+            "src/nvdialog_error.c",
+            "src/nvdialog_image.c",
+            "src/nvdialog_util.c",
+            "src/nvdialog_capab.c",
+            "src/nvdialog_version.c",
+            "src/nvdialog_init.c",
+            "src/nvdialog_string.c",
+            "src/nvdialog_main.c",
+        },
+        .flags = if (target.result.os.tag == .macos)
+            &.{ "-std=c11", "-DNVDIALOG_MAXBUF=4096", "-DNVD_STATIC_LINKAGE", "-DNVD_USE_COCOA=1" }
+        else
+            &.{ "-std=c11", "-DNVDIALOG_MAXBUF=4096", "-DNVD_STATIC_LINKAGE" },
+    });
+    switch (target.result.os.tag) {
+        .linux => {
+            fatal_dialog.addCSourceFiles(.{
+                .root = nvdialog.path("."),
+                .files = &.{
+                    "src/backend/gtk/nvdialog_about_dialog.c",
+                    "src/backend/gtk/nvdialog_file_dialog.c",
+                    "src/backend/gtk/nvdialog_dialog_box.c",
+                    "src/backend/gtk/nvdialog_question_dialog.c",
+                    "src/backend/gtk/nvdialog_notification.c",
+                    "src/backend/gtk/nvdialog_input_dialog.c",
+                },
+                .flags = &.{ "-std=c11", "-DNVDIALOG_MAXBUF=4096", "-DNVD_STATIC_LINKAGE" },
+            });
+            fatal_dialog.linkSystemLibrary("gtk+-3.0", .{ .use_pkg_config = .force });
+            fatal_dialog.linkSystemLibrary("dbus-1", .{ .use_pkg_config = .force });
+        },
+        .macos => {
+            fatal_dialog.addCSourceFiles(.{
+                .root = nvdialog.path("."),
+                .files = &.{
+                    "src/backend/cocoa/nvdialog_dialog_box.m",
+                    "src/backend/cocoa/nvdialog_file_dialog.m",
+                    "src/backend/cocoa/nvdialog_input_box.m",
+                    "src/backend/cocoa/nvdialog_question_dialog.m",
+                    "src/backend/cocoa/nvdialog_notification.m",
+                    "src/backend/cocoa/nvdialog_about_dialog.m",
+                    "src/backend/cocoa/nvdialog_cocoa_init.m",
+                },
+                .flags = &.{ "-DNVD_USE_COCOA=1", "-fno-objc-arc", "-DNVDIALOG_MAXBUF=4096", "-DNVD_STATIC_LINKAGE" },
+            });
+            addMacSdk(b, fatal_dialog);
+            inline for (.{ "AppKit", "Cocoa", "Foundation", "UserNotifications" }) |framework| fatal_dialog.linkFramework(framework, .{});
+        },
+        .windows => {
+            fatal_dialog.addCSourceFiles(.{
+                .root = nvdialog.path("."),
+                .files = &.{
+                    "src/backend/win32/nvdialog_about_dialog.c",
+                    "src/backend/win32/nvdialog_dialog_box.c",
+                    "src/backend/win32/nvdialog_question_dialog.c",
+                    "src/backend/win32/nvdialog_file_dialog.c",
+                    "src/backend/win32/nvdialog_notification.c",
+                    "src/backend/win32/nvdialog_input_box.c",
+                },
+                .flags = &.{ "-std=c11", "-DNVDIALOG_MAXBUF=4096", "-DNVD_STATIC_LINKAGE" },
+            });
+            inline for (.{ "comdlg32", "shell32", "user32", "gdi32", "ole32" }) |lib| fatal_dialog.linkSystemLibrary(lib, .{});
+        },
+        else => @panic("nvdialog is supported only on desktop Linux, macOS, and Windows"),
+    }
     const sdl3 = b.dependency("sdl3", .{
         .target = target,
         .optimize = optimize,
@@ -86,10 +167,12 @@ pub fn build(b: *std.Build) void {
             .target = target,
             .optimize = optimize,
             .link_libc = true,
-            .imports = &.{.{ .name = "eggy", .module = engine }},
+            .imports = &.{ .{ .name = "eggy", .module = engine }, .{ .name = "fatal_dialog", .module = fatal_dialog } },
         }),
         .use_llvm = true,
     });
+    addMacSdk(b, exe.root_module);
+    addMacSdk(b, engine);
     b.installArtifact(exe);
 
     const run = b.addSystemCommand(&.{b.getInstallPath(.bin, if (target.result.os.tag == .windows) "eggy.exe" else "eggy")});
@@ -109,6 +192,18 @@ pub fn build(b: *std.Build) void {
     const test_step = b.step("test", "Run workspace tests");
     test_step.dependOn(&tests.step);
     test_step.dependOn(&slang_tests.step);
+    const dialog_tests = b.addRunArtifact(b.addTest(.{ .root_module = fatal_dialog, .use_llvm = true }));
+    test_step.dependOn(&dialog_tests.step);
+}
+
+fn defaultMacSdk(b: *std.Build) ?[]const u8 {
+    const home = b.graph.environ_map.get("HOME") orelse return null;
+    return b.pathJoin(&.{ home, "SDKs" });
+}
+
+fn addMacSdk(b: *std.Build, mod: *std.Build.Module) void {
+    const sysroot = b.sysroot orelse return;
+    mod.addSystemFrameworkPath(.{ .cwd_relative = b.pathJoin(&.{ sysroot, "System/Library/Frameworks" }) });
 }
 
 fn slangDependency(b: *std.Build, os: std.Target.Os.Tag, arch: std.Target.Cpu.Arch) ?*std.Build.Dependency {

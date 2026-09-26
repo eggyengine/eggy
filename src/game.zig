@@ -36,7 +36,7 @@ pub const Game = struct {
 
     pub fn deinit(self: *Game) void {
         self.m_graphics.deinit();
-        self.window.window.deinit();
+        self.window.deinit();
         sdl3.quit(self.init_flags);
         sdl3.shutdown();
     }

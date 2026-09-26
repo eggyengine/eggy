@@ -22,6 +22,7 @@ pub const Graphics = struct {
     vertices: vit.Buffer,
     pipeline_layout: vit.PipelineLayout,
     pipeline: vit.GraphicsPipeline,
+    theme: ui.Theme = .{},
     demo: ui_demo.Demo = .{},
     font: ui.Font,
     font_texture: vit.Texture,
@@ -159,6 +160,8 @@ pub const Graphics = struct {
         const info = self.swapchain.info();
         var vertex_data: [max_vertices]ui.Vertex = undefined;
         var canvas = ui.Canvas.init(&vertex_data, &self.font);
+        canvas.theme = self.theme;
+        canvas.srgb_target = self.color_format == .bgra8_unorm_srgb or self.color_format == .rgba8_unorm_srgb;
         canvas.pixel_scale = .{ @as(f32, @floatFromInt(info.extent.width)) / self.viewport.w, @as(f32, @floatFromInt(info.extent.height)) / self.viewport.h };
         try self.demo.draw(self.allocator, &canvas, self.viewport);
         for (vertex_data[0..canvas.len]) |*vertex| {
@@ -182,7 +185,12 @@ pub const Graphics = struct {
             .view = acquired.view,
             .load_op = .clear,
             .store_op = .store,
-            .clear_value = .{ .r = 0.965, .g = 0.968, .b = 0.973, .a = 1 },
+            .clear_value = .{
+                .r = if (canvas.srgb_target) ui.linearChannel(self.theme.background[0]) else self.theme.background[0],
+                .g = if (canvas.srgb_target) ui.linearChannel(self.theme.background[1]) else self.theme.background[1],
+                .b = if (canvas.srgb_target) ui.linearChannel(self.theme.background[2]) else self.theme.background[2],
+                .a = 1,
+            },
         }} });
         cmd.setGraphicsPipeline(self.pipeline);
         cmd.setBindGroup(0, self.font_group, &.{});
