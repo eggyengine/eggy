@@ -42,7 +42,8 @@ pub fn build(b: *std.Build) void {
         else => unreachable,
     };
     const library_path = target_slang.path(library_file);
-    b.getInstallStep().dependOn(&b.addInstallFileWithDir(library_path, .bin, library_name).step);
+    // Unix loads the library from lib/; Windows keeps DLLs beside the exe.
+    b.getInstallStep().dependOn(&b.addInstallFileWithDir(library_path, if (target.result.os.tag == .windows) .bin else .lib, library_name).step);
 
     const vitellus = b.dependency("vitellus", .{
         .target = target,

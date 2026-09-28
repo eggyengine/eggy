@@ -8,13 +8,13 @@ pub const Stage = enum(u32) { vertex = 1, fragment = 5, compute = 6 };
 pub fn compileSpirv(allocator: std.mem.Allocator, io: std.Io, source: []const u8, entry: []const u8, stage: Stage) ![]u8 {
     const dir = try std.process.executableDirPathAlloc(io, allocator);
     defer allocator.free(dir);
-    const name = switch (builtin.os.tag) {
-        .linux => "libslang-compiler.so",
-        .macos => "libslang-compiler.dylib",
+    const rel = switch (builtin.os.tag) {
+        .linux => "../lib/libslang-compiler.so",
+        .macos => "../lib/libslang-compiler.dylib",
         .windows => "slang-compiler.dll",
         else => return error.UnsupportedPlatform,
     };
-    const path = try std.fs.path.join(allocator, &.{ dir, name });
+    const path = try std.fs.path.join(allocator, &.{ dir, rel });
     defer allocator.free(path);
     return compileSpirvFromLibrary(allocator, path, source, entry, stage);
 }
