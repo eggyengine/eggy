@@ -16,14 +16,6 @@ pub fn build(b: *std.Build) void {
     const host_slang = slangDependency(b, b.graph.host.result.os.tag, b.graph.host.result.cpu.arch) orelse return;
     const target_slang = slangDependency(b, target.result.os.tag, target.result.cpu.arch) orelse return;
     const host_compiler = host_slang.path(if (b.graph.host.result.os.tag == .windows) "bin/slangc.exe" else "bin/slangc");
-    const vertex_compile = b.addSystemCommand(&.{host_compiler.getPath(b)});
-    vertex_compile.addFileArg(b.path("src/shaders/ui.slang"));
-    vertex_compile.addArgs(&.{ "-target", "spirv", "-entry", "vertexMain", "-stage", "vertex", "-o" });
-    const vertex_spv = vertex_compile.addOutputFileArg("ui.vert.spv");
-    const fragment_compile = b.addSystemCommand(&.{host_compiler.getPath(b)});
-    fragment_compile.addFileArg(b.path("src/shaders/ui.slang"));
-    fragment_compile.addArgs(&.{ "-target", "spirv", "-entry", "fragmentMain", "-stage", "fragment", "-o" });
-    const fragment_spv = fragment_compile.addOutputFileArg("ui.frag.spv");
     const viewport_vertex_compile = b.addSystemCommand(&.{host_compiler.getPath(b)});
     viewport_vertex_compile.addFileArg(b.path("src/shaders/viewport3d.slang"));
     viewport_vertex_compile.addArgs(&.{ "-target", "spirv", "-entry", "vertexMain", "-stage", "vertex", "-o" });
@@ -33,14 +25,10 @@ pub fn build(b: *std.Build) void {
     viewport_fragment_compile.addArgs(&.{ "-target", "spirv", "-entry", "fragmentMain", "-stage", "fragment", "-o" });
     const viewport_fragment_spv = viewport_fragment_compile.addOutputFileArg("viewport3d.frag.spv");
     const shader_files = b.addWriteFiles();
-    _ = shader_files.addCopyFile(vertex_spv, "ui.vert.spv");
-    _ = shader_files.addCopyFile(fragment_spv, "ui.frag.spv");
     _ = shader_files.addCopyFile(viewport_vertex_spv, "viewport3d.vert.spv");
     _ = shader_files.addCopyFile(viewport_fragment_spv, "viewport3d.frag.spv");
     const shader_module = b.createModule(.{
         .root_source_file = shader_files.add("root.zig",
-            \\pub const vertex = @embedFile("ui.vert.spv");
-            \\pub const fragment = @embedFile("ui.frag.spv");
             \\pub const viewport_vertex = @embedFile("viewport3d.vert.spv");
             \\pub const viewport_fragment = @embedFile("viewport3d.frag.spv");
         ),
@@ -63,9 +51,8 @@ pub fn build(b: *std.Build) void {
         .vk = true,
     });
     const emath = b.dependency("eggenvector", .{ .target = target, .optimize = optimize });
-    const weeoui = b.dependency("weeoui", .{ .target = target, .optimize = optimize });
+    const weeoui = b.dependency("weeoui", .{ .target = target, .optimize = optimize, .sdl3 = true });
     const nvdialog = b.dependency("nvdialog", .{});
-    const accesskit = b.dependency("accesskit_c", .{});
     const fatal_dialog = b.createModule(.{ .root_source_file = b.path("src/fatal_dialog.zig"), .target = target, .optimize = optimize, .link_libc = true });
     fatal_dialog.addIncludePath(nvdialog.path("include"));
     fatal_dialog.addIncludePath(nvdialog.path("src"));
@@ -139,11 +126,8 @@ pub fn build(b: *std.Build) void {
         },
         else => @panic("nvdialog is supported only on desktop Linux, macOS, and Windows"),
     }
-    const sdl3 = b.dependency("sdl3", .{
-        .target = target,
-        .optimize = optimize,
-        .c_sdl_preferred_linkage = .static,
-    });
+    // Same args as Weeoui's lazy sdl3 so both share one SDL build (static by default).
+    const sdl3 = b.dependency("sdl3", .{ .target = target, .optimize = optimize });
     const sdl_adapter = b.createModule(.{
         .root_source_file = vitellus.path("src/windowing/sdl3.zig"),
         .target = target,
@@ -168,39 +152,21 @@ pub fn build(b: *std.Build) void {
     engine.addImport("vitellus", vitellus.module("vitellus"));
     engine.addImport("eggenvector", emath.module("eggenvector"));
     engine.addImport("weeoui", weeoui.module("weeoui"));
+    engine.addImport("weeoui_sdl3", weeoui.module("weeoui_sdl3"));
+    // Weeoui's renderer compiled against Eggy's own Vitellus (its -Dvitellus would fetch a second copy).
+    engine.addImport("weeoui_vitellus", b.createModule(.{
+        .root_source_file = weeoui.path("src/vitellus.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{ .{ .name = "weeoui", .module = weeoui.module("weeoui") }, .{ .name = "vitellus", .module = vitellus.module("vitellus") } },
+    }));
     engine.addImport("slangc", slangc);
     engine.addImport("ui_shaders", shader_module);
     engine.addImport("sdl3", sdl3.module("sdl3"));
     engine.addImport("vitellus_sdl3", sdl_adapter);
-    engine.addIncludePath(accesskit.path("include"));
     engine.link_libc = true;
-    const accesskit_library = switch (target.result.os.tag) {
-        .linux => switch (target.result.cpu.arch) {
-            .x86_64 => "lib/linux/x86_64/static/libaccesskit.a",
-            .x86 => "lib/linux/x86/static/libaccesskit.a",
-            else => @panic("AccessKit C 0.23.0 has no bundled Linux library for this architecture"),
-        },
-        .windows => switch (target.result.cpu.arch) {
-            .x86_64 => if (target.result.abi == .msvc) "lib/windows/x86_64/msvc/shared/accesskit.lib" else "lib/windows/x86_64/mingw/shared/libaccesskit.a",
-            .aarch64 => "lib/windows/arm64/msvc/shared/accesskit.lib",
-            else => @panic("AccessKit C 0.23.0 has no bundled Windows library for this architecture"),
-        },
-        .macos => switch (target.result.cpu.arch) {
-            .x86_64 => "lib/macos/x86_64/static/libaccesskit.a",
-            .aarch64 => "lib/macos/arm64/static/libaccesskit.a",
-            else => @panic("AccessKit C 0.23.0 has no bundled macOS library for this architecture"),
-        },
-        else => @panic("AccessKit is supported only on desktop Linux, macOS, and Windows"),
-    };
-    engine.addObjectFile(accesskit.path(accesskit_library));
-    if (target.result.os.tag == .windows) {
-        const dll = switch (target.result.cpu.arch) {
-            .x86_64 => if (target.result.abi == .msvc) "lib/windows/x86_64/msvc/shared/accesskit.dll" else "lib/windows/x86_64/mingw/shared/accesskit.dll",
-            .aarch64 => "lib/windows/arm64/msvc/shared/accesskit.dll",
-            else => unreachable,
-        };
-        b.getInstallStep().dependOn(&b.addInstallFileWithDir(accesskit.path(dll), .bin, "accesskit.dll").step);
-    }
+    // AccessKit comes linked into Weeoui; on Windows its DLL must sit next to the exe.
+    if (target.result.os.tag == .windows) b.getInstallStep().dependOn(&b.addInstallFileWithDir(weeoui.namedLazyPath("accesskit_dll"), .bin, "accesskit.dll").step);
     switch (target.result.os.tag) {
         .linux => {
             engine.linkSystemLibrary("m", .{});

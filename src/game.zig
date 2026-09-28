@@ -1,6 +1,7 @@
 const std = @import("std");
 const sdl_adapter = @import("vitellus_sdl3");
 const sdl3 = sdl_adapter.sdl;
+const weeoui_sdl3 = @import("weeoui_sdl3");
 
 const graphics = @import("graphics.zig");
 const accessibility = @import("accessibility.zig");
@@ -15,14 +16,10 @@ const FileResult = struct {
     name: [128]u8 = undefined,
     len: usize = 0,
 };
-const FileRequest = struct { event_type: @FieldType(sdl3.events.User, "event_type") };
+/// SDL user-event code for file picker results.
+const file_event_code: i32 = -1;
 
-fn fileSelected(request: ?*FileRequest, files: ?[]const [*:0]const u8, _: ?usize, failed: bool) void {
-    const data = request orelse {
-        std.log.err("Missing file dialog callback context", .{});
-        return;
-    };
-    defer std.heap.page_allocator.destroy(data);
+fn fileSelected(_: ?*anyopaque, files: ?[]const [*:0]const u8, _: ?usize, failed: bool) void {
     const result = std.heap.page_allocator.create(FileResult) catch {
         std.log.err("Cannot allocate file dialog result", .{});
         return;
@@ -41,8 +38,8 @@ fn fileSelected(request: ?*FileRequest, files: ?[]const [*:0]const u8, _: ?usize
     if (failed) std.log.err("Native file picker failed", .{});
     sdl3.events.push(.{ .user = .{
         .common = .{ .timestamp = 0 },
-        .event_type = data.event_type,
-        .code = 0,
+        .event_type = @intFromEnum(sdl3.events.Type.user),
+        .code = file_event_code,
         .data1 = result,
     } }) catch |err| {
         std.heap.page_allocator.destroy(result);
@@ -54,8 +51,7 @@ pub const Game = struct {
     window: sdl_adapter.Sdl3Window,
     init_flags: sdl3.InitFlags,
     m_graphics: graphics.Graphics,
-    a11y: *accessibility.Bridge,
-    file_event_type: @FieldType(sdl3.events.User, "event_type"),
+    a11y: *@import("weeoui").accesskit.Adapter,
     text_input_active: bool = false,
     a11y_dirty: bool = false,
     fps_capper: sdl3.extras.FramerateCapper(f32),
@@ -75,9 +71,10 @@ pub const Game = struct {
 
         var m_graphics = try graphics.Graphics.init(i.gpa, window);
         errdefer m_graphics.deinit();
-        const a11y = try accessibility.Bridge.init(i.gpa, window, &m_graphics.demo, m_graphics.viewport, &m_graphics.font);
-        errdefer a11y.deinit();
-        const file_event_type = sdl3.events.register(1) orelse return error.NoFileDialogEvent;
+        const a11y = try @import("weeoui").accesskit.Adapter.create(i.gpa, try weeoui_sdl3.accessKitWindow(window.window), "eggy");
+        errdefer a11y.destroy();
+        try accessibility.publish(a11y, &m_graphics.demo, m_graphics.viewport, &m_graphics.font);
+        weeoui_sdl3.syncWindowBounds(a11y, window.window);
         if (builtin.os.tag == .windows) try window.window.show();
 
         return .{
@@ -85,14 +82,13 @@ pub const Game = struct {
             .init_flags = init_flags,
             .m_graphics = m_graphics,
             .a11y = a11y,
-            .file_event_type = file_event_type,
             .fps_capper = .{ .mode = .{ .limited = fps } },
         };
     }
 
     pub fn deinit(self: *Game) void {
         if (self.text_input_active) sdl3.keyboard.stopTextInput(self.window.window) catch |err| std.log.err("Cannot stop text input: {s}", .{@errorName(err)});
-        self.a11y.deinit();
+        self.a11y.destroy();
         self.m_graphics.deinit();
         self.window.deinit();
         sdl3.quit(self.init_flags);
@@ -106,8 +102,14 @@ pub const Game = struct {
         if (!std.meta.eql(previous_viewport, self.m_graphics.viewport) or previous_dpi != self.m_graphics.font.dpi_scale) self.a11y_dirty = true;
         const dt = self.fps_capper.delay();
         self.m_graphics.demo.animation_phase = @mod(self.m_graphics.demo.animation_phase + @min(dt, 0.25) / 1.2, 1);
+        self.m_graphics.demo.tickScroll(dt);
+        if (accessibility.applyActions(self.a11y, &self.m_graphics.demo)) {
+            try self.m_graphics.syncSize(self.window);
+            try self.m_graphics.relayoutDemo();
+            self.a11y_dirty = true;
+        }
         if (self.a11y_dirty) {
-            try self.a11y.publish(&self.m_graphics.demo, self.m_graphics.viewport, &self.m_graphics.font);
+            try accessibility.publish(self.a11y, &self.m_graphics.demo, self.m_graphics.viewport, &self.m_graphics.font);
             self.a11y_dirty = false;
         }
         try self.m_graphics.frame();
@@ -116,69 +118,61 @@ pub const Game = struct {
 
     pub fn event(self: *Game, curr_event: sdl3.events.Event) !sdl3.AppResult {
         var publish = false;
-        switch (curr_event) {
-            .quit, .terminating => return .success,
-            .window_resized, .window_pixel_size_changed, .window_display_scale_changed => {
-                try self.m_graphics.syncSize(self.window);
-                try self.a11y.windowBounds(self.window);
-                publish = true;
-            },
-            .window_moved, .window_shown => try self.a11y.windowBounds(self.window),
-            .window_focus_gained => self.a11y.windowFocus(true),
-            .window_focus_lost => self.a11y.windowFocus(false),
-            .mouse_motion => |motion| {
+        if (weeoui_sdl3.translate(curr_event)) |ui_event| switch (ui_event) {
+            .pointer_move => |position| {
                 const scale = self.m_graphics.demo.ui_scale;
                 const old_hover = .{ self.m_graphics.demo.hover_card_open, self.m_graphics.demo.tooltip_open };
-                self.m_graphics.demo.pointerMoveAt(motion.x / scale, motion.y / scale, &self.m_graphics.font);
+                self.m_graphics.demo.pointerMoveAt(position.x / scale, position.y / scale, &self.m_graphics.font);
                 if (self.m_graphics.demo.dragging_slider) {
                     try self.m_graphics.syncSize(self.window);
                     publish = true;
-                } else if (self.m_graphics.demo.scroll.dragging != .none or self.m_graphics.demo.dragging_divider or self.m_graphics.demo.dragging_text or old_hover[0] != self.m_graphics.demo.hover_card_open or old_hover[1] != self.m_graphics.demo.tooltip_open) {
+                } else if (self.m_graphics.demo.scrollDragging() or self.m_graphics.demo.dragging_divider or self.m_graphics.demo.dragging_text or old_hover[0] != self.m_graphics.demo.hover_card_open or old_hover[1] != self.m_graphics.demo.tooltip_open) {
                     if (old_hover[0] != self.m_graphics.demo.hover_card_open or old_hover[1] != self.m_graphics.demo.tooltip_open) try self.m_graphics.relayoutDemo();
                     publish = true;
                 }
             },
-            .mouse_button_down => |button| {
+            .pointer_down => |button| {
                 if (button.button == .left) {
                     const scale = self.m_graphics.demo.ui_scale;
-                    self.m_graphics.demo.pointerDownWithClicks(button.x / scale, button.y / scale, &self.m_graphics.font, button.clicks);
+                    self.m_graphics.demo.pointerDownWithClicks(button.position.x / scale, button.position.y / scale, &self.m_graphics.font, button.clicks);
                     try self.m_graphics.syncSize(self.window);
                     try self.m_graphics.relayoutDemo();
                     publish = true;
                 } else if (button.button == .right) {
                     const scale = self.m_graphics.demo.ui_scale;
-                    self.m_graphics.demo.pointerContextDown(button.x / scale, button.y / scale);
+                    self.m_graphics.demo.pointerContextDown(button.position.x / scale, button.position.y / scale);
                     try self.m_graphics.relayoutDemo();
                     publish = true;
                 }
             },
-            .mouse_button_up => |button| if (button.button == .left) self.m_graphics.demo.pointerUp(),
-            .mouse_wheel => |wheel| {
+            .pointer_up => |button| if (button.button == .left) self.m_graphics.demo.pointerUp(),
+            .wheel => |wheel| {
                 const scale = self.m_graphics.demo.ui_scale;
-                self.m_graphics.demo.scrollWheel(wheel.x / scale, wheel.y / scale, wheel.scroll_x, wheel.scroll_y);
+                self.m_graphics.demo.scrollWheel(wheel.position.x / scale, wheel.position.y / scale, wheel.delta.x, wheel.delta.y);
                 publish = true;
             },
-            .text_input => |text| {
-                if (self.m_graphics.demo.insertText(text.text)) {
+            .text => |text| {
+                if (self.m_graphics.demo.insertText(text)) {
                     try self.m_graphics.relayoutDemo();
                     publish = true;
-                } else if (self.m_graphics.demo.menuTypeAhead(text.text)) {
+                } else if (self.m_graphics.demo.menuTypeAhead(text)) {
                     try self.m_graphics.relayoutDemo();
                     publish = true;
                 }
             },
-            .text_editing => |text| {
-                self.m_graphics.demo.setComposition(text.text, text.start);
+            .composition => |text| {
+                self.m_graphics.demo.setComposition(text.text, text.cursor);
                 publish = true;
             },
             .key_down => |key| {
-                if (key.key) |code| {
+                {
+                    const code = key.key;
                     const demo = &self.m_graphics.demo;
-                    const command = if (builtin.os.tag == .macos) key.mod.guiDown() else key.mod.controlDown();
-                    const extend = key.mod.shiftDown();
-                    const word = key.mod.controlDown() or (builtin.os.tag == .macos and key.mod.altDown());
+                    const command = if (builtin.os.tag == .macos) key.modifiers.super else key.modifiers.control;
+                    const extend = key.modifiers.shift;
+                    const word = key.modifiers.control or (builtin.os.tag == .macos and key.modifiers.alt);
                     const shortcut = switch (code) {
-                        .a, .z, .y, .c, .x, .v, .return_key, .kp_enter => true,
+                        .a, .z, .y, .c, .x, .v, .enter => true,
                         else => false,
                     };
                     if (demo.composition_len > 0 and code != .escape and code != .tab) {
@@ -203,7 +197,7 @@ pub const Game = struct {
                                     _ = demo.insertText(copied);
                                 } else demo.status = "Clipboard has no text.";
                             },
-                            .return_key, .kp_enter => if (demo.focusId() == 300 or demo.focusId() == 301 or demo.focusId() == 302) demo.submitForm(),
+                            .enter => if (demo.focusId() == 300 or demo.focusId() == 301 or demo.focusId() == 302) demo.submitForm(),
                             else => {},
                         }
                     } else if (!key.repeat or demo.isEditing()) switch (code) {
@@ -244,7 +238,7 @@ pub const Game = struct {
                             _ = demo.editKey(.delete, false, false, &self.m_graphics.font);
                         },
                         .space => if (!demo.isEditing() and !key.repeat) demo.activate(),
-                        .return_key, .kp_enter => if (demo.composition_len == 0) {
+                        .enter => if (demo.composition_len == 0) {
                             if (!demo.confirmMenu()) {
                                 if (demo.isEditing()) {
                                     if (demo.focusId() == 301) _ = demo.insertText("\n");
@@ -266,8 +260,18 @@ pub const Game = struct {
                     publish = true;
                 }
             },
+        } else switch (curr_event) {
+            .quit, .terminating => return .success,
+            .window_resized, .window_pixel_size_changed, .window_display_scale_changed => {
+                try self.m_graphics.syncSize(self.window);
+                weeoui_sdl3.syncWindowBounds(self.a11y, self.window.window);
+                publish = true;
+            },
+            .window_moved, .window_shown => weeoui_sdl3.syncWindowBounds(self.a11y, self.window.window),
+            .window_focus_gained => self.a11y.setFocused(true),
+            .window_focus_lost => self.a11y.setFocused(false),
             .user => |user| {
-                if (user.event_type == self.file_event_type) {
+                if (user.code == file_event_code) {
                     const result: *FileResult = @ptrCast(@alignCast(user.data1 orelse return error.InvalidFileDialogEvent));
                     defer std.heap.page_allocator.destroy(result);
                     switch (result.status) {
@@ -286,18 +290,13 @@ pub const Game = struct {
                         },
                     }
                     publish = true;
-                } else if (self.a11y.event(user, &self.m_graphics.demo)) {
-                    try self.m_graphics.syncSize(self.window);
-                    publish = true;
                 }
             },
             else => {},
         }
         if (self.m_graphics.demo.file_request) {
             self.m_graphics.demo.file_request = false;
-            const request = try std.heap.page_allocator.create(FileRequest);
-            request.* = .{ .event_type = self.file_event_type };
-            sdl3.dialog.showOpenFile(FileRequest, fileSelected, request, self.window.window, null, null, false);
+            sdl3.dialog.showOpenFile(anyopaque, fileSelected, null, self.window.window, null, null, false);
         }
         try self.syncTextInput();
         self.a11y_dirty = self.a11y_dirty or publish;

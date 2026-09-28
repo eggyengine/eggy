@@ -272,9 +272,19 @@ pub const Demo = struct {
         self.control_ids[i] = element.id;
         self.control_count += 1;
     }
+    fn panes(self: *Demo) [2]*L.ScrollState {
+        return .{ &self.preview_scroll, &self.message_scroll };
+    }
+    pub fn tickScroll(self: *Demo, dt: f32) void {
+        for (self.panes()) |pane| pane.tick(dt);
+    }
+    pub fn scrollDragging(self: *Demo) bool {
+        for (self.panes()) |pane| if (pane.dragging != .none) return true;
+        return self.scroll.dragging != .none;
+    }
     pub fn scrollWheel(self: *Demo, x: f32, y: f32, dx: f32, dy: f32) void {
         if (self.dialog_open) return;
-        for ([_]*L.ScrollState{ &self.preview_scroll, &self.message_scroll }) |pane| {
+        for (self.panes()) |pane| {
             if (pane.viewport.intersection(self.scroll.viewport).contains(x, y)) {
                 const old = pane.offset;
                 pane.wheel(dx, dy);
@@ -504,6 +514,7 @@ pub const Demo = struct {
         self.pointer_x = x;
         self.pointer_y = y;
         if (!self.dialog_open and self.scroll.pointerDown(x, y)) return;
+        if (!self.dialog_open and self.scroll.viewport.contains(x, y)) for (self.panes()) |pane| if (pane.pointerDown(x, y)) return;
         if (!self.dialog_open) {
             var in_popup = false;
             for (self.overlay_rects) |rect| if (rect.contains(x, y)) {
@@ -578,6 +589,7 @@ pub const Demo = struct {
         self.pointer_x = x;
         self.pointer_y = y;
         self.scroll.pointerMove(x, y);
+        for (self.panes()) |pane| pane.pointerMove(x, y);
         if (self.dragging_slider) self.setScaleFromPointer(x);
         if (self.dragging_divider) self.setDividerFromPointer(x);
         if (self.dragging_text) if (font) |face| if (self.editableFor(self.focusId())) |field| {
@@ -599,6 +611,7 @@ pub const Demo = struct {
     }
     pub fn pointerUp(self: *Demo) void {
         self.scroll.pointerUp();
+        for (self.panes()) |pane| pane.pointerUp();
         self.dragging_slider = false;
         self.dragging_divider = false;
         self.dragging_text = false;

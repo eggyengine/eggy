@@ -5,7 +5,8 @@
     .minimum_zig_version = "0.16.0",
     .dependencies = .{
         .sdl3 = .{
-            .path = "src/vitellus/vendor/zig-sdl3",
+            .url = "git+https://codeberg.org/7Games/zig-sdl3?ref=v0.2.2#83c694024f23cbacfa36fcd8fca1c57d4957203e",
+            .hash = "sdl3-0.2.2-NmT1Q-2jKQBa4uSXUwuVwdmXpXe-eYwim7Wkyx531v6O",
         },
         .vitellus = .{
             .path = "src/vitellus",
@@ -53,10 +54,6 @@
         .nvdialog = .{
             .url = "git+https://github.com/tseli0s/nvdialog#721bf6ff623833cd507b42b63424c0e5e57e2525",
             .hash = "N-V-__8AAEuUDgBPfreH-NaCz_VkqQhUzodVDBJwMy7xG76s",
-        },
-        .accesskit_c = .{
-            .url = "https://github.com/AccessKit/accesskit-c/releases/download/0.23.0/accesskit-c-0.23.0.zip",
-            .hash = "N-V-__8AAEFGZhErLHq9UH3Pw21WPLBLfjYaqLIboPjbQHTB",
         },
     },
     .paths = .{
