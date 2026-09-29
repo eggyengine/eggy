@@ -84,7 +84,7 @@ pub const Graphics = struct {
         errdefer swapchain.deinit();
         var font = try ui.Font.init(allocator, ui.default_font);
         errdefer font.deinit();
-        if (!font.loadSystemEmoji(std.Io.Threaded.global_single_threaded.io())) std.log.info("No color emoji font found; emoji draw as '?'", .{});
+        _ = font.loadSystemEmoji(std.Io.Threaded.global_single_threaded.io());
         if (viewport.w > 0) font.dpi_scale = @as(f32, @floatFromInt(extent.width)) / viewport.w;
         var ui_renderer = try weeoui_vitellus.Renderer.init(device, colorFormat(caps.formats[0]), &font);
         errdefer ui_renderer.deinit();
@@ -107,6 +107,7 @@ pub const Graphics = struct {
         };
         var result: @This() = .{ .main_window = window.window, .frames = frames, .demo = demo, .vertex_data = vertex_data, .allocator = allocator, .viewport = viewport, .instance = instance, .adapter = adapter, .device = device, .queue = queue, .swapchain = swapchain, .commands = commands, .color_format = colorFormat(caps.formats[0]), .window_extent = extent, .ui_renderer = ui_renderer, .preview = preview, .font = font };
         try result.demo.relayout(allocator, viewport, &result.font);
+        std.log.info("Graphics ready: {d}x{d} px, {d:.0}x{d:.0} logical, {d:.2}x scale, {s}", .{ extent.width, extent.height, viewport.w, viewport.h, result.font.dpi_scale, @tagName(result.color_format) });
         return result;
     }
 
@@ -209,10 +210,12 @@ pub const Graphics = struct {
         w.extent = extent;
         w.format = format;
         w.vertices = vertices;
+        std.log.info("Opened window {d} for {s} ({d}x{d} px)", .{ w.id, name, extent.width, extent.height });
         return w;
     }
 
     fn closeWindow(self: *@This(), w: *PanelWindow) void {
+        std.log.info("Closing window {d}", .{w.id});
         self.queue.waitIdle() catch {};
         self.allocator.free(w.vertices);
         w.preview.deinit();

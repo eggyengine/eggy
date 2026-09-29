@@ -235,6 +235,8 @@ pub const Demo = struct {
     frames: [ui.dock.max_windows + 1]FrameRects = @splat(.{}),
     /// A title bar button the app should carry out (minimize, maximize, close).
     window_request: ?struct { slot: u8, button: ui.titlebar.Button } = null,
+    /// Where the scene's element was painted in the canvas being drawn (see `sceneMarker`).
+    scene_split: ?usize = null,
     /// Which dock windows were built this frame, in root-child order after the main tree.
     frame_windows: u8 = 0,
     frame_window_index: [ui.dock.max_windows]u8 = undefined,
@@ -342,17 +344,21 @@ pub const Demo = struct {
                 const window_root = tree.children[child];
                 target.canvas.focus_id = if (self.keyboard_focus) self.focusId() else 0;
                 target.canvas.hot_id = self.hotId();
+                self.scene_split = null;
                 try window_root.drawWithoutOverlays(target.canvas);
                 target.base = target.canvas.len;
                 try window_root.drawOverlays(target.canvas);
+                if (self.scene_split) |split| target.base = split;
                 if (self.debug_hitboxes) try window_root.drawHitboxes(target.canvas);
             };
         }
         canvas.focus_id = if (self.keyboard_focus) self.focusId() else 0;
         canvas.hot_id = self.hotId();
+        self.scene_split = null;
         try root.drawWithoutOverlays(canvas);
-        const base_vertices = canvas.len;
+        var base_vertices = canvas.len;
         try root.drawOverlays(canvas);
+        if (self.scene_split) |split| base_vertices = split;
         if (self.debug_hitboxes) try root.drawHitboxes(canvas);
         try self.devtools.highlight(canvas, devtools_gpa);
         self.devtools.vertices = canvas.len;
@@ -398,12 +404,14 @@ pub const Demo = struct {
             self.dock.remove(elements);
             self.dock.remove(performance);
             self.devtools.inspecting = false;
+            std.log.info("DevTools closed", .{});
             return;
         }
         const near: ?u32 = if (self.dock.nodeOf(@intFromEnum(Panel.components)) != null) @intFromEnum(Panel.components) else null;
         self.dock.add(elements, near, .right) catch return;
         self.dock.add(performance, elements, .center) catch {};
         _ = self.dock.activate(ui.dock.first_id + elements);
+        std.log.info("DevTools opened", .{});
     }
     /// Topmost control under the pointer, for hover styling.
     fn hotId(self: *const Demo) u32 {
@@ -1500,6 +1508,17 @@ fn line(b: L.Builder) !*L.Element {
 /// Persistent memory for DevTools' expanded-row set.
 const devtools_gpa = std.heap.smp_allocator;
 
+/// Paint for the 3D scene's element: draws nothing, but notes how many vertices came before
+/// it, so the 3D view is drawn exactly there, above whatever window holds it (docked, floating
+/// or popped out) and below anything painted later, such as menus.
+fn sceneMarker(demo: *Demo) L.Paint {
+    return .{ .custom = .{ .context = &demo.scene_split, .draw = recordSceneSplit } };
+}
+fn recordSceneSplit(context: *const anyopaque, c: *ui.Canvas, _: ui.Rect) anyerror!void {
+    const split: *?usize = @ptrCast(@alignCast(@constCast(context)));
+    split.* = c.len;
+}
+
 /// Title bar controls: `ui.titlebar.id(titlebar_first, slot, part)`.
 pub const titlebar_first: u32 = 0xC0FF_0000;
 pub const FrameRects = struct {
@@ -1549,7 +1568,7 @@ const DockPanels = struct {
         switch (@as(Panel, @enumFromInt(panel))) {
             .components => return layoutPage(b, self.demo, rect, self.count_buf, self.font),
             .scene => {
-                const scene = try b.node(500, .{ .width = rect.w, .height = rect.h }, .none, &.{});
+                const scene = try b.node(500, .{ .width = rect.w, .height = rect.h }, sceneMarker(self.demo), &.{});
                 scene.accessibility = .{ .role = .image, .label = "Rotating 3D viewport" };
                 return scene;
             },
@@ -2099,7 +2118,7 @@ fn componentGallery(b: L.Builder, demo: *Demo, page_width: f32) !*L.Element {
     const resizable = try W.resizable(b, .{ .x = 0, .y = 0, .w = @min(inner_width, 300), .h = 80 }, demo.divider, 480, try b.surface(.card, &.{try b.text("Left")}), try b.surface(.card, &.{try b.text("Right")}));
     resizable.id = 481;
     resizable.children[1].accessibility = .{ .role = .slider, .label = "Panel divider", .numeric_value = demo.divider };
-    const scene = try b.node(500, .{ .width = @min(inner_width, 520), .height = 224 }, .none, &.{});
+    const scene = try b.node(500, .{ .width = @min(inner_width, 520), .height = 224 }, sceneMarker(demo), &.{});
     scene.accessibility = .{ .role = .image, .label = "Rotating 3D viewport" };
     const data = try b.card(&.{
         try label(b, "Data and layout", 22, false, false),
@@ -3061,4 +3080,33 @@ test "the cursor follows hovered controls and ongoing drags" {
     try std.testing.expectEqual(ui.Cursor.default, demo.pointerCursor());
     demo.dragging_divider = true;
     try std.testing.expectEqual(ui.Cursor.ew_resize, demo.pointerCursor());
+}
+
+test "the 3D view is drawn right after its panel, even when the panel floats" {
+    var font = try ui.Font.init(std.testing.allocator, ui.default_font);
+    defer font.deinit();
+    var demo: Demo = .{ .docked = true };
+    defer demo.deinit();
+    const viewport = ui.Rect{ .x = 0, .y = 0, .w = 1400, .h = 900 };
+    const vertices = try std.testing.allocator.alloc(ui.Vertex, 250_000);
+    defer std.testing.allocator.free(vertices);
+    var canvas = ui.Canvas.init(vertices, &font);
+    const docked = try demo.draw(std.testing.allocator, &canvas, viewport);
+    try std.testing.expect(docked > 0 and docked <= canvas.len);
+    // Floating, the panel's window is an overlay: the split must come after its background,
+    // not at the end of the docked layer (where the window would paint over the scene).
+    try demo.dock.float(@intFromEnum(Panel.scene), .{ .x = 200, .y = 200, .w = 400, .h = 300 });
+    try demo.relayout(std.testing.allocator, viewport, &font);
+    canvas.len = 0;
+    const floating = try demo.draw(std.testing.allocator, &canvas, viewport);
+    try std.testing.expect(demo.scene_viewport.w > 0);
+    // Everything drawn after the split lies outside the scene or is a later overlay; the
+    // scene's own window background is before it.
+    try std.testing.expect(floating > 0 and floating < canvas.len);
+    var covering = false;
+    for (canvas.items()[floating..]) |v| {
+        const inside = v.position[0] > demo.scene_viewport.x + 2 and v.position[0] < demo.scene_viewport.x + demo.scene_viewport.w - 2 and v.position[1] > demo.scene_viewport.y + 2 and v.position[1] < demo.scene_viewport.y + demo.scene_viewport.h - 2;
+        if (inside) covering = true;
+    }
+    try std.testing.expect(!covering);
 }

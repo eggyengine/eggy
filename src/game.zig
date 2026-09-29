@@ -7,7 +7,7 @@ const graphics = @import("graphics.zig");
 const accessibility = @import("accessibility.zig");
 const builtin = @import("builtin");
 
-const fps = 60;
+const fps = 340000;
 const width = 900;
 const height = 675;
 const FileResult = struct {
