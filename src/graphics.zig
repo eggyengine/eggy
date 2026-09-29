@@ -6,7 +6,8 @@ const ui_demo = @import("ui_demo.zig");
 const viewport3d = @import("viewport3d.zig");
 const weeoui_vitellus = @import("weeoui_vitellus");
 
-const max_vertices = 30000;
+/// Vertex budget per frame; DevTools and the gallery together need well over 30k.
+const max_vertices = 250_000;
 pub const Graphics = struct {
     allocator: std.mem.Allocator,
     viewport: ui.Rect,
@@ -22,8 +23,11 @@ pub const Graphics = struct {
     preview: viewport3d.Preview,
     theme: ui.Theme = .{},
     system_theme: ui.Theme = .{},
-    demo: ui_demo.Demo = .{},
+    /// On the heap: Demo is large, and Debug builds keep several copies of anything returned
+    /// by value on the stack.
+    demo: *ui_demo.Demo,
     font: ui.Font,
+    vertex_data: []ui.Vertex,
 
     pub fn init(allocator: std.mem.Allocator, window: sdl_adapter.Sdl3Window) !@This() {
         const instance = try vit.Instance.init(allocator, .{ .backend = .{ .vulkan = true }, .validation = .core });
@@ -62,7 +66,12 @@ pub const Graphics = struct {
         errdefer ui_renderer.deinit();
         var preview = try viewport3d.Preview.init(device, colorFormat(caps.formats[0]), extent);
         errdefer preview.deinit();
-        var result: @This() = .{ .allocator = allocator, .viewport = viewport, .instance = instance, .adapter = adapter, .device = device, .queue = queue, .swapchain = swapchain, .commands = commands, .color_format = colorFormat(caps.formats[0]), .window_extent = extent, .ui_renderer = ui_renderer, .preview = preview, .font = font };
+        const vertex_data = try allocator.alloc(ui.Vertex, max_vertices);
+        errdefer allocator.free(vertex_data);
+        const demo = try allocator.create(ui_demo.Demo);
+        errdefer allocator.destroy(demo);
+        demo.* = .{};
+        var result: @This() = .{ .demo = demo, .vertex_data = vertex_data, .allocator = allocator, .viewport = viewport, .instance = instance, .adapter = adapter, .device = device, .queue = queue, .swapchain = swapchain, .commands = commands, .color_format = colorFormat(caps.formats[0]), .window_extent = extent, .ui_renderer = ui_renderer, .preview = preview, .font = font };
         try result.demo.relayout(allocator, viewport, &result.font);
         return result;
     }
@@ -98,6 +107,9 @@ pub const Graphics = struct {
         self.preview.deinit();
         self.ui_renderer.deinit();
         self.font.deinit();
+        self.demo.deinit();
+        self.allocator.destroy(self.demo);
+        self.allocator.free(self.vertex_data);
         self.swapchain.deinit();
         self.commands.deinit();
         self.queue.deinit();
@@ -112,9 +124,15 @@ pub const Graphics = struct {
             .light => .{},
             .dark => ui.Theme.dark,
         };
+        if (self.demo.custom_accent) {
+            const accent = self.demo.color.rgb();
+            self.theme.primary = accent;
+            self.theme.primary_foreground = ui.onColor(accent);
+            self.theme.ring = accent;
+        }
         const info = self.swapchain.info();
-        var vertex_data: [max_vertices]ui.Vertex = undefined;
-        var canvas = ui.Canvas.init(&vertex_data, &self.font);
+        const vertex_data = self.vertex_data;
+        var canvas = ui.Canvas.init(vertex_data, &self.font);
         canvas.theme = self.theme;
         canvas.srgb_target = weeoui_vitellus.isSrgb(self.color_format);
         canvas.pixel_scale = .{ @as(f32, @floatFromInt(info.extent.width)) / self.viewport.w, @as(f32, @floatFromInt(info.extent.height)) / self.viewport.h };

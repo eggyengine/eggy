@@ -74,7 +74,7 @@ pub const Game = struct {
         m_graphics.system_theme = weeoui_sdl3.systemTheme();
         const a11y = try @import("weeoui").accesskit.Adapter.create(i.gpa, try weeoui_sdl3.accessKitWindow(window.window), "eggy");
         errdefer a11y.destroy();
-        try accessibility.publish(a11y, &m_graphics.demo, m_graphics.viewport, &m_graphics.font);
+        try accessibility.publish(a11y, m_graphics.demo, m_graphics.viewport, &m_graphics.font);
         weeoui_sdl3.syncWindowBounds(a11y, window.window);
         if (builtin.os.tag == .windows) try window.window.show();
 
@@ -104,13 +104,13 @@ pub const Game = struct {
         const dt = self.fps_capper.delay();
         self.m_graphics.demo.animation_phase = @mod(self.m_graphics.demo.animation_phase + @min(dt, 0.25) / 1.2, 1);
         self.m_graphics.demo.tickScroll(dt);
-        if (accessibility.applyActions(self.a11y, &self.m_graphics.demo)) {
+        if (accessibility.applyActions(self.a11y, self.m_graphics.demo)) {
             try self.m_graphics.syncSize(self.window);
             try self.m_graphics.relayoutDemo();
             self.a11y_dirty = true;
         }
         if (self.a11y_dirty) {
-            try accessibility.publish(self.a11y, &self.m_graphics.demo, self.m_graphics.viewport, &self.m_graphics.font);
+            try accessibility.publish(self.a11y, self.m_graphics.demo, self.m_graphics.viewport, &self.m_graphics.font);
             self.a11y_dirty = false;
         }
         try self.m_graphics.frame();
@@ -168,7 +168,7 @@ pub const Game = struct {
             .key_down => |key| {
                 {
                     const code = key.key;
-                    const demo = &self.m_graphics.demo;
+                    const demo = self.m_graphics.demo;
                     const command = if (builtin.os.tag == .macos) key.modifiers.super else key.modifiers.control;
                     const extend = key.modifiers.shift;
                     const word = key.modifiers.control or (builtin.os.tag == .macos and key.modifiers.alt);
@@ -201,8 +201,11 @@ pub const Game = struct {
                             .enter => if (demo.focusId() == 300 or demo.focusId() == 301 or demo.focusId() == 302) demo.submitForm(),
                             else => {},
                         }
-                    } else if (!key.repeat or demo.isEditing() or (code == .enter and demo.focusRepeats())) switch (code) {
-                        .tab => if (!key.repeat) demo.next(extend),
+                    } else if (!key.repeat or code == .tab or demo.isEditing() or (code == .enter and demo.focusRepeats())) switch (code) {
+                        // Holding Tab / Shift+Tab keeps moving focus at the keyboard's repeat rate.
+                        .tab => demo.next(extend),
+                        .f12 => if (!key.repeat) demo.devtools.toggle(),
+                        .i => if (!key.repeat and key.modifiers.shift and command) demo.devtools.toggle(),
                         .escape => {
                             if (demo.composition_len > 0) {
                                 demo.setComposition("", null);
@@ -215,20 +218,20 @@ pub const Game = struct {
                                 demo.editKey(.home, extend, false, &self.m_graphics.font)
                             else
                                 demo.editKey(.left, extend, word, &self.m_graphics.font);
-                            if (!moved and !demo.moveComposite(-1)) demo.adjustFocused(-1);
+                            if (!moved and !demo.treeKey(.left) and !demo.moveComposite(-1)) demo.adjustFocused(-1);
                         },
                         .right => {
                             const moved = if (builtin.os.tag == .macos and command and demo.isEditing())
                                 demo.editKey(.end, extend, false, &self.m_graphics.font)
                             else
                                 demo.editKey(.right, extend, word, &self.m_graphics.font);
-                            if (!moved and !demo.moveComposite(1)) demo.adjustFocused(1);
+                            if (!moved and !demo.treeKey(.right) and !demo.moveComposite(1)) demo.adjustFocused(1);
                         },
                         .up => {
-                            if (!demo.menuMove(-1) and !demo.editKey(.up, extend, false, &self.m_graphics.font)) _ = demo.moveComposite(-1);
+                            if (!demo.treeKey(.up) and !demo.adjustVertical(1, extend) and !demo.menuMove(-1) and !demo.editKey(.up, extend, false, &self.m_graphics.font)) _ = demo.moveComposite(-1);
                         },
                         .down => {
-                            if (!demo.menuMove(1) and !demo.editKey(.down, extend, false, &self.m_graphics.font)) _ = demo.moveComposite(1);
+                            if (!demo.treeKey(.down) and !demo.adjustVertical(-1, extend) and !demo.menuMove(1) and !demo.editKey(.down, extend, false, &self.m_graphics.font)) _ = demo.moveComposite(1);
                         },
                         .backspace => {
                             if (word and demo.isEditing()) _ = demo.editKey(.left, true, true, &self.m_graphics.font);

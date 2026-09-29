@@ -25,6 +25,18 @@ const nav_first_id = 850;
 const menubar_popup_id = 890;
 const submenu_popup_id = 891;
 const nav_popup_id = 892;
+/// Color editor ids: +0..+9 wheel, bars and sliders (`ui.ColorChannel`), +10/+11 hex linear/sRGB,
+/// +12 OK, +13 Cancel, +14 the Old swatch, +15.. swatches.
+const color_first_id = 750;
+const wheel_id = color_first_id;
+const hex_linear_id = color_first_id + 10;
+const hex_srgb_id = color_first_id + 11;
+const first_swatch_id = color_first_id + 15;
+const accent_id = 777;
+const swatches = [_]ui.Color{
+    ui.rgb(0xF2, 0xB2, 0x33), ui.rgb(0xE8, 0x6A, 0x3A), ui.rgb(0xD9, 0x3F, 0x5B), ui.rgb(0xB0, 0x4B, 0xD6), ui.rgb(0x5B, 0x6C, 0xF0), ui.rgb(0x2F, 0x9C, 0xE0),
+    ui.rgb(0x23, 0xB5, 0xA3), ui.rgb(0x4C, 0xB8, 0x5A), ui.rgb(0x9B, 0xC4, 0x3A), ui.rgb(0x8A, 0x6E, 0x55), ui.rgb(0x6B, 0x63, 0x58), ui.rgb(0x1C, 0x19, 0x15),
+};
 const W = ui.widgets;
 const native_options = [_][]const u8{ "Low", "Medium", "High", "Ultra" };
 const share_items = [_]W.MenuItem{
@@ -106,8 +118,10 @@ pub const Demo = struct {
     focus: usize = 0,
     restore_focus: ?u32 = null,
     control_count: usize = 0,
-    control_ids: [128]u32 = [_]u32{0} ** 128,
-    control_clips: [128]ui.Rect = [_]ui.Rect{.{ .x = 0, .y = 0, .w = 0, .h = 0 }} ** 128,
+    /// Hit targets from the last layout, on the heap so the DevTools tree (two per page element)
+    /// can't bloat `Demo`, which is copied by value into the app state.
+    control_ids: []u32 = &.{},
+    control_clips: []ui.Rect = &.{},
     selected_tab: u32 = details_tab_id,
     checked: bool = true,
     enabled: bool = false,
@@ -146,7 +160,7 @@ pub const Demo = struct {
     file_request: bool = false,
     file_picker_open: bool = false,
     filename: TextBuffer = textBuffer("No file selected"),
-    editable: [7]Editable = .{
+    editable: [9]Editable = .{
         .{ .id = 300, .text = textBuffer("Eggy") },
         .{ .id = 301, .text = textBuffer("Describe the project") },
         .{ .id = 302, .text = textBuffer("42") },
@@ -154,9 +168,11 @@ pub const Demo = struct {
         .{ .id = 440, .text = textBuffer("new") },
         .{ .id = date_input_id, .text = textBuffer("2024-02-29  00:00") },
         .{ .id = question_first_id + 16, .text = textBuffer("") },
+        .{ .id = hex_linear_id, .text = textBuffer("DB7E0BFF") },
+        .{ .id = hex_srgb_id, .text = textBuffer("F2B233FF") },
     },
-    editing_scroll_x: [7]f32 = @splat(0),
-    editing_scroll_y: [7]f32 = @splat(0),
+    editing_scroll_x: [9]f32 = @splat(0),
+    editing_scroll_y: [9]f32 = @splat(0),
     composition: [128]u8 = undefined,
     composition_len: usize = 0,
     composition_cursor: ?usize = null,
@@ -192,6 +208,13 @@ pub const Demo = struct {
     answers: [3]u16 = .{ 0, 0, 0 },
     questionnaire_done: bool = false,
     wide_scroll: L.ScrollState = .{},
+    color: ui.ColorEditor = ui.ColorEditor.init(ui.rgb(0xF2, 0xB2, 0x33), 1),
+    /// Paint the theme's primary and focus colors with the picked color.
+    custom_accent: bool = false,
+    /// Chrome-style inspector (F12).
+    devtools: ui.devtools.Devtools = .{},
+    panel_rect: ui.Rect = .{ .x = 0, .y = 0, .w = 0, .h = 0 },
+    logged_status: []const u8 = "",
     animation_phase: f32 = 0,
     dragging_slider: bool = false,
     dragging_divider: bool = false,
@@ -205,7 +228,7 @@ pub const Demo = struct {
     preview_scroll: L.ScrollState = .{},
     message_scroll: L.ScrollState = .{ .auto_scroll = true },
     message_count: usize = 3,
-    controls: [128]ui.Rect = [_]ui.Rect{.{ .x = 0, .y = 0, .w = 0, .h = 0 }} ** 128,
+    controls: []ui.Rect = &.{},
     scene_viewport: ui.Rect = .{ .x = 0, .y = 0, .w = 0, .h = 0 },
     scene_clip: ui.Rect = .{ .x = 0, .y = 0, .w = 0, .h = 0 },
     overlay_rects: [10]ui.Rect = [_]ui.Rect{.{ .x = 0, .y = 0, .w = 0, .h = 0 }} ** 10,
@@ -226,8 +249,8 @@ pub const Demo = struct {
     pub fn accessibilityAction(self: *Demo, id: u32, action: AccessibilityAction) bool {
         if (action == .set_value or action == .set_selection) return false;
         const index = self.indexOf(id) orelse return false;
-        if ((action == .click and (id == slider_id or id == 480)) or
-            ((action == .increment or action == .decrement) and id != slider_id and id != 480)) return false;
+        const ranged = id == slider_id or id == 480 or (id >= color_first_id and id <= color_first_id + 9);
+        if ((action == .click and ranged) or ((action == .increment or action == .decrement) and !ranged)) return false;
         self.restore_focus = null;
         if (self.focusId() != id) self.composition_len = 0;
         if (!self.dialog_open and action == .click and !popupRelated(id)) _ = self.dismiss();
@@ -239,6 +262,8 @@ pub const Demo = struct {
             .increment, .decrement => {
                 if (id == 480) {
                     self.divider = std.math.clamp(self.divider + (if (action == .increment) @as(f32, 0.05) else -0.05), 0.1, 0.9);
+                } else if (id >= color_first_id and id <= color_first_id + 9) {
+                    self.adjustFocused(if (action == .increment) 1 else -1);
                 } else self.nudgeScale(if (action == .increment) 1 else -1);
             },
             .set_value, .set_selection => unreachable,
@@ -285,6 +310,14 @@ pub const Demo = struct {
         const base_vertices = canvas.len;
         try root.drawOverlays(canvas);
         if (self.debug_hitboxes) try root.drawHitboxes(canvas);
+        try self.devtools.highlight(canvas, devtools_gpa);
+        self.devtools.vertices = canvas.len;
+        // Status messages double as console output.
+        ui.devtools.console = &self.devtools;
+        if (self.status.ptr != self.logged_status.ptr) {
+            self.logged_status = self.status;
+            self.devtools.log(.info, "{s}", .{self.status});
+        }
         return base_vertices;
     }
     /// Topmost control under the pointer, for hover styling.
@@ -322,6 +355,7 @@ pub const Demo = struct {
             self.overlay_rects[i] = if (root.find(id)) |overlay| overlay.bounds.intersection(overlay.clip) else .{ .x = 0, .y = 0, .w = 0, .h = 0 };
         }
         self.divider_track = if (root.find(481)) |track| track.bounds else .{ .x = 0, .y = 0, .w = 0, .h = 0 };
+        self.panel_rect = if (root.find(ui.devtools.panel_id)) |panel| panel.bounds else .{ .x = 0, .y = 0, .w = 0, .h = 0 };
         if (root.find(gallery_id)) |gallery| self.gallery_top = gallery.bounds.y + self.scroll.offset.y - self.scroll.viewport.y;
         if (root.find(500)) |scene| {
             self.scene_viewport = scene.bounds;
@@ -379,19 +413,31 @@ pub const Demo = struct {
         if (!overlays and element.actionable()) try self.recordControl(element);
         for (0..element.children.len) |i| try self.collectControls(element.paintChild(i), overlays, z);
     }
+    pub fn deinit(self: *Demo) void {
+        devtools_gpa.free(self.control_ids);
+        devtools_gpa.free(self.control_clips);
+        devtools_gpa.free(self.controls);
+        self.devtools.deinit(devtools_gpa);
+    }
     fn recordControl(self: *Demo, element: *const L.Element) !void {
-        if (self.control_count == self.controls.len) return error.TooManyControls;
+        if (self.control_count == self.controls.len) {
+            const capacity = @max(256, self.controls.len * 2);
+            self.control_ids = try devtools_gpa.realloc(self.control_ids, capacity);
+            self.control_clips = try devtools_gpa.realloc(self.control_clips, capacity);
+            self.controls = try devtools_gpa.realloc(self.controls, capacity);
+        }
         const i = self.control_count;
         self.controls[i] = element.bounds;
         self.control_clips[i] = element.bounds.intersection(element.clip);
         self.control_ids[i] = element.id;
         self.control_count += 1;
     }
-    fn panes(self: *Demo) [3]*L.ScrollState {
-        return .{ &self.preview_scroll, &self.message_scroll, &self.wide_scroll };
+    fn panes(self: *Demo) [6]*L.ScrollState {
+        return .{ &self.preview_scroll, &self.message_scroll, &self.wide_scroll, &self.devtools.tree_scroll, &self.devtools.details_scroll, &self.devtools.console_scroll };
     }
     pub fn tickScroll(self: *Demo, dt: f32) void {
         for (self.panes()) |pane| pane.tick(dt);
+        self.devtools.recordFrame(dt * 1000);
         if (self.held_id == 0) return;
         // Hold: first repeat after 0.4 s, then every 0.08 s.
         const before = self.held_time;
@@ -412,20 +458,28 @@ pub const Demo = struct {
         }
     }
     pub fn scrollDragging(self: *Demo) bool {
+        if (self.color.drag != null) return true;
         for (self.panes()) |pane| if (pane.dragging != .none) return true;
         return self.scroll.dragging != .none;
     }
+    /// The part of `pane` on screen: DevTools panes live in the panel, the rest in the page.
+    fn paneVisible(self: *Demo, pane: *L.ScrollState) ui.Rect {
+        const in_panel = pane == &self.devtools.tree_scroll or pane == &self.devtools.details_scroll or pane == &self.devtools.console_scroll;
+        return pane.viewport.intersection(if (in_panel) self.panel_rect else self.scroll.viewport);
+    }
     pub fn scrollWheel(self: *Demo, x: f32, y: f32, dx: f32, dy: f32) void {
-        if (self.dialog_open) return;
+        const over_panel = self.panel_rect.contains(x, y);
+        if (self.dialog_open and !over_panel) return;
         for (self.panes()) |pane| {
-            if (pane.viewport.intersection(self.scroll.viewport).contains(x, y)) {
+            if (self.paneVisible(pane).contains(x, y)) {
                 const old = pane.offset;
                 pane.wheel(dx, dy);
                 if (old.x != pane.offset.x or old.y != pane.offset.y) return;
                 break;
             }
         }
-        self.scroll.wheel(dx, dy);
+        // Never scroll the page from over the DevTools panel.
+        if (!over_panel) self.scroll.wheel(dx, dy);
     }
     /// Whether Enter may auto-repeat on the focused control.
     pub fn focusRepeats(self: *const Demo) bool {
@@ -433,6 +487,7 @@ pub const Demo = struct {
     }
     /// Enter in a single-line field that has a meaning: parse the typed date.
     pub fn commitEdit(self: *Demo) bool {
+        if (self.devtools.commit(devtools_gpa, self.focusId())) return true;
         switch (self.focusId()) {
             date_input_id => {
                 const typed = self.editable[5].text.text();
@@ -446,6 +501,17 @@ pub const Demo = struct {
             },
             question_first_id + 16 => {
                 self.activateId(question_first_id + 19);
+                return true;
+            },
+            hex_linear_id, hex_srgb_id => {
+                const linear = self.focusId() == hex_linear_id;
+                const typed = self.editable[if (linear) 7 else 8].text.text();
+                (if (linear) self.color.setHex(typed, .linear) else self.color.setHex(typed, .srgb)) catch {
+                    self.status = "Type a color as RRGGBB or RRGGBBAA.";
+                    return true;
+                };
+                self.syncHex();
+                self.status = "Color set.";
                 return true;
             },
             else => return false,
@@ -464,6 +530,7 @@ pub const Demo = struct {
     }
     pub fn isEditing(self: *const Demo) bool {
         const id = self.focusId();
+        if (self.devtools.isField(id)) return true;
         return self.editableFor(id) != null or (id >= 310 and id <= 313);
     }
     fn editableFor(self: *const Demo, id: u32) ?usize {
@@ -473,6 +540,7 @@ pub const Demo = struct {
     pub fn insertText(self: *Demo, text: []const u8) bool {
         self.composition_len = 0;
         const id = self.focusId();
+        if (self.devtools.insertText(id, text)) return true;
         if (id >= 310 and id <= 313) {
             if (text.len != 1 or !std.ascii.isDigit(text[0])) {
                 self.status = "OTP accepts one digit per slot.";
@@ -488,14 +556,12 @@ pub const Demo = struct {
                 self.status = "This field is single-line.";
                 return true;
             }
-            self.editable[i].text.insert(text) catch |err| {
-                self.status = switch (err) {
-                    error.Full => "Input is full (128 bytes).",
-                    else => "Invalid text input.",
-                };
+            const truncated = self.editable[i].text.insertFitting(text) catch |err| {
+                self.status = "Invalid text input.";
                 std.log.warn("Text input rejected: {s}", .{@errorName(err)});
                 return true;
             };
+            if (truncated) self.status = "Text was cut to fit the field (128 bytes).";
             if (id == 430) self.combo_open = true;
             if (id == 440) self.command_open = true;
             return true;
@@ -504,6 +570,7 @@ pub const Demo = struct {
     }
     pub fn backspace(self: *Demo) bool {
         const id = self.focusId();
+        if (self.devtools.editKey(devtools_gpa, id, .backspace, false, false)) return true;
         if (id >= 310 and id <= 313) {
             if (self.otp[id - 310] == 0 and id > 310) {
                 self.focus = self.indexOf(id - 1) orelse self.focus;
@@ -521,6 +588,18 @@ pub const Demo = struct {
     }
     pub fn editKey(self: *Demo, key: EditKey, extend: bool, word: bool, font: *const ui.Font) bool {
         const id = self.focusId();
+        if (self.devtools.isField(id)) return self.devtools.editKey(devtools_gpa, id, switch (key) {
+            .left => .left,
+            .right => .right,
+            .up => .up,
+            .down => .down,
+            .home => .home,
+            .end => .end,
+            .delete => .delete,
+            .backspace => .backspace,
+            .select_all => .select_all,
+            .undo, .redo => return false,
+        }, extend, word);
         const i = self.editableFor(id) orelse return false;
         const editor = &self.editable[i].text;
         switch (key) {
@@ -673,6 +752,19 @@ pub const Demo = struct {
         };
         return count;
     }
+    /// Arrow keys on a DevTools tree row (up/down/left/right).
+    pub fn treeKey(self: *Demo, key: EditKey) bool {
+        const target = self.devtools.treeKey(devtools_gpa, self.focusId(), switch (key) {
+            .up => .up,
+            .down => .down,
+            .left => .left,
+            .right => .right,
+            else => return false,
+        }) orelse return false;
+        self.keyboard_focus = true;
+        self.restore_focus = target;
+        return true;
+    }
     pub fn moveComposite(self: *Demo, direction: i8) bool {
         const id = self.focusId();
         self.keyboard_focus = true;
@@ -746,8 +838,9 @@ pub const Demo = struct {
     pub fn pointerDownWithClicks(self: *Demo, x: f32, y: f32, font: ?*const ui.Font, clicks: u8) void {
         self.pointer_x = x;
         self.pointer_y = y;
+        if (!self.panel_rect.contains(x, y) and self.devtools.pointerDown(x, y)) return;
         if (!self.dialog_open and self.scroll.pointerDown(x, y)) return;
-        if (!self.dialog_open and self.scroll.viewport.contains(x, y)) for (self.panes()) |pane| if (pane.pointerDown(x, y)) return;
+        for (self.panes()) |pane| if ((!self.dialog_open or self.panel_rect.contains(x, y)) and self.paneVisible(pane).contains(x, y) and pane.pointerDown(x, y)) return;
         if (!self.dialog_open) {
             var in_popup = false;
             for (self.overlay_rects) |rect| if (rect.contains(x, y)) {
@@ -766,6 +859,7 @@ pub const Demo = struct {
             i -= 1;
             if (!self.control_clips[i].contains(x, y)) continue;
             self.restore_focus = null;
+            if (self.control_ids[i] != self.focusId()) self.devtools.blur(devtools_gpa);
             self.focus = i;
             self.keyboard_focus = false;
             if (repeatable(self.focusId())) {
@@ -780,6 +874,10 @@ pub const Demo = struct {
                     self.drag_scale = self.ui_scale;
                     self.drag_rect = self.controls[i];
                     self.setScaleFromPointer(x);
+                },
+                color_first_id...color_first_id + 9 => {
+                    self.color.press(@enumFromInt(self.focusId() - color_first_id), self.controls[i], x, y);
+                    self.syncHex();
                 },
                 480 => {
                     self.dragging_divider = true;
@@ -828,8 +926,13 @@ pub const Demo = struct {
         self.pointer_y = y;
         self.scroll.pointerMove(x, y);
         for (self.panes()) |pane| pane.pointerMove(x, y);
+        if (self.panel_rect.contains(x, y)) self.devtools.pointer = null else self.devtools.pointerMove(x, y);
         if (self.dragging_slider) self.setScaleFromPointer(x);
         if (self.dragging_divider) self.setDividerFromPointer(x);
+        if (self.color.drag != null) {
+            self.color.dragTo(x, y);
+            self.syncHex();
+        }
         if (self.dragging_text) if (font) |face| if (self.editableFor(self.focusId())) |field| {
             self.editable[field].text.placeCaretIn(.{
                 .font = face,
@@ -849,6 +952,7 @@ pub const Demo = struct {
     }
     pub fn pointerUp(self: *Demo) void {
         self.held_id = 0;
+        self.color.release();
         self.scroll.pointerUp();
         for (self.panes()) |pane| pane.pointerUp();
         self.dragging_slider = false;
@@ -866,19 +970,50 @@ pub const Demo = struct {
     pub fn nudgeScale(self: *Demo, direction: f32) void {
         if (self.focusId() == slider_id) self.ui_scale = @max(0.75, @min(2, @round((self.ui_scale + direction * 0.05) * 20) / 20));
     }
+    fn syncHex(self: *Demo) void {
+        var buffer: [8]u8 = undefined;
+        self.editable[7].text.set(self.color.hex(&buffer, .linear)) catch unreachable;
+        self.editable[8].text.set(self.color.hex(&buffer, .srgb)) catch unreachable;
+    }
+    fn focusedChannel(self: *const Demo) ?ui.ColorChannel {
+        const id = self.focusId();
+        return if (id >= color_first_id and id <= color_first_id + 9) @enumFromInt(id - color_first_id) else null;
+    }
+    /// Up/Down: saturation on the wheel, the bar's own value on the vertical bars.
+    pub fn adjustVertical(self: *Demo, direction: f32, fine: bool) bool {
+        const channel = self.focusedChannel() orelse return false;
+        if (channel != .wheel and channel != .saturation and channel != .value) return false;
+        self.keyboard_focus = true;
+        self.color.nudge(channel, direction * @as(f32, if (fine) 1 else 5), channel == .wheel);
+        self.syncHex();
+        return true;
+    }
     pub fn adjustFocused(self: *Demo, direction: f32) void {
-        if (self.focusId() == 480) {
+        if (self.focusedChannel()) |channel| {
+            self.color.nudge(channel, direction * 5, false);
+            self.syncHex();
+        } else if (self.focusId() == 480) {
             self.divider = std.math.clamp(@round((self.divider + direction * 0.05) * 20) / 20, 0.1, 0.9);
         } else self.nudgeScale(direction);
     }
     pub fn next(self: *Demo, reverse: bool) void {
         if (self.control_count == 0) return;
+        self.devtools.blur(devtools_gpa);
         self.keyboard_focus = true;
         self.composition_len = 0;
-        self.focus = if (reverse) (self.focus + self.control_count - 1) % self.control_count else (self.focus + 1) % self.control_count;
+        // One Tab stop for the DevTools tree: skip every row but the selected one.
+        for (0..self.control_count) |_| {
+            self.focus = if (reverse) (self.focus + self.control_count - 1) % self.control_count else (self.focus + 1) % self.control_count;
+            if (!self.devtools.skipInTabOrder(self.focusId())) break;
+        }
         if (!self.dialog_open) self.scroll.ensureVisible(self.controls[self.indexOf(self.popupAnchor(self.focusId())) orelse self.focus]);
     }
     pub fn dismiss(self: *Demo) bool {
+        if (self.devtools.cancel()) return true;
+        if (self.devtools.inspecting) {
+            self.devtools.inspecting = false;
+            return true;
+        }
         if (self.dialog_open) {
             self.closeDialog();
             return true;
@@ -955,6 +1090,21 @@ pub const Demo = struct {
                 self.status = "Jumped to the component gallery.";
             },
             debug_id => self.debug_hitboxes = !self.debug_hitboxes,
+            color_first_id...color_first_id + 11 => {},
+            color_first_id + 12 => {
+                self.color.commit();
+                self.status = "Color applied.";
+            },
+            color_first_id + 13, color_first_id + 14 => {
+                self.color.revert();
+                self.syncHex();
+                self.status = "Color restored.";
+            },
+            first_swatch_id...first_swatch_id + swatches.len - 1 => {
+                self.color.hsv = ui.Hsv.fromRgb(swatches[id - first_swatch_id], self.color.hsv.h);
+                self.syncHex();
+            },
+            accent_id => self.custom_accent = !self.custom_accent,
             342 => self.bold = !self.bold,
             345 => self.native_index = (self.native_index + 1) % native_options.len,
             471 => self.attachment_visible = false,
@@ -1203,7 +1353,7 @@ pub const Demo = struct {
                 self.restore_focus = 300;
                 if (self.indexOf(300)) |index| self.scroll.ensureVisible(self.controls[index]);
             },
-            else => std.log.warn("Unimplemented demo control: {d}", .{id}),
+            else => if (!self.devtools.activate(devtools_gpa, id)) std.log.warn("Unimplemented demo control: {d}", .{id}),
         }
     }
 };
@@ -1230,7 +1380,21 @@ fn label(b: L.Builder, value: []const u8, size: f32, muted: bool, wrap: bool) !*
 fn line(b: L.Builder) !*L.Element {
     return b.node(0, .{ .height = 1 }, .separator, &.{});
 }
-fn layoutTree(b: L.Builder, demo: *Demo, viewport: ui.Rect, count_buf: *[20]u8, font: *const ui.Font) !*L.Element {
+/// Persistent memory for DevTools' expanded-row set.
+const devtools_gpa = std.heap.smp_allocator;
+
+fn layoutTree(b: L.Builder, demo: *Demo, full: ui.Rect, count_buf: *[20]u8, font: *const ui.Font) !*L.Element {
+    const split = demo.devtools.split(full);
+    const page = try layoutPage(b, demo, split.page, count_buf, font);
+    // DevTools property edits outlive the rebuild, like styles edited in a browser.
+    if (demo.devtools.apply(page)) page.layout(split.page, font);
+    if (!demo.devtools.open) return page;
+    const panel = try demo.devtools.panel(b, devtools_gpa, font, page, split.panel, split.right);
+    const root = try b.node(0, .{ .width = full.w, .height = full.h, .direction = if (split.right) .row else .column }, .none, &.{ page, panel });
+    root.layout(full, font);
+    return root;
+}
+fn layoutPage(b: L.Builder, demo: *Demo, viewport: ui.Rect, count_buf: *[20]u8, font: *const ui.Font) !*L.Element {
     var vertical = false;
     var horizontal = false;
     const requested_offset = demo.scroll.offset;
@@ -1461,18 +1625,47 @@ fn conversationCard(b: L.Builder) !*L.Element {
     });
 }
 
+fn colorCard(b: L.Builder, demo: *Demo) !*L.Element {
+    return b.card(&.{
+        try label(b, "Color picker", 22, false, false),
+        try label(b, "Unreal-style: the wheel picks hue and saturation, the bars saturation and value. Drag any slider, use the arrow keys, or type a hex value and press Enter.", 14, true, true),
+        try W.colorEditor(b, color_first_id, demo.color, .{ .value = demo.editable[7].text.text() }, .{ .value = demo.editable[8].text.text() }, &swatches),
+        try b.node(0, .{ .direction = .row, .gap = 12, .align_items = .center }, .none, &.{
+            try b.node(accent_id, .{ .height = 36 }, .{ .toggle_button = .{ .label = "Use as accent", .pressed = demo.custom_accent } }, &.{}),
+            try label(b, "Recolors buttons and focus rings.", 14, true, true),
+        }),
+    });
+}
+
+const typography_markdown =
+    \\# Taxing Laughter: The Joke Tax Chronicles
+    \\Once upon a time, in a far-off land, there was a very lazy king who spent all day lounging on his throne. One day, his advisors came to him with a problem: the kingdom was running out of money.
+    \\## The King's Plan
+    \\The king thought long and hard, and finally came up with a brilliant plan: he would tax the jokes in the kingdom.
+    \\> "After all," he said, "everyone enjoys a good joke, so it's only fair that they should pay for the privilege."
+    \\### The Joke Tax
+    \\The king's subjects were not amused. They grumbled and complained, but the king was firm:
+    \\- 1st level of puns: 5 gold coins
+    \\- 2nd level of jokes: 10 gold coins
+    \\- 3rd level of one-liners: 20 gold coins
+    \\As a result, people stopped telling jokes, and the kingdom fell into a gloom.
+    \\| King's Treasury | People's happiness |
+    \\| --- | --- |
+    \\| Empty | Overflowing |
+    \\| Modest | Satisfied |
+    \\| Full | Ecstatic |
+    \\### Render your own
+    \\1. Write markdown
+    \\2. Pass it to `W.typeset`
+    \\```
+    \\try W.typeset(b, markdown, .{});
+    \\```
+;
+
 fn typographyCard(b: L.Builder) !*L.Element {
     return b.card(&.{
-        try W.heading(b, 1, "Taxing Laughter"),
-        try W.lead(b, "A modal dialog interrupts the user and requires a response."),
-        try W.heading(b, 2, "The King's Plan"),
-        try W.paragraph(b, "The king thought long and hard, and finally came up with a brilliant plan: he would tax the jokes in the kingdom."),
-        try W.blockquote(b, "\"After all,\" he said, \"everyone enjoys a good joke, so it's only fair that they should pay for the privilege.\""),
-        try W.heading(b, 3, "Joke Tax"),
-        try W.list(b, &.{ "1st level of puns: 5 gold coins", "2nd level of jokes: 10 gold coins", "3rd level of one-liners: 20 gold coins" }),
-        try b.node(0, .{ .direction = .row, .gap = 8, .align_items = .center }, .none, &.{ try W.muted(b, "Install with"), try W.inlineCode(b, "zig fetch --save weeoui") }),
-        try W.heading(b, 4, "People stopped telling jokes"),
-        try W.muted(b, "Enter your email address."),
+        try label(b, "Typography (Typeset)", 14, true, false),
+        try W.typeset(b, typography_markdown, .{}),
     });
 }
 
@@ -1714,6 +1907,7 @@ fn componentGallery(b: L.Builder, demo: *Demo, page_width: f32) !*L.Element {
         feedback,
         try layoutCard(b, demo, inner_width),
         try conversationCard(b),
+        try colorCard(b, demo),
         try typographyCard(b),
         try questionnaireCard(b, demo),
         data,
@@ -1922,6 +2116,9 @@ test "gallery actions, editing, reverse focus and nested wheels update state" {
         question_first_id + 19,
         menubar_first_id + 1...menubar_first_id + 4,
         nav_first_id...nav_first_id + 2,
+        color_first_id...color_first_id + 14,
+        first_swatch_id...first_swatch_id + swatches.len - 1,
+        accent_id,
         1001...1039,
         => {},
         else => return error.UnhandledControl,
@@ -2407,4 +2604,140 @@ test "holding a calendar arrow repeats after a delay and typed dates commit on E
     try std.testing.expect(demo.insertText("1999-12-31 23:59"));
     try std.testing.expect(demo.commitEdit());
     try std.testing.expectEqual(ui.widgets.Date{ .year = 1999, .month = 12, .day = 31, .hour = 23, .minute = 59 }, demo.date);
+}
+
+test "color editor drags, hex entry, swatches, and cancel share one color" {
+    var font = try ui.Font.init(std.testing.allocator, ui.default_font);
+    defer font.deinit();
+    var demo: Demo = .{};
+    const viewport = ui.Rect{ .x = 0, .y = 0, .w = 900, .h = 675 };
+    try demo.relayout(std.testing.allocator, viewport, &font);
+    demo.scroll.ensureVisible(demo.controls[demo.indexOf(wheel_id).?]);
+    try demo.relayout(std.testing.allocator, viewport, &font);
+    const wheel = demo.controls[demo.indexOf(wheel_id).?];
+    demo.pointerDown(wheel.x + wheel.w - 0.5, wheel.center().y); // right edge: hue 90 degrees, full saturation
+    try std.testing.expectApproxEqAbs(@as(f32, 0.25), demo.color.hsv.h, 0.01);
+    try std.testing.expectApproxEqAbs(@as(f32, 1), demo.color.hsv.s, 0.01);
+    demo.pointerMove(wheel.center().x, wheel.y + wheel.h - 0.5); // drag to the bottom
+    try std.testing.expectApproxEqAbs(@as(f32, 0.5), demo.color.hsv.h, 0.01);
+    demo.pointerUp();
+    const value_bar = demo.controls[demo.indexOf(color_first_id + 2).?];
+    demo.pointerDown(value_bar.center().x, value_bar.y + value_bar.h - 0.1);
+    try std.testing.expectApproxEqAbs(@as(f32, 0), demo.color.hsv.v, 0.01);
+    demo.pointerUp();
+    try std.testing.expect(demo.accessibilityAction(hex_srgb_id, .focus));
+    try std.testing.expect(demo.editKey(.select_all, false, false, &font));
+    try std.testing.expect(demo.insertText("2f9ce0"));
+    try std.testing.expect(demo.commitEdit());
+    try std.testing.expectEqualStrings("2F9CE0FF", demo.editable[8].text.text());
+    try std.testing.expect(demo.accessibilityAction(first_swatch_id + 1, .click));
+    try std.testing.expectEqualStrings("E86A3AFF", demo.editable[8].text.text());
+    try std.testing.expect(demo.accessibilityAction(color_first_id + 6, .decrement)); // alpha down
+    try std.testing.expectEqualStrings("E86A3AF2", demo.editable[8].text.text());
+    try std.testing.expect(demo.accessibilityAction(color_first_id + 13, .click)); // Cancel
+    try std.testing.expectEqualStrings("F2B233FF", demo.editable[8].text.text());
+}
+
+test "devtools docks beside the page, inspects without clicking through, and switches tabs" {
+    var font = try ui.Font.init(std.testing.allocator, ui.default_font);
+    defer font.deinit();
+    var demo: Demo = .{};
+    defer demo.deinit();
+    const viewport = ui.Rect{ .x = 0, .y = 0, .w = 1200, .h = 800 };
+    try demo.relayout(std.testing.allocator, viewport, &font);
+    const page_button = demo.controls[demo.indexOf(button_id).?];
+    demo.devtools.toggle();
+    try demo.relayout(std.testing.allocator, viewport, &font);
+    try std.testing.expect(demo.panel_rect.w > 0 and demo.panel_rect.x > 700);
+    try std.testing.expect(demo.scroll.viewport.w < viewport.w - demo.panel_rect.w + 1);
+    const button = demo.controls[demo.indexOf(button_id).?];
+    try std.testing.expect(button.x < page_button.x or button.x == page_button.x);
+    try std.testing.expect(demo.accessibilityAction(ui.devtools.first_id + 8, .click)); // Inspect
+    try std.testing.expect(demo.devtools.inspecting);
+    demo.pointerDown(button.center().x, button.center().y);
+    try std.testing.expectEqual(@as(u32, 0), demo.count); // the click went to the inspector
+    try demo.relayout(std.testing.allocator, viewport, &font);
+    try std.testing.expect(!demo.devtools.inspecting and demo.devtools.selected != 0);
+    try std.testing.expect(demo.accessibilityAction(ui.devtools.first_id + 2, .click)); // Console tab
+    try std.testing.expectEqual(ui.devtools.Tab.console, demo.devtools.tab);
+    var vertices = try std.testing.allocator.alloc(ui.Vertex, 250_000);
+    defer std.testing.allocator.free(vertices);
+    var canvas = ui.Canvas.init(vertices[0..], &font);
+    _ = try demo.draw(std.testing.allocator, &canvas, viewport);
+    try std.testing.expect(demo.devtools.vertices > 0);
+    demo.devtools.toggle();
+    try demo.relayout(std.testing.allocator, viewport, &font);
+    try std.testing.expectEqual(@as(f32, 0), demo.panel_rect.w);
+}
+
+test "every devtools tab draws with frame history" {
+    var font = try ui.Font.init(std.testing.allocator, ui.default_font);
+    defer font.deinit();
+    var demo: Demo = .{};
+    defer demo.deinit();
+    const viewport = ui.Rect{ .x = 0, .y = 0, .w = 700, .h = 800 }; // narrow: docks at the bottom
+    demo.devtools.toggle();
+    for (0..90) |i| demo.tickScroll(0.01 + @as(f32, @floatFromInt(i % 7)) * 0.001);
+    const vertices = try std.testing.allocator.alloc(ui.Vertex, 250_000);
+    defer std.testing.allocator.free(vertices);
+    for ([_]ui.devtools.Tab{ .elements, .performance, .console }) |tab| {
+        demo.devtools.tab = tab;
+        var canvas = ui.Canvas.init(vertices, &font);
+        _ = try demo.draw(std.testing.allocator, &canvas, viewport);
+        try std.testing.expect(demo.panel_rect.y > 0 and demo.panel_rect.w == viewport.w);
+    }
+}
+
+test "devtools lists every page element and edits stick to the rebuilt page" {
+    var font = try ui.Font.init(std.testing.allocator, ui.default_font);
+    defer font.deinit();
+    var demo: Demo = .{};
+    defer demo.deinit();
+    const viewport = ui.Rect{ .x = 0, .y = 0, .w = 1400, .h = 900 };
+    demo.devtools.toggle();
+    try demo.relayout(std.testing.allocator, viewport, &font);
+    // Every element, text and buttons included, has a row (the page tree is fully expanded).
+    try std.testing.expect(demo.devtools.row_count > 500);
+    // Select the Try button by inspecting it, then type a new label into its text field.
+    const button = demo.controls[demo.indexOf(button_id).?];
+    demo.devtools.inspecting = true;
+    demo.pointerDown(button.center().x, button.center().y);
+    try demo.relayout(std.testing.allocator, viewport, &font);
+    const text_field = ui.devtools.first_id + 200 + @intFromEnum(ui.devtools.Prop.text);
+    try std.testing.expect(demo.accessibilityAction(text_field, .click));
+    try std.testing.expect(demo.isEditing());
+    try std.testing.expect(demo.insertText("Edited"));
+    try std.testing.expect(demo.commitEdit());
+    const width_field = ui.devtools.first_id + 200 + @intFromEnum(ui.devtools.Prop.width);
+    try std.testing.expect(demo.accessibilityAction(width_field, .focus));
+    try std.testing.expect(demo.editKey(.up, true, false, &font)); // +10
+    try demo.relayout(std.testing.allocator, viewport, &font);
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const snapshot = try demo.accessibilitySnapshot(arena.allocator(), viewport, &font);
+    for (snapshot.nodes) |node| if (node.id == button_id) {
+        try std.testing.expectEqualStrings("Edited", node.label);
+    };
+    try std.testing.expectApproxEqAbs(@as(f32, 178), demo.controls[demo.indexOf(button_id).?].w, 0.5);
+}
+
+test "the wheel scrolls DevTools panes, not the page behind them" {
+    var font = try ui.Font.init(std.testing.allocator, ui.default_font);
+    defer font.deinit();
+    var demo: Demo = .{};
+    defer demo.deinit();
+    const viewport = ui.Rect{ .x = 0, .y = 0, .w = 1400, .h = 900 };
+    demo.devtools.toggle();
+    try demo.relayout(std.testing.allocator, viewport, &font);
+    const tree = demo.devtools.tree_scroll.viewport;
+    try std.testing.expect(demo.panel_rect.contains(tree.center().x, tree.center().y));
+    demo.scrollWheel(tree.center().x, tree.center().y, 0, -3);
+    try std.testing.expect(demo.devtools.tree_scroll.offset.y > 0);
+    try std.testing.expectEqual(@as(f32, 0), demo.scroll.offset.y);
+    // Scrolled all the way down, extra wheel over the panel still leaves the page alone.
+    demo.scrollWheel(tree.center().x, tree.center().y, 0, -100000);
+    try std.testing.expectEqual(@as(f32, 0), demo.scroll.offset.y);
+    // Over the page, the page scrolls as before.
+    demo.scrollWheel(100, 100, 0, -3);
+    try std.testing.expect(demo.scroll.offset.y > 0);
 }
