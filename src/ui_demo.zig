@@ -213,8 +213,31 @@ pub const Demo = struct {
     custom_accent: bool = false,
     /// Chrome-style inspector (F12).
     devtools: ui.devtools.Devtools = .{},
-    panel_rect: ui.Rect = .{ .x = 0, .y = 0, .w = 0, .h = 0 },
+    /// Where each DevTools view is on screen this frame (zero when not shown).
+    tool_rects: [3]ui.Rect = @splat(.{ .x = 0, .y = 0, .w = 0, .h = 0 }),
+    /// DevTools panel slots to fill this frame, and the page they inspect.
+    tool_slots: [3]struct { tool: ui.devtools.Tool, element: *L.Element } = undefined,
+    tool_slot_count: usize = 0,
+    inspected: ?*L.Element = null,
     logged_status: []const u8 = "",
+    /// Editor layout: the app root is a dockspace (the tests use the plain page).
+    docked: bool = false,
+    dock: ui.dock.DockSpace = ui.dock.DockSpace.init(),
+    dock_ready: bool = false,
+    /// Logical size of each popped-out panel's OS window, once the app has opened it.
+    window_sizes: [ui.dock.max_windows]?[2]f32 = @splat(null),
+    /// Draw our own title bars (the app window is borderless); off in tests.
+    custom_frame: bool = false,
+    frame_layout: ui.titlebar.Layout = ui.titlebar.Layout.default(@import("builtin").os.tag),
+    /// Slot 0 is the main window, slot i + 1 panel window i.
+    window_state: [ui.dock.max_windows + 1]ui.titlebar.State = @splat(.{}),
+    /// Title bar and button rectangles per slot, in window-local units, for the OS hit test.
+    frames: [ui.dock.max_windows + 1]FrameRects = @splat(.{}),
+    /// A title bar button the app should carry out (minimize, maximize, close).
+    window_request: ?struct { slot: u8, button: ui.titlebar.Button } = null,
+    /// Which dock windows were built this frame, in root-child order after the main tree.
+    frame_windows: u8 = 0,
+    frame_window_index: [ui.dock.max_windows]u8 = undefined,
     animation_phase: f32 = 0,
     dragging_slider: bool = false,
     dragging_divider: bool = false,
@@ -229,6 +252,8 @@ pub const Demo = struct {
     message_scroll: L.ScrollState = .{ .auto_scroll = true },
     message_count: usize = 3,
     controls: []ui.Rect = &.{},
+    /// Pointer shape over each control (see `cursor`).
+    control_cursors: []ui.Cursor = &.{},
     scene_viewport: ui.Rect = .{ .x = 0, .y = 0, .w = 0, .h = 0 },
     scene_clip: ui.Rect = .{ .x = 0, .y = 0, .w = 0, .h = 0 },
     overlay_rects: [10]ui.Rect = [_]ui.Rect{.{ .x = 0, .y = 0, .w = 0, .h = 0 }} ** 10,
@@ -299,11 +324,30 @@ pub const Demo = struct {
         return true;
     }
     pub fn draw(self: *Demo, allocator: std.mem.Allocator, canvas: *ui.Canvas, viewport: ui.Rect) !usize {
+        return self.drawWindows(allocator, canvas, viewport, &.{});
+    }
+    /// A popped-out panel's OS window to draw into; `base` returns where its overlays begin.
+    pub const WindowTarget = struct { index: u8, canvas: *ui.Canvas, base: usize = 0 };
+    /// Draw the main window into `canvas` and each open panel window into its target.
+    pub fn drawWindows(self: *Demo, allocator: std.mem.Allocator, canvas: *ui.Canvas, viewport: ui.Rect, targets: []WindowTarget) !usize {
         var arena = std.heap.ArenaAllocator.init(allocator);
         defer arena.deinit();
         var count_buf: [20]u8 = undefined;
-        const root = try layoutTree(.{ .allocator = arena.allocator() }, self, viewport, &count_buf, canvas.font);
-        try self.saveControls(root, canvas.font);
+        const tree = try layoutTree(.{ .allocator = arena.allocator() }, self, viewport, &count_buf, canvas.font);
+        try self.saveControls(tree, canvas.font);
+        const root = if (self.frame_windows > 0) tree.children[0] else tree;
+        for (targets) |*target| {
+            target.base = 0;
+            for (self.frame_window_index[0..self.frame_windows], 1..) |index, child| if (index == target.index) {
+                const window_root = tree.children[child];
+                target.canvas.focus_id = if (self.keyboard_focus) self.focusId() else 0;
+                target.canvas.hot_id = self.hotId();
+                try window_root.drawWithoutOverlays(target.canvas);
+                target.base = target.canvas.len;
+                try window_root.drawOverlays(target.canvas);
+                if (self.debug_hitboxes) try window_root.drawHitboxes(target.canvas);
+            };
+        }
         canvas.focus_id = if (self.keyboard_focus) self.focusId() else 0;
         canvas.hot_id = self.hotId();
         try root.drawWithoutOverlays(canvas);
@@ -319,6 +363,47 @@ pub const Demo = struct {
             self.devtools.log(.info, "{s}", .{self.status});
         }
         return base_vertices;
+    }
+    /// Pointer shape for this moment: what an ongoing drag implies, else what is under the
+    /// pointer (hand on clickable things, I-beam on text, resize arrows on dividers).
+    pub fn pointerCursor(self: *const Demo) ui.Cursor {
+        if (self.dock.cursor()) |c| return c;
+        if (self.dragging_text) return .text;
+        if (self.dragging_divider) return .ew_resize;
+        if (self.dragging_slider) return .pointer;
+        if (self.color.drag) |channel| return switch (channel) {
+            .wheel => .crosshair,
+            .saturation, .value => .ns_resize,
+            else => .ew_resize,
+        };
+        if (self.devtools.inspecting and !self.inTools(self.pointer_x, self.pointer_y)) return .crosshair;
+        var i = self.control_count;
+        while (i > 0) {
+            i -= 1;
+            if (self.control_clips[i].contains(self.pointer_x, self.pointer_y)) return self.control_cursors[i];
+        }
+        return .default;
+    }
+    /// Whether (x, y) is over a DevTools panel (so it isn't the page being inspected).
+    pub fn inTools(self: *const Demo, x: f32, y: f32) bool {
+        for (self.tool_rects) |rect| if (rect.contains(x, y)) return true;
+        return false;
+    }
+    /// F12: show the Elements and Performance panels beside the page, or take them away.
+    pub fn toggleDevtools(self: *Demo) void {
+        if (!self.docked) return;
+        const elements = @intFromEnum(Panel.elements);
+        const performance = @intFromEnum(Panel.performance);
+        if (self.dock.nodeOf(elements) != null or self.dock.nodeOf(performance) != null) {
+            self.dock.remove(elements);
+            self.dock.remove(performance);
+            self.devtools.inspecting = false;
+            return;
+        }
+        const near: ?u32 = if (self.dock.nodeOf(@intFromEnum(Panel.components)) != null) @intFromEnum(Panel.components) else null;
+        self.dock.add(elements, near, .right) catch return;
+        self.dock.add(performance, elements, .center) catch {};
+        _ = self.dock.activate(ui.dock.first_id + elements);
     }
     /// Topmost control under the pointer, for hover styling.
     fn hotId(self: *const Demo) u32 {
@@ -355,7 +440,22 @@ pub const Demo = struct {
             self.overlay_rects[i] = if (root.find(id)) |overlay| overlay.bounds.intersection(overlay.clip) else .{ .x = 0, .y = 0, .w = 0, .h = 0 };
         }
         self.divider_track = if (root.find(481)) |track| track.bounds else .{ .x = 0, .y = 0, .w = 0, .h = 0 };
-        self.panel_rect = if (root.find(ui.devtools.panel_id)) |panel| panel.bounds else .{ .x = 0, .y = 0, .w = 0, .h = 0 };
+        for (&self.tool_rects, 0..) |*rect, i| rect.* = if (root.find(ui.devtools.view_id + @as(u32, @intCast(i)))) |view| view.bounds.intersection(view.clip) else .{ .x = 0, .y = 0, .w = 0, .h = 0 };
+        for (&self.frames, 0..) |*frame, slot| {
+            frame.* = .{};
+            const origin: f32 = if (slot == 0) 0 else windowOrigin(slot - 1);
+            const local = struct {
+                fn f(r: ui.Rect, dx: f32) ui.Rect {
+                    return .{ .x = r.x - dx, .y = r.y, .w = r.w, .h = r.h };
+                }
+            }.f;
+            const bar = root.find(ui.titlebar.id(titlebar_first, @intCast(slot), .bar)) orelse continue;
+            frame.bar = local(bar.bounds, origin);
+            inline for (.{ .close, .minimize, .maximize }) |part| if (root.find(ui.titlebar.id(titlebar_first, @intCast(slot), part))) |button| {
+                frame.buttons[frame.count] = local(button.bounds, origin);
+                frame.count += 1;
+            };
+        }
         if (root.find(gallery_id)) |gallery| self.gallery_top = gallery.bounds.y + self.scroll.offset.y - self.scroll.viewport.y;
         if (root.find(500)) |scene| {
             self.scene_viewport = scene.bounds;
@@ -417,6 +517,7 @@ pub const Demo = struct {
         devtools_gpa.free(self.control_ids);
         devtools_gpa.free(self.control_clips);
         devtools_gpa.free(self.controls);
+        devtools_gpa.free(self.control_cursors);
         self.devtools.deinit(devtools_gpa);
     }
     fn recordControl(self: *Demo, element: *const L.Element) !void {
@@ -425,7 +526,9 @@ pub const Demo = struct {
             self.control_ids = try devtools_gpa.realloc(self.control_ids, capacity);
             self.control_clips = try devtools_gpa.realloc(self.control_clips, capacity);
             self.controls = try devtools_gpa.realloc(self.controls, capacity);
+            self.control_cursors = try devtools_gpa.realloc(self.control_cursors, capacity);
         }
+        self.control_cursors[self.control_count] = element.cursorFor();
         const i = self.control_count;
         self.controls[i] = element.bounds;
         self.control_clips[i] = element.bounds.intersection(element.clip);
@@ -458,17 +561,19 @@ pub const Demo = struct {
         }
     }
     pub fn scrollDragging(self: *Demo) bool {
+        if (self.dock.dragging()) return true;
         if (self.color.drag != null) return true;
         for (self.panes()) |pane| if (pane.dragging != .none) return true;
         return self.scroll.dragging != .none;
     }
     /// The part of `pane` on screen: DevTools panes live in the panel, the rest in the page.
     fn paneVisible(self: *Demo, pane: *L.ScrollState) ui.Rect {
-        const in_panel = pane == &self.devtools.tree_scroll or pane == &self.devtools.details_scroll or pane == &self.devtools.console_scroll;
-        return pane.viewport.intersection(if (in_panel) self.panel_rect else self.scroll.viewport);
+        // DevTools panes live in their own panels, not inside the page.
+        if (pane == &self.devtools.tree_scroll or pane == &self.devtools.details_scroll or pane == &self.devtools.console_scroll) return pane.viewport;
+        return pane.viewport.intersection(self.scroll.viewport);
     }
     pub fn scrollWheel(self: *Demo, x: f32, y: f32, dx: f32, dy: f32) void {
-        const over_panel = self.panel_rect.contains(x, y);
+        const over_panel = self.inTools(x, y);
         if (self.dialog_open and !over_panel) return;
         for (self.panes()) |pane| {
             if (self.paneVisible(pane).contains(x, y)) {
@@ -478,8 +583,8 @@ pub const Demo = struct {
                 break;
             }
         }
-        // Never scroll the page from over the DevTools panel.
-        if (!over_panel) self.scroll.wheel(dx, dy);
+        // Never scroll the page from over the DevTools panel (or, docked, from another panel).
+        if (!over_panel and (!self.docked or self.scroll.viewport.contains(x, y))) self.scroll.wheel(dx, dy);
     }
     /// Whether Enter may auto-repeat on the focused control.
     pub fn focusRepeats(self: *const Demo) bool {
@@ -838,9 +943,9 @@ pub const Demo = struct {
     pub fn pointerDownWithClicks(self: *Demo, x: f32, y: f32, font: ?*const ui.Font, clicks: u8) void {
         self.pointer_x = x;
         self.pointer_y = y;
-        if (!self.panel_rect.contains(x, y) and self.devtools.pointerDown(x, y)) return;
+        if (!self.inTools(x, y) and self.devtools.pointerDown(x, y)) return;
         if (!self.dialog_open and self.scroll.pointerDown(x, y)) return;
-        for (self.panes()) |pane| if ((!self.dialog_open or self.panel_rect.contains(x, y)) and self.paneVisible(pane).contains(x, y) and pane.pointerDown(x, y)) return;
+        for (self.panes()) |pane| if ((!self.dialog_open or self.inTools(x, y)) and self.paneVisible(pane).contains(x, y) and pane.pointerDown(x, y)) return;
         if (!self.dialog_open) {
             var in_popup = false;
             for (self.overlay_rects) |rect| if (rect.contains(x, y)) {
@@ -858,6 +963,11 @@ pub const Demo = struct {
         while (i > 0) {
             i -= 1;
             if (!self.control_clips[i].contains(x, y)) continue;
+            if (self.dock.press(self.control_ids[i], x, y)) {
+                self.focus = i;
+                self.keyboard_focus = false;
+                return;
+            }
             self.restore_focus = null;
             if (self.control_ids[i] != self.focusId()) self.devtools.blur(devtools_gpa);
             self.focus = i;
@@ -924,9 +1034,10 @@ pub const Demo = struct {
     pub fn pointerMoveAt(self: *Demo, x: f32, y: f32, font: ?*const ui.Font) void {
         self.pointer_x = x;
         self.pointer_y = y;
+        if (self.dock.dragging()) self.dock.dragTo(x, y);
         self.scroll.pointerMove(x, y);
         for (self.panes()) |pane| pane.pointerMove(x, y);
-        if (self.panel_rect.contains(x, y)) self.devtools.pointer = null else self.devtools.pointerMove(x, y);
+        if (self.inTools(x, y)) self.devtools.pointer = null else self.devtools.pointerMove(x, y);
         if (self.dragging_slider) self.setScaleFromPointer(x);
         if (self.dragging_divider) self.setDividerFromPointer(x);
         if (self.color.drag != null) {
@@ -951,6 +1062,7 @@ pub const Demo = struct {
         }
     }
     pub fn pointerUp(self: *Demo) void {
+        if (self.dock.dragging()) self.dock.release(self.pointer_x, self.pointer_y);
         self.held_id = 0;
         self.color.release();
         self.scroll.pointerUp();
@@ -1018,6 +1130,7 @@ pub const Demo = struct {
             self.closeDialog();
             return true;
         }
+        if (self.dock.dismissMenu()) return true;
         const had_popup = self.select_open or self.menu_open or self.context_point != null or self.combo_open or self.command_open or self.popover_open or self.menubar_open != 0 or self.nav_open != 0 or self.calendar_open;
         if (self.menubar_open != 0) self.restore_focus = self.menubar_open;
         if (self.nav_open != 0) self.restore_focus = self.nav_open;
@@ -1353,7 +1466,11 @@ pub const Demo = struct {
                 self.restore_focus = 300;
                 if (self.indexOf(300)) |index| self.scroll.ensureVisible(self.controls[index]);
             },
-            else => if (!self.devtools.activate(devtools_gpa, id)) std.log.warn("Unimplemented demo control: {d}", .{id}),
+            titlebar_first...titlebar_first + (ui.dock.max_windows + 1) * 4 - 1 => {
+                const part = (id - titlebar_first) % 4;
+                if (part < 3) self.window_request = .{ .slot = @intCast((id - titlebar_first) / 4), .button = @enumFromInt(part) };
+            },
+            else => if (!self.dock.activate(id) and !self.devtools.activate(devtools_gpa, id)) std.log.warn("Unimplemented demo control: {d}", .{id}),
         }
     }
 };
@@ -1383,16 +1500,152 @@ fn line(b: L.Builder) !*L.Element {
 /// Persistent memory for DevTools' expanded-row set.
 const devtools_gpa = std.heap.smp_allocator;
 
-fn layoutTree(b: L.Builder, demo: *Demo, full: ui.Rect, count_buf: *[20]u8, font: *const ui.Font) !*L.Element {
-    const split = demo.devtools.split(full);
-    const page = try layoutPage(b, demo, split.page, count_buf, font);
-    // DevTools property edits outlive the rebuild, like styles edited in a browser.
-    if (demo.devtools.apply(page)) page.layout(split.page, font);
-    if (!demo.devtools.open) return page;
-    const panel = try demo.devtools.panel(b, devtools_gpa, font, page, split.panel, split.right);
-    const root = try b.node(0, .{ .width = full.w, .height = full.h, .direction = if (split.right) .row else .column }, .none, &.{ page, panel });
+/// Title bar controls: `ui.titlebar.id(titlebar_first, slot, part)`.
+pub const titlebar_first: u32 = 0xC0FF_0000;
+pub const FrameRects = struct {
+    bar: ui.Rect = .{ .x = 0, .y = 0, .w = 0, .h = 0 },
+    buttons: [3]ui.Rect = @splat(.{ .x = 0, .y = 0, .w = 0, .h = 0 }),
+    count: u8 = 0,
+};
+
+/// Dock panels in the editor layout.
+pub const Panel = enum(u32) { components = 1, scene, console, notes, elements, performance };
+/// Each OS window's tree is laid out in its own slice of one coordinate space, so a single
+/// control list (hover, focus, clicks) spans every window; window `i` starts at this x.
+pub const window_stride: f32 = 20000;
+pub fn windowOrigin(index: usize) f32 {
+    return window_stride * @as(f32, @floatFromInt(index + 1));
+}
+const notes_markdown =
+    \\## Docking
+    \\- Drag a tab onto the compass to dock it left, right, above, below, or into a stack.
+    \\- Drop a tab anywhere else to float it; drag the floating tab bar to move it and the corner to resize.
+    \\- Drag a tab past the window's edge, or press Pop out, to give it its own OS window.
+    \\- Press Dock, or close that window, to bring the panel back.
+    \\- Drag the thin bars between panels to resize them.
+    \\- F12 (or Ctrl+Shift+I) adds the Elements and Performance panels; Console is always here.
+;
+
+/// Title of dock panel `panel`, for OS window titles.
+pub fn panelTitle(panel: u32) []const u8 {
+    return DockPanels.title(undefined, panel);
+}
+const DockPanels = struct {
+    demo: *Demo,
+    count_buf: *[20]u8,
+    font: *const ui.Font,
+
+    pub fn title(_: DockPanels, panel: u32) []const u8 {
+        return switch (@as(Panel, @enumFromInt(panel))) {
+            .components => "Components",
+            .scene => "Scene",
+            .console => "Console",
+            .notes => "Notes",
+            .elements => "Elements",
+            .performance => "Performance",
+        };
+    }
+    pub fn content(self: DockPanels, b: L.Builder, panel: u32, rect: ui.Rect) !*L.Element {
+        switch (@as(Panel, @enumFromInt(panel))) {
+            .components => return layoutPage(b, self.demo, rect, self.count_buf, self.font),
+            .scene => {
+                const scene = try b.node(500, .{ .width = rect.w, .height = rect.h }, .none, &.{});
+                scene.accessibility = .{ .role = .image, .label = "Rotating 3D viewport" };
+                return scene;
+            },
+            // DevTools inspects the finished tree, so its panels start as empty slots filled in
+            // once every window is laid out (see `fillTools`).
+            .console, .elements, .performance => {
+                const slot = try b.node(0, .{ .width = rect.w, .height = rect.h }, .none, &.{});
+                const demo = self.demo;
+                if (demo.tool_slot_count < demo.tool_slots.len) {
+                    demo.tool_slots[demo.tool_slot_count] = .{ .tool = switch (@as(Panel, @enumFromInt(panel))) {
+                        .elements => .elements,
+                        .performance => .performance,
+                        else => .console,
+                    }, .element = slot };
+                    demo.tool_slot_count += 1;
+                }
+                return slot;
+            },
+            .notes => return b.node(0, .{ .padding = .{ .left = 16, .right = 16, .top = 12, .bottom = 12 } }, .none, &.{try W.typeset(b, notes_markdown, .{ .density = .chat })}),
+        }
+    }
+};
+
+fn layoutDock(b: L.Builder, demo: *Demo, viewport: ui.Rect, count_buf: *[20]u8, font: *const ui.Font) !*L.Element {
+    if (!demo.dock_ready) {
+        demo.dock_ready = true;
+        const dock = &demo.dock;
+        try dock.add(@intFromEnum(Panel.components), null, .center);
+        try dock.add(@intFromEnum(Panel.scene), @intFromEnum(Panel.components), .right);
+        try dock.add(@intFromEnum(Panel.console), @intFromEnum(Panel.scene), .bottom);
+        try dock.add(@intFromEnum(Panel.notes), @intFromEnum(Panel.console), .center);
+        dock.nodes[dock.root].ratio = 0.64;
+        dock.nodes[dock.nodes[dock.root].second].ratio = 0.52;
+    }
+    const root = try demo.dock.build(b, .main, viewport, DockPanels{ .demo = demo, .count_buf = count_buf, .font = font });
+    root.layout(viewport, font);
+    return root;
+}
+
+/// `content` under a title bar for window `slot`, laid out in `full`.
+fn framed(b: L.Builder, demo: *Demo, slot: u32, title: []const u8, full: ui.Rect, content: *L.Element, font: *const ui.Font) !*L.Element {
+    const title_bar = try ui.titlebar.bar(b, titlebar_first, slot, title, demo.frame_layout, demo.window_state[slot]);
+    const root = try b.node(0, .{ .width = full.w, .height = full.h }, .none, &.{ title_bar, content });
     root.layout(full, font);
     return root;
+}
+fn belowBar(demo: *const Demo, full: ui.Rect) ui.Rect {
+    if (!demo.custom_frame) return full;
+    return .{ .x = full.x, .y = full.y + ui.titlebar.height, .w = full.w, .h = @max(0, full.h - ui.titlebar.height) };
+}
+fn layoutTree(b: L.Builder, demo: *Demo, full: ui.Rect, count_buf: *[20]u8, font: *const ui.Font) !*L.Element {
+    demo.tool_slot_count = 0;
+    const tree = try layoutWindows(b, demo, full, count_buf, font);
+    try fillTools(b, demo, font);
+    return tree;
+}
+/// Put the DevTools views into their panel slots, now that the page they inspect is laid out.
+fn fillTools(b: L.Builder, demo: *Demo, font: *const ui.Font) !void {
+    if (demo.tool_slot_count == 0) return;
+    try demo.devtools.prepare(devtools_gpa, demo.inspected orelse return);
+    for (demo.tool_slots[0..demo.tool_slot_count]) |slot| {
+        const view = try demo.devtools.view(b, devtools_gpa, slot.tool, slot.element.bounds);
+        view.layout(slot.element.bounds, font);
+        slot.element.children = try b.allocator.dupe(*L.Element, &.{view});
+    }
+}
+fn layoutWindows(b: L.Builder, demo: *Demo, full: ui.Rect, count_buf: *[20]u8, font: *const ui.Font) !*L.Element {
+    const inner = try layoutMain(b, demo, belowBar(demo, full), count_buf, font);
+    const main = if (demo.custom_frame) try framed(b, demo, 0, "eggy", full, inner, font) else inner;
+    demo.frame_windows = 0;
+    if (!demo.docked) return main;
+    // Popped-out panels: each OS window's tree, in its own slice of the coordinate space.
+    var roots: std.ArrayList(*L.Element) = .empty;
+    try roots.append(b.allocator, main);
+    for (demo.dock.windows, demo.window_sizes, 0..) |window, size, i| {
+        if (window == null or size == null) continue;
+        const full_window = ui.Rect{ .x = windowOrigin(i), .y = 0, .w = size.?[0], .h = size.?[1] };
+        const viewport = belowBar(demo, full_window);
+        const dock_tree = try demo.dock.build(b, .{ .window = @intCast(i) }, viewport, DockPanels{ .demo = demo, .count_buf = count_buf, .font = font });
+        dock_tree.layout(viewport, font);
+        const node = demo.dock.nodes[demo.dock.windows[i].?.root];
+        const tree = if (demo.custom_frame) try framed(b, demo, @intCast(i + 1), if (node.count > 0) panelTitle(node.panels[node.active]) else "Panel", full_window, dock_tree, font) else dock_tree;
+        demo.frame_window_index[demo.frame_windows] = @intCast(i);
+        demo.frame_windows += 1;
+        try roots.append(b.allocator, tree);
+    }
+    if (demo.frame_windows == 0) return main;
+    // Not laid out as a whole: it only groups the per-window trees for focus and hit-testing.
+    return b.node(0, .{}, .none, roots.items);
+}
+fn layoutMain(b: L.Builder, demo: *Demo, full: ui.Rect, count_buf: *[20]u8, font: *const ui.Font) !*L.Element {
+    const page = if (demo.docked) try layoutDock(b, demo, full, count_buf, font) else try layoutPage(b, demo, full, count_buf, font);
+    // DevTools property edits outlive the rebuild, like styles edited in a browser.
+    if (demo.devtools.apply(page)) page.layout(full, font);
+    demo.inspected = page;
+    return page;
 }
 fn layoutPage(b: L.Builder, demo: *Demo, viewport: ui.Rect, count_buf: *[20]u8, font: *const ui.Font) !*L.Element {
     var vertical = false;
@@ -1853,8 +2106,8 @@ fn componentGallery(b: L.Builder, demo: *Demo, page_width: f32) !*L.Element {
         try W.dataTableWithOptions(b, &.{ .{ .id = 450, .label = "Name" }, .{ .id = 451, .label = "Status" } }, if (demo.sorted_descending) &.{ &.{ "Weeoui", "Alpha" }, &.{ demo.editable[0].text.text(), "Ready" } } else &.{ &.{ demo.editable[0].text.text(), "Ready" }, &.{ "Weeoui", "Alpha" } }, .{ .lines = demo.table_lines }),
         try b.button(452, if (demo.table_lines) "Hide table lines" else "Show table lines"),
         chart,
-        try label(b, "3D scene (Vitellus)", 14, true, false),
-        scene,
+        try label(b, if (demo.docked) "3D scene (Vitellus): see the Scene panel" else "3D scene (Vitellus)", 14, true, false),
+        if (demo.docked) try b.node(0, .{ .height = 0 }, .none, &.{}) else scene,
         try b.row(&.{ try b.avatar("AB"), try b.spinner(demo.animation_phase), try b.animatedSkeleton(72, 24, demo.animation_phase) }),
         try b.node(0, .{ .width = 160, .padding = .{ .left = 16, .right = 16, .top = 16, .bottom = 16 }, .gap = 8 }, .card, &.{
             image,
@@ -2638,66 +2891,54 @@ test "color editor drags, hex entry, swatches, and cancel share one color" {
     try std.testing.expectEqualStrings("F2B233FF", demo.editable[8].text.text());
 }
 
-test "devtools docks beside the page, inspects without clicking through, and switches tabs" {
+test "F12 docks the DevTools panels beside the page; Inspect picks without clicking through" {
     var font = try ui.Font.init(std.testing.allocator, ui.default_font);
     defer font.deinit();
-    var demo: Demo = .{};
+    var demo: Demo = .{ .docked = true };
     defer demo.deinit();
-    const viewport = ui.Rect{ .x = 0, .y = 0, .w = 1200, .h = 800 };
+    const viewport = ui.Rect{ .x = 0, .y = 0, .w = 1400, .h = 900 };
     try demo.relayout(std.testing.allocator, viewport, &font);
-    const page_button = demo.controls[demo.indexOf(button_id).?];
-    demo.devtools.toggle();
+    // Console starts as a panel, tabbed behind Notes; Elements and Performance come with F12.
+    try std.testing.expect(demo.dock.nodeOf(@intFromEnum(Panel.console)) != null);
+    try std.testing.expectEqual(@as(f32, 0), demo.tool_rects[@intFromEnum(ui.devtools.Tool.console)].w);
+    demo.toggleDevtools();
     try demo.relayout(std.testing.allocator, viewport, &font);
-    try std.testing.expect(demo.panel_rect.w > 0 and demo.panel_rect.x > 700);
-    try std.testing.expect(demo.scroll.viewport.w < viewport.w - demo.panel_rect.w + 1);
+    const elements = demo.tool_rects[@intFromEnum(ui.devtools.Tool.elements)];
+    try std.testing.expect(elements.w > 0);
     const button = demo.controls[demo.indexOf(button_id).?];
-    try std.testing.expect(button.x < page_button.x or button.x == page_button.x);
+    try std.testing.expect(elements.x > button.x); // docked to the right of the page
     try std.testing.expect(demo.accessibilityAction(ui.devtools.first_id + 8, .click)); // Inspect
     try std.testing.expect(demo.devtools.inspecting);
     demo.pointerDown(button.center().x, button.center().y);
     try std.testing.expectEqual(@as(u32, 0), demo.count); // the click went to the inspector
     try demo.relayout(std.testing.allocator, viewport, &font);
     try std.testing.expect(!demo.devtools.inspecting and demo.devtools.selected != 0);
-    try std.testing.expect(demo.accessibilityAction(ui.devtools.first_id + 2, .click)); // Console tab
-    try std.testing.expectEqual(ui.devtools.Tab.console, demo.devtools.tab);
-    var vertices = try std.testing.allocator.alloc(ui.Vertex, 250_000);
-    defer std.testing.allocator.free(vertices);
-    var canvas = ui.Canvas.init(vertices[0..], &font);
-    _ = try demo.draw(std.testing.allocator, &canvas, viewport);
-    try std.testing.expect(demo.devtools.vertices > 0);
-    demo.devtools.toggle();
-    try demo.relayout(std.testing.allocator, viewport, &font);
-    try std.testing.expectEqual(@as(f32, 0), demo.panel_rect.w);
-}
-
-test "every devtools tab draws with frame history" {
-    var font = try ui.Font.init(std.testing.allocator, ui.default_font);
-    defer font.deinit();
-    var demo: Demo = .{};
-    defer demo.deinit();
-    const viewport = ui.Rect{ .x = 0, .y = 0, .w = 700, .h = 800 }; // narrow: docks at the bottom
-    demo.devtools.toggle();
+    // Every element, text and buttons included, has a row (the tree is fully expanded).
+    try std.testing.expect(demo.devtools.row_count > 500);
+    // Performance is a tab in the same stack; drawing it works with frame history.
     for (0..90) |i| demo.tickScroll(0.01 + @as(f32, @floatFromInt(i % 7)) * 0.001);
+    _ = demo.dock.activate(ui.dock.first_id + @intFromEnum(Panel.performance));
     const vertices = try std.testing.allocator.alloc(ui.Vertex, 250_000);
     defer std.testing.allocator.free(vertices);
-    for ([_]ui.devtools.Tab{ .elements, .performance, .console }) |tab| {
-        demo.devtools.tab = tab;
-        var canvas = ui.Canvas.init(vertices, &font);
-        _ = try demo.draw(std.testing.allocator, &canvas, viewport);
-        try std.testing.expect(demo.panel_rect.y > 0 and demo.panel_rect.w == viewport.w);
-    }
+    var canvas = ui.Canvas.init(vertices, &font);
+    _ = try demo.draw(std.testing.allocator, &canvas, viewport);
+    try std.testing.expect(demo.tool_rects[@intFromEnum(ui.devtools.Tool.performance)].w > 0);
+    try std.testing.expect(demo.devtools.vertices > 0);
+    // F12 again takes them away.
+    demo.toggleDevtools();
+    try demo.relayout(std.testing.allocator, viewport, &font);
+    try std.testing.expectEqual(@as(f32, 0), demo.tool_rects[@intFromEnum(ui.devtools.Tool.elements)].w);
 }
 
-test "devtools lists every page element and edits stick to the rebuilt page" {
+test "DevTools edits stick to the rebuilt page" {
     var font = try ui.Font.init(std.testing.allocator, ui.default_font);
     defer font.deinit();
-    var demo: Demo = .{};
+    var demo: Demo = .{ .docked = true };
     defer demo.deinit();
     const viewport = ui.Rect{ .x = 0, .y = 0, .w = 1400, .h = 900 };
-    demo.devtools.toggle();
     try demo.relayout(std.testing.allocator, viewport, &font);
-    // Every element, text and buttons included, has a row (the page tree is fully expanded).
-    try std.testing.expect(demo.devtools.row_count > 500);
+    demo.toggleDevtools();
+    try demo.relayout(std.testing.allocator, viewport, &font);
     // Select the Try button by inspecting it, then type a new label into its text field.
     const button = demo.controls[demo.indexOf(button_id).?];
     demo.devtools.inspecting = true;
@@ -2724,13 +2965,14 @@ test "devtools lists every page element and edits stick to the rebuilt page" {
 test "the wheel scrolls DevTools panes, not the page behind them" {
     var font = try ui.Font.init(std.testing.allocator, ui.default_font);
     defer font.deinit();
-    var demo: Demo = .{};
+    var demo: Demo = .{ .docked = true };
     defer demo.deinit();
     const viewport = ui.Rect{ .x = 0, .y = 0, .w = 1400, .h = 900 };
-    demo.devtools.toggle();
+    try demo.relayout(std.testing.allocator, viewport, &font);
+    demo.toggleDevtools();
     try demo.relayout(std.testing.allocator, viewport, &font);
     const tree = demo.devtools.tree_scroll.viewport;
-    try std.testing.expect(demo.panel_rect.contains(tree.center().x, tree.center().y));
+    try std.testing.expect(demo.inTools(tree.center().x, tree.center().y));
     demo.scrollWheel(tree.center().x, tree.center().y, 0, -3);
     try std.testing.expect(demo.devtools.tree_scroll.offset.y > 0);
     try std.testing.expectEqual(@as(f32, 0), demo.scroll.offset.y);
@@ -2738,6 +2980,85 @@ test "the wheel scrolls DevTools panes, not the page behind them" {
     demo.scrollWheel(tree.center().x, tree.center().y, 0, -100000);
     try std.testing.expectEqual(@as(f32, 0), demo.scroll.offset.y);
     // Over the page, the page scrolls as before.
-    demo.scrollWheel(100, 100, 0, -3);
+    const button = demo.controls[demo.indexOf(button_id).?];
+    demo.scrollWheel(button.center().x, button.center().y, 0, -3);
     try std.testing.expect(demo.scroll.offset.y > 0);
+}
+
+test "docked editor pops panels into windows that share one control list, and docks them back" {
+    var font = try ui.Font.init(std.testing.allocator, ui.default_font);
+    defer font.deinit();
+    var demo: Demo = .{ .docked = true };
+    defer demo.deinit();
+    const viewport = ui.Rect{ .x = 0, .y = 0, .w = 1400, .h = 900 };
+    try demo.relayout(std.testing.allocator, viewport, &font);
+    // Components (the page) sits left of the Scene panel, which holds the 3D view.
+    const button = demo.controls[demo.indexOf(button_id).?];
+    try std.testing.expect(demo.scene_viewport.w > 0 and demo.scene_viewport.x > button.x);
+    const scene_tab = ui.dock.first_id + @intFromEnum(Panel.scene);
+    try std.testing.expect(demo.indexOf(scene_tab) != null);
+    // Pop the Scene out; once the app reports its window size, its tree joins the controls.
+    try demo.dock.detach(@intFromEnum(Panel.scene));
+    demo.window_sizes[0] = .{ 500, 400 };
+    try demo.relayout(std.testing.allocator, viewport, &font);
+    try std.testing.expect(demo.scene_viewport.x >= windowOrigin(0));
+    const tab = demo.controls[demo.indexOf(scene_tab).?];
+    try std.testing.expect(tab.x >= windowOrigin(0));
+    // A click in that window (its x offset by the window's origin) reaches its controls.
+    demo.pointerDown(tab.center().x, tab.center().y);
+    try std.testing.expectEqual(scene_tab, demo.focusId());
+    try std.testing.expect(demo.indexOf(button_id) != null); // the main window's controls remain
+    // Closing the window docks the panel back into the main window.
+    demo.dock.redock(.{ .window = 0 });
+    try demo.relayout(std.testing.allocator, viewport, &font);
+    try std.testing.expect(demo.scene_viewport.x < windowOrigin(0) and demo.scene_viewport.w > 0);
+    const vertices = try std.testing.allocator.alloc(ui.Vertex, 250_000);
+    defer std.testing.allocator.free(vertices);
+    var canvas = ui.Canvas.init(vertices, &font);
+    _ = try demo.draw(std.testing.allocator, &canvas, viewport);
+}
+
+test "custom title bars follow the desktop's button layout and request window actions" {
+    var font = try ui.Font.init(std.testing.allocator, ui.default_font);
+    defer font.deinit();
+    var demo: Demo = .{ .docked = true, .custom_frame = true, .frame_layout = ui.titlebar.Layout.parse(":close", .gnome) };
+    defer demo.deinit();
+    const viewport = ui.Rect{ .x = 0, .y = 0, .w = 1200, .h = 800 };
+    try demo.relayout(std.testing.allocator, viewport, &font);
+    // A bar across the top, with only a close button (minimize and maximize turned off).
+    try std.testing.expectEqual(viewport.w, demo.frames[0].bar.w);
+    try std.testing.expectEqual(@as(u8, 1), demo.frames[0].count);
+    try std.testing.expect(demo.frames[0].buttons[0].x > viewport.w / 2);
+    try std.testing.expect(demo.indexOf(ui.titlebar.id(titlebar_first, 0, .minimize)) == null);
+    // Everything else starts below it.
+    try std.testing.expect(demo.controls[demo.indexOf(ui.dock.first_id + @intFromEnum(Panel.components)).?].y >= ui.titlebar.height);
+    try std.testing.expect(demo.accessibilityAction(ui.titlebar.id(titlebar_first, 0, .close), .click));
+    try std.testing.expectEqual(ui.titlebar.Button.close, demo.window_request.?.button);
+    // A popped-out panel gets its own bar in its own slot, with window-local coordinates.
+    try demo.dock.detach(@intFromEnum(Panel.notes));
+    demo.window_sizes[0] = .{ 400, 300 };
+    try demo.relayout(std.testing.allocator, viewport, &font);
+    try std.testing.expectEqual(@as(f32, 0), demo.frames[1].bar.x);
+    try std.testing.expectEqual(@as(f32, 400), demo.frames[1].bar.w);
+}
+
+test "the cursor follows hovered controls and ongoing drags" {
+    var font = try ui.Font.init(std.testing.allocator, ui.default_font);
+    defer font.deinit();
+    var demo: Demo = .{};
+    defer demo.deinit();
+    const viewport = ui.Rect{ .x = 0, .y = 0, .w = 900, .h = 675 };
+    try demo.relayout(std.testing.allocator, viewport, &font);
+    const button = demo.controls[demo.indexOf(button_id).?];
+    demo.pointerMove(button.center().x, button.center().y);
+    try std.testing.expectEqual(ui.Cursor.pointer, demo.pointerCursor());
+    demo.scroll.ensureVisible(demo.controls[demo.indexOf(300).?]);
+    try demo.relayout(std.testing.allocator, viewport, &font);
+    const field = demo.controls[demo.indexOf(300).?];
+    demo.pointerMove(field.center().x, field.center().y);
+    try std.testing.expectEqual(ui.Cursor.text, demo.pointerCursor());
+    demo.pointerMove(2, 2);
+    try std.testing.expectEqual(ui.Cursor.default, demo.pointerCursor());
+    demo.dragging_divider = true;
+    try std.testing.expectEqual(ui.Cursor.ew_resize, demo.pointerCursor());
 }

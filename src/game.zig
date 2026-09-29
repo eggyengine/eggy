@@ -114,16 +114,33 @@ pub const Game = struct {
             self.a11y_dirty = false;
         }
         try self.m_graphics.frame();
+        weeoui_sdl3.setCursor(self.m_graphics.demo.pointerCursor());
         return .run;
+    }
+
+    /// Where the event's window starts in the demo's coordinate space: 0 for the main window,
+    /// a far-off slice for a popped-out dock panel.
+    fn eventOrigin(self: *const Game, curr_event: sdl3.events.Event) f32 {
+        const id: ?sdl3.video.WindowId = switch (curr_event) {
+            inline else => |payload| blk: {
+                const T = @TypeOf(payload);
+                if (T == sdl3.events.Window) break :blk payload.id;
+                if (@typeInfo(T) == .@"struct" and @hasField(T, "window_id")) break :blk payload.window_id;
+                break :blk null;
+            },
+        };
+        const index = self.m_graphics.windowFor(id orelse return 0) orelse return 0;
+        return @import("ui_demo.zig").windowOrigin(index);
     }
 
     pub fn event(self: *Game, curr_event: sdl3.events.Event) !sdl3.AppResult {
         var publish = false;
+        const origin = self.eventOrigin(curr_event);
         if (weeoui_sdl3.translate(curr_event)) |ui_event| switch (ui_event) {
             .pointer_move => |position| {
                 const scale = self.m_graphics.demo.ui_scale;
                 const old_hover = .{ self.m_graphics.demo.hover_card_open, self.m_graphics.demo.tooltip_open };
-                self.m_graphics.demo.pointerMoveAt(position.x / scale, position.y / scale, &self.m_graphics.font);
+                self.m_graphics.demo.pointerMoveAt(position.x / scale + origin, position.y / scale, &self.m_graphics.font);
                 if (self.m_graphics.demo.dragging_slider) {
                     try self.m_graphics.syncSize(self.window);
                     publish = true;
@@ -135,21 +152,28 @@ pub const Game = struct {
             .pointer_down => |button| {
                 if (button.button == .left) {
                     const scale = self.m_graphics.demo.ui_scale;
-                    self.m_graphics.demo.pointerDownWithClicks(button.position.x / scale, button.position.y / scale, &self.m_graphics.font, button.clicks);
+                    self.m_graphics.demo.pointerDownWithClicks(button.position.x / scale + origin, button.position.y / scale, &self.m_graphics.font, button.clicks);
                     try self.m_graphics.syncSize(self.window);
                     try self.m_graphics.relayoutDemo();
                     publish = true;
                 } else if (button.button == .right) {
                     const scale = self.m_graphics.demo.ui_scale;
-                    self.m_graphics.demo.pointerContextDown(button.position.x / scale, button.position.y / scale);
+                    self.m_graphics.demo.pointerContextDown(button.position.x / scale + origin, button.position.y / scale);
                     try self.m_graphics.relayoutDemo();
                     publish = true;
                 }
             },
-            .pointer_up => |button| if (button.button == .left) self.m_graphics.demo.pointerUp(),
+            .pointer_up => |button| if (button.button == .left) {
+                // The release point decides where a dragged dock tab lands.
+                const scale = self.m_graphics.demo.ui_scale;
+                self.m_graphics.demo.pointer_x = button.position.x / scale + origin;
+                self.m_graphics.demo.pointer_y = button.position.y / scale;
+                self.m_graphics.demo.pointerUp();
+                publish = true;
+            },
             .wheel => |wheel| {
                 const scale = self.m_graphics.demo.ui_scale;
-                self.m_graphics.demo.scrollWheel(wheel.position.x / scale, wheel.position.y / scale, wheel.delta.x, wheel.delta.y);
+                self.m_graphics.demo.scrollWheel(wheel.position.x / scale + origin, wheel.position.y / scale, wheel.delta.x, wheel.delta.y);
                 publish = true;
             },
             .text => |text| {
@@ -204,8 +228,8 @@ pub const Game = struct {
                     } else if (!key.repeat or code == .tab or demo.isEditing() or (code == .enter and demo.focusRepeats())) switch (code) {
                         // Holding Tab / Shift+Tab keeps moving focus at the keyboard's repeat rate.
                         .tab => demo.next(extend),
-                        .f12 => if (!key.repeat) demo.devtools.toggle(),
-                        .i => if (!key.repeat and key.modifiers.shift and command) demo.devtools.toggle(),
+                        .f12 => if (!key.repeat) demo.toggleDevtools(),
+                        .i => if (!key.repeat and key.modifiers.shift and command) demo.toggleDevtools(),
                         .escape => {
                             if (demo.composition_len > 0) {
                                 demo.setComposition("", null);
@@ -266,6 +290,13 @@ pub const Game = struct {
             },
         } else switch (curr_event) {
             .quit, .terminating => return .success,
+            // Closing a popped-out panel's window docks it back; closing the main window quits.
+            .window_close_requested => |w| {
+                if (self.m_graphics.windowFor(w.id)) |index| {
+                    self.m_graphics.demo.dock.redock(.{ .window = @intCast(index) });
+                    publish = true;
+                } else return .success;
+            },
             .window_resized, .window_pixel_size_changed, .window_display_scale_changed => {
                 try self.m_graphics.syncSize(self.window);
                 weeoui_sdl3.syncWindowBounds(self.a11y, self.window.window);
@@ -298,6 +329,15 @@ pub const Game = struct {
                 }
             },
             else => {},
+        }
+        // Title bar buttons: minimize and maximize go to the OS; close quits or docks a panel back.
+        if (self.m_graphics.demo.window_request) |request| {
+            self.m_graphics.demo.window_request = null;
+            if (request.slot == 0) {
+                if (weeoui_sdl3.windowAction(self.window.window, request.button)) return .success;
+            } else if (self.m_graphics.windows[request.slot - 1]) |panel| {
+                if (weeoui_sdl3.windowAction(panel.window.window, request.button)) self.m_graphics.demo.dock.redock(.{ .window = request.slot - 1 });
+            }
         }
         if (self.m_graphics.demo.file_request) {
             self.m_graphics.demo.file_request = false;
