@@ -13,6 +13,86 @@ const overview_tab_id = 360;
 const details_tab_id = 361;
 const gap: f32 = 24;
 const bar_width: f32 = 12;
+const appearance_id = 560;
+const debug_id = 565;
+const date_input_id = 402;
+const date_button_id = 403;
+const gallery_id = 700;
+const layout_first_id = 710;
+const question_first_id = 720;
+const menubar_first_id = 800;
+const nav_first_id = 850;
+const menubar_popup_id = 890;
+const submenu_popup_id = 891;
+const nav_popup_id = 892;
+const W = ui.widgets;
+const native_options = [_][]const u8{ "Low", "Medium", "High", "Ultra" };
+const share_items = [_]W.MenuItem{
+    .{ .id = menubar_first_id + 14, .label = "Email link" },
+    .{ .id = menubar_first_id + 15, .label = "Messages" },
+    .{ .id = menubar_first_id + 16, .label = "Notes" },
+};
+/// Structure of the menubar; checked states are filled in per frame.
+const menubar_menus = [_]W.MenubarMenu{
+    .{ .id = menubar_first_id + 1, .label = "File", .items = &.{
+        .{ .id = menubar_first_id + 10, .label = "New Tab", .shortcut = "Ctrl+T" },
+        .{ .id = menubar_first_id + 11, .label = "New Window", .shortcut = "Ctrl+N" },
+        .{ .id = menubar_first_id + 12, .label = "New Incognito Window", .disabled = true },
+        .{ .kind = .separator },
+        .{ .id = menubar_first_id + 13, .label = "Share", .kind = .submenu, .items = &share_items },
+        .{ .kind = .separator },
+        .{ .id = menubar_first_id + 17, .label = "Print...", .shortcut = "Ctrl+P" },
+    } },
+    .{ .id = menubar_first_id + 2, .label = "Edit", .items = &.{
+        .{ .id = menubar_first_id + 20, .label = "Undo", .shortcut = "Ctrl+Z" },
+        .{ .id = menubar_first_id + 21, .label = "Redo", .shortcut = "Shift+Ctrl+Z" },
+        .{ .kind = .separator },
+        .{ .id = menubar_first_id + 22, .label = "Cut" },
+        .{ .id = menubar_first_id + 23, .label = "Copy" },
+        .{ .id = menubar_first_id + 24, .label = "Paste" },
+    } },
+    .{ .id = menubar_first_id + 3, .label = "View", .items = &.{
+        .{ .id = menubar_first_id + 30, .label = "Always Show Bookmarks Bar", .kind = .checkbox },
+        .{ .id = menubar_first_id + 31, .label = "Always Show Full URLs", .kind = .checkbox },
+        .{ .kind = .separator },
+        .{ .id = menubar_first_id + 32, .label = "Reload", .shortcut = "Ctrl+R" },
+        .{ .id = menubar_first_id + 33, .label = "Force Reload", .shortcut = "Shift+Ctrl+R", .disabled = true },
+        .{ .kind = .separator },
+        .{ .id = menubar_first_id + 34, .label = "Toggle Fullscreen" },
+        .{ .kind = .separator },
+        .{ .id = menubar_first_id + 35, .label = "Hide Sidebar" },
+    } },
+    .{ .id = menubar_first_id + 4, .label = "Profiles", .items = &.{
+        .{ .id = menubar_first_id + 40, .label = "Andy", .kind = .radio },
+        .{ .id = menubar_first_id + 41, .label = "Benoit", .kind = .radio },
+        .{ .id = menubar_first_id + 42, .label = "Luis", .kind = .radio },
+        .{ .kind = .separator },
+        .{ .id = menubar_first_id + 43, .label = "Edit..." },
+        .{ .kind = .separator },
+        .{ .id = menubar_first_id + 44, .label = "Add Profile..." },
+    } },
+};
+fn menubarStatus(id: u32) []const u8 {
+    for (menubar_menus) |entry| for (entry.items) |row| {
+        if (row.id == id) return row.label;
+        for (row.items) |sub| if (sub.id == id) return sub.label;
+    };
+    return "Menu command";
+}
+const ui_questions = [_]W.Question{
+    .{ .title = "What should the agent build next?", .description = "Pick the one that matters most this week.", .choices = &.{ "A settings page", "A search experience", "An onboarding flow" } },
+    .{ .title = "What should every progress update include?", .description = "Choose all that apply.", .choices = &.{ "What changed", "What's next", "Open questions" }, .multiple = true },
+    .{ .title = "Anything else the agent should know?", .choices = &.{ "Keep it small", "Match the existing style", "Ask before large changes" }, .optional = true, .freeform = true },
+};
+
+/// Controls that repeat while the pointer (or Enter) is held: calendar steps, pagination, carousel.
+fn repeatable(id: u32) bool {
+    return switch (id) {
+        1032...1039, 390, 393, 410, 411 => true,
+        else => false,
+    };
+}
+pub const Appearance = enum { system, light, dark };
 pub const AccessibilityAction = enum(i32) { focus, click, increment, decrement, set_value, set_selection };
 pub const EditKey = enum { left, right, up, down, home, end, delete, backspace, select_all, undo, redo };
 
@@ -40,7 +120,7 @@ pub const Demo = struct {
     open_advanced: bool = false,
     page: u16 = 1,
     date: ui.widgets.Date = .{ .year = 2024, .month = 2, .day = 29 },
-    calendar_open: bool = true,
+    calendar_open: bool = false,
     slide: usize = 0,
     menu_highlight: u32 = 420,
     menu_open: bool = false,
@@ -66,21 +146,52 @@ pub const Demo = struct {
     file_request: bool = false,
     file_picker_open: bool = false,
     filename: TextBuffer = textBuffer("No file selected"),
-    editable: [5]Editable = .{
+    editable: [7]Editable = .{
         .{ .id = 300, .text = textBuffer("Eggy") },
         .{ .id = 301, .text = textBuffer("Describe the project") },
         .{ .id = 302, .text = textBuffer("42") },
         .{ .id = 430, .text = textBuffer("sea") },
         .{ .id = 440, .text = textBuffer("new") },
+        .{ .id = date_input_id, .text = textBuffer("2024-02-29  00:00") },
+        .{ .id = question_first_id + 16, .text = textBuffer("") },
     },
-    editing_scroll_x: [5]f32 = @splat(0),
-    editing_scroll_y: [5]f32 = @splat(0),
+    editing_scroll_x: [7]f32 = @splat(0),
+    editing_scroll_y: [7]f32 = @splat(0),
     composition: [128]u8 = undefined,
     composition_len: usize = 0,
     composition_cursor: ?usize = null,
     dragging_text: bool = false,
     otp: [4]u8 = .{ '1', '2', '3', 0 },
     ui_scale: f32 = 1,
+    appearance: Appearance = .system,
+    /// Outline every hit target in red.
+    debug_hitboxes: bool = false,
+    /// Focus ring only after keyboard navigation, like CSS :focus-visible.
+    keyboard_focus: bool = false,
+    /// Pointer-held control that auto-repeats, and how long it has been held.
+    held_id: u32 = 0,
+    held_time: f32 = 0,
+    gallery_top: f32 = 0,
+    bold: bool = false,
+    native_index: usize = 0,
+    dialog_kind: ui.widgets.Modal = .alert_dialog,
+    dialog_opener: u32 = 489,
+    attachment_visible: bool = true,
+    menubar_open: u32 = 0,
+    menubar_highlight: u32 = 0,
+    menubar_submenu: u32 = 0,
+    bookmarks_bar: bool = false,
+    full_urls: bool = true,
+    profile: u32 = menubar_first_id + 41,
+    nav_open: u32 = 0,
+    layout_justify: u32 = layout_first_id,
+    layout_wrap: bool = true,
+    grid_columns: u16 = 3,
+    rtl: bool = false,
+    question: usize = 0,
+    answers: [3]u16 = .{ 0, 0, 0 },
+    questionnaire_done: bool = false,
+    wide_scroll: L.ScrollState = .{},
     animation_phase: f32 = 0,
     dragging_slider: bool = false,
     dragging_divider: bool = false,
@@ -97,7 +208,7 @@ pub const Demo = struct {
     controls: [128]ui.Rect = [_]ui.Rect{.{ .x = 0, .y = 0, .w = 0, .h = 0 }} ** 128,
     scene_viewport: ui.Rect = .{ .x = 0, .y = 0, .w = 0, .h = 0 },
     scene_clip: ui.Rect = .{ .x = 0, .y = 0, .w = 0, .h = 0 },
-    overlay_rects: [7]ui.Rect = [_]ui.Rect{.{ .x = 0, .y = 0, .w = 0, .h = 0 }} ** 7,
+    overlay_rects: [10]ui.Rect = [_]ui.Rect{.{ .x = 0, .y = 0, .w = 0, .h = 0 }} ** 10,
 
     pub fn relayout(self: *Demo, allocator: std.mem.Allocator, viewport: ui.Rect, font: *const ui.Font) !void {
         var arena = std.heap.ArenaAllocator.init(allocator);
@@ -168,10 +279,22 @@ pub const Demo = struct {
         var count_buf: [20]u8 = undefined;
         const root = try layoutTree(.{ .allocator = arena.allocator() }, self, viewport, &count_buf, canvas.font);
         try self.saveControls(root, canvas.font);
+        canvas.focus_id = if (self.keyboard_focus) self.focusId() else 0;
+        canvas.hot_id = self.hotId();
         try root.drawWithoutOverlays(canvas);
         const base_vertices = canvas.len;
         try root.drawOverlays(canvas);
+        if (self.debug_hitboxes) try root.drawHitboxes(canvas);
         return base_vertices;
+    }
+    /// Topmost control under the pointer, for hover styling.
+    fn hotId(self: *const Demo) u32 {
+        var i = self.control_count;
+        while (i > 0) {
+            i -= 1;
+            if (self.control_clips[i].contains(self.pointer_x, self.pointer_y)) return self.control_ids[i];
+        }
+        return 0;
     }
     pub fn focusId(self: *const Demo) u32 {
         return if (self.control_count > 0) self.control_ids[self.focus] else button_id;
@@ -195,10 +318,11 @@ pub const Demo = struct {
         }
         self.focus = self.indexOf(old_id) orelse 0;
         self.markFocus(root, font);
-        for ([_]u32{ 325, 423, 427, 433, 436, 438, 445 }, 0..) |id, i| {
+        for ([_]u32{ 325, 423, 427, 433, 436, 438, 445, menubar_popup_id, submenu_popup_id, nav_popup_id }, 0..) |id, i| {
             self.overlay_rects[i] = if (root.find(id)) |overlay| overlay.bounds.intersection(overlay.clip) else .{ .x = 0, .y = 0, .w = 0, .h = 0 };
         }
         self.divider_track = if (root.find(481)) |track| track.bounds else .{ .x = 0, .y = 0, .w = 0, .h = 0 };
+        if (root.find(gallery_id)) |gallery| self.gallery_top = gallery.bounds.y + self.scroll.offset.y - self.scroll.viewport.y;
         if (root.find(500)) |scene| {
             self.scene_viewport = scene.bounds;
             self.scene_clip = scene.clip.intersection(scene.bounds);
@@ -210,10 +334,6 @@ pub const Demo = struct {
     fn markFocus(self: *Demo, element: *L.Element, font: *const ui.Font) void {
         const focused = element.id != 0 and element.id == self.focusId();
         switch (element.paint_kind) {
-            .button => |*button| button.focused = focused,
-            .checkbox => |*checkbox| checkbox.focused = focused,
-            .toggle => |*toggle| toggle.focused = focused,
-            .slider => |*slider| slider.focused = focused,
             .input => |*input| {
                 input.focused = focused;
                 if (focused) if (self.editableFor(element.id)) |i| {
@@ -243,12 +363,7 @@ pub const Demo = struct {
                     if (self.composition_len > 0) input.composition = .{ .text = self.composition[0..self.composition_len], .cursor = self.composition_cursor };
                 };
             },
-            .radio => |*radio| radio.focused = focused,
-            .toggle_button => |*toggle_button| toggle_button.focused = focused,
-            .tab => |*tab| tab.focused = focused,
-            else => {
-                if (focused and element.accessibility.role == .radio) element.children[0].paint_kind.radio.focused = true;
-            },
+            else => {},
         }
         for (element.children) |child| self.markFocus(child, font);
     }
@@ -272,11 +387,29 @@ pub const Demo = struct {
         self.control_ids[i] = element.id;
         self.control_count += 1;
     }
-    fn panes(self: *Demo) [2]*L.ScrollState {
-        return .{ &self.preview_scroll, &self.message_scroll };
+    fn panes(self: *Demo) [3]*L.ScrollState {
+        return .{ &self.preview_scroll, &self.message_scroll, &self.wide_scroll };
     }
     pub fn tickScroll(self: *Demo, dt: f32) void {
         for (self.panes()) |pane| pane.tick(dt);
+        if (self.held_id == 0) return;
+        // Hold: first repeat after 0.4 s, then every 0.08 s.
+        const before = self.held_time;
+        self.held_time += dt;
+        const delay: f32 = 0.4;
+        const interval: f32 = 0.08;
+        if (self.held_time < delay) return;
+        const fired_before: i32 = if (before < delay) -1 else @intFromFloat(@floor((before - delay) / interval));
+        const fired_now: i32 = @intFromFloat(@floor((self.held_time - delay) / interval));
+        // A slow frame may cross several repeat points; fire each (capped so a stall can't run away).
+        for (0..@min(8, @as(usize, @intCast(fired_now - fired_before)))) |_| {
+            const index = self.indexOf(self.held_id) orelse {
+                self.held_id = 0;
+                return;
+            };
+            self.focus = index;
+            self.activate();
+        }
     }
     pub fn scrollDragging(self: *Demo) bool {
         for (self.panes()) |pane| if (pane.dragging != .none) return true;
@@ -293,6 +426,41 @@ pub const Demo = struct {
             }
         }
         self.scroll.wheel(dx, dy);
+    }
+    /// Whether Enter may auto-repeat on the focused control.
+    pub fn focusRepeats(self: *const Demo) bool {
+        return repeatable(self.focusId());
+    }
+    /// Enter in a single-line field that has a meaning: parse the typed date.
+    pub fn commitEdit(self: *Demo) bool {
+        switch (self.focusId()) {
+            date_input_id => {
+                const typed = self.editable[5].text.text();
+                self.date = ui.widgets.parseDate(typed) catch {
+                    self.status = "Type a date as YYYY-MM-DD HH:MM.";
+                    return true;
+                };
+                self.syncDateText();
+                self.status = "Date set.";
+                return true;
+            },
+            question_first_id + 16 => {
+                self.activateId(question_first_id + 19);
+                return true;
+            },
+            else => return false,
+        }
+    }
+    fn syncDateText(self: *Demo) void {
+        var buffer: [32]u8 = undefined;
+        const text = std.fmt.bufPrint(&buffer, "{d:0>4}-{d:0>2}-{d:0>2}  {d:0>2}:{d:0>2}", .{ self.date.year, self.date.month, self.date.day, self.date.hour, self.date.minute }) catch unreachable;
+        self.editable[5].text.set(text) catch unreachable;
+    }
+    fn activateId(self: *Demo, id: u32) void {
+        const saved = self.focus;
+        self.focus = self.indexOf(id) orelse return;
+        self.activate();
+        if (self.indexOf(id) == null) self.focus = saved;
     }
     pub fn isEditing(self: *const Demo) bool {
         const id = self.focusId();
@@ -416,6 +584,27 @@ pub const Demo = struct {
     }
     pub fn menuMove(self: *Demo, direction: i8) bool {
         const id = self.focusId();
+        self.keyboard_focus = true;
+        if (self.menubar_open != 0) {
+            var rows: [16]u32 = undefined;
+            const count = self.menubarRows(&rows);
+            if (count == 0) return false;
+            const at = std.mem.indexOfScalar(u32, rows[0..count], id) orelse (if (direction > 0) count - 1 else 0);
+            const next_row = rows[if (direction > 0) (at + 1) % count else (at + count - 1) % count];
+            self.focus = self.indexOf(next_row) orelse return false;
+            self.menubar_highlight = next_row;
+            return true;
+        }
+        if (id >= menubar_first_id + 1 and id <= menubar_first_id + 4 and self.menubar_open == 0) {
+            _ = self.dismiss();
+            self.menubar_open = id;
+            var rows: [16]u32 = undefined;
+            if (self.menubarRows(&rows) > 0) {
+                self.menubar_highlight = rows[0];
+                self.restore_focus = rows[0];
+            }
+            return true;
+        }
         if (id == 320 and !self.select_open) {
             _ = self.dismiss();
             self.select_open = true;
@@ -468,11 +657,50 @@ pub const Demo = struct {
         }
         return false;
     }
+    /// Actionable rows of the open menubar menu (and its open submenu), in order.
+    fn menubarRows(self: *const Demo, out: *[16]u32) usize {
+        var count: usize = 0;
+        for (menubar_menus) |entry| if (entry.id == self.menubar_open) {
+            for (entry.items) |row| {
+                if (row.kind == .separator or row.kind == .label or row.disabled) continue;
+                out[count] = row.id;
+                count += 1;
+                if (row.kind == .submenu and row.id == self.menubar_submenu) for (row.items) |sub| {
+                    out[count] = sub.id;
+                    count += 1;
+                };
+            }
+        };
+        return count;
+    }
     pub fn moveComposite(self: *Demo, direction: i8) bool {
         const id = self.focusId();
+        self.keyboard_focus = true;
+        // Left/right across the menubar keeps a menu open, like desktop menu bars.
+        if (self.menubar_open != 0 or (id >= menubar_first_id + 1 and id <= menubar_first_id + 4)) {
+            if (direction > 0 and self.menubar_open != 0 and id == menubar_first_id + 13) {
+                self.menubar_submenu = id;
+                return true;
+            }
+            const current = if (self.menubar_open != 0) self.menubar_open else id;
+            const next_menu = menubar_first_id + 1 + @as(u32, @intCast(@mod(@as(i32, @intCast(current - menubar_first_id - 1)) + direction, 4)));
+            const was_open = self.menubar_open != 0;
+            self.focus = self.indexOf(next_menu) orelse return false;
+            if (was_open) {
+                self.menubar_open = next_menu;
+                self.menubar_submenu = 0;
+                var rows: [16]u32 = undefined;
+                if (self.menubarRows(&rows) > 0) self.menubar_highlight = rows[0];
+            }
+            return true;
+        }
         const peers: []const u32 = switch (id) {
             330, 331 => &.{ 330, 331 },
             340, 341 => &.{ 340, 341 },
+            appearance_id...appearance_id + 2 => &.{ appearance_id, appearance_id + 1, appearance_id + 2 },
+            layout_first_id...layout_first_id + 3 => &.{ layout_first_id, layout_first_id + 1, layout_first_id + 2, layout_first_id + 3 },
+            layout_first_id + 5...layout_first_id + 7 => &.{ layout_first_id + 5, layout_first_id + 6, layout_first_id + 7 },
+            question_first_id...question_first_id + 2 => &.{ question_first_id, question_first_id + 1, question_first_id + 2 },
             overview_tab_id, details_tab_id => &.{ overview_tab_id, details_tab_id },
             370, 371 => &.{ 370, 371 },
             else => return false,
@@ -481,12 +709,17 @@ pub const Demo = struct {
         const next_index = if (direction > 0) (current + 1) % peers.len else (current + peers.len - 1) % peers.len;
         const index = self.indexOf(peers[next_index]) orelse return false;
         self.focus = index;
-        if (id != 370 and id != 371) self.activate();
+        if (id != 370 and id != 371 and !(id >= question_first_id and id <= question_first_id + 2 and ui_questions[self.question].multiple)) self.activate();
         return true;
     }
     pub fn confirmMenu(self: *Demo) bool {
         if (self.composition_len > 0) return false;
         const id = self.focusId();
+        if (self.menubar_open != 0 and id >= menubar_first_id + 1 and id <= menubar_first_id + 4) {
+            self.focus = self.indexOf(self.menubar_highlight) orelse return false;
+            self.activate();
+            return true;
+        }
         const chosen = if (id == 320 and self.select_open) @as(u32, 322 + @as(u32, @intCast(self.select_index))) else if (id == 419 and self.menu_open) self.menu_highlight else if (id == 430 and self.combo_open) self.combo_highlight else if (id == 440 and self.command_open) self.command_highlight else return false;
         self.focus = self.indexOf(chosen) orelse return false;
         self.activate();
@@ -534,6 +767,11 @@ pub const Demo = struct {
             if (!self.control_clips[i].contains(x, y)) continue;
             self.restore_focus = null;
             self.focus = i;
+            self.keyboard_focus = false;
+            if (repeatable(self.focusId())) {
+                self.held_id = self.focusId();
+                self.held_time = 0;
+            }
             if (!self.dialog_open and !popupRelated(self.focusId())) _ = self.dismiss();
             self.composition_len = 0;
             switch (self.focusId()) {
@@ -610,6 +848,7 @@ pub const Demo = struct {
         }
     }
     pub fn pointerUp(self: *Demo) void {
+        self.held_id = 0;
         self.scroll.pointerUp();
         for (self.panes()) |pane| pane.pointerUp();
         self.dragging_slider = false;
@@ -634,6 +873,7 @@ pub const Demo = struct {
     }
     pub fn next(self: *Demo, reverse: bool) void {
         if (self.control_count == 0) return;
+        self.keyboard_focus = true;
         self.composition_len = 0;
         self.focus = if (reverse) (self.focus + self.control_count - 1) % self.control_count else (self.focus + 1) % self.control_count;
         if (!self.dialog_open) self.scroll.ensureVisible(self.controls[self.indexOf(self.popupAnchor(self.focusId())) orelse self.focus]);
@@ -643,7 +883,13 @@ pub const Demo = struct {
             self.closeDialog();
             return true;
         }
-        const had_popup = self.select_open or self.menu_open or self.context_point != null or self.combo_open or self.command_open or self.popover_open;
+        const had_popup = self.select_open or self.menu_open or self.context_point != null or self.combo_open or self.command_open or self.popover_open or self.menubar_open != 0 or self.nav_open != 0 or self.calendar_open;
+        if (self.menubar_open != 0) self.restore_focus = self.menubar_open;
+        if (self.nav_open != 0) self.restore_focus = self.nav_open;
+        self.menubar_open = 0;
+        self.menubar_submenu = 0;
+        self.nav_open = 0;
+        self.calendar_open = false;
         self.select_open = false;
         self.menu_open = false;
         self.context_point = null;
@@ -654,7 +900,7 @@ pub const Demo = struct {
     }
     fn closeDialog(self: *Demo) void {
         self.dialog_open = false;
-        self.restore_focus = 489;
+        self.restore_focus = self.dialog_opener;
     }
     fn popupAnchor(self: *const Demo, id: u32) u32 {
         return switch (id) {
@@ -662,7 +908,9 @@ pub const Demo = struct {
             420, 421 => if (self.context_point != null) 426 else 419,
             431, 432 => 430,
             441, 442 => 440,
-            1001...1037 => 400,
+            1001...1039 => date_button_id,
+            menubar_first_id + 10...menubar_first_id + 49 => self.menubar_open,
+            nav_first_id + 10...nav_first_id + 19 => self.nav_open,
             else => id,
         };
     }
@@ -686,6 +934,7 @@ pub const Demo = struct {
             },
             330, 331 => self.selected_radio = id,
             340, 341 => self.selected_view = id,
+            appearance_id...appearance_id + 2 => self.appearance = @enumFromInt(id - appearance_id),
             350 => self.submitForm(),
             351 => {
                 self.select_index = 0;
@@ -696,7 +945,103 @@ pub const Demo = struct {
             overview_tab_id, details_tab_id => self.selected_tab = id,
             370 => self.open_appearance = !self.open_appearance,
             371 => self.open_advanced = !self.open_advanced,
-            380 => self.status = "Home breadcrumb selected.",
+            380 => {
+                self.scroll.offset.y = 0;
+                self.status = "Back at the top (Home).";
+            },
+            381 => {
+                self.scroll.offset.y = self.gallery_top;
+                self.scroll.clamp();
+                self.status = "Jumped to the component gallery.";
+            },
+            debug_id => self.debug_hitboxes = !self.debug_hitboxes,
+            342 => self.bold = !self.bold,
+            345 => self.native_index = (self.native_index + 1) % native_options.len,
+            471 => self.attachment_visible = false,
+            485, 486, 487 => {
+                _ = self.dismiss();
+                self.dialog_kind = switch (id) {
+                    485 => .drawer,
+                    486 => .dialog,
+                    else => .sheet,
+                };
+                self.dialog_opener = id;
+                self.dialog_open = true;
+            },
+            493 => {
+                self.closeDialog();
+                self.status = "Panel closed.";
+            },
+            layout_first_id...layout_first_id + 3 => self.layout_justify = id,
+            layout_first_id + 4 => self.layout_wrap = !self.layout_wrap,
+            layout_first_id + 5...layout_first_id + 7 => self.grid_columns = @intCast(id - layout_first_id - 3),
+            layout_first_id + 8 => self.rtl = !self.rtl,
+            question_first_id...question_first_id + 2 => {
+                const bit = @as(u16, 1) << @intCast(id - question_first_id);
+                const answer = &self.answers[self.question];
+                answer.* = if (ui_questions[self.question].multiple) answer.* ^ bit else bit;
+            },
+            question_first_id + 16 => {},
+            question_first_id + 17 => self.question -|= 1,
+            question_first_id + 18, question_first_id + 19 => {
+                const skip = id == question_first_id + 18;
+                if (!skip and self.answers[self.question] == 0 and !ui_questions[self.question].optional) {
+                    self.status = "Choose an answer to continue.";
+                    return;
+                }
+                if (self.question + 1 < ui_questions.len) {
+                    self.question += 1;
+                    self.restore_focus = question_first_id;
+                } else {
+                    self.questionnaire_done = true;
+                    self.status = "Plan saved.";
+                }
+            },
+            question_first_id + 3 => {
+                self.questionnaire_done = false;
+                self.question = 0;
+                self.answers = .{ 0, 0, 0 };
+            },
+            menubar_first_id + 1...menubar_first_id + 4 => {
+                const open = self.menubar_open != id;
+                _ = self.dismiss();
+                self.restore_focus = id;
+                if (open) {
+                    self.menubar_open = id;
+                    var rows: [16]u32 = undefined;
+                    if (self.menubarRows(&rows) > 0) self.menubar_highlight = rows[0];
+                }
+            },
+            menubar_first_id + 10...menubar_first_id + 49 => {
+                self.menubar_highlight = id;
+                if (id == menubar_first_id + 13) {
+                    self.menubar_submenu = if (self.menubar_submenu == id) 0 else id;
+                    return;
+                }
+                switch (id) {
+                    menubar_first_id + 30 => self.bookmarks_bar = !self.bookmarks_bar,
+                    menubar_first_id + 31 => self.full_urls = !self.full_urls,
+                    menubar_first_id + 40...menubar_first_id + 42 => self.profile = id,
+                    else => {},
+                }
+                self.status = menubarStatus(id);
+                const menu_id = self.menubar_open;
+                _ = self.dismiss();
+                self.restore_focus = menu_id;
+            },
+            nav_first_id...nav_first_id + 2 => {
+                const open = self.nav_open != id and id != nav_first_id + 2;
+                _ = self.dismiss();
+                self.restore_focus = id;
+                if (open) self.nav_open = id;
+                if (id == nav_first_id + 2) self.status = "Docs link followed.";
+            },
+            nav_first_id + 10...nav_first_id + 19 => {
+                self.status = "Navigation link followed.";
+                const trigger = self.nav_open;
+                _ = self.dismiss();
+                self.restore_focus = trigger;
+            },
             390 => {
                 self.page = @max(1, self.page -| 1);
                 self.focus = self.indexOf(390 + self.page) orelse self.focus;
@@ -706,23 +1051,39 @@ pub const Demo = struct {
                 self.page = @min(2, self.page + 1);
                 self.focus = self.indexOf(390 + self.page) orelse self.focus;
             },
-            400 => self.calendar_open = !self.calendar_open,
+            date_input_id => {},
+            date_button_id => {
+                const open = !self.calendar_open;
+                _ = self.dismiss();
+                self.calendar_open = open;
+            },
             1001...1031 => {
                 self.date.day = @intCast(id - 1000);
                 self.calendar_open = false;
-                self.restore_focus = 400;
+                self.restore_focus = date_button_id;
+                self.syncDateText();
             },
-            1032, 1033 => {
-                self.date = ui.widgets.shiftMonth(self.date, if (id == 1032) .previous else .next) catch |err| {
+            1032, 1033, 1038, 1039 => {
+                const shifted = if (id == 1032 or id == 1033)
+                    ui.widgets.shiftMonth(self.date, if (id == 1032) .previous else .next)
+                else
+                    ui.widgets.shiftYear(self.date, if (id == 1038) .previous else .next);
+                self.date = shifted catch |err| {
                     self.status = "Cannot navigate beyond supported calendar years.";
                     std.log.warn("Calendar navigation rejected: {s}", .{@errorName(err)});
                     return;
                 };
+                self.syncDateText();
             },
-            1034 => self.date.hour = (self.date.hour + 23) % 24,
-            1035 => self.date.hour = (self.date.hour + 1) % 24,
-            1036 => self.date.minute = (self.date.minute + 45) % 60,
-            1037 => self.date.minute = (self.date.minute + 15) % 60,
+            1034...1037 => {
+                switch (id) {
+                    1034 => self.date.hour = (self.date.hour + 23) % 24,
+                    1035 => self.date.hour = (self.date.hour + 1) % 24,
+                    1036 => self.date.minute = (self.date.minute + 45) % 60,
+                    else => self.date.minute = (self.date.minute + 15) % 60,
+                }
+                self.syncDateText();
+            },
             410 => self.slide = (self.slide + 1) % 2,
             411 => self.slide = (self.slide + 1) % 2,
             419 => {
@@ -795,6 +1156,7 @@ pub const Demo = struct {
             452 => self.table_lines = !self.table_lines,
             460 => self.selected_item = !self.selected_item,
             470 => {
+                self.attachment_visible = true;
                 if (!self.file_picker_open) {
                     self.file_request = true;
                     self.file_picker_open = true;
@@ -813,6 +1175,8 @@ pub const Demo = struct {
             },
             489 => {
                 _ = self.dismiss();
+                self.dialog_kind = .alert_dialog;
+                self.dialog_opener = 489;
                 self.dialog_open = true;
             },
             490 => {
@@ -846,7 +1210,7 @@ pub const Demo = struct {
 
 fn popupRelated(id: u32) bool {
     return switch (id) {
-        320, 322...324, 419...421, 426, 430...432, 435, 437, 439...442 => true,
+        320, 322...324, 419...421, 426, 430...432, 435, 437, 439...442, date_button_id, 1001...1039, menubar_first_id + 1...menubar_first_id + 49, nav_first_id...nav_first_id + 19 => true,
         else => false,
     };
 }
@@ -898,14 +1262,14 @@ fn build(b: L.Builder, demo: *Demo, viewport: ui.Rect, count_buf: *[20]u8, verti
         try label(b, "weeoui", 30, false, false),
         try label(b, "UI demo / components", 14, true, true),
     });
-    const badge = try b.node(0, .{ .width = 72, .height = 28 }, .{ .badge = "Alpha" }, &.{});
-    const header = try b.node(0, .{ .direction = if (page_width < 320) .column else .row, .gap = 16 }, .none, &.{ title, badge });
+    const badge = try b.node(0, .{ .height = 24 }, .{ .badge = .{ .label = "Alpha" } }, &.{});
+    const header = try b.node(0, .{ .direction = if (page_width < 320) .column else .row, .gap = 12, .align_items = .center }, .none, &.{ title, badge });
     const introduction = try b.node(0, .{ .direction = .column, .gap = 4 }, .none, &.{
         try label(b, "Clean building blocks", 22, false, true),
         try label(b, "A small UI kit for the Eggy engine.", 15, true, true),
     });
-    const button = try b.node(button_id, .{ .width = 168, .height = 40 }, .{ .button = .{ .label = "Try button", .hot = demo.controls[0].contains(demo.pointer_x, demo.pointer_y), .focused = demo.focus == 0 } }, &.{});
-    const slider = try b.node(slider_id, .{ .height = 32 }, .{ .slider = .{ .value = (demo.ui_scale - 0.75) / 1.25, .focused = demo.focus == 3 } }, &.{});
+    const button = try b.node(button_id, .{ .width = 168, .height = 40 }, .{ .button = .{ .label = "Try button" } }, &.{});
+    const slider = try b.node(slider_id, .{ .height = 32 }, .{ .slider = .{ .value = (demo.ui_scale - 0.75) / 1.25 } }, &.{});
     slider.accessibility.label = "UI scale";
     const left = try b.node(0, .{ .min_width = if (narrow) 240 else 320, .grow = 1, .padding = .{ .left = gap, .right = gap, .top = gap, .bottom = gap }, .gap = 12 }, .card, &.{
         try label(b, "Button", 22, false, false),
@@ -919,12 +1283,20 @@ fn build(b: L.Builder, demo: *Demo, viewport: ui.Rect, count_buf: *[20]u8, verti
         try label(b, "Preferences", 22, false, false),
         try label(b, "Simple interactive controls.", 15, true, true),
         try line(b),
-        try b.node(checkbox_id, .{ .height = 32 }, .{ .checkbox = .{ .label = "Show hints", .checked = demo.checked, .focused = demo.focus == 1 } }, &.{}),
+        try b.node(checkbox_id, .{ .height = 32 }, .{ .checkbox = .{ .label = "Show hints", .checked = demo.checked } }, &.{}),
         try line(b),
-        try b.node(toggle_id, .{ .height = 32 }, .{ .toggle = .{ .label = "Live updates", .enabled = demo.enabled, .focused = demo.focus == 2 } }, &.{}),
+        try b.node(toggle_id, .{ .height = 32 }, .{ .toggle = .{ .label = "Live updates", .enabled = demo.enabled } }, &.{}),
         try line(b),
         try label(b, scale_label, 15, true, false),
         slider,
+        try line(b),
+        try label(b, "Appearance", 15, true, false),
+        try ui.widgets.toggleGroup(b, &.{ .{ .id = appearance_id, .label = "System" }, .{ .id = appearance_id + 1, .label = "Light" }, .{ .id = appearance_id + 2, .label = "Dark" } }, &.{appearance_id + @as(u32, @intFromEnum(demo.appearance))}),
+        try line(b),
+        try b.node(0, .{ .direction = .row, .gap = 12, .align_items = .center }, .none, &.{
+            try b.node(debug_id, .{ .height = 32 }, .{ .toggle_button = .{ .label = "Debug hitboxes", .pressed = demo.debug_hitboxes } }, &.{}),
+            try label(b, "Outline every click target in red.", 14, true, true),
+        }),
     });
     const cards = try b.node(0, .{ .direction = if (narrow) .column else .row, .gap = gap }, .none, &.{ left, right });
     const input_preview = try b.input(0, .{ .value = "Search projects", .placeholder = "Search..." });
@@ -953,15 +1325,27 @@ fn build(b: L.Builder, demo: *Demo, viewport: ui.Rect, count_buf: *[20]u8, verti
     layers[count_layers] = base;
     count_layers += 1;
     if (demo.dialog_open) {
-        const modal = try ui.widgets.modal(b, viewport, .alert_dialog, &.{
+        const modal = if (demo.dialog_kind == .alert_dialog) try ui.widgets.modal(b, viewport, .alert_dialog, &.{
             try label(b, "Confirm action", 22, false, false),
             try label(b, "The rest of the page is unavailable until this closes.", 15, true, true),
-            try b.row(&.{ try b.button(490, "Continue"), try b.button(492, "Cancel") }),
+            try b.node(0, .{ .direction = .row, .gap = 8 }, .none, &.{ try b.button(490, "Continue"), try b.buttonVariant(492, "Cancel", .outline) }),
+        }) else try ui.widgets.modal(b, viewport, demo.dialog_kind, &.{
+            try label(b, switch (demo.dialog_kind) {
+                .sheet => "Sheet",
+                .drawer => "Drawer",
+                else => "Dialog",
+            }, 22, false, false),
+            try label(b, switch (demo.dialog_kind) {
+                .sheet => "Slides in from the edge for secondary tasks.",
+                .drawer => "Rises from the bottom, handy on small screens.",
+                else => "A focused window over the page. Escape closes it.",
+            }, 15, true, true),
+            try b.buttonVariant(493, "Close", .outline),
         });
         modal.id = 488;
         modal.style.z_index = 300;
         modal.overlay = .viewport;
-        modal.children[0].accessibility.label = "Confirm action";
+        modal.children[0].accessibility.label = if (demo.dialog_kind == .alert_dialog) "Confirm action" else "Panel";
         layers[count_layers] = modal;
         count_layers += 1;
     }
@@ -972,8 +1356,139 @@ fn build(b: L.Builder, demo: *Demo, viewport: ui.Rect, count_buf: *[20]u8, verti
     return b.node(0, .{ .width = viewport.w, .height = viewport.h }, .none, layers[0..count_layers]);
 }
 
+fn menusCard(b: L.Builder, demo: *Demo) !*L.Element {
+    // Copy the static menus so checkbox and radio rows reflect current state.
+    const menus = try b.allocator.dupe(W.MenubarMenu, &menubar_menus);
+    for (menus) |*entry| {
+        const rows = try b.allocator.dupe(W.MenuItem, entry.items);
+        for (rows) |*row| row.checked = switch (row.id) {
+            menubar_first_id + 30 => demo.bookmarks_bar,
+            menubar_first_id + 31 => demo.full_urls,
+            menubar_first_id + 40...menubar_first_id + 42 => row.id == demo.profile,
+            else => false,
+        };
+        entry.items = rows;
+    }
+    const bar = try W.menubar(b, menus, demo.menubar_open, demo.menubar_highlight, demo.menubar_submenu);
+    for (bar.children[0].children) |child| if (child.overlay != null) {
+        child.id = menubar_popup_id;
+        for (child.children) |row| if (row.overlay != null) {
+            row.id = submenu_popup_id;
+        };
+    };
+    const nav = try W.navigationMenu(b, &.{
+        .{ .id = nav_first_id, .label = "Getting started", .links = &.{
+            .{ .id = nav_first_id + 10, .title = "Introduction", .description = "Immediate-mode widgets for the Eggy engine." },
+            .{ .id = nav_first_id + 11, .title = "Installation", .description = "Add weeoui with zig fetch and two imports." },
+            .{ .id = nav_first_id + 12, .title = "Theming", .description = "Light, dark, or follow the system." },
+            .{ .id = nav_first_id + 13, .title = "Accessibility", .description = "AccessKit exposes every control to screen readers." },
+        } },
+        .{ .id = nav_first_id + 1, .label = "Components", .links = &.{
+            .{ .id = nav_first_id + 14, .title = "Menubar", .description = "Desktop menus with shortcuts and submenus." },
+            .{ .id = nav_first_id + 15, .title = "Calendar", .description = "Type a date or step months and years." },
+        } },
+        .{ .id = nav_first_id + 2, .label = "Docs" },
+    }, demo.nav_open);
+    for (nav.children) |child| if (child.overlay != null) {
+        child.id = nav_popup_id;
+    };
+    return b.card(&.{
+        try label(b, "Menubar and navigation", 22, false, false),
+        try label(b, "Arrow keys move between menus and items; Escape closes.", 14, true, true),
+        bar,
+        nav,
+    });
+}
+
+fn layoutCard(b: L.Builder, demo: *Demo, inner_width: f32) !*L.Element {
+    const names = [_][]const u8{ "Alpha", "Beta", "Gamma", "Delta", "Epsilon", "Zeta" };
+    var chips: [names.len]*L.Element = undefined;
+    for (&chips, names) |*chip, name| chip.* = try b.node(0, .{ .height = 28, .padding = .{ .left = 12, .right = 12 } }, .{ .surface = .track }, &.{try b.node(0, .{ .height = 28 }, .{ .text = .{ .value = name, .size = 14 } }, &.{})});
+    const flex = try b.node(0, .{
+        .direction = .row,
+        .gap = 8,
+        .wrap = demo.layout_wrap,
+        .justify = switch (demo.layout_justify - layout_first_id) {
+            0 => .start,
+            1 => .center,
+            2 => .end,
+            else => .space_between,
+        },
+        .padding = .{ .left = 8, .right = 8, .top = 8, .bottom = 8 },
+    }, .{ .surface = .card }, &chips);
+    var tiles: [6]*L.Element = undefined;
+    for (&tiles, 0..) |*tile, i| tile.* = try b.node(0, .{ .height = @floatFromInt(40 + (i % 3) * 16), .padding = .{ .left = 10, .top = 8 } }, .{ .surface = .track }, &.{try label(b, try std.fmt.allocPrint(b.allocator, "Cell {d}", .{i + 1}), 13, true, false)});
+    const grid = try b.node(0, .{ .columns = demo.grid_columns, .gap = 8 }, .none, &tiles);
+    const mirrored = try W.textDirection(b, demo.rtl, &.{
+        try b.node(0, .{ .direction = .row, .gap = 8, .align_items = .center }, .none, &.{
+            try b.avatar("RT"),
+            try b.node(0, .{ .grow = 1 }, .{ .text = .{ .value = if (demo.rtl) "Right-to-left: rows start on the right" else "Left-to-right: rows start on the left", .size = 14 } }, &.{}),
+            try b.node(0, .{ .height = 22 }, .{ .badge = .{ .label = if (demo.rtl) "RTL" else "LTR", .variant = .secondary } }, &.{}),
+        }),
+    });
+    var cards: [10]*L.Element = undefined;
+    for (&cards, 0..) |*card, i| card.* = try b.node(0, .{ .width = 100, .height = 80, .padding = .{ .left = 10, .top = 10 } }, .{ .surface = .card }, &.{try label(b, try std.fmt.allocPrint(b.allocator, "Card {d}", .{i + 1}), 14, false, false)});
+    return b.card(&.{
+        try label(b, "Layout: flexbox, grid and direction", 22, false, true),
+        try label(b, "Justify", 14, true, false),
+        try W.toggleGroup(b, &.{ .{ .id = layout_first_id, .label = "Start" }, .{ .id = layout_first_id + 1, .label = "Center" }, .{ .id = layout_first_id + 2, .label = "End" }, .{ .id = layout_first_id + 3, .label = "Between" } }, &.{demo.layout_justify}),
+        try b.node(0, .{ .direction = .row, .gap = 8, .wrap = true }, .none, &.{
+            try b.node(layout_first_id + 4, .{ .height = 36 }, .{ .toggle_button = .{ .label = "Wrap", .pressed = demo.layout_wrap } }, &.{}),
+            try b.node(layout_first_id + 8, .{ .height = 36 }, .{ .toggle_button = .{ .label = "Right to left", .pressed = demo.rtl } }, &.{}),
+        }),
+        try b.node(0, .{ .width = @min(inner_width, 420) }, .none, &.{flex}),
+        try label(b, "Grid columns", 14, true, false),
+        try W.toggleGroup(b, &.{ .{ .id = layout_first_id + 5, .label = "2" }, .{ .id = layout_first_id + 6, .label = "3" }, .{ .id = layout_first_id + 7, .label = "4" } }, &.{layout_first_id + 3 + @as(u32, demo.grid_columns)}),
+        grid,
+        mirrored,
+        try label(b, "Sideways scroll (Shift + wheel or trackpad)", 14, true, false),
+        try W.scrollArea(b, .{ .x = 0, .y = 0, .w = @min(inner_width, 420), .h = 96 }, &demo.wide_scroll, &.{
+            try b.node(0, .{ .direction = .row, .gap = 8, .width = 1080 }, .none, &cards),
+        }),
+    });
+}
+
+fn conversationCard(b: L.Builder) !*L.Element {
+    return b.card(&.{
+        try label(b, "Conversation", 22, false, false),
+        try W.marker(b, "Today", .separator, null),
+        try W.bubble(b, "Hey there! what's up? \u{1f44b}", .{}),
+        try W.bubble(b, "Sure. Hit me with your best demo", .{ .alignment = .end, .variant = .default }),
+        try W.bubble(b, "Yes. You are reading a demo that is demoing itself.", .{ .reactions = "\u{1f44d} \u{1f525} \u{1f440} +2" }),
+        try W.marker(b, "Agent is typing...", .default, .info),
+        try W.marker(b, "Conversation archived", .border, null),
+        try W.message(b, "Eggy", "Messages pair an avatar with the author and body. \u{1f95a}"),
+    });
+}
+
+fn typographyCard(b: L.Builder) !*L.Element {
+    return b.card(&.{
+        try W.heading(b, 1, "Taxing Laughter"),
+        try W.lead(b, "A modal dialog interrupts the user and requires a response."),
+        try W.heading(b, 2, "The King's Plan"),
+        try W.paragraph(b, "The king thought long and hard, and finally came up with a brilliant plan: he would tax the jokes in the kingdom."),
+        try W.blockquote(b, "\"After all,\" he said, \"everyone enjoys a good joke, so it's only fair that they should pay for the privilege.\""),
+        try W.heading(b, 3, "Joke Tax"),
+        try W.list(b, &.{ "1st level of puns: 5 gold coins", "2nd level of jokes: 10 gold coins", "3rd level of one-liners: 20 gold coins" }),
+        try b.node(0, .{ .direction = .row, .gap = 8, .align_items = .center }, .none, &.{ try W.muted(b, "Install with"), try W.inlineCode(b, "zig fetch --save weeoui") }),
+        try W.heading(b, 4, "People stopped telling jokes"),
+        try W.muted(b, "Enter your email address."),
+    });
+}
+
+fn questionnaireCard(b: L.Builder, demo: *Demo) !*L.Element {
+    if (demo.questionnaire_done) return b.card(&.{
+        try label(b, "Questionnaire", 22, false, false),
+        try W.marker(b, "Plan saved", .default, .check),
+        try b.buttonVariant(question_first_id + 3, "Start over", .outline),
+    });
+    return b.card(&.{
+        try label(b, "Questionnaire", 22, false, false),
+        try W.questionnaire(b, question_first_id, ui_questions[demo.question], demo.question, ui_questions.len, demo.answers[demo.question], .{ .value = demo.editable[6].text.text() }),
+    });
+}
+
 fn componentGallery(b: L.Builder, demo: *Demo, page_width: f32) !*L.Element {
-    const W = ui.widgets;
     const message_texts = [_][]const u8{ "One", "Two", "Three", "Four", "Five", "Six", "Seven", "Eight" };
     var messages: [message_texts.len]*L.Element = undefined;
     for (messages[0..demo.message_count], 0..) |*entry, i| {
@@ -990,11 +1505,11 @@ fn componentGallery(b: L.Builder, demo: *Demo, page_width: f32) !*L.Element {
     if (demo.select_open) select.accessibility.controls = 325;
     const size_menu = try W.dropdownMenu(b, select, &.{ .{ .id = 322, .label = "Compact" }, .{ .id = 323, .label = "Comfortable" }, .{ .id = 324, .label = "Spacious" } }, 322 + @as(u32, @intCast(demo.select_index)), demo.select_open);
     const fields = try W.form(b, &.{
-        try W.field(b, 300, "Project", .{ .value = demo.editable[0].text.text(), .placeholder = "Project name" }),
+        try W.field(b, 300, "Project", if (demo.editable[0].text.text().len == 0) "A project name is required." else "Shown in the window title.", .{ .value = demo.editable[0].text.text(), .placeholder = "Project name", .invalid = demo.editable[0].text.text().len == 0 }),
         try b.textarea(301, .{ .value = demo.editable[1].text.text(), .placeholder = "Description" }),
         try W.inputGroup(b, 302, "$", .{ .value = demo.editable[2].text.text(), .placeholder = "Amount" }, "USD"),
         try W.inputOtp(b, 310, demo.otp[0..otp_len], 4),
-        if (size_menu) |popup| try b.node(0, .{ .width = 220 }, .none, &.{ select, blk: {
+        if (size_menu) |popup| try b.node(0, .{}, .none, &.{ select, blk: {
             popup.id = 325;
             break :blk popup;
         } }) else select,
@@ -1007,6 +1522,29 @@ fn componentGallery(b: L.Builder, demo: *Demo, page_width: f32) !*L.Element {
         try W.radioGroup(b, &.{ .{ .id = 330, .label = "Email" }, .{ .id = 331, .label = "Desktop" } }, demo.selected_radio),
         try W.toggleGroup(b, &.{ .{ .id = 340, .label = "Grid" }, .{ .id = 341, .label = "List" } }, if (demo.selected_view == 340) &.{340} else &.{341}),
         try W.buttonGroup(b, &.{ .{ .id = 350, .label = "Apply" }, .{ .id = 351, .label = "Reset" } }),
+        try b.node(0, .{ .direction = .row, .gap = 12, .align_items = .center, .wrap = true }, .none, &.{
+            try b.node(342, .{ .height = 36 }, .{ .toggle_button = .{ .label = "Bold", .pressed = demo.bold } }, &.{}),
+            try label(b, "Quality", 14, true, false),
+            blk: {
+                const native = try W.nativeSelect(b, 345, &native_options, demo.native_index);
+                native.style.width = 140;
+                break :blk native;
+            },
+        }),
+        try b.node(0, .{ .direction = .row, .gap = 8, .wrap = true }, .none, &.{
+            try b.buttonVariant(0, "Default", .default),
+            try b.buttonVariant(0, "Secondary", .secondary),
+            try b.buttonVariant(0, "Outline", .outline),
+            try b.buttonVariant(0, "Ghost", .ghost),
+            try b.buttonVariant(0, "Destructive", .destructive),
+            try b.buttonVariant(0, "Link", .link),
+        }),
+        try b.node(0, .{ .direction = .row, .gap = 8, .wrap = true }, .none, &.{
+            try b.node(0, .{ .height = 22 }, .{ .badge = .{ .label = "Default" } }, &.{}),
+            try b.node(0, .{ .height = 22 }, .{ .badge = .{ .label = "Secondary", .variant = .secondary } }, &.{}),
+            try b.node(0, .{ .height = 22 }, .{ .badge = .{ .label = "Destructive", .variant = .destructive } }, &.{}),
+            try b.node(0, .{ .height = 22 }, .{ .badge = .{ .label = "Outline", .variant = .outline } }, &.{}),
+        }),
         status,
     });
 
@@ -1019,7 +1557,8 @@ fn componentGallery(b: L.Builder, demo: *Demo, page_width: f32) !*L.Element {
         }),
         try W.breadcrumb(b, &.{ .{ .id = 380, .label = "Home" }, .{ .id = 381, .label = "Components" } }),
         try W.pagination(b, 390, demo.page, 2),
-        try W.datePickerWithWidth(b, 400, 1000, demo.date, demo.calendar_open, @min(300, inner_width)),
+        try label(b, "Type a date and press Enter, or hold the arrows to skip months and years.", 14, true, true),
+        try W.datePickerInput(b, date_input_id, date_button_id, 1000, demo.date, .{ .value = demo.editable[5].text.text() }, demo.calendar_open, @min(300, inner_width)),
         try W.carousel(b, 410, 411, &.{ try b.text("Slide one"), try b.text("Slide two") }, demo.slide),
     });
 
@@ -1075,16 +1614,17 @@ fn componentGallery(b: L.Builder, demo: *Demo, page_width: f32) !*L.Element {
     const workspace_button = try b.button(520, "Workspace");
     const dashboard_button = try b.button(521, "Dashboard");
     const settings_button = try b.button(522, "Settings");
-    workspace_button.paint_kind.button.primary = demo.sidebar_selection == 520;
-    dashboard_button.paint_kind.button.primary = demo.sidebar_selection == 521;
-    settings_button.paint_kind.button.primary = demo.sidebar_selection == 522;
+    for ([_]*L.Element{ workspace_button, dashboard_button, settings_button }, 520..) |entry, id| {
+        entry.paint_kind.button.variant = .ghost;
+        entry.paint_kind.button.hot = demo.sidebar_selection == id;
+    }
     const sidebar = try W.sidebar(b, 172, &.{ workspace_button, dashboard_button, settings_button });
     sidebar.style.width = @min(240, inner_width);
     const sidebar_content = switch (demo.sidebar_selection) {
         520 => try b.card(&.{
             try label(b, "Workspace", 20, false, false),
             try label(b, try std.fmt.allocPrint(b.allocator, "Project: {s}", .{demo.editable[0].text.text()}), 15, false, true),
-            try b.row(&.{ try b.button(530, "New file"), try b.button(531, "New folder") }),
+            try b.node(0, .{ .direction = .row, .gap = 8 }, .none, &.{ try b.button(530, "New file"), try b.button(531, "New folder") }),
             try b.button(536, "Edit project"),
         }),
         521 => try b.card(&.{
@@ -1128,7 +1668,13 @@ fn componentGallery(b: L.Builder, demo: *Demo, page_width: f32) !*L.Element {
             try label(b, "Lucide SVG image", 14, true, false),
         }),
         item,
-        try W.attachment(b, 470, demo.filename.text()),
+        try b.node(0, .{ .direction = .row, .gap = 8, .align_items = .center }, .none, &.{ blk: {
+            const choose = try b.buttonVariant(470, "Choose file", .outline);
+            choose.style.width = 132;
+            break :blk choose;
+        }, try b.node(0, .{ .grow = 1 }, .{ .text = .{ .value = demo.filename.text(), .tone = .muted, .size = 14 } }, &.{}) }),
+        if (demo.attachment_visible) try W.attachment(b, 471, .{ .name = "report.pdf", .state = .uploading, .progress = 0.64 }) else try b.node(0, .{ .height = 0 }, .none, &.{}),
+        try W.attachment(b, 0, .{ .name = "workspace.png", .description = "PNG image, 1.2 MB", .icon = .image }),
         sidebar,
         sidebar_content,
         try W.empty(b, "No results", "Try a different search.", try b.button(491, try std.fmt.allocPrint(b.allocator, "Retry ({d})", .{demo.retry_count}))),
@@ -1142,13 +1688,18 @@ fn componentGallery(b: L.Builder, demo: *Demo, page_width: f32) !*L.Element {
             try b.text("Scrollable fifth line"),
         }),
         try W.messageScroller(b, .{ .x = 0, .y = 0, .w = @min(inner_width, 300), .h = 100 }, &demo.message_scroll, messages[0..demo.message_count]),
-        try b.row(&.{ try b.button(498, "Add message"), try b.button(499, "Jump to latest") }),
+        try b.node(0, .{ .direction = .row, .gap = 8 }, .none, &.{ try b.button(498, "Add message"), try b.buttonVariant(499, "Jump to latest", .outline) }),
         resizable,
         try W.aspectRatio(b, 160, 1.6, &.{try b.skeleton(160, 100)}),
-        try b.button(489, "Open dialog"),
+        try b.node(0, .{ .direction = .row, .gap = 8, .wrap = true }, .none, &.{
+            try b.button(489, "Alert dialog"),
+            try b.buttonVariant(486, "Dialog", .outline),
+            try b.buttonVariant(487, "Sheet", .outline),
+            try b.buttonVariant(485, "Drawer", .outline),
+        }),
     });
 
-    const gallery = try b.node(0, .{ .gap = gap }, .none, &.{
+    const gallery = try b.node(gallery_id, .{ .gap = gap }, .none, &.{
         try label(b, "Component gallery", 22, false, false),
         try label(b, "Every control responds to pointer, keyboard, and accessible actions.", 14, true, true),
         try b.node(0, .{ .width = @min(inner_width, 400), .padding = .{ .left = 12, .right = 12, .top = 8, .bottom = 8 }, .gap = 0 }, .card, &.{
@@ -1157,16 +1708,21 @@ fn componentGallery(b: L.Builder, demo: *Demo, page_width: f32) !*L.Element {
             try b.node(0, .{ .height = 32 }, .{ .text = .{ .value = "End aligned", .alignment = .end } }, &.{}),
         }),
         try b.node(0, .{ .direction = .row, .gap = 8, .align_items = .center }, .none, &.{ try b.icon(.search), try b.icon(.check), try label(b, "Lucide SVG icons", 14, true, false) }),
+        try menusCard(b, demo),
         choices,
         navigation,
         feedback,
+        try layoutCard(b, demo, inner_width),
+        try conversationCard(b),
+        try typographyCard(b),
+        try questionnaireCard(b, demo),
         data,
     });
     return gallery;
 }
 
 test "responsive cards and controls follow scrolling" {
-    var font = try ui.Font.init(std.testing.allocator, ui.default_font, 32);
+    var font = try ui.Font.init(std.testing.allocator, ui.default_font);
     defer font.deinit();
     var demo: Demo = .{};
     const wide = ui.Rect{ .x = 0, .y = 0, .w = 900, .h = 600 };
@@ -1223,7 +1779,7 @@ test "responsive cards and controls follow scrolling" {
 }
 
 test "screen reader actions use the same app-owned control state" {
-    var font = try ui.Font.init(std.testing.allocator, ui.default_font, 32);
+    var font = try ui.Font.init(std.testing.allocator, ui.default_font);
     defer font.deinit();
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
@@ -1242,7 +1798,7 @@ test "screen reader actions use the same app-owned control state" {
 }
 
 test "gallery accessibility tree covers rendered component roles and visible bounds" {
-    var font = try ui.Font.init(std.testing.allocator, ui.default_font, 32);
+    var font = try ui.Font.init(std.testing.allocator, ui.default_font);
     defer font.deinit();
     var demo: Demo = .{};
     const viewport = ui.Rect{ .x = 0, .y = 0, .w = 900, .h = 675 };
@@ -1265,11 +1821,16 @@ test "gallery accessibility tree covers rendered component roles and visible bou
     const field = snapshotNode(snapshot, 300).?;
     try std.testing.expectEqualStrings("Project", field.label);
     try std.testing.expectEqualStrings("Eggy", field.value);
-    const day = snapshotNode(snapshot, 1029).?;
+    try std.testing.expect(snapshotNode(snapshot, 1029) == null);
+    try std.testing.expect(!snapshotNode(snapshot, date_button_id).?.expanded.?);
+    try std.testing.expect(demo.accessibilityAction(date_button_id, .click));
+    const calendar_open = try demo.accessibilitySnapshot(arena.allocator(), viewport, &font);
+    const day = snapshotNode(calendar_open, 1029).?;
     try std.testing.expectEqualStrings("29", day.label);
     try std.testing.expect(!day.disabled and day.actionable);
     try std.testing.expectEqual(L.Accessibility.Role.column_header, snapshotNode(snapshot, 450).?.role);
-    try std.testing.expect(snapshotNode(snapshot, 400).?.expanded.?);
+    try std.testing.expect(snapshotNode(calendar_open, date_button_id).?.expanded.?);
+    _ = demo.dismiss();
     var found_chart = false;
     for (snapshot.nodes) |node| {
         try std.testing.expect(node.role != .alert_dialog);
@@ -1309,7 +1870,7 @@ test "gallery accessibility tree covers rendered component roles and visible bou
 }
 
 test "gallery actions, editing, reverse focus and nested wheels update state" {
-    var font = try ui.Font.init(std.testing.allocator, ui.default_font, 32);
+    var font = try ui.Font.init(std.testing.allocator, ui.default_font);
     defer font.deinit();
     var demo: Demo = .{};
     const viewport = ui.Rect{ .x = 0, .y = 0, .w = 900, .h = 675 };
@@ -1324,12 +1885,16 @@ test "gallery actions, editing, reverse focus and nested wheels update state" {
         320,
         330...331,
         340...341,
+        appearance_id...appearance_id + 2,
         350...351,
         360...361,
         370...371,
-        380,
+        342,
+        345,
+        380...381,
         390...393,
-        400,
+        date_input_id,
+        date_button_id,
         410...411,
         419,
         426,
@@ -1341,15 +1906,23 @@ test "gallery actions, editing, reverse focus and nested wheels update state" {
         443,
         450...452,
         460,
-        470,
+        470...471,
         480,
+        485...487,
         489,
         491,
         498...499,
         520...522,
         530...531,
         533...536,
-        1001...1037,
+        debug_id,
+        layout_first_id...layout_first_id + 8,
+        question_first_id...question_first_id + 2,
+        question_first_id + 17,
+        question_first_id + 19,
+        menubar_first_id + 1...menubar_first_id + 4,
+        nav_first_id...nav_first_id + 2,
+        1001...1039,
         => {},
         else => return error.UnhandledControl,
     };
@@ -1383,7 +1956,10 @@ test "gallery actions, editing, reverse focus and nested wheels update state" {
     try std.testing.expectEqual(@as(u16, 1), demo.page);
     try demo.relayout(std.testing.allocator, viewport, &font);
     try std.testing.expectEqual(@as(u32, 391), demo.focusId());
+    try std.testing.expect(demo.accessibilityAction(date_button_id, .click));
+    try demo.relayout(std.testing.allocator, viewport, &font);
     try std.testing.expect(demo.accessibilityAction(1028, .click));
+    try std.testing.expectEqualStrings("2024-02-28  00:00", demo.editable[5].text.text());
     try std.testing.expectEqual(@as(u8, 28), demo.date.day);
     try std.testing.expect(!demo.calendar_open);
     try demo.relayout(std.testing.allocator, viewport, &font);
@@ -1421,7 +1997,7 @@ test "gallery actions, editing, reverse focus and nested wheels update state" {
 }
 
 test "3D viewport bounds follow gallery scroll and width" {
-    var font = try ui.Font.init(std.testing.allocator, ui.default_font, 32);
+    var font = try ui.Font.init(std.testing.allocator, ui.default_font);
     defer font.deinit();
     var demo: Demo = .{};
     const wide = ui.Rect{ .x = 0, .y = 0, .w = 900, .h = 675 };
@@ -1442,7 +2018,7 @@ test "3D viewport bounds follow gallery scroll and width" {
 }
 
 test "AccessKit message log follows additions until a user scrolls away" {
-    var font = try ui.Font.init(std.testing.allocator, ui.default_font, 32);
+    var font = try ui.Font.init(std.testing.allocator, ui.default_font);
     defer font.deinit();
     var demo: Demo = .{};
     const viewport = ui.Rect{ .x = 0, .y = 0, .w = 900, .h = 675 };
@@ -1491,7 +2067,7 @@ test "AccessKit message log follows additions until a user scrolls away" {
 }
 
 test "end scrolling exposes the complete footer and bottom padding" {
-    var font = try ui.Font.init(std.testing.allocator, ui.default_font, 32);
+    var font = try ui.Font.init(std.testing.allocator, ui.default_font);
     defer font.deinit();
     var demo: Demo = .{};
     for ([_]u32{ 520, 521, 522 }) |selection| {
@@ -1515,7 +2091,7 @@ test "end scrolling exposes the complete footer and bottom padding" {
 }
 
 test "wheel bursts paint within a bounded frame budget" {
-    var font = try ui.Font.init(std.testing.allocator, ui.default_font, 32);
+    var font = try ui.Font.init(std.testing.allocator, ui.default_font);
     defer font.deinit();
     var demo: Demo = .{};
     const viewport = ui.Rect{ .x = 0, .y = 0, .w = 900, .h = 675 };
@@ -1533,7 +2109,7 @@ test "wheel bursts paint within a bounded frame budget" {
 }
 
 test "AccessKit gallery menus, context actions, toast and modal trap" {
-    var font = try ui.Font.init(std.testing.allocator, ui.default_font, 32);
+    var font = try ui.Font.init(std.testing.allocator, ui.default_font);
     defer font.deinit();
     var demo: Demo = .{};
     const viewport = ui.Rect{ .x = 0, .y = 0, .w = 900, .h = 675 };
@@ -1593,7 +2169,7 @@ test "AccessKit gallery menus, context actions, toast and modal trap" {
 }
 
 test "AccessKit text updates preserve Unicode selection and editing contracts" {
-    var font = try ui.Font.init(std.testing.allocator, ui.default_font, 32);
+    var font = try ui.Font.init(std.testing.allocator, ui.default_font);
     defer font.deinit();
     var demo: Demo = .{};
     const viewport = ui.Rect{ .x = 0, .y = 0, .w = 900, .h = 675 };
@@ -1626,7 +2202,7 @@ test "AccessKit text updates preserve Unicode selection and editing contracts" {
 }
 
 test "multi-click text selection is reflected in AccessKit" {
-    var font = try ui.Font.init(std.testing.allocator, ui.default_font, 32);
+    var font = try ui.Font.init(std.testing.allocator, ui.default_font);
     defer font.deinit();
     var demo: Demo = .{};
     const viewport = ui.Rect{ .x = 0, .y = 0, .w = 900, .h = 675 };
@@ -1654,7 +2230,7 @@ test "multi-click text selection is reflected in AccessKit" {
 }
 
 test "gallery filters commands, navigates dates, shows tooltip and swaps sidebar views" {
-    var font = try ui.Font.init(std.testing.allocator, ui.default_font, 32);
+    var font = try ui.Font.init(std.testing.allocator, ui.default_font);
     defer font.deinit();
     var demo: Demo = .{};
     const viewport = ui.Rect{ .x = 0, .y = 0, .w = 900, .h = 675 };
@@ -1678,6 +2254,8 @@ test "gallery filters commands, navigates dates, shows tooltip and swaps sidebar
     try std.testing.expect(!demo.combo_open);
     _ = try demo.accessibilitySnapshot(arena.allocator(), viewport, &font);
 
+    try std.testing.expect(demo.accessibilityAction(date_button_id, .click));
+    _ = try demo.accessibilitySnapshot(arena.allocator(), viewport, &font);
     try std.testing.expect(demo.accessibilityAction(1033, .click));
     try std.testing.expectEqual(@as(u8, 3), demo.date.month);
     try std.testing.expect(demo.accessibilityAction(1035, .click));
@@ -1685,7 +2263,7 @@ test "gallery filters commands, navigates dates, shows tooltip and swaps sidebar
     try std.testing.expectEqual(@as(u8, 1), demo.date.hour);
     try std.testing.expectEqual(@as(u8, 15), demo.date.minute);
     snapshot = try demo.accessibilitySnapshot(arena.allocator(), viewport, &font);
-    try std.testing.expect(std.mem.indexOf(u8, snapshotNode(snapshot, 400).?.value, "01:15") != null);
+    try std.testing.expect(std.mem.indexOf(u8, snapshotNode(snapshot, date_input_id).?.value, "01:15") != null);
 
     try std.testing.expect(demo.accessibilityAction(439, .focus));
     try demo.relayout(std.testing.allocator, viewport, &font);
@@ -1709,7 +2287,7 @@ test "gallery filters commands, navigates dates, shows tooltip and swaps sidebar
 }
 
 test "AccessKit sidebar views expose working project actions and shared settings" {
-    var font = try ui.Font.init(std.testing.allocator, ui.default_font, 32);
+    var font = try ui.Font.init(std.testing.allocator, ui.default_font);
     defer font.deinit();
     var demo: Demo = .{};
     const viewport = ui.Rect{ .x = 0, .y = 0, .w = 900, .h = 675 };
@@ -1756,7 +2334,7 @@ test "AccessKit sidebar views expose working project actions and shared settings
 }
 
 test "portable questionnaire keyboard rules preserve radio and tab selection and IME confirmation" {
-    var font = try ui.Font.init(std.testing.allocator, ui.default_font, 32);
+    var font = try ui.Font.init(std.testing.allocator, ui.default_font);
     defer font.deinit();
     var demo: Demo = .{};
     const viewport = ui.Rect{ .x = 0, .y = 0, .w = 900, .h = 675 };
@@ -1789,4 +2367,44 @@ test "portable questionnaire keyboard rules preserve radio and tab selection and
 fn snapshotNode(snapshot: ui.accessibility.Snapshot, id: u64) ?ui.accessibility.Node {
     for (snapshot.nodes) |node| if (node.id == id) return node;
     return null;
+}
+
+test "appearance choices switch theme mode and arrow between peers" {
+    var font = try ui.Font.init(std.testing.allocator, ui.default_font);
+    defer font.deinit();
+    var demo: Demo = .{};
+    try demo.relayout(std.testing.allocator, .{ .x = 0, .y = 0, .w = 900, .h = 675 }, &font);
+    demo.focus = demo.indexOf(appearance_id + 2).?;
+    demo.activate();
+    try std.testing.expectEqual(Appearance.dark, demo.appearance);
+    try std.testing.expect(demo.moveComposite(1));
+    try std.testing.expectEqual(@as(u32, appearance_id), demo.focusId());
+}
+
+test "holding a calendar arrow repeats after a delay and typed dates commit on Enter" {
+    var font = try ui.Font.init(std.testing.allocator, ui.default_font);
+    defer font.deinit();
+    var demo: Demo = .{};
+    const viewport = ui.Rect{ .x = 0, .y = 0, .w = 900, .h = 675 };
+    try demo.relayout(std.testing.allocator, viewport, &font);
+    try std.testing.expect(!demo.calendar_open);
+    try std.testing.expect(demo.accessibilityAction(date_button_id, .click));
+    try demo.relayout(std.testing.allocator, viewport, &font);
+    const next_month = demo.controls[demo.indexOf(1033).?];
+    demo.pointerDown(next_month.center().x, next_month.center().y);
+    try std.testing.expectEqual(@as(u8, 3), demo.date.month);
+    demo.tickScroll(0.3);
+    try std.testing.expectEqual(@as(u8, 3), demo.date.month); // still inside the initial delay
+    demo.tickScroll(0.2); // 0.5 s: repeats at 0.40 and 0.48
+    try std.testing.expectEqual(@as(u8, 5), demo.date.month);
+    demo.tickScroll(0.16); // 0.66 s: 0.56 and 0.64
+    try std.testing.expectEqual(@as(u8, 7), demo.date.month);
+    demo.pointerUp();
+    demo.tickScroll(1);
+    try std.testing.expectEqual(@as(u8, 7), demo.date.month);
+    try std.testing.expect(demo.accessibilityAction(date_input_id, .focus));
+    try std.testing.expect(demo.editKey(.select_all, false, false, &font));
+    try std.testing.expect(demo.insertText("1999-12-31 23:59"));
+    try std.testing.expect(demo.commitEdit());
+    try std.testing.expectEqual(ui.widgets.Date{ .year = 1999, .month = 12, .day = 31, .hour = 23, .minute = 59 }, demo.date);
 }

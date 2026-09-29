@@ -42,13 +42,13 @@ fn contains(adapter: *Adapter, text: []const u8) !bool {
 }
 
 test "published tree includes demo labels and follows screen-reader focus" {
-    var font = try ui.Font.init(std.testing.allocator, ui.default_font, 32);
+    var font = try ui.Font.init(std.testing.allocator, ui.default_font);
     defer font.deinit();
     var demo: Demo = .{};
     var adapter = headless();
     defer adapter.arena.deinit();
     try publish(&adapter, &demo, test_viewport, &font);
-    for ([_][]const u8{ "Try button", "Show hints", "Details panel", "Activity over five periods", "Open dialog" }) |label| {
+    for ([_][]const u8{ "Try button", "Show hints", "Details panel", "Activity over five periods", "Alert dialog" }) |label| {
         try std.testing.expect(try contains(&adapter, label));
     }
     adapter.push(.{ .click = 360 });
@@ -60,7 +60,7 @@ test "published tree includes demo labels and follows screen-reader focus" {
 }
 
 test "value and selection actions reach the bounded UTF-8 editor" {
-    var font = try ui.Font.init(std.testing.allocator, ui.default_font, 32);
+    var font = try ui.Font.init(std.testing.allocator, ui.default_font);
     defer font.deinit();
     var demo: Demo = .{};
     var adapter = headless();
@@ -77,7 +77,7 @@ test "value and selection actions reach the bounded UTF-8 editor" {
 }
 
 test "screen-reader clicks activate message and sidebar controls" {
-    var font = try ui.Font.init(std.testing.allocator, ui.default_font, 32);
+    var font = try ui.Font.init(std.testing.allocator, ui.default_font);
     defer font.deinit();
     var demo: Demo = .{};
     var adapter = headless();

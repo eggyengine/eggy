@@ -21,6 +21,7 @@ pub const Graphics = struct {
     ui_renderer: weeoui_vitellus.Renderer,
     preview: viewport3d.Preview,
     theme: ui.Theme = .{},
+    system_theme: ui.Theme = .{},
     demo: ui_demo.Demo = .{},
     font: ui.Font,
 
@@ -53,8 +54,9 @@ pub const Graphics = struct {
             .composite_alpha = caps.composite_alpha[0],
         });
         errdefer swapchain.deinit();
-        var font = try ui.Font.init(allocator, ui.default_font, 32);
+        var font = try ui.Font.init(allocator, ui.default_font);
         errdefer font.deinit();
+        if (!font.loadSystemEmoji(std.Io.Threaded.global_single_threaded.io())) std.log.info("No color emoji font found; emoji draw as '?'", .{});
         if (viewport.w > 0) font.dpi_scale = @as(f32, @floatFromInt(extent.width)) / viewport.w;
         var ui_renderer = try weeoui_vitellus.Renderer.init(device, colorFormat(caps.formats[0]), &font);
         errdefer ui_renderer.deinit();
@@ -105,6 +107,11 @@ pub const Graphics = struct {
     }
 
     pub fn frame(self: *@This()) !void {
+        self.theme = switch (self.demo.appearance) {
+            .system => self.system_theme,
+            .light => .{},
+            .dark => ui.Theme.dark,
+        };
         const info = self.swapchain.info();
         var vertex_data: [max_vertices]ui.Vertex = undefined;
         var canvas = ui.Canvas.init(&vertex_data, &self.font);
@@ -117,7 +124,7 @@ pub const Graphics = struct {
         const cmd = try vit.CommandBuffer.init(self.commands, .{});
         defer cmd.deinit();
         try cmd.barrier(&.{.{ .texture_view = .{ .view = acquired.view, .before = .present, .after = .color_attachment } }});
-        try self.ui_renderer.upload(cmd, vertex_data[0..canvas.len], self.viewport);
+        try self.ui_renderer.upload(cmd, &self.font, vertex_data[0..canvas.len], self.viewport);
         try cmd.beginRenderPass(.{ .color_attachments = &.{.{
             .view = acquired.view,
             .load_op = .clear,

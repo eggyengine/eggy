@@ -71,6 +71,7 @@ pub const Game = struct {
 
         var m_graphics = try graphics.Graphics.init(i.gpa, window);
         errdefer m_graphics.deinit();
+        m_graphics.system_theme = weeoui_sdl3.systemTheme();
         const a11y = try @import("weeoui").accesskit.Adapter.create(i.gpa, try weeoui_sdl3.accessKitWindow(window.window), "eggy");
         errdefer a11y.destroy();
         try accessibility.publish(a11y, &m_graphics.demo, m_graphics.viewport, &m_graphics.font);
@@ -200,7 +201,7 @@ pub const Game = struct {
                             .enter => if (demo.focusId() == 300 or demo.focusId() == 301 or demo.focusId() == 302) demo.submitForm(),
                             else => {},
                         }
-                    } else if (!key.repeat or demo.isEditing()) switch (code) {
+                    } else if (!key.repeat or demo.isEditing() or (code == .enter and demo.focusRepeats())) switch (code) {
                         .tab => if (!key.repeat) demo.next(extend),
                         .escape => {
                             if (demo.composition_len > 0) {
@@ -241,8 +242,8 @@ pub const Game = struct {
                         .enter => if (demo.composition_len == 0) {
                             if (!demo.confirmMenu()) {
                                 if (demo.isEditing()) {
-                                    if (demo.focusId() == 301) _ = demo.insertText("\n");
-                                } else if (!key.repeat) demo.activate();
+                                    if (demo.focusId() == 301) _ = demo.insertText("\n") else _ = demo.commitEdit();
+                                } else if (!key.repeat or demo.focusRepeats()) demo.activate();
                             }
                         },
                         .page_down => if (!demo.dialog_open) demo.scroll.wheel(0, -self.m_graphics.viewport.h / 40),
@@ -268,6 +269,7 @@ pub const Game = struct {
                 publish = true;
             },
             .window_moved, .window_shown => weeoui_sdl3.syncWindowBounds(self.a11y, self.window.window),
+            .system_theme_changed => self.m_graphics.system_theme = weeoui_sdl3.systemTheme(),
             .window_focus_gained => self.a11y.setFocused(true),
             .window_focus_lost => self.a11y.setFocused(false),
             .user => |user| {
