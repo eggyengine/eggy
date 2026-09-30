@@ -34,7 +34,14 @@ pub const Graphics = struct {
     device: vit.Device,
     queue: vit.Queue,
     swapchain: vit.Swapchain,
-    commands: vit.CommandPool,
+    /// The CPU records into one slot while the GPU may still be drawing the other.
+    slots: [frames_in_flight]FrameSlot,
+    slot: usize = 0,
+    /// Advances to a frame's number when the GPU finishes it.
+    gpu_done: vit.Fence,
+    submitted: u64 = 0,
+    /// Signalled when drawing into swapchain image i finishes; its present waits on it.
+    render_done: [max_swapchain_images]vit.Semaphore,
     color_format: vit.Format,
     window_extent: vit.Extent2D,
     ui_renderer: weeoui_vitellus.Renderer,
@@ -52,6 +59,10 @@ pub const Graphics = struct {
     /// Title bar geometry for the OS hit test: slot 0 the main window, i + 1 panel window i.
     /// On the heap because SDL keeps pointers to them.
     frames: *[ui.dock.max_windows + 1]weeoui_sdl3.Frame,
+    /// Scratch for each layout pass, reset (keeping its memory) instead of freed every frame.
+    frame_arena: std.heap.ArenaAllocator,
+    /// Input changed the demo since its last layout; `ensureLayout` or the next frame rebuilds it.
+    layout_dirty: bool = false,
 
     pub fn init(allocator: std.mem.Allocator, window: sdl_adapter.Sdl3Window) !@This() {
         const instance = try vit.Instance.init(allocator, .{ .backend = .{ .vulkan = true }, .validation = .core });
@@ -62,8 +73,20 @@ pub const Graphics = struct {
         errdefer device.deinit();
         const queue = try vit.Queue.init(device, .{ .label = "graphics queue", .kind = .graphics });
         errdefer queue.deinit();
-        const commands = try vit.CommandPool.init(device, .{ .kind = .graphics });
-        errdefer commands.deinit();
+        var slots: [frames_in_flight]FrameSlot = undefined;
+        for (&slots, 0..) |*slot, i| {
+            errdefer for (slots[0..i]) |*made| made.deinit();
+            slot.* = try .init(device);
+        }
+        errdefer for (&slots) |*slot| slot.deinit();
+        const gpu_done = try vit.Fence.init(device, .{ .label = "frames done" });
+        errdefer gpu_done.deinit();
+        var render_done: [max_swapchain_images]vit.Semaphore = undefined;
+        for (&render_done, 0..) |*semaphore, i| {
+            errdefer for (render_done[0..i]) |made| made.deinit();
+            semaphore.* = try vit.Semaphore.init(device, .{ .label = "render done" });
+        }
+        errdefer for (render_done) |semaphore| semaphore.deinit();
         const caps = try adapter.surfaceCapabilities(instance.allocator, try window.asWindow());
         defer caps.deinit();
         if (caps.formats.len == 0 or caps.present_modes.len == 0 or caps.composite_alpha.len == 0) return error.NoSurfaceCapabilities;
@@ -105,7 +128,7 @@ pub const Graphics = struct {
             std.log.warn("Custom title bar unavailable: {s}", .{@errorName(err)});
             demo.custom_frame = false;
         };
-        var result: @This() = .{ .main_window = window.window, .frames = frames, .demo = demo, .vertex_data = vertex_data, .allocator = allocator, .viewport = viewport, .instance = instance, .adapter = adapter, .device = device, .queue = queue, .swapchain = swapchain, .commands = commands, .color_format = colorFormat(caps.formats[0]), .window_extent = extent, .ui_renderer = ui_renderer, .preview = preview, .font = font };
+        var result: @This() = .{ .main_window = window.window, .frames = frames, .demo = demo, .vertex_data = vertex_data, .allocator = allocator, .viewport = viewport, .instance = instance, .adapter = adapter, .device = device, .queue = queue, .swapchain = swapchain, .slots = slots, .gpu_done = gpu_done, .render_done = render_done, .color_format = colorFormat(caps.formats[0]), .window_extent = extent, .ui_renderer = ui_renderer, .preview = preview, .font = font, .frame_arena = .init(allocator) };
         try result.demo.relayout(allocator, viewport, &result.font);
         std.log.info("Graphics ready: {d}x{d} px, {d:.0}x{d:.0} logical, {d:.2}x scale, {s}", .{ extent.width, extent.height, viewport.w, viewport.h, result.font.dpi_scale, @tagName(result.color_format) });
         return result;
@@ -127,14 +150,26 @@ pub const Graphics = struct {
         if (viewport.w != self.viewport.w or viewport.h != self.viewport.h or dpi_scale != self.font.dpi_scale) {
             self.viewport = viewport;
             self.font.dpi_scale = dpi_scale;
-            try self.relayoutDemo();
+            try self.layoutNow();
             self.demo.scroll.ensureVisible(self.demo.controls[self.demo.focus]);
-            try self.relayoutDemo();
+            try self.layoutNow();
         }
     }
 
+    /// Input changed what the demo shows; lay it out again before it is next read.
     pub fn relayoutDemo(self: *@This()) !void {
-        try self.demo.relayout(self.allocator, self.viewport, &self.font);
+        self.layout_dirty = true;
+    }
+
+    /// Bring hit-test rectangles up to date if input has changed the demo since its last layout.
+    pub fn ensureLayout(self: *@This()) !void {
+        if (self.layout_dirty) try self.layoutNow();
+    }
+
+    fn layoutNow(self: *@This()) !void {
+        defer _ = self.frame_arena.reset(.retain_capacity);
+        try self.demo.relayout(self.frame_arena.allocator(), self.viewport, &self.font);
+        self.layout_dirty = false;
     }
 
     pub fn deinit(self: *@This()) void {
@@ -146,12 +181,15 @@ pub const Graphics = struct {
         self.preview.deinit();
         self.ui_renderer.deinit();
         self.font.deinit();
+        self.frame_arena.deinit();
         self.demo.deinit();
         self.allocator.destroy(self.demo);
         self.allocator.destroy(self.frames);
         self.allocator.free(self.vertex_data);
         self.swapchain.deinit();
-        self.commands.deinit();
+        for (&self.slots) |*slot| slot.deinit();
+        for (self.render_done) |semaphore| semaphore.deinit();
+        self.gpu_done.deinit();
         self.queue.deinit();
         self.device.deinit();
         self.adapter.deinit();
@@ -188,7 +226,8 @@ pub const Graphics = struct {
             .extent = extent,
             .format = caps.formats[0],
             .present_mode = pickPresentMode(caps.present_modes),
-            .image_count = 2,
+            // A third image lets mailbox keep presenting while two frames are in flight.
+            .image_count = 3,
             .composite_alpha = caps.composite_alpha[0],
         });
         errdefer swapchain.deinit();
@@ -273,7 +312,8 @@ pub const Graphics = struct {
         }
     }
 
-    pub fn frame(self: *@This()) !void {
+    /// Draw every window. With `snapshot`, also collect the accessibility tree from this frame's layout.
+    pub fn frame(self: *@This(), snapshot: ?ui_demo.Demo.SnapshotRequest) !void {
         try self.syncWindows();
         self.theme = switch (self.demo.appearance) {
             .system => self.system_theme,
@@ -304,12 +344,21 @@ pub const Graphics = struct {
             targets[target_count] = .{ .index = @intCast(i), .canvas = c };
             target_count += 1;
         };
-        const base_vertices = try self.demo.drawWindows(self.allocator, &canvas, self.viewport, targets[0..target_count]);
+        defer _ = self.frame_arena.reset(.retain_capacity);
+        const base_vertices = try self.demo.drawWindows(self.frame_arena.allocator(), &canvas, self.viewport, targets[0..target_count], snapshot);
+        self.layout_dirty = false;
         self.syncFrames();
-        try self.commands.reset();
-        const acquired = try self.swapchain.acquireNextImage(null);
-        const cmd = try vit.CommandBuffer.init(self.commands, .{});
-        defer cmd.deinit();
+        const slot = &self.slots[self.slot];
+        // Wait for the frame that last used this slot, `frames_in_flight` frames ago.
+        _ = try self.gpu_done.wait(slot.frame, null);
+        if (slot.cmd) |old| old.deinit();
+        slot.cmd = null;
+        try slot.commands.reset();
+        const acquired = try self.swapchain.acquireNextImage(slot.acquired);
+        if (acquired.index >= max_swapchain_images) return error.TooManySwapchainImages;
+        const render_done = self.render_done[acquired.index];
+        const cmd = try vit.CommandBuffer.init(slot.commands, .{});
+        slot.cmd = cmd;
         try cmd.barrier(&.{.{ .texture_view = .{ .view = acquired.view, .before = .present, .after = .color_attachment } }});
         try self.ui_renderer.upload(cmd, &self.font, vertex_data[0..canvas.len], self.viewport);
         try cmd.beginRenderPass(.{ .color_attachments = &.{.{
@@ -333,8 +382,16 @@ pub const Graphics = struct {
         }
         try cmd.barrier(&.{.{ .texture_view = .{ .view = acquired.view, .before = .color_attachment, .after = .present } }});
         try cmd.finish();
-        try self.queue.submit(.{ .command_buffers = &.{cmd} });
-        _ = try self.swapchain.present(&.{});
+        self.submitted += 1;
+        try self.queue.submit(.{
+            .command_buffers = &.{cmd},
+            .wait_semaphores = &.{slot.acquired},
+            .signal_semaphores = &.{render_done},
+            .signal_fences = &.{.{ .fence = self.gpu_done, .value = self.submitted }},
+        });
+        slot.frame = self.submitted;
+        self.slot = (self.slot + 1) % frames_in_flight;
+        _ = try self.swapchain.present(&.{render_done});
         for (targets[0..target_count]) |target| try self.presentWindow(self.windows[target.index].?, target);
     }
 
@@ -385,6 +442,32 @@ pub const Graphics = struct {
         try cmd.finish();
         try self.queue.submit(.{ .command_buffers = &.{cmd} });
         _ = try w.swapchain.present(&.{});
+    }
+};
+
+const frames_in_flight = weeoui_vitellus.frames_in_flight;
+const max_swapchain_images = 8;
+
+/// What one frame in flight owns until the GPU finishes it.
+const FrameSlot = struct {
+    commands: vit.CommandPool,
+    /// Signalled by the swapchain when the acquired image is ready to draw into.
+    acquired: vit.Semaphore,
+    /// Freed once the GPU is done with it, not right after submitting.
+    cmd: ?vit.CommandBuffer = null,
+    /// Frame number (`gpu_done` value) that last used this slot.
+    frame: u64 = 0,
+
+    fn init(device: vit.Device) !FrameSlot {
+        const commands = try vit.CommandPool.init(device, .{ .kind = .graphics });
+        errdefer commands.deinit();
+        return .{ .commands = commands, .acquired = try vit.Semaphore.init(device, .{ .label = "image acquired" }) };
+    }
+
+    fn deinit(self: *FrameSlot) void {
+        if (self.cmd) |cmd| cmd.deinit();
+        self.acquired.deinit();
+        self.commands.deinit();
     }
 };
 

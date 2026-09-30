@@ -155,12 +155,13 @@ pub fn build(b: *std.Build) void {
     engine.addImport("weeoui", weeoui.module("weeoui"));
     engine.addImport("weeoui_sdl3", weeoui.module("weeoui_sdl3"));
     // Weeoui's renderer compiled against Eggy's own Vitellus (its -Dvitellus would fetch a second copy).
-    engine.addImport("weeoui_vitellus", b.createModule(.{
+    const weeoui_vitellus = b.createModule(.{
         .root_source_file = weeoui.path("src/vitellus.zig"),
         .target = target,
         .optimize = optimize,
         .imports = &.{ .{ .name = "weeoui", .module = weeoui.module("weeoui") }, .{ .name = "vitellus", .module = vitellus.module("vitellus") } },
-    }));
+    });
+    engine.addImport("weeoui_vitellus", weeoui_vitellus);
     engine.addImport("slangc", slangc);
     engine.addImport("ui_shaders", shader_module);
     engine.addImport("sdl3", sdl3.module("sdl3"));
@@ -225,6 +226,7 @@ pub fn build(b: *std.Build) void {
     viewport_tests_module.addImport("weeoui", weeoui.module("weeoui"));
     viewport_tests_module.addImport("sdl3", sdl3.module("sdl3"));
     viewport_tests_module.addImport("ui_shaders", shader_module);
+    viewport_tests_module.addImport("weeoui_vitellus", weeoui_vitellus);
     const viewport_tests = b.addRunArtifact(b.addTest(.{ .root_module = viewport_tests_module, .use_llvm = true }));
     test_step.dependOn(&viewport_tests.step);
     b.step("test-viewport", "Run 3D preview tests").dependOn(&viewport_tests.step);

@@ -250,6 +250,8 @@ pub const Demo = struct {
     pointer_x: f32 = -1,
     pointer_y: f32 = -1,
     scroll: L.ScrollState = .{},
+    /// Whether the page needed vertical and horizontal scroll bars last layout: the first guess next time.
+    page_bars: [2]bool = .{ false, false },
     preview_scroll: L.ScrollState = .{},
     message_scroll: L.ScrollState = .{ .auto_scroll = true },
     message_count: usize = 3,
@@ -326,17 +328,20 @@ pub const Demo = struct {
         return true;
     }
     pub fn draw(self: *Demo, allocator: std.mem.Allocator, canvas: *ui.Canvas, viewport: ui.Rect) !usize {
-        return self.drawWindows(allocator, canvas, viewport, &.{});
+        return self.drawWindows(allocator, canvas, viewport, &.{}, null);
     }
+    /// Where `drawWindows` puts the accessibility tree of the frame it lays out.
+    pub const SnapshotRequest = struct { allocator: std.mem.Allocator, out: *ui.accessibility.Snapshot };
     /// A popped-out panel's OS window to draw into; `base` returns where its overlays begin.
     pub const WindowTarget = struct { index: u8, canvas: *ui.Canvas, base: usize = 0 };
     /// Draw the main window into `canvas` and each open panel window into its target.
-    pub fn drawWindows(self: *Demo, allocator: std.mem.Allocator, canvas: *ui.Canvas, viewport: ui.Rect, targets: []WindowTarget) !usize {
+    pub fn drawWindows(self: *Demo, allocator: std.mem.Allocator, canvas: *ui.Canvas, viewport: ui.Rect, targets: []WindowTarget, snapshot: ?SnapshotRequest) !usize {
         var arena = std.heap.ArenaAllocator.init(allocator);
         defer arena.deinit();
         var count_buf: [20]u8 = undefined;
         const tree = try layoutTree(.{ .allocator = arena.allocator() }, self, viewport, &count_buf, canvas.font);
         try self.saveControls(tree, canvas.font);
+        if (snapshot) |request| request.out.* = try ui.accessibility.collect(request.allocator, if (self.dialog_open) tree.find(488).? else tree, self.focusId());
         const root = if (self.frame_windows > 0) tree.children[0] else tree;
         for (targets) |*target| {
             target.base = 0;
@@ -1667,8 +1672,8 @@ fn layoutMain(b: L.Builder, demo: *Demo, full: ui.Rect, count_buf: *[20]u8, font
     return page;
 }
 fn layoutPage(b: L.Builder, demo: *Demo, viewport: ui.Rect, count_buf: *[20]u8, font: *const ui.Font) !*L.Element {
-    var vertical = false;
-    var horizontal = false;
+    var vertical = demo.page_bars[0];
+    var horizontal = demo.page_bars[1];
     const requested_offset = demo.scroll.offset;
     var root: *L.Element = undefined;
     for (0..4) |_| {
@@ -1678,6 +1683,7 @@ fn layoutPage(b: L.Builder, demo: *Demo, viewport: ui.Rect, count_buf: *[20]u8, 
         root.layout(viewport, font);
         const need_vertical = demo.scroll.content.y > demo.scroll.viewport.h and demo.scroll.viewport.h >= 16;
         const need_horizontal = demo.scroll.content.x > demo.scroll.viewport.w and demo.scroll.viewport.w >= 16;
+        demo.page_bars = .{ need_vertical, need_horizontal };
         if (need_vertical == vertical and need_horizontal == horizontal) return root;
         demo.scroll.offset = requested_offset;
         vertical = need_vertical;

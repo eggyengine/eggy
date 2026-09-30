@@ -8,6 +8,9 @@ const accessibility = @import("accessibility.zig");
 const builtin = @import("builtin");
 
 const fps = 340000;
+/// Every bounds-only accessibility update costs a full tree push to the platform (~13 ms on AT-SPI),
+/// so scrolling and dragging publish at this rate instead of every frame.
+const a11y_bounds_interval_ns = 250 * std.time.ns_per_ms;
 const width = 900;
 const height = 675;
 const FileResult = struct {
@@ -54,6 +57,9 @@ pub const Game = struct {
     a11y: *@import("weeoui").accesskit.Adapter,
     text_input_active: bool = false,
     a11y_dirty: bool = false,
+    /// Only bounds moved (scrolling, dragging): published at most every `a11y_bounds_interval_ns`.
+    a11y_moved: bool = false,
+    a11y_published_ns: u64 = 0,
     fps_capper: sdl3.extras.FramerateCapper(f32),
 
     pub fn init(i: sdl3.Init) !Game {
@@ -104,16 +110,24 @@ pub const Game = struct {
         const dt = self.fps_capper.delay();
         self.m_graphics.demo.animation_phase = @mod(self.m_graphics.demo.animation_phase + @min(dt, 0.25) / 1.2, 1);
         self.m_graphics.demo.tickScroll(dt);
+        try self.m_graphics.ensureLayout();
         if (accessibility.applyActions(self.a11y, self.m_graphics.demo)) {
             try self.m_graphics.syncSize(self.window);
             try self.m_graphics.relayoutDemo();
             self.a11y_dirty = true;
         }
-        if (self.a11y_dirty) {
-            try accessibility.publish(self.a11y, self.m_graphics.demo, self.m_graphics.viewport, &self.m_graphics.font);
+        const now = sdl3.timer.getNanosecondsSinceInit();
+        if (self.a11y_dirty or (self.a11y_moved and now -| self.a11y_published_ns >= a11y_bounds_interval_ns)) {
+            // Collected from the frame's own layout rather than a second one.
+            var arena = std.heap.ArenaAllocator.init(self.a11y.allocator);
+            errdefer arena.deinit();
+            var snapshot: @import("weeoui").accessibility.Snapshot = undefined;
+            try self.m_graphics.frame(.{ .allocator = arena.allocator(), .out = &snapshot });
+            self.a11y.update(arena, snapshot, self.m_graphics.demo.ui_scale);
             self.a11y_dirty = false;
-        }
-        try self.m_graphics.frame();
+            self.a11y_moved = false;
+            self.a11y_published_ns = now;
+        } else try self.m_graphics.frame(null);
         weeoui_sdl3.setCursor(self.m_graphics.demo.pointerCursor());
         return .run;
     }
@@ -135,6 +149,8 @@ pub const Game = struct {
 
     pub fn event(self: *Game, curr_event: sdl3.events.Event) !sdl3.AppResult {
         var publish = false;
+        // Handlers hit-test against the layout, so apply what earlier events in this batch changed.
+        try self.m_graphics.ensureLayout();
         const origin = self.eventOrigin(curr_event);
         if (weeoui_sdl3.translate(curr_event)) |ui_event| switch (ui_event) {
             .pointer_move => |position| {
@@ -143,10 +159,12 @@ pub const Game = struct {
                 self.m_graphics.demo.pointerMoveAt(position.x / scale + origin, position.y / scale, &self.m_graphics.font);
                 if (self.m_graphics.demo.dragging_slider) {
                     try self.m_graphics.syncSize(self.window);
+                    self.a11y_moved = true;
+                } else if (old_hover[0] != self.m_graphics.demo.hover_card_open or old_hover[1] != self.m_graphics.demo.tooltip_open) {
+                    try self.m_graphics.relayoutDemo();
                     publish = true;
-                } else if (self.m_graphics.demo.scrollDragging() or self.m_graphics.demo.dragging_divider or self.m_graphics.demo.dragging_text or old_hover[0] != self.m_graphics.demo.hover_card_open or old_hover[1] != self.m_graphics.demo.tooltip_open) {
-                    if (old_hover[0] != self.m_graphics.demo.hover_card_open or old_hover[1] != self.m_graphics.demo.tooltip_open) try self.m_graphics.relayoutDemo();
-                    publish = true;
+                } else if (self.m_graphics.demo.scrollDragging() or self.m_graphics.demo.dragging_divider or self.m_graphics.demo.dragging_text) {
+                    self.a11y_moved = true;
                 }
             },
             .pointer_down => |button| {
@@ -174,7 +192,7 @@ pub const Game = struct {
             .wheel => |wheel| {
                 const scale = self.m_graphics.demo.ui_scale;
                 self.m_graphics.demo.scrollWheel(wheel.position.x / scale + origin, wheel.position.y / scale, wheel.delta.x, wheel.delta.y);
-                publish = true;
+                self.a11y_moved = true;
             },
             .text => |text| {
                 if (self.m_graphics.demo.insertText(text)) {

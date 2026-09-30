@@ -3,6 +3,7 @@ const vit = @import("vitellus");
 const ui = @import("weeoui");
 const sdl3 = @import("sdl3");
 const shaders = @import("ui_shaders");
+const frames_in_flight = @import("weeoui_vitellus").frames_in_flight;
 
 const Vertex = extern struct {
     position: [3]f32,
@@ -20,9 +21,11 @@ const vertex_data = sceneVertices();
 
 pub const Preview = struct {
     geometry: vit.Buffer,
-    uniforms: vit.Buffer,
+    /// One per frame in flight, so `draw` never rewrites a transform the GPU is still reading.
+    uniforms: [frames_in_flight]vit.Buffer,
     group_layout: vit.BindGroupLayout,
-    group: vit.BindGroup,
+    groups: [frames_in_flight]vit.BindGroup,
+    slot: usize = 0,
     pipeline_layout: vit.PipelineLayout,
     pipeline: vit.GraphicsPipeline,
     depth: vit.Texture,
@@ -37,21 +40,32 @@ pub const Preview = struct {
             .initial_data = std.mem.asBytes(&vertex_data),
         });
         errdefer geometry.deinit();
-        const uniforms = try vit.Buffer.init(device, .{
-            .label = "preview transform",
-            .size = 256,
-            .usage = .{ .uniform = true },
-            .memory = .upload,
-        });
-        errdefer uniforms.deinit();
         const group_layout = try vit.BindGroupLayout.init(device, .{ .entries = &.{
             .{ .binding = 0, .kind = .{ .buffer = .{ .kind = .uniform } }, .visibility = .{ .vertex = true, .fragment = true } },
         } });
         errdefer group_layout.deinit();
-        const group = try vit.BindGroup.init(device, .{ .layout = group_layout, .entries = &.{
-            .{ .binding = 0, .resource = .{ .buffer = .{ .buffer = uniforms } } },
-        } });
-        errdefer group.deinit();
+        var uniforms: [frames_in_flight]vit.Buffer = undefined;
+        var groups: [frames_in_flight]vit.BindGroup = undefined;
+        for (&uniforms, &groups, 0..) |*buffer, *group, i| {
+            errdefer for (uniforms[0..i], groups[0..i]) |b, g| {
+                g.deinit();
+                b.deinit();
+            };
+            buffer.* = try vit.Buffer.init(device, .{
+                .label = "preview transform",
+                .size = 256,
+                .usage = .{ .uniform = true },
+                .memory = .upload,
+            });
+            errdefer buffer.deinit();
+            group.* = try vit.BindGroup.init(device, .{ .layout = group_layout, .entries = &.{
+                .{ .binding = 0, .resource = .{ .buffer = .{ .buffer = buffer.* } } },
+            } });
+        }
+        errdefer for (uniforms, groups) |b, g| {
+            g.deinit();
+            b.deinit();
+        };
         const vs = try vit.Shader.init(device, .{ .label = "preview vertex", .stage = .vertex, .source = vit.SPIRVShaderModule.init(.{ .code = shaders.viewport_vertex }) });
         defer vs.deinit();
         const fs = try vit.Shader.init(device, .{ .label = "preview fragment", .stage = .fragment, .source = vit.SPIRVShaderModule.init(.{ .code = shaders.viewport_fragment }) });
@@ -80,7 +94,7 @@ pub const Preview = struct {
             .geometry = geometry,
             .uniforms = uniforms,
             .group_layout = group_layout,
-            .group = group,
+            .groups = groups,
             .pipeline_layout = pipeline_layout,
             .pipeline = pipeline,
             .depth = depth,
@@ -104,9 +118,11 @@ pub const Preview = struct {
         self.depth.deinit();
         self.pipeline.deinit();
         self.pipeline_layout.deinit();
-        self.group.deinit();
+        for (self.uniforms, self.groups) |b, g| {
+            g.deinit();
+            b.deinit();
+        }
         self.group_layout.deinit();
-        self.uniforms.deinit();
         self.geometry.deinit();
     }
 
@@ -128,9 +144,11 @@ pub const Preview = struct {
             .projection = .{ aspect, 1.55 * @min(1, aspect), if (srgb) 1 else 0, 0 },
         };
         const bytes = std.mem.asBytes(&transform);
-        const mapped = try self.uniforms.map(.write, .{ .size = bytes.len });
+        self.slot = (self.slot + 1) % frames_in_flight;
+        const uniforms = self.uniforms[self.slot];
+        const mapped = try uniforms.map(.write, .{ .size = bytes.len });
         @memcpy(mapped[0..bytes.len], bytes);
-        self.uniforms.unmap(.{ .size = bytes.len });
+        uniforms.unmap(.{ .size = bytes.len });
 
         try cmd.barrier(&.{.{ .texture = .{
             .texture = self.depth,
@@ -146,7 +164,7 @@ pub const Preview = struct {
         cmd.setViewport(.{ .width = @floatFromInt(extent.width), .height = @floatFromInt(extent.height) });
         cmd.setScissor(scissor);
         cmd.setGraphicsPipeline(self.pipeline);
-        cmd.setBindGroup(0, self.group, &.{});
+        cmd.setBindGroup(0, self.groups[self.slot], &.{});
         cmd.setVertexBuffer(0, self.geometry, 0);
         cmd.draw(@intCast(vertex_data.len), 1, 0, 0);
         cmd.endRenderPass();
