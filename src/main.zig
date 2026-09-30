@@ -12,8 +12,6 @@ pub const WinMainCRTStartup = void;
 
 const AppState = eggy.Editor;
 
-pub const std_options: std.Options = .{ .logFn = eggy.devtools_log };
-
 pub const panic = std.debug.FullPanic(panicHandler);
 
 fn panicHandler(message: []const u8, first_trace_addr: ?usize) noreturn {
