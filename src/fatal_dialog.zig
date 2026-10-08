@@ -1,5 +1,6 @@
 const std = @import("std");
-const nvd = @cImport({
+const web = @import("builtin").os.tag == .emscripten;
+const nvd = if (web) struct {} else @cImport({
     @cDefine("NVD_STATIC_LINKAGE", "1");
     @cInclude("nvdialog.h");
 });
@@ -15,6 +16,7 @@ pub fn report(stage: []const u8, err: anyerror, detail: ?[]const u8) void {
 }
 
 pub fn show(stage: []const u8, message: []const u8) void {
+    if (web) return; // `report` already logged it to the browser console
     var buffer: [2048]u8 = undefined;
     const description = formatMessage(&buffer, stage, message);
     const init_result = nvd.nvd_init();
