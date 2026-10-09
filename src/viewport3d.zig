@@ -175,7 +175,7 @@ pub const Preview = struct {
 fn shaderSource(code: []const u8, entry_point: []const u8) vit.ShaderModule {
     if (@import("builtin").os.tag == .emscripten)
         return vit.BinaryShaderModule.init(.{ .backend = .webgpu, .format = .wgsl, .bytes = code, .entry_point = entry_point });
-    return vit.SPIRVShaderModule.init(.{ .code = code });
+    return @import("vitellus_spirv").SPIRVShaderModule.init(.{ .code = code });
 }
 
 fn makeDepth(device: vit.Device, extent: vit.Extent2D) !vit.Texture {

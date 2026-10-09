@@ -1,4 +1,6 @@
 const std = @import("std");
+const vitellus_build = @import("vitellus");
+const Emscripten = vitellus_build.Emscripten;
 
 pub fn build(b: *std.Build) void {
     const update_submodules = b.addSystemCommand(&.{ "git", "submodule", "update", "--init", "--remote", "--recursive" });
@@ -15,28 +17,25 @@ pub fn build(b: *std.Build) void {
     }
     // The web build renders with WebGPU, takes WGSL, and is linked by emcc instead of Zig.
     const web = target.result.os.tag == .emscripten;
-    const emsdk = b.option([]const u8, "emsdk", "Path to emsdk for web builds (default: $EMSDK, then ~/emsdk)") orelse
-        b.graph.environ_map.get("EMSDK") orelse
-        b.pathJoin(&.{ b.graph.environ_map.get("HOME") orelse "/", "emsdk" });
-    const emscripten_sysroot = b.pathJoin(&.{ emsdk, "upstream/emscripten/cache/sysroot" });
-    const emscripten_sysroot_include: std.Build.LazyPath = .{ .cwd_relative = b.pathJoin(&.{ emscripten_sysroot, "include" }) };
-    // SDL's build reads Emscripten's sysroot from `--sysroot`.
-    if (web and b.sysroot == null) b.sysroot = emscripten_sysroot;
+    const emscripten = Emscripten.init(b, target, b.option([]const u8, "emsdk", "Path to emsdk for web builds (default: $EMSDK, then ~/emsdk)"));
 
-    const host_slang = slangDependency(b, b.graph.host.result.os.tag, b.graph.host.result.cpu.arch) orelse return;
-    const host_compiler = host_slang.path(if (b.graph.host.result.os.tag == .windows) "bin/slangc.exe" else "bin/slangc");
-    const shader_target, const shader_ext = if (web) .{ "wgsl", "wgsl" } else .{ "spirv", "spv" };
-    const viewport_vertex_compile = b.addSystemCommand(&.{host_compiler.getPath(b)});
-    viewport_vertex_compile.addFileArg(b.path("src/shaders/viewport3d.slang"));
-    viewport_vertex_compile.addArgs(&.{ "-target", shader_target, "-entry", "vertexMain", "-stage", "vertex", "-o" });
-    const viewport_vertex_code = viewport_vertex_compile.addOutputFileArg(b.fmt("viewport3d.vert.{s}", .{shader_ext}));
-    const viewport_fragment_compile = b.addSystemCommand(&.{host_compiler.getPath(b)});
-    viewport_fragment_compile.addFileArg(b.path("src/shaders/viewport3d.slang"));
-    viewport_fragment_compile.addArgs(&.{ "-target", shader_target, "-entry", "fragmentMain", "-stage", "fragment", "-o" });
-    const viewport_fragment_code = viewport_fragment_compile.addOutputFileArg(b.fmt("viewport3d.frag.{s}", .{shader_ext}));
+    const vitellus = b.dependency("vitellus", .{
+        .target = target,
+        .optimize = optimize,
+        .dx12 = true,
+        .vk = !web,
+        .emsdk = emscripten.emsdk,
+        .enable_slang = true,
+    });
+    vitellus_build.installLibraries(b, vitellus);
+
+    // Built-in shaders: WGSL on the web, SPIR-V elsewhere.
+    const viewport_shader = b.path("src/shaders/viewport3d.slang");
+    const viewport_vertex = vitellus_build.compileSlang(b, vitellus, target, viewport_shader, "vertexMain", .vertex) orelse return;
+    const viewport_fragment = vitellus_build.compileSlang(b, vitellus, target, viewport_shader, "fragmentMain", .fragment) orelse return;
     const shader_files = b.addWriteFiles();
-    _ = shader_files.addCopyFile(viewport_vertex_code, "viewport3d.vert");
-    _ = shader_files.addCopyFile(viewport_fragment_code, "viewport3d.frag");
+    _ = shader_files.addCopyFile(viewport_vertex, "viewport3d.vert");
+    _ = shader_files.addCopyFile(viewport_fragment, "viewport3d.frag");
     const shader_module = b.createModule(.{
         .root_source_file = shader_files.add("root.zig",
             \\pub const viewport_vertex = @embedFile("viewport3d.vert");
@@ -44,29 +43,6 @@ pub fn build(b: *std.Build) void {
         ),
         .target = target,
         .optimize = optimize,
-    });
-    // The in-process Slang compiler is desktop-only; the web build has its shaders baked in.
-    const slang_options = b.addOptions();
-    if (!web) {
-        const target_slang = slangDependency(b, target.result.os.tag, target.result.cpu.arch) orelse return;
-        const library_file, const library_name = switch (target.result.os.tag) {
-            .linux => .{ "lib/libslang-compiler.so.0.2026.18.2", "libslang-compiler.so" },
-            .macos => .{ "lib/libslang-compiler.0.2026.18.2.dylib", "libslang-compiler.dylib" },
-            .windows => .{ "bin/slang-compiler.dll", "slang-compiler.dll" },
-            else => unreachable,
-        };
-        const library_path = target_slang.path(library_file);
-        slang_options.addOptionPath("library", library_path);
-        // Unix loads the library from lib/; Windows keeps DLLs beside the exe.
-        b.getInstallStep().dependOn(&b.addInstallFileWithDir(library_path, if (target.result.os.tag == .windows) .bin else .lib, library_name).step);
-    }
-
-    const vitellus = b.dependency("vitellus", .{
-        .target = target,
-        .optimize = optimize,
-        .dx12 = true,
-        .vk = !web,
-        .emsdk = emsdk,
     });
     const emath = b.dependency("eggenvector", .{ .target = target, .optimize = optimize });
     const weeoui = b.dependency("weeoui", .{ .target = target, .optimize = optimize, .sdl3 = !web });
@@ -76,10 +52,9 @@ pub fn build(b: *std.Build) void {
     // Same args as Weeoui's lazy sdl3 so both share one SDL build (static by default).
     // On the web Weeoui skips SDL, and SDL needs Emscripten's system headers.
     const sdl3 = if (web)
-        b.dependency("sdl3", .{ .target = target, .optimize = optimize, .sdl_system_include_path = emscripten_sysroot_include })
+        b.dependency("sdl3", .{ .target = target, .optimize = optimize, .sdl_system_include_path = emscripten.include })
     else
         b.dependency("sdl3", .{ .target = target, .optimize = optimize });
-    if (web) sdl3.module("sdl3").addSystemIncludePath(emscripten_sysroot_include);
     const sdl_adapter = b.createModule(.{
         .root_source_file = vitellus.path("src/windowing/sdl3.zig"),
         .target = target,
@@ -87,12 +62,6 @@ pub fn build(b: *std.Build) void {
     });
     sdl_adapter.addImport("vitellus", vitellus.module("vitellus"));
     sdl_adapter.addImport("sdl3", sdl3.module("sdl3"));
-    const slangc = b.createModule(.{
-        .root_source_file = b.path("src/slangc.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-    slangc.addImport("slang_library", slang_options.createModule());
 
     const engine = b.createModule(.{
         .root_source_file = b.path("src/root.zig"),
@@ -100,6 +69,7 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
     engine.addImport("vitellus", vitellus.module("vitellus"));
+    engine.addImport("vitellus_spirv", vitellus.module("vitellus_spirv"));
     engine.addImport("eggenvector", emath.module("eggenvector"));
     engine.addImport("weeoui", weeoui.module("weeoui"));
     if (!web) engine.addImport("weeoui_sdl3", weeoui.module("weeoui_sdl3"));
@@ -108,10 +78,10 @@ pub fn build(b: *std.Build) void {
         .root_source_file = weeoui.path("src/vitellus.zig"),
         .target = target,
         .optimize = optimize,
-        .imports = &.{ .{ .name = "weeoui", .module = weeoui.module("weeoui") }, .{ .name = "vitellus", .module = vitellus.module("vitellus") } },
+        .imports = &.{ .{ .name = "weeoui", .module = weeoui.module("weeoui") }, .{ .name = "vitellus", .module = vitellus.module("vitellus") }, .{ .name = "vitellus_spirv", .module = vitellus.module("vitellus_spirv") } },
     });
     engine.addImport("weeoui_vitellus", weeoui_vitellus);
-    engine.addImport("slangc", slangc);
+    engine.addImport("vitellus_slangc", vitellus.module("vitellus_slangc"));
     engine.addImport("ui_shaders", shader_module);
     engine.addImport("sdl3", sdl3.module("sdl3"));
     engine.addImport("vitellus_sdl3", sdl_adapter);
@@ -139,7 +109,11 @@ pub fn build(b: *std.Build) void {
         .link_libc = true,
         .imports = &.{ .{ .name = "eggy", .module = engine }, .{ .name = "fatal_dialog", .module = fatal_dialog } },
     });
-    if (web) return addWeb(b, main_module, emsdk, emscripten_sysroot_include, optimize);
+    if (web) {
+        const app = emscripten.addApp(b, .{ .name = "eggy", .root_module = main_module });
+        b.step("run", "Open the game in a browser").dependOn(&app.run.step);
+        return;
+    }
 
     const exe = b.addExecutable(.{
         .name = "eggy",
@@ -156,17 +130,8 @@ pub fn build(b: *std.Build) void {
     b.step("run", "Run the game").dependOn(&run.step);
 
     const tests = b.addRunArtifact(b.addTest(.{ .root_module = engine, .use_llvm = true }));
-    const slang_test_module = b.createModule(.{
-        .root_source_file = b.path("src/slangc.zig"),
-        .target = target,
-        .optimize = optimize,
-        .link_libc = true,
-    });
-    slang_test_module.addImport("slang_library", slang_options.createModule());
-    const slang_tests = b.addRunArtifact(b.addTest(.{ .root_module = slang_test_module, .use_llvm = true }));
     const test_step = b.step("test", "Run workspace tests");
     test_step.dependOn(&tests.step);
-    test_step.dependOn(&slang_tests.step);
     const dialog_tests = b.addRunArtifact(b.addTest(.{ .root_module = fatal_dialog, .use_llvm = true }));
     test_step.dependOn(&dialog_tests.step);
     const viewport_tests_module = b.createModule(.{
@@ -175,6 +140,7 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
     viewport_tests_module.addImport("vitellus", vitellus.module("vitellus"));
+    viewport_tests_module.addImport("vitellus_spirv", vitellus.module("vitellus_spirv"));
     viewport_tests_module.addImport("weeoui", weeoui.module("weeoui"));
     viewport_tests_module.addImport("sdl3", sdl3.module("sdl3"));
     viewport_tests_module.addImport("ui_shaders", shader_module);
@@ -182,47 +148,6 @@ pub fn build(b: *std.Build) void {
     const viewport_tests = b.addRunArtifact(b.addTest(.{ .root_module = viewport_tests_module, .use_llvm = true }));
     test_step.dependOn(&viewport_tests.step);
     b.step("test-viewport", "Run 3D preview tests").dependOn(&viewport_tests.step);
-}
-
-/// `zig build -Dtarget=wasm32-emscripten`: Zig builds a static library and emcc links it, SDL
-/// and Dawn's WebGPU bindings into zig-out/web/eggy.html. `run` serves it with emrun.
-fn addWeb(b: *std.Build, main_module: *std.Build.Module, emsdk: []const u8, sysroot_include: std.Build.LazyPath, optimize: std.builtin.OptimizeMode) void {
-    const lib = b.addLibrary(.{ .name = "eggy", .linkage = .static, .root_module = main_module });
-    // Zig ships no Emscripten libc headers; C code in every module (FreeType, zlib, stb, ...) needs the sysroot's.
-    for (lib.getCompileDependencies(false)) |dep| {
-        for (dep.root_module.getGraph().modules) |module| module.addSystemIncludePath(sysroot_include);
-    }
-    const emscripten = b.pathJoin(&.{ emsdk, "upstream/emscripten" });
-    // em++, since Dawn's WebGPU bindings are C++.
-    const emcc = b.addSystemCommand(&.{b.pathJoin(&.{ emscripten, "em++" })});
-    emcc.setEnvironmentVariable("EM_CONFIG", b.pathJoin(&.{ emsdk, ".emscripten" }));
-    // Zig static libraries do not bundle their dependencies, so hand emcc every one (SDL, FreeType, ...).
-    for (lib.getCompileDependencies(false)) |dep| {
-        if (dep.kind == .lib and dep.linkage == .static) emcc.addArtifactArg(dep);
-    }
-    emcc.addArgs(&.{
-        switch (optimize) {
-            .Debug => "-O0",
-            .ReleaseSafe, .ReleaseFast => "-O2",
-            .ReleaseSmall => "-Oz",
-        },
-        "--use-port=emdawnwebgpu",
-        // Vitellus waits on WebGPU's async adapter, device and fence callbacks.
-        "-sASYNCIFY",
-        "-sASYNCIFY_STACK_SIZE=65536",
-        "-sSTACK_SIZE=1048576",
-        "-sALLOW_MEMORY_GROWTH",
-        "-o",
-    });
-    const html = emcc.addOutputFileArg("eggy.html");
-    const install = b.addInstallDirectory(.{ .source_dir = html.dirname(), .install_dir = .prefix, .install_subdir = "web" });
-    b.getInstallStep().dependOn(&install.step);
-
-    const run = b.addSystemCommand(&.{ b.pathJoin(&.{ emscripten, "emrun" }), b.getInstallPath(.prefix, "web/eggy.html") });
-    run.setEnvironmentVariable("EM_CONFIG", b.pathJoin(&.{ emsdk, ".emscripten" }));
-    run.step.dependOn(&install.step);
-    if (b.args) |args| run.addArgs(args);
-    b.step("run", "Open the game in a browser").dependOn(&run.step);
 }
 
 /// The native fatal-error dialog; the web build reports to the browser console instead.
@@ -311,26 +236,4 @@ fn addMacSdk(b: *std.Build, mod: *std.Build.Module) void {
     mod.addSystemIncludePath(.{ .cwd_relative = b.pathJoin(&.{ sysroot, "usr/include" }) });
     mod.addSystemFrameworkPath(.{ .cwd_relative = b.pathJoin(&.{ sysroot, "System/Library/Frameworks" }) });
     mod.addLibraryPath(.{ .cwd_relative = "/usr/lib" });
-}
-
-fn slangDependency(b: *std.Build, os: std.Target.Os.Tag, arch: std.Target.Cpu.Arch) ?*std.Build.Dependency {
-    const name = switch (os) {
-        .linux => switch (arch) {
-            .x86_64 => "slang_linux_x86_64",
-            .aarch64 => "slang_linux_aarch64",
-            else => @panic("Slang has no bundled release for this Linux architecture"),
-        },
-        .macos => switch (arch) {
-            .x86_64 => "slang_macos_x86_64",
-            .aarch64 => "slang_macos_aarch64",
-            else => @panic("Slang has no bundled release for this macOS architecture"),
-        },
-        .windows => switch (arch) {
-            .x86_64 => "slang_windows_x86_64",
-            .aarch64 => "slang_windows_aarch64",
-            else => @panic("Slang has no bundled release for this Windows architecture"),
-        },
-        else => @panic("Slang has no bundled release for this operating system"),
-    };
-    return b.lazyDependency(name, .{});
 }

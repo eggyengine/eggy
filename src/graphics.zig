@@ -24,8 +24,8 @@ pub const Graphics = struct {
     preview: viewport3d.Preview,
 
     pub fn init(allocator: std.mem.Allocator, window: sdl_adapter.Sdl3Window) !@This() {
-        const backend: vit.BackendType = if (@import("builtin").os.tag == .emscripten) .{ .webgpu = true } else .{ .vulkan = true };
-        const instance = try vit.Instance.init(allocator, .{ .backend = backend, .validation = .core });
+        // Eggy's shaders are SPIR-V and WGSL; each platform only tries the backends it has.
+        const instance = try vit.Instance.init(allocator, .{ .backend = .{ .vulkan = true, .webgpu = true }, .validation = .core });
         errdefer instance.deinit();
         const adapter = try vit.Adapter.init(instance, .{ .label = "vitellus adapter" });
         errdefer adapter.deinit();
