@@ -66,9 +66,9 @@ pub const Preview = struct {
             g.deinit();
             b.deinit();
         };
-        const vs = try vit.Shader.init(device, .{ .label = "preview vertex", .stage = .vertex, .source = vit.SPIRVShaderModule.init(.{ .code = shaders.viewport_vertex }) });
+        const vs = try vit.Shader.init(device, .{ .label = "preview vertex", .stage = .vertex, .source = shaderSource(shaders.viewport_vertex, "vertexMain") });
         defer vs.deinit();
-        const fs = try vit.Shader.init(device, .{ .label = "preview fragment", .stage = .fragment, .source = vit.SPIRVShaderModule.init(.{ .code = shaders.viewport_fragment }) });
+        const fs = try vit.Shader.init(device, .{ .label = "preview fragment", .stage = .fragment, .source = shaderSource(shaders.viewport_fragment, "fragmentMain") });
         defer fs.deinit();
         const pipeline_layout = try vit.PipelineLayout.init(device, .{ .label = "preview layout", .bind_group_layouts = &.{group_layout} });
         errdefer pipeline_layout.deinit();
@@ -170,6 +170,13 @@ pub const Preview = struct {
         cmd.endRenderPass();
     }
 };
+
+/// The build compiles the Slang shaders to WGSL for the web and SPIR-V elsewhere.
+fn shaderSource(code: []const u8, entry_point: []const u8) vit.ShaderModule {
+    if (@import("builtin").os.tag == .emscripten)
+        return vit.BinaryShaderModule.init(.{ .backend = .webgpu, .format = .wgsl, .bytes = code, .entry_point = entry_point });
+    return @import("vitellus_spirv").SPIRVShaderModule.init(.{ .code = code });
+}
 
 fn makeDepth(device: vit.Device, extent: vit.Extent2D) !vit.Texture {
     return vit.Texture.init(device, .{

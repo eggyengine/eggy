@@ -4,7 +4,7 @@ const sdl3 = eggy.sdl_adapter.sdl;
 const fatal_dialog = @import("fatal_dialog");
 
 comptime {
-    _ = sdl3.main_callbacks;
+    _ = eggy.sdl_adapter.main_callbacks;
 }
 
 pub const _start = void;
@@ -14,7 +14,11 @@ const AppState = eggy.Editor;
 
 pub const panic = std.debug.FullPanic(panicHandler);
 
+pub const std_options = eggy.vit.web.std_options;
+const web = @import("builtin").os.tag == .emscripten;
+
 fn panicHandler(message: []const u8, first_trace_addr: ?usize) noreturn {
+    if (web) eggy.vit.web.panic.call(message, first_trace_addr);
     fatal_dialog.show("panic", message);
     std.debug.defaultPanic(message, first_trace_addr);
 }
@@ -24,7 +28,7 @@ fn reportError(stage: []const u8, err: anyerror) void {
 }
 
 pub fn init(init_data: sdl3.Init) !struct { AppState, sdl3.AppResult } {
-    return .{ AppState.init(init_data) catch |err| {
+    return .{ AppState.init(init_data.gpa) catch |err| {
         reportError("init", err);
         return err;
     }, .run };

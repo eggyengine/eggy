@@ -1,4 +1,6 @@
 const std = @import("std");
+const vitellus_build = @import("vitellus");
+const Emscripten = vitellus_build.Emscripten;
 
 pub fn build(b: *std.Build) void {
     const update_submodules = b.addSystemCommand(&.{ "git", "submodule", "update", "--init", "--remote", "--recursive" });
@@ -13,48 +15,143 @@ pub fn build(b: *std.Build) void {
             std.process.exit(1);
         };
     }
-    const host_slang = slangDependency(b, b.graph.host.result.os.tag, b.graph.host.result.cpu.arch) orelse return;
-    const target_slang = slangDependency(b, target.result.os.tag, target.result.cpu.arch) orelse return;
-    const host_compiler = host_slang.path(if (b.graph.host.result.os.tag == .windows) "bin/slangc.exe" else "bin/slangc");
-    const viewport_vertex_compile = b.addSystemCommand(&.{host_compiler.getPath(b)});
-    viewport_vertex_compile.addFileArg(b.path("src/shaders/viewport3d.slang"));
-    viewport_vertex_compile.addArgs(&.{ "-target", "spirv", "-entry", "vertexMain", "-stage", "vertex", "-o" });
-    const viewport_vertex_spv = viewport_vertex_compile.addOutputFileArg("viewport3d.vert.spv");
-    const viewport_fragment_compile = b.addSystemCommand(&.{host_compiler.getPath(b)});
-    viewport_fragment_compile.addFileArg(b.path("src/shaders/viewport3d.slang"));
-    viewport_fragment_compile.addArgs(&.{ "-target", "spirv", "-entry", "fragmentMain", "-stage", "fragment", "-o" });
-    const viewport_fragment_spv = viewport_fragment_compile.addOutputFileArg("viewport3d.frag.spv");
-    const shader_files = b.addWriteFiles();
-    _ = shader_files.addCopyFile(viewport_vertex_spv, "viewport3d.vert.spv");
-    _ = shader_files.addCopyFile(viewport_fragment_spv, "viewport3d.frag.spv");
-    const shader_module = b.createModule(.{
-        .root_source_file = shader_files.add("root.zig",
-            \\pub const viewport_vertex = @embedFile("viewport3d.vert.spv");
-            \\pub const viewport_fragment = @embedFile("viewport3d.frag.spv");
-        ),
-        .target = target,
-        .optimize = optimize,
-    });
-    const library_file, const library_name = switch (target.result.os.tag) {
-        .linux => .{ "lib/libslang-compiler.so.0.2026.18.2", "libslang-compiler.so" },
-        .macos => .{ "lib/libslang-compiler.0.2026.18.2.dylib", "libslang-compiler.dylib" },
-        .windows => .{ "bin/slang-compiler.dll", "slang-compiler.dll" },
-        else => unreachable,
-    };
-    const library_path = target_slang.path(library_file);
-    // Unix loads the library from lib/; Windows keeps DLLs beside the exe.
-    b.getInstallStep().dependOn(&b.addInstallFileWithDir(library_path, if (target.result.os.tag == .windows) .bin else .lib, library_name).step);
+    // The web build renders with WebGPU, takes WGSL, and is linked by emcc instead of Zig.
+    const web = target.result.os.tag == .emscripten;
+    const emscripten = Emscripten.init(b, target, b.option([]const u8, "emsdk", "Path to emsdk for web builds (default: $EMSDK, then ~/emsdk)"));
 
     const vitellus = b.dependency("vitellus", .{
         .target = target,
         .optimize = optimize,
         .dx12 = true,
-        .vk = true,
+        .vk = !web,
+        .emsdk = emscripten.emsdk,
+        .enable_slang = true,
+    });
+    vitellus_build.installLibraries(b, vitellus);
+
+    // Built-in shaders: WGSL on the web, SPIR-V elsewhere.
+    const viewport_shader = b.path("src/shaders/viewport3d.slang");
+    const viewport_vertex = vitellus_build.compileSlang(b, vitellus, target, viewport_shader, "vertexMain", .vertex) orelse return;
+    const viewport_fragment = vitellus_build.compileSlang(b, vitellus, target, viewport_shader, "fragmentMain", .fragment) orelse return;
+    const shader_files = b.addWriteFiles();
+    _ = shader_files.addCopyFile(viewport_vertex, "viewport3d.vert");
+    _ = shader_files.addCopyFile(viewport_fragment, "viewport3d.frag");
+    const shader_module = b.createModule(.{
+        .root_source_file = shader_files.add("root.zig",
+            \\pub const viewport_vertex = @embedFile("viewport3d.vert");
+            \\pub const viewport_fragment = @embedFile("viewport3d.frag");
+        ),
+        .target = target,
+        .optimize = optimize,
     });
     const emath = b.dependency("eggenvector", .{ .target = target, .optimize = optimize });
-    const weeoui = b.dependency("weeoui", .{ .target = target, .optimize = optimize, .sdl3 = true });
+    const weeoui = b.dependency("weeoui", .{ .target = target, .optimize = optimize, .sdl3 = !web });
     const nvdialog = b.dependency("nvdialog", .{});
     const fatal_dialog = b.createModule(.{ .root_source_file = b.path("src/fatal_dialog.zig"), .target = target, .optimize = optimize, .link_libc = true });
+    if (!web) addNvdialog(b, fatal_dialog, nvdialog, target.result);
+    // Same args as Weeoui's lazy sdl3 so both share one SDL build (static by default).
+    // On the web Weeoui skips SDL, and SDL needs Emscripten's system headers.
+    const sdl3 = if (web)
+        b.dependency("sdl3", .{ .target = target, .optimize = optimize, .sdl_system_include_path = emscripten.include })
+    else
+        b.dependency("sdl3", .{ .target = target, .optimize = optimize });
+    const sdl_adapter = b.createModule(.{
+        .root_source_file = vitellus.path("src/windowing/sdl3.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    sdl_adapter.addImport("vitellus", vitellus.module("vitellus"));
+    sdl_adapter.addImport("sdl3", sdl3.module("sdl3"));
+
+    const engine = b.createModule(.{
+        .root_source_file = b.path("src/root.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    engine.addImport("vitellus", vitellus.module("vitellus"));
+    engine.addImport("vitellus_spirv", vitellus.module("vitellus_spirv"));
+    engine.addImport("eggenvector", emath.module("eggenvector"));
+    engine.addImport("weeoui", weeoui.module("weeoui"));
+    if (!web) engine.addImport("weeoui_sdl3", weeoui.module("weeoui_sdl3"));
+    // Weeoui's renderer compiled against Eggy's own Vitellus (its -Dvitellus would fetch a second copy).
+    const weeoui_vitellus = b.createModule(.{
+        .root_source_file = weeoui.path("src/vitellus.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{ .{ .name = "weeoui", .module = weeoui.module("weeoui") }, .{ .name = "vitellus", .module = vitellus.module("vitellus") }, .{ .name = "vitellus_spirv", .module = vitellus.module("vitellus_spirv") } },
+    });
+    engine.addImport("weeoui_vitellus", weeoui_vitellus);
+    engine.addImport("vitellus_slangc", vitellus.module("vitellus_slangc"));
+    engine.addImport("ui_shaders", shader_module);
+    engine.addImport("sdl3", sdl3.module("sdl3"));
+    engine.addImport("vitellus_sdl3", sdl_adapter);
+    engine.link_libc = true;
+    // AccessKit comes linked into Weeoui; on Windows its DLL must sit next to the exe.
+    if (target.result.os.tag == .windows) b.getInstallStep().dependOn(&b.addInstallFileWithDir(weeoui.namedLazyPath("accesskit_dll"), .bin, "accesskit.dll").step);
+    switch (target.result.os.tag) {
+        .linux => {
+            engine.linkSystemLibrary("m", .{});
+            engine.linkSystemLibrary("unwind", .{});
+        },
+        .windows => {},
+        .macos => {
+            inline for (.{ "AppKit", "Foundation", "CoreFoundation" }) |framework| engine.linkFramework(framework, .{});
+            engine.linkSystemLibrary("objc", .{});
+            engine.linkSystemLibrary("c++", .{});
+        },
+        .emscripten => {},
+        else => unreachable,
+    }
+    const main_module = b.createModule(.{
+        .root_source_file = b.path("src/main.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+        .imports = &.{ .{ .name = "eggy", .module = engine }, .{ .name = "fatal_dialog", .module = fatal_dialog } },
+    });
+    if (web) {
+        const app = emscripten.addApp(b, .{ .name = "eggy", .root_module = main_module });
+        b.step("run", "Open the game in a browser").dependOn(&app.run.step);
+        return;
+    }
+
+    const exe = b.addExecutable(.{
+        .name = "eggy",
+        .root_module = main_module,
+        .use_llvm = true,
+    });
+    addMacSdk(b, exe.root_module);
+    addMacSdk(b, engine);
+    b.installArtifact(exe);
+
+    const run = b.addSystemCommand(&.{b.getInstallPath(.bin, if (target.result.os.tag == .windows) "eggy.exe" else "eggy")});
+    run.step.dependOn(b.getInstallStep());
+    if (b.args) |args| run.addArgs(args);
+    b.step("run", "Run the game").dependOn(&run.step);
+
+    const tests = b.addRunArtifact(b.addTest(.{ .root_module = engine, .use_llvm = true }));
+    const test_step = b.step("test", "Run workspace tests");
+    test_step.dependOn(&tests.step);
+    const dialog_tests = b.addRunArtifact(b.addTest(.{ .root_module = fatal_dialog, .use_llvm = true }));
+    test_step.dependOn(&dialog_tests.step);
+    const viewport_tests_module = b.createModule(.{
+        .root_source_file = b.path("src/viewport3d.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    viewport_tests_module.addImport("vitellus", vitellus.module("vitellus"));
+    viewport_tests_module.addImport("vitellus_spirv", vitellus.module("vitellus_spirv"));
+    viewport_tests_module.addImport("weeoui", weeoui.module("weeoui"));
+    viewport_tests_module.addImport("sdl3", sdl3.module("sdl3"));
+    viewport_tests_module.addImport("ui_shaders", shader_module);
+    viewport_tests_module.addImport("weeoui_vitellus", weeoui_vitellus);
+    const viewport_tests = b.addRunArtifact(b.addTest(.{ .root_module = viewport_tests_module, .use_llvm = true }));
+    test_step.dependOn(&viewport_tests.step);
+    b.step("test-viewport", "Run 3D preview tests").dependOn(&viewport_tests.step);
+}
+
+/// The native fatal-error dialog; the web build reports to the browser console instead.
+fn addNvdialog(b: *std.Build, fatal_dialog: *std.Build.Module, nvdialog: *std.Build.Dependency, target: std.Target) void {
     fatal_dialog.addIncludePath(nvdialog.path("include"));
     fatal_dialog.addIncludePath(nvdialog.path("src"));
     fatal_dialog.addIncludePath(nvdialog.path("src/impl"));
@@ -71,12 +168,12 @@ pub fn build(b: *std.Build) void {
             "src/nvdialog_string.c",
             "src/nvdialog_main.c",
         },
-        .flags = if (target.result.os.tag == .macos)
+        .flags = if (target.os.tag == .macos)
             &.{ "-std=c11", "-DNVDIALOG_MAXBUF=4096", "-DNVD_STATIC_LINKAGE", "-DNVD_USE_COCOA=1" }
         else
             &.{ "-std=c11", "-DNVDIALOG_MAXBUF=4096", "-DNVD_STATIC_LINKAGE" },
     });
-    switch (target.result.os.tag) {
+    switch (target.os.tag) {
         .linux => {
             fatal_dialog.addCSourceFiles(.{
                 .root = nvdialog.path("."),
@@ -127,109 +224,6 @@ pub fn build(b: *std.Build) void {
         },
         else => @panic("nvdialog is supported only on desktop Linux, macOS, and Windows"),
     }
-    // Same args as Weeoui's lazy sdl3 so both share one SDL build (static by default).
-    const sdl3 = b.dependency("sdl3", .{ .target = target, .optimize = optimize });
-    const sdl_adapter = b.createModule(.{
-        .root_source_file = vitellus.path("src/windowing/sdl3.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-    sdl_adapter.addImport("vitellus", vitellus.module("vitellus"));
-    sdl_adapter.addImport("sdl3", sdl3.module("sdl3"));
-    const slangc = b.createModule(.{
-        .root_source_file = b.path("src/slangc.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-    const slang_options = b.addOptions();
-    slang_options.addOptionPath("library", library_path);
-    slangc.addImport("slang_library", slang_options.createModule());
-
-    const engine = b.createModule(.{
-        .root_source_file = b.path("src/root.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-    engine.addImport("vitellus", vitellus.module("vitellus"));
-    engine.addImport("eggenvector", emath.module("eggenvector"));
-    engine.addImport("weeoui", weeoui.module("weeoui"));
-    engine.addImport("weeoui_sdl3", weeoui.module("weeoui_sdl3"));
-    // Weeoui's renderer compiled against Eggy's own Vitellus (its -Dvitellus would fetch a second copy).
-    const weeoui_vitellus = b.createModule(.{
-        .root_source_file = weeoui.path("src/vitellus.zig"),
-        .target = target,
-        .optimize = optimize,
-        .imports = &.{ .{ .name = "weeoui", .module = weeoui.module("weeoui") }, .{ .name = "vitellus", .module = vitellus.module("vitellus") } },
-    });
-    engine.addImport("weeoui_vitellus", weeoui_vitellus);
-    engine.addImport("slangc", slangc);
-    engine.addImport("ui_shaders", shader_module);
-    engine.addImport("sdl3", sdl3.module("sdl3"));
-    engine.addImport("vitellus_sdl3", sdl_adapter);
-    engine.link_libc = true;
-    // AccessKit comes linked into Weeoui; on Windows its DLL must sit next to the exe.
-    if (target.result.os.tag == .windows) b.getInstallStep().dependOn(&b.addInstallFileWithDir(weeoui.namedLazyPath("accesskit_dll"), .bin, "accesskit.dll").step);
-    switch (target.result.os.tag) {
-        .linux => {
-            engine.linkSystemLibrary("m", .{});
-            engine.linkSystemLibrary("unwind", .{});
-        },
-        .windows => {},
-        .macos => {
-            inline for (.{ "AppKit", "Foundation", "CoreFoundation" }) |framework| engine.linkFramework(framework, .{});
-            engine.linkSystemLibrary("objc", .{});
-            engine.linkSystemLibrary("c++", .{});
-        },
-        else => unreachable,
-    }
-
-    const exe = b.addExecutable(.{
-        .name = "eggy",
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("src/main.zig"),
-            .target = target,
-            .optimize = optimize,
-            .link_libc = true,
-            .imports = &.{ .{ .name = "eggy", .module = engine }, .{ .name = "fatal_dialog", .module = fatal_dialog } },
-        }),
-        .use_llvm = true,
-    });
-    addMacSdk(b, exe.root_module);
-    addMacSdk(b, engine);
-    b.installArtifact(exe);
-
-    const run = b.addSystemCommand(&.{b.getInstallPath(.bin, if (target.result.os.tag == .windows) "eggy.exe" else "eggy")});
-    run.step.dependOn(b.getInstallStep());
-    if (b.args) |args| run.addArgs(args);
-    b.step("run", "Run the game").dependOn(&run.step);
-
-    const tests = b.addRunArtifact(b.addTest(.{ .root_module = engine, .use_llvm = true }));
-    const slang_test_module = b.createModule(.{
-        .root_source_file = b.path("src/slangc.zig"),
-        .target = target,
-        .optimize = optimize,
-        .link_libc = true,
-    });
-    slang_test_module.addImport("slang_library", slang_options.createModule());
-    const slang_tests = b.addRunArtifact(b.addTest(.{ .root_module = slang_test_module, .use_llvm = true }));
-    const test_step = b.step("test", "Run workspace tests");
-    test_step.dependOn(&tests.step);
-    test_step.dependOn(&slang_tests.step);
-    const dialog_tests = b.addRunArtifact(b.addTest(.{ .root_module = fatal_dialog, .use_llvm = true }));
-    test_step.dependOn(&dialog_tests.step);
-    const viewport_tests_module = b.createModule(.{
-        .root_source_file = b.path("src/viewport3d.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-    viewport_tests_module.addImport("vitellus", vitellus.module("vitellus"));
-    viewport_tests_module.addImport("weeoui", weeoui.module("weeoui"));
-    viewport_tests_module.addImport("sdl3", sdl3.module("sdl3"));
-    viewport_tests_module.addImport("ui_shaders", shader_module);
-    viewport_tests_module.addImport("weeoui_vitellus", weeoui_vitellus);
-    const viewport_tests = b.addRunArtifact(b.addTest(.{ .root_module = viewport_tests_module, .use_llvm = true }));
-    test_step.dependOn(&viewport_tests.step);
-    b.step("test-viewport", "Run 3D preview tests").dependOn(&viewport_tests.step);
 }
 
 fn defaultMacSdk(b: *std.Build) ?[]const u8 {
@@ -242,26 +236,4 @@ fn addMacSdk(b: *std.Build, mod: *std.Build.Module) void {
     mod.addSystemIncludePath(.{ .cwd_relative = b.pathJoin(&.{ sysroot, "usr/include" }) });
     mod.addSystemFrameworkPath(.{ .cwd_relative = b.pathJoin(&.{ sysroot, "System/Library/Frameworks" }) });
     mod.addLibraryPath(.{ .cwd_relative = "/usr/lib" });
-}
-
-fn slangDependency(b: *std.Build, os: std.Target.Os.Tag, arch: std.Target.Cpu.Arch) ?*std.Build.Dependency {
-    const name = switch (os) {
-        .linux => switch (arch) {
-            .x86_64 => "slang_linux_x86_64",
-            .aarch64 => "slang_linux_aarch64",
-            else => @panic("Slang has no bundled release for this Linux architecture"),
-        },
-        .macos => switch (arch) {
-            .x86_64 => "slang_macos_x86_64",
-            .aarch64 => "slang_macos_aarch64",
-            else => @panic("Slang has no bundled release for this macOS architecture"),
-        },
-        .windows => switch (arch) {
-            .x86_64 => "slang_windows_x86_64",
-            .aarch64 => "slang_windows_aarch64",
-            else => @panic("Slang has no bundled release for this Windows architecture"),
-        },
-        else => @panic("Slang has no bundled release for this operating system"),
-    };
-    return b.lazyDependency(name, .{});
 }

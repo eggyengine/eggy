@@ -4,6 +4,7 @@ const sdl3 = sdl_adapter.sdl;
 
 const graphics = @import("graphics.zig");
 const builtin = @import("builtin");
+const web = builtin.os.tag == .emscripten;
 
 const fps = 340000;
 const width = 900;
@@ -15,20 +16,20 @@ pub const Game = struct {
     m_graphics: graphics.Graphics,
     fps_capper: sdl3.extras.FramerateCapper(f32),
 
-    pub fn init(i: sdl3.Init) !Game {
+    pub fn init(gpa: std.mem.Allocator) !Game {
         const init_flags = sdl3.InitFlags{ .video = true };
         try sdl3.init(init_flags);
         errdefer sdl3.quit(init_flags);
 
         var window: sdl_adapter.Sdl3Window = .init(try sdl3.video.Window.init("eggy", width, height, .{
-            .vulkan = true,
+            .vulkan = !web,
             .resizable = true,
             .high_pixel_density = true,
             .hidden = builtin.os.tag == .windows,
         }));
         errdefer window.deinit();
 
-        var m_graphics = try graphics.Graphics.init(i.gpa, window);
+        var m_graphics = try graphics.Graphics.init(gpa, window);
         errdefer m_graphics.deinit();
         if (builtin.os.tag == .windows) try window.window.show();
 
@@ -49,7 +50,8 @@ pub const Game = struct {
 
     pub fn iterate(self: *Game) !sdl3.AppResult {
         try self.m_graphics.syncSize(self.window);
-        _ = self.fps_capper.delay();
+        // The browser already paces frames to the display.
+        if (!web) _ = self.fps_capper.delay();
         try self.m_graphics.frame();
         return .run;
     }
