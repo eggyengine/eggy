@@ -1,7 +1,7 @@
 [submodule "src/vitellus"]
 	path = src/vitellus
 	url = https://github.com/eggyengine/vitellus.git
-	branch = android
+	branch = main
 [submodule "src/humpty"]
 	path = src/humpty
 	url = https://github.com/eggyengine/humpty.git
