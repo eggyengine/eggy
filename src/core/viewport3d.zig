@@ -2,7 +2,7 @@ const std = @import("std");
 const vit = @import("vitellus");
 const ui = @import("weeoui");
 const sdl3 = @import("sdl3");
-const shaders = @import("ui_shaders");
+const shaders = @import("scene_shaders");
 const frames_in_flight = @import("weeoui_vitellus").frames_in_flight;
 
 const Vertex = extern struct {

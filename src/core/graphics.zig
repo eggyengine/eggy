@@ -104,39 +104,60 @@ pub const Graphics = struct {
         self.instance.deinit();
     }
 
-    /// Draw the 3D scene over the whole window.
-    pub fn frame(self: *Graphics) !void {
-        const extent = self.swapchain.info().extent;
-        const slot = &self.slots[self.slot];
+    /// Start a frame: wait for its slot, acquire a swapchain image, and draw the 3D scene over the
+    /// whole window. Record any overlays into the returned `Frame`, then pass it to `endFrame`.
+    pub fn beginFrame(self: *Graphics) !Frame {
         // Wait for the frame that last used this slot, `frames_in_flight` frames ago.
+        const slot = &self.slots[self.slot];
         _ = try self.gpu_done.wait(slot.frame, null);
         if (slot.cmd) |old| old.deinit();
         slot.cmd = null;
         try slot.commands.reset();
+
+        // Acquire the next swapchain image and make it a render target.
         const acquired = try self.swapchain.acquireNextImage(slot.acquired);
         if (acquired.index >= max_swapchain_images) return error.TooManySwapchainImages;
-        const render_done = self.render_done[acquired.index];
         const cmd = try vit.CommandBuffer.init(slot.commands, .{});
         slot.cmd = cmd;
         try cmd.barrier(&.{.{ .texture_view = .{ .view = acquired.view, .before = .present, .after = .color_attachment } }});
+
         // The scene paints its own backdrop; the clear only covers the first frame's undefined image.
+        const extent = self.swapchain.info().extent;
         try cmd.beginRenderPass(.{ .color_attachments = &.{.{ .view = acquired.view, .load_op = .clear, .store_op = .store, .clear_value = .{ .r = 0, .g = 0, .b = 0, .a = 1 } }} });
         cmd.endRenderPass();
         const window = ui.Rect{ .x = 0, .y = 0, .w = @floatFromInt(extent.width), .h = @floatFromInt(extent.height) };
         try self.preview.draw(cmd, acquired.view, window, window, window, extent, weeoui_vitellus.isSrgb(self.color_format));
-        try cmd.barrier(&.{.{ .texture_view = .{ .view = acquired.view, .before = .color_attachment, .after = .present } }});
-        try cmd.finish();
+        return .{ .cmd = cmd, .target = acquired.view, .extent = extent, .render_done = self.render_done[acquired.index] };
+    }
+
+    /// Finish `frame`: submit its commands and present the image once they have run.
+    pub fn endFrame(self: *Graphics, frame: Frame) !void {
+        try frame.cmd.barrier(&.{.{ .texture_view = .{ .view = frame.target, .before = .color_attachment, .after = .present } }});
+        try frame.cmd.finish();
+
+        // Submit, then hand the slot on; the next use of this slot waits for `submitted`.
         self.submitted += 1;
+        const slot = &self.slots[self.slot];
         try self.queue.submit(.{
-            .command_buffers = &.{cmd},
+            .command_buffers = &.{frame.cmd},
             .wait_semaphores = &.{slot.acquired},
-            .signal_semaphores = &.{render_done},
+            .signal_semaphores = &.{frame.render_done},
             .signal_fences = &.{.{ .fence = self.gpu_done, .value = self.submitted }},
         });
         slot.frame = self.submitted;
         self.slot = (self.slot + 1) % frames_in_flight;
-        _ = try self.swapchain.present(&.{render_done});
+        _ = try self.swapchain.present(&.{frame.render_done});
     }
+};
+
+/// A frame between `Graphics.beginFrame` and `Graphics.endFrame`: the scene is already in `target`.
+pub const Frame = struct {
+    cmd: vit.CommandBuffer,
+    /// The acquired swapchain image, in the color-attachment state.
+    target: vit.TextureView,
+    extent: vit.Extent2D,
+    /// Signalled when this frame's commands finish; its present waits on it.
+    render_done: vit.Semaphore,
 };
 
 const frames_in_flight = weeoui_vitellus.frames_in_flight;
