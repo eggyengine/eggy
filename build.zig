@@ -153,13 +153,13 @@ fn addProject(b: *std.Build, engine: *std.Build, emscripten: Emscripten, target:
         },
     });
     const editor_app = addDesktopApp(b, target, editor_module, b.fmt("{s}_editor", .{options.name}));
-    const template_tarball = installTemplateTarball(b, engine);
+    const resources = installEditorResources(b, engine);
     const editor_step = b.step("editor", "Build the editor");
     editor_step.dependOn(&editor_app.install.step);
-    editor_step.dependOn(template_tarball);
+    editor_step.dependOn(resources);
     b.step("run", "Run the editor").dependOn(&editor_app.run.step);
     all_step.dependOn(&editor_app.install.step);
-    all_step.dependOn(template_tarball);
+    all_step.dependOn(resources);
 }
 
 /// The modules and dependencies Eggy's own tests need.
@@ -326,38 +326,69 @@ fn addEngine(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.buil
     };
 }
 
-/// `resources/template/` as `<prefix>/resources/template.tar`, the new-project template the
-/// editor unpacks. Build output inside the template (`.zig-cache`, `zig-out`, `zig-pkg`) is left out.
-fn installTemplateTarball(b: *std.Build, engine: *std.Build) *std.Build.Step {
-    const io = b.graph.io;
-    const pack = b.addRunArtifact(engine.addExecutable(.{
+/// What the editor ships in `<prefix>/resources/`, as tarballs it unpacks when it creates a
+/// project: `template.tar`, the new-project template (`resources/template/`), and `eggy.tar`,
+/// Eggy's own package, which new projects build against. Returns the step that installs both.
+fn installEditorResources(b: *std.Build, engine: *std.Build) *std.Build.Step {
+    const tool = engine.addExecutable(.{
         .name = "tar",
         .root_module = engine.createModule(.{ .root_source_file = engine.path("src/build/tar.zig"), .target = engine.graph.host }),
-    }));
-    const tarball = pack.addOutputFileArg("template.tar");
+    });
+    const step = b.step("editor-resources", "Pack the editor's resources");
+    step.dependOn(packTarball(b, engine, tool, "resources/template", &.{}, "template.tar"));
+    // The package as `zig fetch` would see it (build.zig.zon's `.paths`), less the submodules,
+    // which are dependencies fetched by URL.
+    step.dependOn(packTarball(b, engine, tool, ".", &.{ "build.zig", "build.zig.zon", "resources", "src" }, "eggy.tar"));
+    b.getInstallStep().dependOn(step);
+    return step;
+}
+
+/// Pack `engine`'s directory `root` into `<prefix>/resources/<name>`, keeping only the top-level
+/// entries in `only` when it is not empty. Build output and Git submodules are left out.
+fn packTarball(b: *std.Build, engine: *std.Build, tool: *std.Build.Step.Compile, root: []const u8, only: []const []const u8, name: []const u8) *std.Build.Step {
+    const io = b.graph.io;
+    const pack = b.addRunArtifact(tool);
+    const tarball = pack.addOutputFileArg(name);
 
     // List the files now, each as a file argument, so editing one repacks the tarball.
-    var template_dir = engine.build_root.handle.openDir(io, "resources/template", .{ .iterate = true }) catch |err| std.debug.panic("cannot open resources/template: {t}", .{err});
-    defer template_dir.close(io);
-    var walker = template_dir.walkSelectively(b.allocator) catch @panic("OOM");
+    var dir = engine.build_root.handle.openDir(io, root, .{ .iterate = true }) catch |err| std.debug.panic("cannot open {s}: {t}", .{ root, err });
+    defer dir.close(io);
+    var walker = dir.walkSelectively(b.allocator) catch @panic("OOM");
     defer walker.deinit();
-    while (walker.next(io) catch |err| std.debug.panic("cannot list resources/template: {t}", .{err})) |entry| {
+    while (walker.next(io) catch |err| std.debug.panic("cannot list {s}: {t}", .{ root, err })) |entry| {
         const archive_path = std.mem.replaceOwned(u8, b.allocator, entry.path, std.fs.path.sep_str, "/") catch @panic("OOM");
+        const top_level = std.mem.indexOfScalar(u8, archive_path, '/') == null;
+        if (top_level and only.len > 0) {
+            for (only) |kept| {
+                if (std.mem.eql(u8, archive_path, kept)) break;
+            } else continue;
+        }
         switch (entry.kind) {
-            .directory => for ([_][]const u8{ ".zig-cache", "zig-out", "zig-pkg" }) |ignored| {
-                if (std.mem.eql(u8, entry.basename, ignored)) break;
-            } else walker.enter(io, entry) catch |err| std.debug.panic("cannot open resources/template/{s}: {t}", .{ archive_path, err }),
+            .directory => {
+                for ([_][]const u8{ ".zig-cache", "zig-out", "zig-pkg", "node_modules", ".git" }) |ignored| {
+                    if (std.mem.eql(u8, entry.basename, ignored)) break;
+                } else if (!isSubmodule(entry.dir, io, entry.basename)) {
+                    walker.enter(io, entry) catch |err| std.debug.panic("cannot open {s}/{s}: {t}", .{ root, archive_path, err });
+                }
+            },
             .file => {
                 pack.addArg(archive_path);
-                pack.addFileArg(engine.path(b.pathJoin(&.{ "resources/template", entry.path })));
+                pack.addFileArg(engine.path(b.pathJoin(&.{ root, entry.path })));
             },
             else => {},
         }
     }
 
-    const install = &b.addInstallFileWithDir(tarball, .{ .custom = "resources" }, "template.tar").step;
-    b.getInstallStep().dependOn(install);
+    const install = &b.addInstallFileWithDir(tarball, .{ .custom = "resources" }, name).step;
     return install;
+}
+
+/// Whether directory `name` in `parent` is a Git submodule's checkout (it holds a `.git` file).
+fn isSubmodule(parent: std.Io.Dir, io: std.Io, name: []const u8) bool {
+    var dir = parent.openDir(io, name, .{}) catch return false;
+    defer dir.close(io);
+    const stat = dir.statFile(io, ".git", .{}) catch return false;
+    return stat.kind == .file;
 }
 
 const runtime_library_prefix = "runtime:";

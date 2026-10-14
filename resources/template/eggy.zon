@@ -1,0 +1,6 @@
+.{
+    // The package name, as build.zig's addGame uses it: the editor opens `<name>_editor`.
+    .name = "eggy_template_name",
+    .title = "eggy_template_title",
+    .version = "0.0.1",
+}
