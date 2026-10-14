@@ -18,7 +18,8 @@ pub fn Runtime(comptime project: type) type {
 
         const Self = @This();
 
-        pub fn init(gpa: std.mem.Allocator) !Self {
+        pub fn init(gpa: std.mem.Allocator, args: []const [*:0]const u8) !Self {
+            _ = args;
             var app = try eggy.App.init(gpa, project.name);
             errdefer app.deinit();
             var plugins = try Plugins.init(gpa, &app);

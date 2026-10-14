@@ -9,12 +9,12 @@ const fatal_dialog = @import("fatal_dialog");
 const web = builtin.os.tag == .emscripten;
 
 /// The `init`, `iterate`, `event` and `quit` callbacks for `AppState`, which provides
-/// `init(gpa) !AppState`, `iterate(*AppState) !AppResult`, `event(*AppState, Event) !AppResult`
+/// `init(gpa, args) !AppState` (args: the command line, program first), `iterate(*AppState) !AppResult`, `event(*AppState, Event) !AppResult`
 /// and `deinit(*AppState)`. Re-export them from the executable's root file.
 pub fn Callbacks(comptime AppState: type) type {
     return struct {
         pub fn init(init_data: sdl3.Init) !struct { AppState, sdl3.AppResult } {
-            return .{ AppState.init(init_data.gpa) catch |err| {
+            return .{ AppState.init(init_data.gpa, init_data.args) catch |err| {
                 reportError("init", err);
                 return err;
             }, .run };
