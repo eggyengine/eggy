@@ -230,6 +230,7 @@ fn addEngine(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.buil
     engine.addImport("vitellus", vitellus.module("vitellus"));
     engine.addImport("vitellus_spirv", vitellus.module("vitellus_spirv"));
     engine.addImport("eggenvector", emath.module("eggenvector"));
+    engine.addImport("clutch", b.dependency("clutch", .{ .target = target, .optimize = optimize }).module("clutch"));
     engine.addImport("weeoui", weeoui.module("weeoui"));
     engine.addImport("fatal_dialog", fatal_dialog);
     // Weeoui's renderer compiled against Eggy's own Vitellus (its -Dvitellus would fetch a second copy).

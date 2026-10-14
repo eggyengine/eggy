@@ -21,8 +21,11 @@ pub fn Runtime(comptime project: type) type {
         pub fn init(gpa: std.mem.Allocator) !Self {
             var app = try eggy.App.init(gpa, project.name);
             errdefer app.deinit();
+            var plugins = try Plugins.init(gpa, &app);
+            errdefer plugins.deinit();
+            try app.startWorld();
             return .{
-                .plugins = try Plugins.init(gpa, &app),
+                .plugins = plugins,
                 .app = app,
                 .fps_capper = .{ .mode = .{ .limited = fps } },
             };
@@ -38,6 +41,7 @@ pub fn Runtime(comptime project: type) type {
             // The browser already paces frames to the display.
             if (!web) _ = self.fps_capper.delay();
             try self.plugins.update(&self.app);
+            try self.app.updateWorld();
             const frame = try self.app.graphics.beginFrame();
             try self.app.graphics.endFrame(frame);
             return .run;

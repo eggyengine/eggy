@@ -9,3 +9,7 @@
 	path = src/weeoui
 	url = https://github.com/eggyengine/weeoui.git
 	branch = main
+[submodule "src/clutch"]
+	path = src/clutch
+	url = https://github.com/eggyengine/clutch.git
+	branch = main

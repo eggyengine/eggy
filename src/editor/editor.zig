@@ -27,7 +27,10 @@ pub fn Editor(comptime project: type) type {
             context.srgb_target = weeoui_vitellus.isSrgb(app.graphics.color_format);
             var overlay = try weeoui_vitellus.Renderer.init(app.graphics.device, app.graphics.color_format, &context.font);
             errdefer overlay.deinit();
-            return .{ .plugins = try Plugins.init(gpa, &app), .app = app, .ui = context, .overlay = overlay };
+            var plugins = try Plugins.init(gpa, &app);
+            errdefer plugins.deinit();
+            try app.startWorld();
+            return .{ .plugins = plugins, .app = app, .ui = context, .overlay = overlay };
         }
 
         pub fn deinit(self: *Self) void {
@@ -43,6 +46,7 @@ pub fn Editor(comptime project: type) type {
             try self.app.graphics.syncSize(self.app.window);
             const viewport = try self.uiViewport() orelse return .run; // minimized
             try self.plugins.update(&self.app);
+            try self.app.updateWorld();
 
             // Build this frame's UI.
             self.ui.newFrame(viewport);

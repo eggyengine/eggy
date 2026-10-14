@@ -2,6 +2,7 @@
 
 // re-exports
 pub const math = @import("eggenvector");
+pub const ecs = @import("clutch");
 pub const vit = @import("vitellus");
 pub const sdl_adapter = @import("vitellus_sdl3");
 pub const slangc = @import("vitellus_slangc");

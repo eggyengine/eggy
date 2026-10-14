@@ -13,8 +13,12 @@
             .hash = "vitellus-0.1.0-JC2CjAL8CQDVVl-2Sh5I_CC_17Z1agN7xmNKk25WMJMk",
         },
         .humpty = .{
-            .url = "git+https://github.com/eggyengine/humpty#6265c3f5b93940bdd1dc1312ce93e9b663c3c817",
-            .hash = "humpty-0.1.0-h_J63wcIAADLPVRshQm93kPjHWghG09aKKy6vy0hKyWT",
+            .url = "git+https://github.com/eggyengine/humpty#028ed2aefc84847c4def521cf137605fadba89b8",
+            .hash = "humpty-0.1.0-h_J630EWAADXOAtyB9ApfnYopzodWcEcqs0RLJLAWE-N",
+        },
+        .clutch = .{
+            .url = "git+https://github.com/eggyengine/clutch#1d5e64db3f779b907391d7142aa63a19b4ece4ec",
+            .hash = "clutch-0.1.0-gpdHb-t7AQBdjeoFzKaa22gbIDJyQqyNQr9wI5waI9-i",
         },
         .weeoui = .{
             .url = "git+https://github.com/eggyengine/weeoui#374574da3b9bc4f78c3ac43a11749ab692ec6ad1",
