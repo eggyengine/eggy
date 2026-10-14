@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256">
+  <defs>
+    <linearGradient id="shell" x1="0.3" y1="0" x2="0.7" y2="1">
+      <stop offset="0" stop-color="#FFF1C9"/>
+      <stop offset="0.55" stop-color="#FFC85C"/>
+      <stop offset="1" stop-color="#F08A24"/>
+    </linearGradient>
+    <radialGradient id="shade" cx="0.68" cy="0.78" r="0.6">
+      <stop offset="0" stop-color="#C2581A" stop-opacity="0.35"/>
+      <stop offset="1" stop-color="#C2581A" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <!-- The egg -->
+  <path d="M128 14 C188 14 222 112 222 160 C222 213 180 244 128 244 C76 244 34 213 34 160 C34 112 68 14 128 14 Z" fill="url(#shell)" stroke="#B85A16" stroke-width="6"/>
+  <path d="M128 14 C188 14 222 112 222 160 C222 213 180 244 128 244 C76 244 34 213 34 160 C34 112 68 14 128 14 Z" fill="url(#shade)"/>
+  <!-- A shine on its upper left -->
+  <ellipse cx="94" cy="92" rx="17" ry="34" transform="rotate(24 94 92)" fill="#FFFFFF" fill-opacity="0.75"/>
+  <circle cx="82" cy="146" r="7" fill="#FFFFFF" fill-opacity="0.55"/>
+</svg>
