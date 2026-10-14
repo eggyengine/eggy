@@ -5,6 +5,7 @@ _eggy_ is a game engine written in Zig. it's built from a handful of in-house li
 - **[vitellus](https://github.com/eggyengine/vitellus)**: the rendering hardware interface (vulkan, dx12, webgpu)
 - **[weeoui](https://github.com/eggyengine/weeoui)**: the immediate-mode UI, with docking panels and screen-reader support
 - **[humpty](https://github.com/eggyengine/humpty)**: physics
+- **[clutch](https://github.com/eggyengine/clutch)**: the entity component system, inspired by `bevy_ecs`; your game reaches it as `eggy.ecs` and `app.world`
 
 eggy itself comes in three parts:
 
@@ -17,6 +18,12 @@ eggy itself comes in three parts:
 ## make a game
 requires zig `0.16.0`
 
+The eggy engine uses the editor to initialise the project, so all of these steps are done automatically.
+
+Future documentation will document how to create a project manually, and other features. 
+<!-- 
+an eggy package works like a zig one: `src/main.zig` is a **game** (`pub const Game`), and `src/root.zig` is a **plugin** or library (`pub const Plugin`) that other packages can use. keep both, or delete the one you don't need.
+
 add eggy to your project:
 ```bash
 zig fetch --save git+https://github.com/eggyengine/eggy
@@ -28,14 +35,24 @@ const std = @import("std");
 const eggy = @import("eggy");
 
 pub fn build(b: *std.Build) void {
+    const target = b.standardTargetOptions(.{});
+    const optimize = b.standardOptimizeOption(.{});
+
+    // src/root.zig: published as module "my_game", with @import("eggy")
+    const plugin = eggy.addPlugin(b, .{ .name = "my_game", .root_source_file = b.path("src/root.zig"), .target = target, .optimize = optimize });
+
+    // src/main.zig: the game, running the plugin
     eggy.addGame(b, .{
         .name = "my_game",
-        .game = b.createModule(.{ .root_source_file = b.path("src/game.zig") }),
+        .game = b.createModule(.{ .root_source_file = b.path("src/main.zig"), .target = target, .optimize = optimize }),
+        .plugins = &.{plugin},
+        .target = target,
+        .optimize = optimize,
     });
 }
 ```
 
-and your game, in `src/game.zig`:
+your game, in `src/main.zig`:
 ```zig
 const eggy = @import("eggy");
 
@@ -53,67 +70,27 @@ pub const Game = struct {
 };
 ```
 
-`zig build run` opens your game in the editor, and `zig build run-runtime` runs it on its own. `zig build all` builds `my_game` and `my_game_editor` into `zig-out/bin/`; with `-Dtarget=wasm32-emscripten`, `zig build run` opens it in a browser instead.
-
-every hook is optional: `init`, `deinit`, `update`, `event` and `editorUi`. see [`plugins.zig`](src/core/plugins.zig) for their signatures, and [`examples/sandbox`](examples/sandbox) for a working game.
-
-### plugins
-a plugin uses the same hooks as your game, and runs after it each frame. it's a module that declares `pub const Plugin`:
-
+and your plugin, in `src/root.zig`:
 ```zig
-const std = @import("std");
 const eggy = @import("eggy");
 
 pub const Plugin = struct {
-    pub fn init(gpa: std.mem.Allocator, app: *eggy.App) !Plugin {
-        _ = gpa;
-        _ = app;
-        std.log.info("hello from a plugin", .{});
-        return .{};
+    pub fn editorUi(_: *Plugin, ui: *eggy.ui.Context) void {
+        ui.muted("my_game plugin");
     }
 };
 ```
 
-plugins can live in your project, or come from their own package through `zig fetch`. hand them to `addGame` in the order they should run:
+### using other plugins
+a plugin package publishes its `src/root.zig` with `addPlugin`. fetch it, then list it in `addGame`; plugins run after your game each frame, in the order you list them:
 ```zig
-eggy.addGame(b, .{
-    .name = "my_game",
-    .game = b.createModule(.{ .root_source_file = b.path("src/game.zig") }),
-    .plugins = &.{
-        b.createModule(.{ .root_source_file = b.path("src/hello_plugin.zig") }),
-        b.dependency("cool_plugin", .{}).module("cool_plugin"),
-    },
-});
+.plugins = &.{
+    plugin,
+    b.dependency("cool_plugin", .{}).module("cool_plugin"),
+},
 ```
 
-`addGame` gives your game and each plugin `@import("eggy")`.
-
-## work on eggy
-```bash
-git clone --recursive https://github.com/eggyengine/eggy
-cd eggy
-zig build run
-```
-
-this repo builds a sandbox game from [`examples/sandbox`](examples/sandbox), the same way `addGame` builds yours.
-
-| command | what it does |
-|---|---|
-| `zig build all` | build `sandbox` and `sandbox_editor` into `zig-out/bin/` |
-| `zig build runtime` / `zig build editor` | build just one of them |
-| `zig build run` | build and launch the editor (on the web, the runtime) |
-| `zig build run-runtime` | build and launch the runtime |
-| `zig build test` | run every test |
-| `zig build test-core` / `test-runtime` / `test-editor` | run one part's tests |
-| `zig build -Dtarget=wasm32-emscripten run` | build the runtime for the browser and open it (uses `$EMSDK`, or `-Demsdk=<path>`) |
-
-eggy pins vitellus, weeoui and humpty by commit in `build.zig.zon`. the submodules under `src/` are local checkouts of them: to build against your changes there, add `--fork` for each one:
-
-```bash
-zig build run --fork=src/vitellus --fork=src/weeoui --fork=src/humpty
-```
-
-once those changes are pushed, re-pin eggy with `zig fetch --save=<name> git+https://github.com/eggyengine/<name>#<commit>`.
+every plugin runs on your game's eggy, so they all share one engine. -->
 
 ### linux packages
 fatal errors pop up a native dialog through [nvdialog](https://github.com/tseli0s/nvdialog), which needs GTK3 and DBus headers. accessibility needs `libunwind`. on debian:
@@ -123,3 +100,14 @@ sudo apt install libgtk-3-dev libdbus-1-dev libunwind-dev
 ```
 
 everything else (SDL3, nvdialog, AccessKit) is fetched and linked by `zig build`. windows builds ship `accesskit.dll` beside the executables.
+
+## contributing to eggy
+clone the repository, then run the editor as such:
+
+```bash
+git clone --recursive https://github.com/eggyengine/eggy
+cd eggy
+zig build run
+```
+
+despite being potentially controversial, agents are welcome to contribute however you cannot make **slop** commits. They must be reviewed as though I can ask you in person what the PR does without looking at the code. 

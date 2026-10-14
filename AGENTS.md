@@ -7,12 +7,21 @@ Eggy is a Zig 0.16 game engine that games use as a package: they `zig fetch` it,
 - `src/core/` (`eggy`, every platform): the engine games and plugins import. `app.zig` owns SDL, the window and `Graphics`; `graphics.zig` renders through Vitellus and splits each frame into `beginFrame`/`endFrame`; `viewport3d.zig` draws the 3D scene; `plugins.zig` defines the plugin hooks and runs them; `entry.zig` provides the SDL main callbacks and fatal-error reporting both executables use. Shader sources live in `src/core/shaders/`.
 - `src/runtime/` (`eggy_runtime`, every platform including the web): `Runtime(project)` runs a game and its plugins.
 - `src/editor/` (`eggy_editor`, desktop only): `Editor(project)` runs a game with Weeoui tooling drawn over it. Never add it to the web build.
+- `src/resources/` (`eggy_template`): the new-project template in `template/`, and `template.zig`, which embeds it and fills in its placeholders (`eggy_template_name`, the fingerprint, and the `eggy_template_engine` dependency) for the editor. Keep the template valid Zig as written; when you add a file to it, add it to `template.files`.
 
 `build.zig`'s public `addGame` builds a game: it generates an `eggy_project` module (the game's name and plugin types) and compiles `src/runtime/main.zig` and `src/editor/main.zig` against it. This repo builds its own sandbox game from `examples/sandbox/` through the same path, so keep the sandbox working as the reference game.
 
+An Eggy package follows Zig's layout: `src/main.zig` is a game (`pub const Game`, built with `addGame`) and `src/root.zig` is a plugin or library (`pub const Plugin`, published with `addPlugin`). `addGame` and `addPlugin` must request eggy with identical arguments (see `eggyDependency`) so a package's game and plugin share one engine; do not give either helper extra eggy options.
+
 Code both executables need belongs in `eggy`; keep it free of editor-only dependencies. The game is the first plugin: keep game and plugin hooks one interface, and document any new hook in `plugins.zig`. Plugins are static (compiled in through `addGame`) for now.
 
-`build.zig.zon` pins Vitellus, weeoui and humpty by git URL and commit, because Zig's package manager does not fetch submodules. `src/vitellus`, `src/humpty` and `src/weeoui` are Git submodules for local work: build against them with `--fork=src/<name>`. Commit and push changes in their own repositories, then re-pin Eggy with `zig fetch --save=<name> git+https://github.com/eggyengine/<name>#<commit>` and update the submodule pointer to the same commit. weeoui must pin the same Vitellus commit as Eggy, or `--fork=src/vitellus` fails with two Vitellus packages.
+`build.zig.zon` pins Vitellus, weeoui, humpty and clutch by git URL and commit, because Zig's package manager does not fetch submodules. `src/vitellus`, `src/humpty`, `src/weeoui` and `src/clutch` are Git submodules for local work: build against them with `--fork=src/<name>`. Commit and push changes in their own repositories, then re-pin Eggy with `zig fetch --save=<name> git+https://github.com/eggyengine/<name>#<commit>` and update the submodule pointer to the same commit. weeoui must pin the same Vitellus commit as Eggy, or `--fork=src/vitellus` fails with two Vitellus packages. Likewise humpty must pin the same clutch commit as Eggy: humpty's physics runs on the world `App` owns, re-exported as `eggy.ecs`.
+
+## README Files
+
+Every `README.md` in this repository and its submodules is off limits to agents. Do not create, edit, reformat, or delete one unless a human explicitly asks for that change, and then change only what they asked for. Never update a README as a side effect of other work, even to document something you just built: put that in code comments, doc comments, or this file instead, and mention in your reply that the README may need a human's update.
+
+When a human does ask for a README change, keep it short and clean. Write for the people who use the project. No changelogs, no implementation details, no status notes, and no repeated content.
 
 ## Build, Test, and Development Commands
 
@@ -22,7 +31,8 @@ Code both executables need belongs in `eggy`; keep it free of editor-only depend
 - `zig build run`: build and launch the editor. On the web, where there is no editor, it opens the runtime in a browser.
 - `zig build run-runtime`: build and launch the runtime.
 - `zig build test`: run every test. `zig build test-core`, `test-runtime` and `test-editor` run one part's tests.
-- Add `--fork=src/vitellus --fork=src/weeoui --fork=src/humpty` to any command to build against the local submodules instead of the pinned commits.
+- `zig build test-template`: render the template into a new project and build it against this checkout. Slow (it builds eggy from scratch), so it is not part of `test`; run it after changing the template, `addGame`, or the plugin hooks.
+- Add `--fork=src/vitellus --fork=src/weeoui --fork=src/humpty --fork=src/clutch` to any command to build against the local submodules instead of the pinned commits.
 - `zig build update-submodules`: fetch the latest configured submodule branches. Review and commit changed pointers before sharing them.
 
 ## Coding Style & Naming Conventions
