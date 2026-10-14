@@ -1,7 +1,6 @@
 const std = @import("std");
 const vitellus_build = @import("vitellus");
 const Emscripten = vitellus_build.Emscripten;
-const template = @import("src/resources/template.zig");
 
 pub fn build(b: *std.Build) void {
     const update_submodules = b.addSystemCommand(&.{ "git", "submodule", "update", "--init", "--remote", "--recursive" });
@@ -20,12 +19,13 @@ pub fn build(b: *std.Build) void {
     // On a fresh checkout Slang isn't fetched yet: Zig fetches it and runs this build again.
     const engine = addEngine(b, target, optimize, emscripten) orelse return;
 
-    // The sandbox: what `zig build run` opens here, built exactly as `addGame` builds a game.
+    // Eggy's own executables, eggy_runtime and eggy_editor: an empty project, built exactly as
+    // `addGame` builds a game.
+    const empty_game = b.addWriteFiles().add("game.zig", "pub const Game = struct {};\n");
     addProject(b, b, emscripten, target, optimize, .{
-        .name = "sandbox",
-        .game = b.createModule(.{ .root_source_file = b.path("examples/sandbox/game.zig"), .target = target, .optimize = optimize }),
-        .plugins = &.{b.createModule(.{ .root_source_file = b.path("examples/sandbox/window_info.zig"), .target = target, .optimize = optimize })},
-    });
+        .name = "eggy",
+        .game = b.createModule(.{ .root_source_file = empty_game, .target = target, .optimize = optimize }),
+    }, "eggy_runtime");
 
     // Tests. The runtime's and editor's mostly check that they compile: running them needs a GPU.
     const test_step = b.step("test", "Run every test");
@@ -34,11 +34,6 @@ pub fn build(b: *std.Build) void {
     const runtime_tests = &b.addRunArtifact(b.addTest(.{ .root_module = b.modules.get("eggy_runtime").?, .use_llvm = true })).step;
     b.step("test-runtime", "Run eggy_runtime's tests").dependOn(runtime_tests);
     test_step.dependOn(runtime_tests);
-    const template_tests = &b.addRunArtifact(b.addTest(.{ .root_module = b.modules.get("eggy_template").? })).step;
-    test_step.dependOn(template_tests);
-    const template_step = b.step("test-template", "Build a new project made from the template (slow: builds eggy from scratch)");
-    template_step.dependOn(template_tests);
-    template_step.dependOn(addTemplateProject(b));
     if (b.modules.get("eggy_editor")) |editor| {
         const editor_tests = &b.addRunArtifact(b.addTest(.{ .root_module = editor, .use_llvm = true })).step;
         b.step("test-editor", "Run eggy_editor's tests").dependOn(editor_tests);
@@ -67,7 +62,7 @@ pub const GameOptions = struct {
 pub fn addGame(b: *std.Build, options: GameOptions) void {
     const target = options.target orelse b.standardTargetOptions(.{});
     const optimize = options.optimize orelse b.standardOptimizeOption(.{});
-    addProject(b, eggyDependency(b, target, optimize).builder, Emscripten.init(b, target, null), target, optimize, options);
+    addProject(b, eggyDependency(b, target, optimize).builder, Emscripten.init(b, target, null), target, optimize, options, options.name);
 }
 
 pub const PluginOptions = struct {
@@ -99,8 +94,9 @@ fn eggyDependency(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std
     return b.dependencyFromBuildZig(@This(), .{ .target = target, .optimize = optimize });
 }
 
-/// `addGame` for any builder: `engine` is Eggy's own builder, which is `b` itself for the sandbox.
-fn addProject(b: *std.Build, engine: *std.Build, emscripten: Emscripten, target: std.Build.ResolvedTarget, optimize: std.builtin.OptimizeMode, options: GameOptions) void {
+/// `addGame` for any builder: `engine` is Eggy's own builder, which is `b` itself for Eggy's own
+/// executables. The runtime executable is `runtime_name`; the editor is `<options.name>_editor`.
+fn addProject(b: *std.Build, engine: *std.Build, emscripten: Emscripten, target: std.Build.ResolvedTarget, optimize: std.builtin.OptimizeMode, options: GameOptions, runtime_name: []const u8) void {
     // Missing until Eggy's lazy dependencies are fetched; Zig then runs the build again.
     const eggy = engine.modules.get("eggy") orelse return;
     const runtime = engine.modules.get("eggy_runtime").?;
@@ -132,14 +128,14 @@ fn addProject(b: *std.Build, engine: *std.Build, emscripten: Emscripten, target:
     });
     const all_step = b.step("all", "Build every executable for this target");
     if (target.result.os.tag == .emscripten) {
-        const app = emscripten.addApp(b, .{ .name = options.name, .root_module = runtime_module });
+        const app = emscripten.addApp(b, .{ .name = runtime_name, .root_module = runtime_module });
         b.step("runtime", "Build the game for the browser").dependOn(&app.install.step);
         b.step("run", "Open the game in a browser").dependOn(&app.run.step);
         all_step.dependOn(&app.install.step);
         return;
     }
     installRuntimeLibraries(b, engine);
-    const runtime_app = addDesktopApp(b, target, runtime_module, options.name);
+    const runtime_app = addDesktopApp(b, target, runtime_module, runtime_name);
     b.step("runtime", "Build the game").dependOn(&runtime_app.install.step);
     b.step("run-runtime", "Run the game").dependOn(&runtime_app.run.step);
     all_step.dependOn(&runtime_app.install.step);
@@ -157,9 +153,13 @@ fn addProject(b: *std.Build, engine: *std.Build, emscripten: Emscripten, target:
         },
     });
     const editor_app = addDesktopApp(b, target, editor_module, b.fmt("{s}_editor", .{options.name}));
-    b.step("editor", "Build the editor").dependOn(&editor_app.install.step);
+    const template_tarball = installTemplateTarball(b, engine);
+    const editor_step = b.step("editor", "Build the editor");
+    editor_step.dependOn(&editor_app.install.step);
+    editor_step.dependOn(template_tarball);
     b.step("run", "Run the editor").dependOn(&editor_app.run.step);
     all_step.dependOn(&editor_app.install.step);
+    all_step.dependOn(template_tarball);
 }
 
 /// The modules and dependencies Eggy's own tests need.
@@ -191,13 +191,20 @@ fn addEngine(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.buil
     const viewport_shader = b.path("src/core/shaders/viewport3d.slang");
     const viewport_vertex = vitellus_build.compileSlang(b, vitellus, target, viewport_shader, "vertexMain", .vertex) orelse return null;
     const viewport_fragment = vitellus_build.compileSlang(b, vitellus, target, viewport_shader, "fragmentMain", .fragment) orelse return null;
+    const blit_shader = b.path("src/core/shaders/scene_blit.slang");
+    const blit_vertex = vitellus_build.compileSlang(b, vitellus, target, blit_shader, "vertexMain", .vertex) orelse return null;
+    const blit_fragment = vitellus_build.compileSlang(b, vitellus, target, blit_shader, "fragmentMain", .fragment) orelse return null;
     const shader_files = b.addWriteFiles();
     _ = shader_files.addCopyFile(viewport_vertex, "viewport3d.vert");
     _ = shader_files.addCopyFile(viewport_fragment, "viewport3d.frag");
+    _ = shader_files.addCopyFile(blit_vertex, "scene_blit.vert");
+    _ = shader_files.addCopyFile(blit_fragment, "scene_blit.frag");
     const shader_module = b.createModule(.{
         .root_source_file = shader_files.add("root.zig",
             \\pub const viewport_vertex = @embedFile("viewport3d.vert");
             \\pub const viewport_fragment = @embedFile("viewport3d.frag");
+            \\pub const blit_vertex = @embedFile("scene_blit.vert");
+            \\pub const blit_fragment = @embedFile("scene_blit.frag");
         ),
         .target = target,
         .optimize = optimize,
@@ -209,10 +216,12 @@ fn addEngine(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.buil
     if (!web) addNvdialog(b, fatal_dialog, nvdialog, target.result);
     // Same args as Weeoui's lazy sdl3 so both share one SDL build (static by default).
     // On the web Weeoui skips SDL, and SDL needs Emscripten's system headers.
+    // ponytail: no C UB traps in SDL, since 3.4.0's Wayland pointer_handle_leave evaluates
+    // SDL_BUTTON_MASK(0) (a shift by -1) and SIGILLs when a window drag takes the pointer; re-enable after an SDL bump.
     const sdl3 = if (web)
-        b.dependency("sdl3", .{ .target = target, .optimize = optimize, .sdl_system_include_path = emscripten.include })
+        b.dependency("sdl3", .{ .target = target, .optimize = optimize, .c_sdl_sanitize_c = .off, .sdl_system_include_path = emscripten.include })
     else
-        b.dependency("sdl3", .{ .target = target, .optimize = optimize });
+        b.dependency("sdl3", .{ .target = target, .optimize = optimize, .c_sdl_sanitize_c = .off });
     const sdl_adapter = b.createModule(.{
         .root_source_file = vitellus.path("src/windowing/sdl3.zig"),
         .target = target,
@@ -277,13 +286,6 @@ fn addEngine(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.buil
         .imports = &.{.{ .name = "eggy", .module = engine }},
     });
 
-    // eggy_template: the new-project template the editor fills in and copies.
-    const template_module = b.addModule("eggy_template", .{
-        .root_source_file = b.path("src/resources/template.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-
     // eggy_editor: a game with Weeoui tooling over it, desktop only.
     if (!web) {
         // Weeoui's SDL adapter compiled against Eggy's SDL and Vitellus, so neither is built twice.
@@ -299,17 +301,18 @@ fn addEngine(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.buil
                 .{ .name = "weeoui_vitellus", .module = weeoui_vitellus },
             },
         });
-        _ = b.addModule("eggy_editor", .{
+        const editor = b.addModule("eggy_editor", .{
             .root_source_file = b.path("src/editor/editor.zig"),
             .target = target,
             .optimize = optimize,
             .imports = &.{
                 .{ .name = "eggy", .module = engine },
-                .{ .name = "eggy_template", .module = template_module },
                 .{ .name = "weeoui_sdl3", .module = weeoui_sdl3 },
                 .{ .name = "weeoui_vitellus", .module = weeoui_vitellus },
             },
         });
+        // The window icon, rendered from resources/icon.svg: `rsvg-convert -w 256 -h 256`.
+        editor.addAnonymousImport("editor_icon", .{ .root_source_file = b.path("resources/icon.png") });
     }
 
     return .{
@@ -323,22 +326,38 @@ fn addEngine(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.buil
     };
 }
 
-/// A project made from the template, as the editor would make it but using this checkout of
-/// eggy, and a `zig build all test` of it.
-fn addTemplateProject(b: *std.Build) *std.Build.Step {
-    // The project lands in `<cache>/o/<hash>/`; the hash doesn't change how far up this checkout is.
-    const root = b.build_root.path orelse ".";
-    const project_dir = b.pathJoin(&.{ b.cache_root.path orelse ".zig-cache", "o", "hash" });
-    const engine_path = std.fs.path.relative(b.allocator, root, null, project_dir, root) catch @panic("OOM");
-    const project = template.Project{ .name = "template_check", .fingerprint_id = 1, .engine = .{ .path = engine_path } };
-    const files = b.addWriteFiles();
-    for (template.files) |file| {
-        const contents = template.render(b.allocator, file.contents, project) catch |err| std.debug.panic("cannot render template file {s}: {t}", .{ file.path, err });
-        _ = files.add(file.path, contents);
+/// `resources/template/` as `<prefix>/resources/template.tar`, the new-project template the
+/// editor unpacks. Build output inside the template (`.zig-cache`, `zig-out`, `zig-pkg`) is left out.
+fn installTemplateTarball(b: *std.Build, engine: *std.Build) *std.Build.Step {
+    const io = b.graph.io;
+    const pack = b.addRunArtifact(engine.addExecutable(.{
+        .name = "tar",
+        .root_module = engine.createModule(.{ .root_source_file = engine.path("src/build/tar.zig"), .target = engine.graph.host }),
+    }));
+    const tarball = pack.addOutputFileArg("template.tar");
+
+    // List the files now, each as a file argument, so editing one repacks the tarball.
+    var template_dir = engine.build_root.handle.openDir(io, "resources/template", .{ .iterate = true }) catch |err| std.debug.panic("cannot open resources/template: {t}", .{err});
+    defer template_dir.close(io);
+    var walker = template_dir.walkSelectively(b.allocator) catch @panic("OOM");
+    defer walker.deinit();
+    while (walker.next(io) catch |err| std.debug.panic("cannot list resources/template: {t}", .{err})) |entry| {
+        const archive_path = std.mem.replaceOwned(u8, b.allocator, entry.path, std.fs.path.sep_str, "/") catch @panic("OOM");
+        switch (entry.kind) {
+            .directory => for ([_][]const u8{ ".zig-cache", "zig-out", "zig-pkg" }) |ignored| {
+                if (std.mem.eql(u8, entry.basename, ignored)) break;
+            } else walker.enter(io, entry) catch |err| std.debug.panic("cannot open resources/template/{s}: {t}", .{ archive_path, err }),
+            .file => {
+                pack.addArg(archive_path);
+                pack.addFileArg(engine.path(b.pathJoin(&.{ "resources/template", entry.path })));
+            },
+            else => {},
+        }
     }
-    const build_project = b.addSystemCommand(&.{ b.graph.zig_exe, "build", "all", "test" });
-    build_project.setCwd(files.getDirectory());
-    return &build_project.step;
+
+    const install = &b.addInstallFileWithDir(tarball, .{ .custom = "resources" }, "template.tar").step;
+    b.getInstallStep().dependOn(install);
+    return install;
 }
 
 const runtime_library_prefix = "runtime:";
