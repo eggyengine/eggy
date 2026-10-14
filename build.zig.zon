@@ -17,7 +17,7 @@
             .hash = "humpty-0.1.0-h_J630EWAADXOAtyB9ApfnYopzodWcEcqs0RLJLAWE-N",
         },
         .clutch = .{
-            .url = "git+https://github.com/eggyengine/clutch#1d5e64db3f779b907391d7142aa63a19b4ece4ec",
+            .url = "git+https://github.com/eggyengine/clutch#40d7faaa389526ae33dc425002e43ea2dc135a46",
             .hash = "clutch-0.1.0-gpdHb-t7AQBdjeoFzKaa22gbIDJyQqyNQr9wI5waI9-i",
         },
         .weeoui = .{
