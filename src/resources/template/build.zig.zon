@@ -1,0 +1,14 @@
+.{
+    .name = .eggy_template_name,
+    .version = "0.0.1",
+    .fingerprint = 0x76cd980c5eed1e55, // Changing this has security and trust implications.
+    .minimum_zig_version = "0.16.0",
+    .dependencies = .{
+        .eggy = .{ .path = "eggy_template_engine" },
+    },
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "src",
+    },
+}

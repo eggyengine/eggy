@@ -1,6 +1,7 @@
 const std = @import("std");
 const vitellus_build = @import("vitellus");
 const Emscripten = vitellus_build.Emscripten;
+const template = @import("src/resources/template.zig");
 
 pub fn build(b: *std.Build) void {
     const update_submodules = b.addSystemCommand(&.{ "git", "submodule", "update", "--init", "--remote", "--recursive" });
@@ -33,6 +34,11 @@ pub fn build(b: *std.Build) void {
     const runtime_tests = &b.addRunArtifact(b.addTest(.{ .root_module = b.modules.get("eggy_runtime").?, .use_llvm = true })).step;
     b.step("test-runtime", "Run eggy_runtime's tests").dependOn(runtime_tests);
     test_step.dependOn(runtime_tests);
+    const template_tests = &b.addRunArtifact(b.addTest(.{ .root_module = b.modules.get("eggy_template").? })).step;
+    test_step.dependOn(template_tests);
+    const template_step = b.step("test-template", "Build a new project made from the template (slow: builds eggy from scratch)");
+    template_step.dependOn(template_tests);
+    template_step.dependOn(addTemplateProject(b));
     if (b.modules.get("eggy_editor")) |editor| {
         const editor_tests = &b.addRunArtifact(b.addTest(.{ .root_module = editor, .use_llvm = true })).step;
         b.step("test-editor", "Run eggy_editor's tests").dependOn(editor_tests);
@@ -53,15 +59,44 @@ pub const GameOptions = struct {
     optimize: ?std.builtin.OptimizeMode = null,
 };
 
-/// Build a game made with Eggy: its runtime, its editor (desktop only), and the steps `all`,
-/// `runtime`, `editor`, `run` (the editor; on the web, the runtime in a browser) and `run-runtime`.
-/// The game and each plugin get `@import("eggy")`. Call this from the game's `build.zig`.
+/// Build a game made with Eggy (a package's `src/main.zig`): its runtime, its editor (desktop
+/// only), and the steps `all`, `runtime`, `editor`, `run` (the editor; on the web, the runtime in
+/// a browser) and `run-runtime`. The game and each plugin get `@import("eggy")`, this package's
+/// eggy even for plugins from other packages, so every part shares one engine. Web builds find
+/// emsdk through `$EMSDK`, then `~/emsdk`.
 pub fn addGame(b: *std.Build, options: GameOptions) void {
     const target = options.target orelse b.standardTargetOptions(.{});
     const optimize = options.optimize orelse b.standardOptimizeOption(.{});
-    const emsdk = b.option([]const u8, "emsdk", "Path to emsdk for web builds (default: $EMSDK, then ~/emsdk)");
-    const eggy = b.dependencyFromBuildZig(@This(), .{ .target = target, .optimize = optimize, .emsdk = emsdk });
-    addProject(b, eggy.builder, Emscripten.init(b, target, emsdk), target, optimize, options);
+    addProject(b, eggyDependency(b, target, optimize).builder, Emscripten.init(b, target, null), target, optimize, options);
+}
+
+pub const PluginOptions = struct {
+    /// The module's name: games use it as `b.dependency(<package>, .{}).module(name)`.
+    name: []const u8,
+    /// The plugin's root, which declares `pub const Plugin`. By convention `src/root.zig`.
+    root_source_file: std.Build.LazyPath,
+    /// Default: `-Dtarget`.
+    target: ?std.Build.ResolvedTarget = null,
+    /// Default: `-Doptimize`.
+    optimize: ?std.builtin.OptimizeMode = null,
+};
+
+/// Publish a plugin or library (a package's `src/root.zig`) as module `name`, with
+/// `@import("eggy")`, so it compiles and tests on its own and other packages can depend on it.
+/// A game that lists it gets this package's plugin running on the game's own eggy.
+pub fn addPlugin(b: *std.Build, options: PluginOptions) *std.Build.Module {
+    const target = options.target orelse b.standardTargetOptions(.{});
+    const optimize = options.optimize orelse b.standardOptimizeOption(.{});
+    const plugin = b.addModule(options.name, .{ .root_source_file = options.root_source_file, .target = target, .optimize = optimize });
+    // Missing until eggy's lazy dependencies are fetched; Zig then runs the build again.
+    if (eggyDependency(b, target, optimize).builder.modules.get("eggy")) |eggy| plugin.addImport("eggy", eggy);
+    return plugin;
+}
+
+/// Eggy as a dependency of `b`. `addGame` and `addPlugin` pass the same arguments, so a package
+/// that calls both gets one eggy, and the game's and plugin's `eggy.App` are the same type.
+fn eggyDependency(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builtin.OptimizeMode) *std.Build.Dependency {
+    return b.dependencyFromBuildZig(@This(), .{ .target = target, .optimize = optimize });
 }
 
 /// `addGame` for any builder: `engine` is Eggy's own builder, which is `b` itself for the sandbox.
@@ -241,6 +276,13 @@ fn addEngine(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.buil
         .imports = &.{.{ .name = "eggy", .module = engine }},
     });
 
+    // eggy_template: the new-project template the editor fills in and copies.
+    const template_module = b.addModule("eggy_template", .{
+        .root_source_file = b.path("src/resources/template.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+
     // eggy_editor: a game with Weeoui tooling over it, desktop only.
     if (!web) {
         // Weeoui's SDL adapter compiled against Eggy's SDL and Vitellus, so neither is built twice.
@@ -262,6 +304,7 @@ fn addEngine(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.buil
             .optimize = optimize,
             .imports = &.{
                 .{ .name = "eggy", .module = engine },
+                .{ .name = "eggy_template", .module = template_module },
                 .{ .name = "weeoui_sdl3", .module = weeoui_sdl3 },
                 .{ .name = "weeoui_vitellus", .module = weeoui_vitellus },
             },
@@ -277,6 +320,24 @@ fn addEngine(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.buil
         .shader_module = shader_module,
         .weeoui_vitellus = weeoui_vitellus,
     };
+}
+
+/// A project made from the template, as the editor would make it but using this checkout of
+/// eggy, and a `zig build all test` of it.
+fn addTemplateProject(b: *std.Build) *std.Build.Step {
+    // The project lands in `<cache>/o/<hash>/`; the hash doesn't change how far up this checkout is.
+    const root = b.build_root.path orelse ".";
+    const project_dir = b.pathJoin(&.{ b.cache_root.path orelse ".zig-cache", "o", "hash" });
+    const engine_path = std.fs.path.relative(b.allocator, root, null, project_dir, root) catch @panic("OOM");
+    const project = template.Project{ .name = "template_check", .fingerprint_id = 1, .engine = .{ .path = engine_path } };
+    const files = b.addWriteFiles();
+    for (template.files) |file| {
+        const contents = template.render(b.allocator, file.contents, project) catch |err| std.debug.panic("cannot render template file {s}: {t}", .{ file.path, err });
+        _ = files.add(file.path, contents);
+    }
+    const build_project = b.addSystemCommand(&.{ b.graph.zig_exe, "build", "all", "test" });
+    build_project.setCwd(files.getDirectory());
+    return &build_project.step;
 }
 
 const runtime_library_prefix = "runtime:";
