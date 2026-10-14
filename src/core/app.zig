@@ -64,11 +64,13 @@ pub const App = struct {
         self.world.tick();
     }
 
-    /// Window lifecycle every program shares: quit requests end the app (`.success`), and size
-    /// or scale changes resize the swapchain.
+    /// Window lifecycle every program shares: quit requests and closing the main window end the
+    /// app (`.success`), and size or scale changes resize the main window's swapchain. Closing
+    /// another window (an editor pop-out) is left to whoever opened it.
     pub fn event(self: *App, curr_event: sdl3.events.Event) !sdl3.AppResult {
         switch (curr_event) {
-            .quit, .terminating, .window_close_requested => return .success,
+            .quit, .terminating => return .success,
+            .window_close_requested => |window| if (window.id == try self.window.window.getId()) return .success,
             .window_resized, .window_pixel_size_changed, .window_display_scale_changed => try self.graphics.syncSize(self.window),
             else => {},
         }

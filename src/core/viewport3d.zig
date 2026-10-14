@@ -172,7 +172,7 @@ pub const Preview = struct {
 };
 
 /// The build compiles the Slang shaders to WGSL for the web and SPIR-V elsewhere.
-fn shaderSource(code: []const u8, entry_point: []const u8) vit.ShaderModule {
+pub fn shaderSource(code: []const u8, entry_point: []const u8) vit.ShaderModule {
     if (@import("builtin").os.tag == .emscripten)
         return vit.BinaryShaderModule.init(.{ .backend = .webgpu, .format = .wgsl, .bytes = code, .entry_point = entry_point });
     return @import("vitellus_spirv").SPIRVShaderModule.init(.{ .code = code });

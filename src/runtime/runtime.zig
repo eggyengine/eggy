@@ -43,6 +43,7 @@ pub fn Runtime(comptime project: type) type {
             try self.plugins.update(&self.app);
             try self.app.updateWorld();
             const frame = try self.app.graphics.beginFrame();
+            try self.app.graphics.drawScene(frame);
             try self.app.graphics.endFrame(frame);
             return .run;
         }

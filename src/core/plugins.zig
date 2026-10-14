@@ -7,12 +7,24 @@
 //!     pub fn update(self: *Self, app: *eggy.App) !void
 //!     pub fn editorUi(self: *Self, ui: *eggy.ui.Context) void  // in the editor only
 //!
+//! A plugin can also add panels of its own to the editor's dock, each a page of UI it fills
+//! every frame. Declare them, then draw panel `panel` (an index into the declaration):
+//!
+//!     pub const editor_panels = [_]eggy.plugins.EditorPanel{.{ .title = "Stats" }};
+//!     pub fn editorPanelUi(self: *Self, panel: usize, ui: *eggy.ui.Context) void  // in the editor only
+//!
 //! Plugins are stored by value and may move after `init`: keep no pointers to `self`, and use the
 //! `app` each hook is given rather than storing it.
 const std = @import("std");
 const App = @import("app.zig").App;
 const Event = @import("vitellus_sdl3").sdl.events.Event;
 const ui = @import("weeoui");
+
+/// A panel a plugin adds to the editor's dock (see `editor_panels` above).
+pub const EditorPanel = struct {
+    /// Its tab's label, and its window's title when popped out.
+    title: [:0]const u8,
+};
 
 /// One instance of each type in `types` (a tuple such as `.{ Game, Stats }`). Hooks run in list
 /// order, so the game, listed first, sees each frame before its plugins; `deinit` runs in reverse.
@@ -22,6 +34,15 @@ pub fn Set(comptime types: anytype) type {
         instances: std.meta.Tuple(&list),
 
         const Self = @This();
+
+        /// Every plugin's `editor_panels`, in plugin order.
+        pub const editor_panels: []const EditorPanel = blk: {
+            var all: []const EditorPanel = &.{};
+            for (list) |T| if (@hasDecl(T, "editor_panels")) {
+                all = all ++ T.editor_panels;
+            };
+            break :blk all;
+        };
 
         /// Start every plugin. If one fails, those already started are stopped again.
         pub fn init(gpa: std.mem.Allocator, app: *App) !Self {
@@ -49,6 +70,19 @@ pub fn Set(comptime types: anytype) type {
 
         pub fn editorUi(self: *Self, context: *ui.Context) void {
             inline for (list, 0..) |T, i| if (@hasDecl(T, "editorUi")) self.instances[i].editorUi(context);
+        }
+
+        /// Fill panel `panel` of `editor_panels` through the plugin that declared it.
+        pub fn editorPanelUi(self: *Self, panel: usize, context: *ui.Context) void {
+            comptime var first: usize = 0;
+            inline for (list, 0..) |T, i| if (@hasDecl(T, "editor_panels")) {
+                const count = T.editor_panels.len;
+                if (panel >= first and panel < first + count) {
+                    if (@hasDecl(T, "editorPanelUi")) self.instances[i].editorPanelUi(panel - first, context);
+                    return;
+                }
+                first += count;
+            };
         }
 
         fn start(comptime T: type, gpa: std.mem.Allocator, app: *App) !T {
@@ -102,6 +136,33 @@ test "plugins start in order, stop in reverse, and skip hooks they don't declare
     try set.update(undefined);
     set.deinit();
     try std.testing.expectEqualStrings("gsuSG", Log.entries[0..Log.len]);
+}
+
+test "editor panels from every plugin are listed in order and reach the plugin that declared them" {
+    const Log = struct {
+        var drawn: [4]usize = undefined;
+        var len: usize = 0;
+    };
+    const Game = struct {
+        pub const editor_panels = [_]EditorPanel{.{ .title = "Level" }};
+        pub fn editorPanelUi(_: *@This(), panel: usize, _: *ui.Context) void {
+            Log.drawn[Log.len] = 10 + panel;
+            Log.len += 1;
+        }
+    };
+    const Stats = struct {
+        pub const editor_panels = [_]EditorPanel{ .{ .title = "Frames" }, .{ .title = "Memory" } };
+        pub fn editorPanelUi(_: *@This(), panel: usize, _: *ui.Context) void {
+            Log.drawn[Log.len] = 20 + panel;
+            Log.len += 1;
+        }
+    };
+    const Plugins = Set(.{ Game, struct {}, Stats });
+    try std.testing.expectEqual(@as(usize, 3), Plugins.editor_panels.len);
+    try std.testing.expectEqualStrings("Memory", Plugins.editor_panels[2].title);
+    var set = try Plugins.init(std.testing.allocator, undefined);
+    for (0..3) |panel| set.editorPanelUi(panel, undefined);
+    try std.testing.expectEqualSlices(usize, &.{ 10, 20, 21 }, Log.drawn[0..Log.len]);
 }
 
 test "a plugin that fails to start stops the ones started before it" {
