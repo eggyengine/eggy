@@ -4,16 +4,16 @@
 
 Eggy is a Zig 0.16 game engine that games use as a package: they `zig fetch` it, call `addGame` from their `build.zig`, and `@import("eggy")`. It publishes three modules:
 
-- `src/core/` (`eggy`, every platform): the engine games and plugins import. `app.zig` owns SDL, the window and `Graphics`; `graphics.zig` renders through Vitellus and splits each frame into `beginFrame`/`endFrame`; `viewport3d.zig` draws the 3D scene; `plugins.zig` defines the plugin hooks and runs them; `entry.zig` provides the SDL main callbacks and fatal-error reporting both executables use. Shader sources live in `src/core/shaders/`.
+- `src/core/` (`eggy`, every platform): the engine games and plugins import. `app.zig` owns SDL, the window and `Graphics`; `graphics.zig` renders through Vitellus: `Graphics` owns the device and the main window's `Surface` (a swapchain and its frames in flight, each split into `beginFrame`/`endFrame`), and `addSurface` gives other windows their own; `viewport3d.zig` draws the 3D scene, which `Graphics.drawScene` puts across the window (the runtime) and `scene_texture.zig` renders offscreen for a panel (the editor's Scene); `plugins.zig` defines the plugin hooks and runs them; `entry.zig` provides the SDL main callbacks and fatal-error reporting both executables use. Shader sources live in `src/core/shaders/`.
 - `src/runtime/` (`eggy_runtime`, every platform including the web): `Runtime(project)` runs a game and its plugins.
-- `src/editor/` (`eggy_editor`, desktop only): `Editor(project)` runs a game with Weeoui tooling drawn over it. Never add it to the web build.
-- `src/resources/` (`eggy_template`): the new-project template in `template/`, and `template.zig`, which embeds it and fills in its placeholders (`eggy_template_name`, the fingerprint, and the `eggy_template_engine` dependency) for the editor. Keep the template valid Zig as written; when you add a file to it, add it to `template.files`.
+- `src/editor/` (`eggy_editor`, desktop only): `Editor(project)` runs a game with Weeoui tooling drawn over it; `workspace.zig` builds, draws and routes input for each window (the drawn title bar over the dock, and each pop-out), `menus.zig` holds the menus, `panels.zig` what each panel shows, `popout.zig` the OS window a panel pops out into, and `icon.zig` the window icon from `resources/icon.svg`. Never add it to the web build.
+- `resources/`: files the editor ships with, installed to `zig-out/resources/`. `resources/template/` is the new-project template, with placeholders `eggy_template_name`, the fingerprint, and the `eggy_template_engine` dependency; keep it valid Zig as written. The build packs it into `zig-out/resources/template.tar` with `src/build/tar.zig`.
 
-`build.zig`'s public `addGame` builds a game: it generates an `eggy_project` module (the game's name and plugin types) and compiles `src/runtime/main.zig` and `src/editor/main.zig` against it. This repo builds its own sandbox game from `examples/sandbox/` through the same path, so keep the sandbox working as the reference game.
+`build.zig`'s public `addGame` builds a game: it generates an `eggy_project` module (the game's name and plugin types) and compiles `src/runtime/main.zig` and `src/editor/main.zig` against it. This repo builds its own executables, `eggy_runtime` and `eggy_editor`, from an empty project through the same path; a game's runtime takes the game's name and its editor is `<name>_editor`.
 
 An Eggy package follows Zig's layout: `src/main.zig` is a game (`pub const Game`, built with `addGame`) and `src/root.zig` is a plugin or library (`pub const Plugin`, published with `addPlugin`). `addGame` and `addPlugin` must request eggy with identical arguments (see `eggyDependency`) so a package's game and plugin share one engine; do not give either helper extra eggy options.
 
-Code both executables need belongs in `eggy`; keep it free of editor-only dependencies. The game is the first plugin: keep game and plugin hooks one interface, and document any new hook in `plugins.zig`. Plugins are static (compiled in through `addGame`) for now.
+Code both executables need belongs in `eggy`; keep it free of editor-only dependencies. The game is the first plugin: keep game and plugin hooks one interface, and document any new hook in `plugins.zig` and in `docs/docs/guides/plugins.md`. Plugins are static (compiled in through `addGame`) for now.
 
 `build.zig.zon` pins Vitellus, weeoui, humpty and clutch by git URL and commit, because Zig's package manager does not fetch submodules. `src/vitellus`, `src/humpty`, `src/weeoui` and `src/clutch` are Git submodules for local work: build against them with `--fork=src/<name>`. Commit and push changes in their own repositories, then re-pin Eggy with `zig fetch --save=<name> git+https://github.com/eggyengine/<name>#<commit>` and update the submodule pointer to the same commit. weeoui must pin the same Vitellus commit as Eggy, or `--fork=src/vitellus` fails with two Vitellus packages. Likewise humpty must pin clutch with the same package hash as Eggy (Zig identifies packages by hash, so commits that differ only outside clutch's `.paths` still match): humpty's physics runs on the world `App` owns, re-exported as `eggy.ecs`.
 
@@ -23,15 +23,18 @@ Every `README.md` in this repository and its submodules is off limits to agents.
 
 When a human does ask for a README change, keep it short and clean. Write for the people who use the project. No changelogs, no implementation details, no status notes, and no repeated content.
 
+## Documentation
+
+`docs/` is the Docusaurus site, published to GitHub Pages by `.github/workflows/docs.yml`. Pages live in `docs/docs/`; guides go in `docs/docs/guides/`, which the sidebar shows as "Guides". Run `npm ci` then `npm run start` in `docs/` to preview, and `npm run build` to check it builds (broken links fail it). Write the guides for people making games with Eggy, not for people working on it.
+
 ## Build, Test, and Development Commands
 
 - `git submodule update --init --recursive`: populate the submodule checkouts after cloning.
-- `zig build all`: build the sandbox's runtime and editor (`sandbox`, `sandbox_editor`) into `zig-out/bin/` without running them.
+- `zig build all`: build `eggy_runtime` and `eggy_editor` into `zig-out/bin/` without running them.
 - `zig build runtime` / `zig build editor`: build one executable without running it.
 - `zig build run`: build and launch the editor. On the web, where there is no editor, it opens the runtime in a browser.
 - `zig build run-runtime`: build and launch the runtime.
 - `zig build test`: run every test. `zig build test-core`, `test-runtime` and `test-editor` run one part's tests.
-- `zig build test-template`: render the template into a new project and build it against this checkout. Slow (it builds eggy from scratch), so it is not part of `test`; run it after changing the template, `addGame`, or the plugin hooks.
 - Add `--fork=src/vitellus --fork=src/weeoui --fork=src/humpty --fork=src/clutch` to any command to build against the local submodules instead of the pinned commits.
 - `zig build update-submodules`: fetch the latest configured submodule branches. Review and commit changed pointers before sharing them.
 
@@ -53,6 +56,11 @@ Write code that a newcomer can follow without opening every helper. These rules 
 **Organize by feature.**
 
 - Put code where its feature name says it is. Split a file when it mixes separate jobs, not when it reaches a line count. A long file with one concept is fine.
+- No god files. A file owns one feature, and its `//!` comment says which in one sentence; if that sentence needs "and", split the file. Do not grow `app.zig`, `graphics.zig`, `editor.zig`, `runtime.zig`, `root.zig` or `build.zig` into catch-alls: they wire features together and delegate, and new behaviour goes in its own file beside them (as `scene_texture.zig` and `workspace.zig` do).
+- Keep `root.zig` files to the module's doc comment, re-exports, and the `test` block that pulls in each file's tests. Logic lives in the feature files they export.
+- When a feature grows several files, give it a directory named after it with a file of the same name as its entry point, for example `src/editor/panels/panels.zig`. Callers import that entry point, not the files behind it.
+- Dependencies point one way: `editor` and `runtime` depend on `core`, never the reverse, and feature files in one module do not import each other in cycles. Pass what a file needs as parameters instead of reaching into another feature's internals.
+- Keep each file's public surface small. Mark helpers private unless another file needs them, and expose the feature through a few types and functions with `///` contracts.
 - Add a layer or helper only when it hides real detail or owns an invariant. Leave short, cohesive sequences inline.
 
 **Name and type for meaning.**
