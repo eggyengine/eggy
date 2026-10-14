@@ -1,0 +1,98 @@
+# Publishes the Docusaurus docs (docs/) to the gh-pages branch. The default branch lives at the
+# site root and every other branch under /<branch>/, with slashes turned into dashes
+# (feature/x -> feature-x). Deleting a branch removes its folder.
+# Needs Settings > Pages > Source set to "Deploy from a branch", branch gh-pages, folder /.
+name: Docs
+
+on:
+  push:
+    branches: ['**']
+  delete:
+  workflow_dispatch:
+
+permissions:
+  contents: write # push to gh-pages
+  pages: read # site URL, so a custom domain keeps working
+
+# A newer push to the same branch supersedes a queued build. Branches build in parallel;
+# the publish step retries if another branch pushed to gh-pages first.
+concurrency:
+  group: docs-${{ github.event_name == 'delete' && github.event.ref || github.ref_name }}
+  cancel-in-progress: true
+
+jobs:
+  docs:
+    if: github.event_name != 'delete' || github.event.ref_type == 'branch'
+    runs-on: ubuntu-latest
+    env:
+      BRANCH: ${{ github.event_name == 'delete' && github.event.ref || github.ref_name }}
+      DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+    steps:
+      - id: slug
+        run: echo "slug=${BRANCH//\//-}" >> "$GITHUB_OUTPUT"
+
+      - if: github.event_name != 'delete'
+        uses: actions/checkout@v7
+      - if: github.event_name != 'delete'
+        id: pages
+        uses: actions/configure-pages@v5
+      - if: github.event_name != 'delete'
+        uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: docs/package-lock.json
+      - if: github.event_name != 'delete'
+        run: npm ci
+        working-directory: docs
+      - if: github.event_name != 'delete'
+        run: npm run build
+        working-directory: docs
+        env:
+          SITE_URL: ${{ steps.pages.outputs.origin }}
+          BASE_PATH: ${{ steps.pages.outputs.base_path }}${{ env.BRANCH != env.DEFAULT_BRANCH && format('/{0}', steps.slug.outputs.slug) || '' }}
+          DOCS_BRANCH: ${{ env.BRANCH }}
+
+      - name: Publish to gh-pages
+        env:
+          SLUG: ${{ steps.slug.outputs.slug }}
+          BUILD: ${{ github.event_name != 'delete' && 'docs/build' || '' }}
+          REMOTE: https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git
+        run: |
+          set -euo pipefail
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          for attempt in 1 2 3 4 5; do
+            rm -rf site
+            if git ls-remote --exit-code --heads "$REMOTE" gh-pages >/dev/null; then
+              git clone --quiet --depth 1 --branch gh-pages "$REMOTE" site
+            else
+              git init --quiet -b gh-pages site
+              git -C site remote add origin "$REMOTE"
+            fi
+            # .root-files lists the default branch's top-level entries, so republishing it
+            # replaces exactly those and leaves the branch folders beside them alone.
+            touch site/.root-files
+            if [ "$BRANCH" = "$DEFAULT_BRANCH" ]; then
+              while IFS= read -r entry; do rm -rf "site/$entry"; done < site/.root-files
+              cp -r "$BUILD"/. site/
+              ls -A "$BUILD" > site/.root-files
+            elif grep -qxF "$SLUG" site/.root-files; then
+              echo "::error::branch folder '$SLUG' would overwrite the default branch's '$SLUG'; rename the branch"
+              exit 1
+            else
+              rm -rf "site/$SLUG"
+              if [ -n "$BUILD" ]; then cp -r "$BUILD" "site/$SLUG"; fi
+            fi
+            # Docusaurus needs no Jekyll processing.
+            touch site/.nojekyll
+            git -C site add -A
+            if git -C site diff --cached --quiet; then exit 0; fi
+            message="Docs for $BRANCH at ${GITHUB_SHA::7}"
+            if [ -z "$BUILD" ]; then message="Remove docs for deleted branch $BRANCH"; fi
+            git -C site commit --quiet -m "$message"
+            if git -C site push --quiet origin gh-pages; then exit 0; fi
+            echo "gh-pages moved; retrying ($attempt)"
+            sleep $((attempt * 5))
+          done
+          exit 1
