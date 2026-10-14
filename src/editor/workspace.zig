@@ -11,6 +11,7 @@ const titlebar = ui.titlebar;
 const dock = ui.dock;
 const menus = @import("menus.zig");
 const panels = @import("panels.zig");
+const play_button = @import("play_button.zig");
 const Panel = panels.Panel;
 
 /// Which OS window a tree, event or panel belongs to: 0 is the main window (and the panels
@@ -32,7 +33,19 @@ pub const Outcome = union(enum) {
     quit,
     /// A button on the main window's title bar.
     window: titlebar.Button,
+    /// The play button: start the game (true) or stop it (false).
+    play: bool,
+    /// File > New Project.
+    new_project,
+    /// File > Open Project.
+    open_project,
 };
+
+/// The project the editor has open, for the status bar.
+pub const Project = struct { title: []const u8, dir: []const u8 };
+
+/// Height of the status bar along the main window's bottom.
+const status_height: f32 = 24;
 
 /// Title bar ids, kept below `dock.first_id`.
 const titlebar_first: u32 = 0x5400_0000;
@@ -47,6 +60,10 @@ pub const Workspace = struct {
     custom_frame: bool = true,
     /// The main window's title bar state, for its buttons' look.
     window_state: titlebar.State = .{},
+    /// Whether the game is playing, which turns the play button into a stop button.
+    playing: bool = false,
+    /// The project open in this editor, shown in the status bar; its text belongs to the editor.
+    project: ?Project = null,
     pointer: ui.Vec2 = .{ .x = -1, .y = -1 },
     pointer_slot: Slot = main_slot,
     /// Each window's tree from the last `build`; lives in `arena` until the next one.
@@ -127,9 +144,11 @@ pub const Workspace = struct {
             break :blk bar;
         };
         const bar_height = if (self.custom_frame) titlebar.height else widgets.window_menubar_height;
-        const dock_rect = ui.Rect{ .x = viewport.x, .y = viewport.y + bar_height, .w = viewport.w, .h = @max(0, viewport.h - bar_height) };
+        const dock_rect = ui.Rect{ .x = viewport.x, .y = viewport.y + bar_height, .w = viewport.w, .h = @max(0, viewport.h - bar_height - status_height) };
         const docked = try self.dock.build(b, .main, dock_rect, panels.Provider{ .placements = &self.placed, .slot = main_slot, .plugin_panels = self.plugin_panels });
-        const main = try b.node(0, .{ .width = viewport.w, .height = viewport.h, .direction = .column }, .none, &.{ top_bar, docked });
+        const play = try play_button.element(b, self.playing, viewport.x, viewport.w, bar_height);
+        const status = try self.statusBar(b, viewport.w);
+        const main = try b.node(0, .{ .width = viewport.w, .height = viewport.h, .direction = .column }, .none, &.{ top_bar, docked, status, play });
         main.layout(viewport, font);
         self.roots[main_slot] = main;
 
@@ -142,6 +161,26 @@ pub const Workspace = struct {
             tree.layout(area, font);
             self.roots[slot] = tree;
         }
+    }
+
+    /// The bar along the main window's bottom: which project is open (and where), and whether
+    /// the game is playing.
+    fn statusBar(self: *const Workspace, b: L.Builder, width: f32) !*L.Element {
+        var children: std.ArrayList(*L.Element) = .empty;
+        const text = struct {
+            fn make(builder: L.Builder, value: []const u8, tone: @FieldType(L.Text, "tone")) !*L.Element {
+                return builder.node(0, .{}, .{ .text = .{ .value = value, .size = 12, .tone = tone } }, &.{});
+            }
+        }.make;
+        if (self.project) |project| {
+            try children.append(b.allocator, try text(b, project.title, .foreground));
+            try children.append(b.allocator, try text(b, project.dir, .muted));
+        } else try children.append(b.allocator, try text(b, "No project open: File > New Project or Open Project", .muted));
+        try children.append(b.allocator, try b.node(0, .{ .grow = 1 }, .none, &.{}));
+        if (self.playing) try children.append(b.allocator, try text(b, "Playing", .foreground));
+        const bar = try b.node(0, .{ .width = width, .height = status_height, .direction = .row, .align_items = .center, .gap = 10, .padding = .{ .left = 10, .right = 10 } }, .{ .surface = .sidebar }, children.items);
+        bar.accessibility = .{ .role = .group, .label = "Status" };
+        return bar;
     }
 
     /// Where the main window's drawn title bar is, for the OS to move and resize the window by it.
@@ -157,6 +196,10 @@ pub const Workspace = struct {
         if (root.find(@intFromEnum(menus.Menu.file))) |first| if (root.find(@intFromEnum(menus.Menu.help))) |last| {
             frame.controls = .{ .x = first.bounds.x, .y = first.bounds.y, .w = last.bounds.x + last.bounds.w - first.bounds.x, .h = first.bounds.h };
         };
+        if (root.find(play_button.id)) |play| {
+            frame.extra_controls[0] = play.bounds;
+            frame.extra_count = 1;
+        }
         return frame;
     }
 
@@ -254,6 +297,10 @@ pub const Workspace = struct {
                 }
                 if (slot == main_slot) {
                     if (titlebarButton(id)) |button| return .{ .window = button };
+                    if (id == play_button.id) {
+                        self.playing = !self.playing;
+                        return .{ .play = self.playing };
+                    }
                     if (self.menubar.press(id)) |action| return self.run(action);
                 }
                 if (self.dock.press(id, down.position.x, down.position.y)) return .handled;
@@ -290,6 +337,8 @@ pub const Workspace = struct {
             .toggle_panel => |panel| self.togglePanel(panel),
             .command => |command| switch (command) {
                 .quit => return .quit,
+                .new_project => return .new_project,
+                .open_project => return .open_project,
                 .reset_layout => self.resetLayout() catch |err| std.log.warn("cannot reset the layout: {t}", .{err}),
                 // ponytail: stubs until the editor has projects, undo history and settings.
                 else => std.log.info("{t}: not implemented yet", .{command}),
@@ -374,4 +423,19 @@ test "plugin panels dock as tabs beside the Inspector, which stays in front" {
     try std.testing.expect(workspace.dock.isVisible(inspector));
     try workspace.dock.detach(panels.plugin_first);
     try std.testing.expectEqualStrings("Stats", workspace.windowTitle(0));
+}
+
+test "the play button turns into a stop button and back" {
+    var workspace = try testWorkspace();
+    defer workspace.deinit();
+    var font = try ui.Font.init(std.testing.allocator, ui.default_font);
+    defer font.deinit();
+    const viewport = ui.Rect{ .x = 0, .y = 0, .w = 1000, .h = 600 };
+    try workspace.build(viewport, @splat(null), &font);
+    const play = workspace.roots[main_slot].?.find(play_button.id).?;
+    try std.testing.expectApproxEqAbs(viewport.w / 2, play.bounds.x + play.bounds.w / 2, 0.5);
+    try std.testing.expect(workspace.titlebarFrame().extra_count == 1);
+    const press = ui.input.Event{ .pointer_down = .{ .position = play.bounds.center(), .button = .left, .clicks = 1 } };
+    try std.testing.expectEqual(Outcome{ .play = true }, workspace.handle(main_slot, press));
+    try std.testing.expectEqual(Outcome{ .play = false }, workspace.handle(main_slot, press));
 }

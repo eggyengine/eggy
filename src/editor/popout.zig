@@ -14,10 +14,14 @@ pub const PopOut = struct {
     overlay: weeoui_vitellus.Renderer,
 
     /// Open a `size` (in points) window titled `title`, rendering in `graphics`' color format.
-    pub fn open(graphics: *const eggy.Graphics, font: *const ui.Font, title: [:0]const u8, size: [2]f32) !PopOut {
+    /// `flags` are SDL's (Vulkan and high pixel density are always on).
+    pub fn open(graphics: *const eggy.Graphics, font: *const ui.Font, title: [:0]const u8, size: [2]f32, flags: sdl3.video.Window.Flags) !PopOut {
         const width: usize = @intFromFloat(@max(160, size[0]));
         const height: usize = @intFromFloat(@max(120, size[1]));
-        var window: sdl_adapter.Sdl3Window = .init(try sdl3.video.Window.init(title, width, height, .{ .vulkan = true, .resizable = true, .high_pixel_density = true }));
+        var window_flags = flags;
+        window_flags.vulkan = true;
+        window_flags.high_pixel_density = true;
+        var window: sdl_adapter.Sdl3Window = .init(try sdl3.video.Window.init(title, width, height, window_flags));
         errdefer window.deinit();
         var surface = try graphics.addSurface(window);
         errdefer surface.deinit();

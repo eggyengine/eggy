@@ -12,6 +12,7 @@ const Slot = workspace_zig.Slot;
 const main_slot = workspace_zig.main_slot;
 const PopOut = @import("popout.zig").PopOut;
 const icon = @import("icon.zig");
+const ProjectFlow = @import("projects/flow.zig").ProjectFlow;
 
 /// The editor for `project` (see `eggy_runtime.Runtime`). The game and its plugins run as they
 /// do in the runtime, inside a window of dockable panels; each can add to the Inspector through
@@ -38,6 +39,15 @@ pub fn Editor(comptime project: type) type {
         overlay: weeoui_vitellus.Renderer,
         /// The OS window for each of the dock's pop-out windows that is open.
         popouts: [ui.dock.max_windows]?PopOut = @splat(null),
+        /// File > New Project or Open Project, while its window is open.
+        project_flow: ?*ProjectFlow = null,
+        /// A folder File > Open Project's picker chose; it may call back from another thread,
+        /// so the next frame takes it from here.
+        picked_project: std.atomic.Value(?[*:0]u8) = .init(null),
+        /// Whether the editor's windows are hidden, as they are while a new project is created.
+        hidden: bool = false,
+        /// The project this editor opened (`--project <dir>`), from its `eggy.zon`.
+        project: ?workspace_zig.Project = null,
         /// When the main title bar was last pressed, to spot a double-click; see `titlebarPressed`.
         titlebar_press_ns: u64 = 0,
 
@@ -48,9 +58,11 @@ pub fn Editor(comptime project: type) type {
         /// Pages: the Inspector, then each plugin panel.
         const page_count = 1 + Plugins.editor_panels.len;
 
-        pub fn init(gpa: std.mem.Allocator) !Self {
+        pub fn init(gpa: std.mem.Allocator, args: []const [*:0]const u8) !Self {
             var app = try eggy.App.init(gpa, title);
             errdefer app.deinit();
+            const opened_project = try openProject(gpa, app.window.window, args);
+            errdefer if (opened_project) |opened| freeProject(gpa, opened);
             app.window.window.maximize() catch |err| std.log.warn("cannot maximize the editor: {t}", .{err});
             icon.apply(app.window.window);
             var context = try ui.Context.init(gpa);
@@ -69,6 +81,7 @@ pub fn Editor(comptime project: type) type {
             var threaded: std.Io.Threaded = .init_single_threaded;
             var workspace = try Workspace.init(gpa, weeoui_sdl3.buttonLayout(gpa, threaded.io()), Plugins.editor_panels);
             errdefer workspace.deinit();
+            workspace.project = opened_project;
             const frame = try gpa.create(weeoui_sdl3.Frame);
             errdefer gpa.destroy(frame);
             frame.* = .{};
@@ -80,11 +93,14 @@ pub fn Editor(comptime project: type) type {
             var plugins = try Plugins.init(gpa, &app);
             errdefer plugins.deinit();
             try app.startWorld();
-            return .{ .gpa = gpa, .plugins = plugins, .app = app, .ui = context, .plugin_pages = plugin_pages, .workspace = workspace, .frame = frame, .scene = scene, .overlay = overlay };
+            return .{ .gpa = gpa, .plugins = plugins, .app = app, .ui = context, .plugin_pages = plugin_pages, .workspace = workspace, .frame = frame, .scene = scene, .overlay = overlay, .project = opened_project };
         }
 
         pub fn deinit(self: *Self) void {
             self.plugins.deinit();
+            if (self.project_flow) |flow| flow.close(&self.app.graphics);
+            if (self.picked_project.swap(null, .acq_rel)) |path| std.heap.c_allocator.free(std.mem.span(path));
+            if (self.project) |opened| freeProject(self.gpa, opened);
             for (&self.popouts) |*popout| if (popout.*) |*open| {
                 open.close(&self.app.graphics);
                 popout.* = null;
@@ -101,6 +117,14 @@ pub fn Editor(comptime project: type) type {
         }
 
         pub fn iterate(self: *Self) !sdl3.AppResult {
+            // While a new project is created, only its loading screen shows. Hidden windows aren't
+            // drawn to: presenting to one can block until it is shown again.
+            if (self.project_flow) |flow| if (flow.isWorking()) {
+                self.setHidden(true);
+                return self.updateProjectFlow(flow);
+            };
+            self.setHidden(false);
+
             try self.app.graphics.syncSize(self.app.window);
             const viewport = try self.uiViewport() orelse return .run; // minimized
             try self.plugins.update(&self.app);
@@ -138,10 +162,50 @@ pub fn Editor(comptime project: type) type {
                 try open.surface.syncSize(self.app.graphics.queue, open.window);
                 try self.present(workspace_zig.windowSlot(i), &open.surface, &open.overlay, area, &pages);
             };
+            // A folder chosen in File > Open Project's picker: open it.
+            if (self.picked_project.swap(null, .acq_rel)) |path| {
+                defer std.heap.c_allocator.free(std.mem.span(path));
+                if (self.project_flow == null) self.project_flow = try ProjectFlow.open(self.gpa, &self.app.graphics, self.ui.font, std.mem.span(path));
+            }
+            // File > New/Open Project's window, if open.
+            if (self.project_flow) |flow| if (try self.updateProjectFlow(flow) == .success) return .success;
+
             const pointer = self.workspace.pointer;
             const hovered = self.pageAt(self.workspace.pointer_slot, pointer.x, pointer.y);
             weeoui_sdl3.setCursor(self.workspace.dock.cursor() orelse if (hovered) |index| self.page(index).cursor else .default);
             return .run;
+        }
+
+        /// Draw File > New/Open Project's window and move it on: drop it once closed, and quit once
+        /// the new project's editor is up.
+        fn updateProjectFlow(self: *Self, flow: *ProjectFlow) !sdl3.AppResult {
+            switch (try flow.update(&self.app.graphics, &self.ui)) {
+                .running => {},
+                .closed => {
+                    flow.close(&self.app.graphics);
+                    self.project_flow = null;
+                },
+                .launched => return .success,
+            }
+            return .run;
+        }
+
+        fn pickedProject(self: ?*Self, files: ?[]const [*:0]const u8, _: ?usize, failed: bool) void {
+            const chosen = files orelse return;
+            if (failed or chosen.len == 0) return;
+            const copy = std.heap.c_allocator.dupeZ(u8, std.mem.span(chosen[0])) catch return;
+            if (self.?.picked_project.swap(copy.ptr, .acq_rel)) |old| std.heap.c_allocator.free(std.mem.span(old));
+        }
+
+        /// Hide or show the main window and its pop-outs.
+        fn setHidden(self: *Self, hidden: bool) void {
+            if (hidden == self.hidden) return;
+            self.hidden = hidden;
+            const main = self.app.window.window;
+            (if (hidden) main.hide() else main.show()) catch {};
+            for (self.popouts) |popout| if (popout) |open| {
+                (if (hidden) open.window.window.hide() else open.window.window.show()) catch {};
+            };
         }
 
         /// Draw window `slot` into `surface`: its UI with the pages' (`pages`) in their panels,
@@ -171,13 +235,22 @@ pub fn Editor(comptime project: type) type {
                     if (popout.*) |*open| open.close(&self.app.graphics);
                     popout.* = null;
                 } else if (popout.* == null) {
-                    popout.* = try PopOut.open(&self.app.graphics, self.ui.font, self.workspace.windowTitle(i), wanted.?.size);
+                    popout.* = try PopOut.open(&self.app.graphics, self.ui.font, self.workspace.windowTitle(i), wanted.?.size, .{ .resizable = true });
                     icon.apply(popout.*.?.window.window);
                 }
             }
         }
 
         pub fn event(self: *Self, curr_event: sdl3.events.Event) !sdl3.AppResult {
+            // File > New Project's window takes its own events; closing it cancels.
+            if (self.project_flow) |flow| {
+                if (flow.closeRequested(curr_event)) {
+                    flow.close(&self.app.graphics);
+                    self.project_flow = null;
+                    return .run;
+                }
+                if (flow.handle(curr_event)) return .run;
+            }
             const slot = self.slotOf(curr_event);
 
             // A pop-out window's close button docks its panels back into the main window.
@@ -200,6 +273,14 @@ pub fn Editor(comptime project: type) type {
             switch (outcome) {
                 .quit => return .success,
                 .window => |button| if (weeoui_sdl3.windowAction(self.app.window.window, button)) return .success,
+                // ponytail: a stub until the editor can run the game in play mode.
+                .play => |playing| std.log.info("{s}: not implemented yet", .{if (playing) "play" else "stop"}),
+                .new_project => if (self.project_flow == null) {
+                    self.project_flow = try ProjectFlow.create(self.gpa, &self.app.graphics, self.ui.font);
+                },
+                .open_project => if (self.project_flow == null) {
+                    sdl3.dialog.showOpenFolder(Self, pickedProject, self, self.app.window.window, null, false);
+                },
                 else => {},
             }
             if (curr_event == .system_theme_changed) self.ui.theme = weeoui_sdl3.systemTheme();
@@ -208,6 +289,38 @@ pub fn Editor(comptime project: type) type {
             if (outcome == .ignored or curr_event == .mouse_motion) self.routeToPages(slot, curr_event);
             try self.plugins.event(&self.app, curr_event);
             return self.app.event(curr_event);
+        }
+
+        /// The project named by `--project <dir>` in `args`, if any, read from its `eggy.zon`
+        /// (caller-owned; see `freeProject`), after titling `window` after it.
+        fn openProject(gpa: std.mem.Allocator, window: sdl3.video.Window, args: []const [*:0]const u8) !?workspace_zig.Project {
+            const dir = for (args, 0..) |arg, i| {
+                if (std.mem.eql(u8, std.mem.span(arg), "--project") and i + 1 < args.len) break std.mem.span(args[i + 1]);
+            } else return null;
+            var threaded: std.Io.Threaded = .init_single_threaded;
+            const io = threaded.io();
+            var project_root = std.Io.Dir.cwd().openDir(io, dir, .{}) catch |err| {
+                std.log.err("cannot open project {s}: {t}", .{ dir, err });
+                return err;
+            };
+            defer project_root.close(io);
+            var arena = std.heap.ArenaAllocator.init(gpa);
+            defer arena.deinit();
+            const config = eggy.project.load(arena.allocator(), io, project_root) catch |err| {
+                std.log.err("cannot read {s}/{s}: {t}", .{ dir, eggy.project.file_name, err });
+                return err;
+            };
+            const window_title = try std.fmt.allocPrintSentinel(arena.allocator(), "{s} - eggy editor", .{config.title}, 0);
+            window.setTitle(window_title) catch {};
+            std.log.info("opened {s} ({s})", .{ config.title, dir });
+            const title_copy = try gpa.dupe(u8, config.title);
+            errdefer gpa.free(title_copy);
+            return .{ .title = title_copy, .dir = try gpa.dupe(u8, dir) };
+        }
+
+        fn freeProject(gpa: std.mem.Allocator, opened: workspace_zig.Project) void {
+            gpa.free(opened.title);
+            gpa.free(opened.dir);
         }
 
         /// Hand `curr_event` from window `slot` to the pages in that window that want it: pointer
@@ -324,6 +437,12 @@ test {
     _ = @import("workspace.zig");
     _ = @import("menus.zig");
     _ = @import("panels.zig");
+    _ = @import("play_button.zig");
+    _ = @import("projects/template.zig");
+    _ = @import("projects/job.zig");
+    _ = @import("projects/wizard.zig");
+    _ = @import("projects/flow.zig");
+    _ = @import("terminal_view.zig");
 }
 
 test "the editor compiles for a project" {
