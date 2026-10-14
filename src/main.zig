@@ -10,7 +10,7 @@ comptime {
 pub const _start = void;
 pub const WinMainCRTStartup = void;
 
-const AppState = eggy.Editor;
+const AppState = eggy.Game;
 
 pub const panic = std.debug.FullPanic(panicHandler);
 
