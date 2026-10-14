@@ -2,14 +2,27 @@
 
 ## Project Structure & Module Organization
 
-Eggy is a Zig 0.16 desktop application. `src/main.zig` handles SDL entry points, `src/game.zig` owns the window and game loop, `src/graphics.zig` renders through Vitellus, and `src/root.zig` exports the application module. Shader sources and compiled SPIR-V live together in `src/shaders/`. Android packaging and platform code live on the `android` branch. `src/vitellus`, `src/humpty`, and `src/weeoui` are Git submodules; commit changes in their own repositories before updating Eggy's submodule pointers.
+Eggy is a Zig 0.16 game engine that games use as a package: they `zig fetch` it, call `addGame` from their `build.zig`, and `@import("eggy")`. It publishes three modules:
+
+- `src/core/` (`eggy`, every platform): the engine games and plugins import. `app.zig` owns SDL, the window and `Graphics`; `graphics.zig` renders through Vitellus and splits each frame into `beginFrame`/`endFrame`; `viewport3d.zig` draws the 3D scene; `plugins.zig` defines the plugin hooks and runs them; `entry.zig` provides the SDL main callbacks and fatal-error reporting both executables use. Shader sources live in `src/core/shaders/`.
+- `src/runtime/` (`eggy_runtime`, every platform including the web): `Runtime(project)` runs a game and its plugins.
+- `src/editor/` (`eggy_editor`, desktop only): `Editor(project)` runs a game with Weeoui tooling drawn over it. Never add it to the web build.
+
+`build.zig`'s public `addGame` builds a game: it generates an `eggy_project` module (the game's name and plugin types) and compiles `src/runtime/main.zig` and `src/editor/main.zig` against it. This repo builds its own sandbox game from `examples/sandbox/` through the same path, so keep the sandbox working as the reference game.
+
+Code both executables need belongs in `eggy`; keep it free of editor-only dependencies. The game is the first plugin: keep game and plugin hooks one interface, and document any new hook in `plugins.zig`. Plugins are static (compiled in through `addGame`) for now.
+
+`build.zig.zon` pins Vitellus, weeoui and humpty by git URL and commit, because Zig's package manager does not fetch submodules. `src/vitellus`, `src/humpty` and `src/weeoui` are Git submodules for local work: build against them with `--fork=src/<name>`. Commit and push changes in their own repositories, then re-pin Eggy with `zig fetch --save=<name> git+https://github.com/eggyengine/<name>#<commit>` and update the submodule pointer to the same commit. weeoui must pin the same Vitellus commit as Eggy, or `--fork=src/vitellus` fails with two Vitellus packages.
 
 ## Build, Test, and Development Commands
 
-- `git submodule update --init --recursive`: populate the pinned submodule revisions after cloning.
-- `zig build`: build the desktop executable in `zig-out/bin/`.
-- `zig build run`: build and launch the desktop application.
-- `zig build test`: compile and run Eggy's workspace tests.
+- `git submodule update --init --recursive`: populate the submodule checkouts after cloning.
+- `zig build all`: build the sandbox's runtime and editor (`sandbox`, `sandbox_editor`) into `zig-out/bin/` without running them.
+- `zig build runtime` / `zig build editor`: build one executable without running it.
+- `zig build run`: build and launch the editor. On the web, where there is no editor, it opens the runtime in a browser.
+- `zig build run-runtime`: build and launch the runtime.
+- `zig build test`: run every test. `zig build test-core`, `test-runtime` and `test-editor` run one part's tests.
+- Add `--fork=src/vitellus --fork=src/weeoui --fork=src/humpty` to any command to build against the local submodules instead of the pinned commits.
 - `zig build update-submodules`: fetch the latest configured submodule branches. Review and commit changed pointers before sharing them.
 
 ## Coding Style & Naming Conventions
@@ -75,14 +88,14 @@ pub fn frame(self: *Graphics) !void {
 
 ## Testing Guidelines
 
-Place small Zig `test "behavior"` blocks beside the code they exercise. Name each test after the behavior it checks, and keep its decisive inputs and expected outcomes visible in the test. Run `zig build test` for code changes and `zig build run` when changing windowing or graphics. For visual changes, check the desktop window when available. There is no repository-wide coverage threshold.
+Place small Zig `test "behavior"` blocks beside the code they exercise. Name each test after the behavior it checks, and keep its decisive inputs and expected outcomes visible in the test. Run `zig build test` for code changes and `zig build run` and `zig build run-runtime` when changing windowing or graphics. For visual changes, check the desktop window when available. There is no repository-wide coverage threshold.
 
 ## Commit Guidelines
 
 Use [Conventional Commits](https://www.conventionalcommits.org/): `type(scope): summary`.
 
 - **type**: `feat`, `fix`, `refactor`, `perf`, `docs`, `test`, `build`, `ci`, `chore`, or `release`.
-- **scope**: the module or area touched, such as `graphics`, `game`, `shaders`, `build`, `vitellus`, `weeoui`, or `humpty`. Omit it only when the change is genuinely repo-wide.
+- **scope**: the module or area touched, such as `core`, `runtime`, `editor`, `graphics`, `shaders`, `build`, `vitellus`, `weeoui`, or `humpty`. Omit it only when the change is genuinely repo-wide.
 - **summary**: imperative, lower case, no trailing period, at most about 72 characters.
 - Mark breaking changes with `!` after the scope, and explain the break in the body under `BREAKING CHANGE:`.
 - Use the body for the reasoning behind the change, not a list of files.
