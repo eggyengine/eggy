@@ -7,8 +7,8 @@
 //! row's child; in the space below the tree it moves to the end of the top level. While dragging,
 //! the target lights up and a chip with the entity's name follows the pointer; anywhere else (or onto its own
 //! children) letting go does nothing, and Escape cancels. A right-click opens a menu (rename, add
-//! a child, duplicate, move to the top level, delete); a double-click or Ctrl+R renames, Delete
-//! deletes.
+//! a child, duplicate, move to the top level, delete); a double-click on a name renames (both
+//! clicks on its text, in the same spot), as does Ctrl+R, and Delete deletes.
 //!
 //! The page doesn't change the world itself: `build`, `pointer` and `key` return the `Action` the
 //! user took, for the editor to carry out.
@@ -44,6 +44,8 @@ const row_height: f32 = 24;
 const indent: f32 = 16;
 /// How far a press moves before it is a drag.
 const drag_threshold: f32 = 5;
+/// How far apart a double-click's presses can be, in points, and still rename.
+const same_spot: f32 = 2;
 const name_size: f32 = 12;
 const components_size: f32 = 11;
 
@@ -80,12 +82,20 @@ pub const Hierarchy = struct {
     /// The rows last built, to match presses to.
     rows: std.ArrayList(Row) = .empty,
     rows_arena: std.heap.ArenaAllocator,
+    /// Where each row's name was drawn in the last build, for double-clicks to rename.
+    names: std.ArrayList(NameSpan) = .empty,
+    /// The last press on a name: the second of a double-click must land in the same spot.
+    name_press: ?struct { entity: ecs.EntityId, at: ui.Vec2 } = null,
+
+    /// A row's name: how far right of the row it starts, and how wide it is.
+    const NameSpan = struct { entity: ecs.EntityId, left: f32, width: f32 };
 
     pub fn init(gpa: std.mem.Allocator) Hierarchy {
         return .{ .rows_arena = .init(gpa) };
     }
 
     pub fn deinit(self: *Hierarchy) void {
+        self.names.deinit(self.rows_arena.child_allocator);
         self.rows_arena.deinit();
     }
 
@@ -99,6 +109,7 @@ pub const Hierarchy = struct {
     pub fn build(self: *Hierarchy, context: *ui.Context, rows: []const Row, selected: ?ecs.EntityId) ?Action {
         var action: ?Action = null;
         self.keepRows(rows);
+        self.names.clearRetainingCapacity();
         const b = context.builder();
 
         // The filter, and a button to add an entity at the top level.
@@ -152,10 +163,15 @@ pub const Hierarchy = struct {
                     },
                     .left => {
                         const pressed = row orelse return .{ .used = false };
-                        if (down.clicks >= 2) {
+                        // A rename takes both clicks on the name's text, in the same spot.
+                        const on_name = self.onName(context, pressed.entity, down.position);
+                        const first = self.name_press;
+                        self.name_press = if (on_name) .{ .entity = pressed.entity, .at = down.position } else null;
+                        if (down.clicks >= 2 and on_name) if (first) |earlier| if (earlier.entity.eql(pressed.entity) and distance(earlier.at, down.position) <= same_spot) {
+                            self.name_press = null;
                             self.startRename(pressed.entity, pressed.name);
                             return .{ .used = true };
-                        }
+                        };
                         self.drag = .{ .entity = pressed.entity, .from = down.position };
                     },
                     .middle => {},
@@ -253,7 +269,9 @@ pub const Hierarchy = struct {
         const width = context.contentWidth();
         const text_left = left + 8;
         const name = page_style.fitText(arena, context.font, if (row.name.len > 0) row.name else (std.fmt.allocPrint(arena, "Entity {d}", .{row.entity.id}) catch "Entity"), name_size, width - text_left - 8);
-        const room = width - text_left - context.font.measure(name, name_size) - 20;
+        const name_width = context.font.measure(name, name_size);
+        const room = width - text_left - name_width - 20;
+        self.names.append(self.rows_arena.child_allocator, .{ .entity = row.entity, .left = text_left, .width = name_width }) catch {};
         const paint = arena.create(RowPaint) catch return null;
         paint.* = .{
             .id = id,
@@ -373,6 +391,15 @@ pub const Hierarchy = struct {
     }
 
     /// The row under `at` in last frame's layout.
+    /// Whether `at` is on `entity`'s name as last drawn.
+    fn onName(self: *const Hierarchy, context: *const ui.Context, entity: ecs.EntityId, at: ui.Vec2) bool {
+        const row = context.last_bounds.get(row_id_base + entity.id) orelse return false;
+        for (self.names.items) |span| if (span.entity.eql(entity)) {
+            return row.rect.contains(at.x, at.y) and at.x >= row.rect.x + span.left and at.x <= row.rect.x + span.left + span.width;
+        };
+        return false;
+    }
+
     fn rowAt(self: *const Hierarchy, context: *const ui.Context, at: ui.Vec2) ?Row {
         for (self.rows.items) |row| {
             const target = context.last_bounds.get(row_id_base + row.entity.id) orelse continue;
@@ -398,6 +425,10 @@ pub const Hierarchy = struct {
         for (rows) |row| self.rows.append(arena, .{ .entity = row.entity, .name = arena.dupe(u8, row.name) catch "", .depth = row.depth, .has_parent = row.has_parent, .components = &.{} }) catch return;
     }
 };
+
+fn distance(a: ui.Vec2, b: ui.Vec2) f32 {
+    return @sqrt((a.x - b.x) * (a.x - b.x) + (a.y - b.y) * (a.y - b.y));
+}
 
 /// What a drag shows on a row it would drop on: an outline (into it) or a line above or below.
 const Drop = enum { none, into, before, after };
@@ -578,4 +609,35 @@ test "a row's top and bottom quarters drop beside it, the middle into it" {
     try std.testing.expectEqual(rows[0].entity, hierarchy.targetAt(&context, dragged, at(sun, 0.9)).place.after);
     // Onto itself: nowhere.
     try std.testing.expect(hierarchy.targetAt(&context, rows[0].entity, at(sun, 0.5)) == .none);
+}
+
+test "a double-click renames only with both clicks on the name, in the same spot" {
+    var context = try ui.Context.init(std.testing.allocator);
+    defer context.deinit();
+    var hierarchy = Hierarchy.init(std.testing.allocator);
+    defer hierarchy.deinit();
+    const rows = [_]Row{.{ .entity = .init(0, 0), .name = "Sun", .depth = 0, .has_parent = false, .components = &.{} }};
+    try buildPage(&context, &hierarchy, &rows, 300);
+    const row = context.last_bounds.get(row_id_base + 0).?.rect;
+    const on_name = ui.Vec2{ .x = row.x + 12, .y = row.y + row.h / 2 };
+    const beside_name = ui.Vec2{ .x = row.x + row.w - 10, .y = on_name.y };
+    const click = struct {
+        fn f(h: *Hierarchy, c: *const ui.Context, at: ui.Vec2, clicks: u8) void {
+            _ = h.pointer(c, .{ .pointer_down = .{ .position = at, .button = .left, .clicks = clicks } });
+            _ = h.pointer(c, .{ .pointer_up = .{ .position = at, .button = .left } });
+        }
+    }.f;
+
+    // Beside the name, on the row: no rename.
+    click(&hierarchy, &context, beside_name, 1);
+    click(&hierarchy, &context, beside_name, 2);
+    try std.testing.expect(hierarchy.renaming == null);
+    // On the name, but the second click elsewhere on it: no rename.
+    click(&hierarchy, &context, on_name, 1);
+    click(&hierarchy, &context, .{ .x = on_name.x + 6, .y = on_name.y }, 2);
+    try std.testing.expect(hierarchy.renaming == null);
+    // Both on the name, in the same spot: rename.
+    click(&hierarchy, &context, on_name, 1);
+    click(&hierarchy, &context, on_name, 2);
+    try std.testing.expect(hierarchy.renaming != null);
 }
