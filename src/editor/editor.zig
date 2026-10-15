@@ -414,6 +414,7 @@ pub fn Editor(comptime project: type) type {
                     page_style.dragChip(page_ui, self.dragLabel(frame_arena.allocator(), dragged, index));
                 };
                 vertices.* = try page_ui.render();
+                syncClipboard(page_ui);
             }
             self.syncTextInput();
 
@@ -1498,6 +1499,21 @@ pub fn Editor(comptime project: type) type {
                 const on = if (wanted) |chosen| chosen == slot else false;
                 if (sdl3.keyboard.textInputActive(window) == on) continue;
                 (if (on) sdl3.keyboard.startTextInput(window) else sdl3.keyboard.stopTextInput(window)) catch {};
+            }
+        }
+
+        /// Put what a page's field cut or copied on the system clipboard, and answer its paste.
+        fn syncClipboard(page_ui: *ui.Context) void {
+            if (page_ui.copied) |text| {
+                var buffer: [4096]u8 = undefined;
+                if (std.fmt.bufPrintZ(&buffer, "{s}", .{text})) |copy| sdl3.clipboard.setText(copy) catch {} else |_| {}
+            }
+            if (page_ui.paste_requested) {
+                page_ui.paste_requested = false;
+                if (!sdl3.clipboard.hasText()) return;
+                const text = sdl3.clipboard.getText() catch return;
+                defer sdl3.free(text);
+                page_ui.handle(.{ .text = text });
             }
         }
 
