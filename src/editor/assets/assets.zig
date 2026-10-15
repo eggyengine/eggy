@@ -39,6 +39,8 @@ pub const Handled = struct { used: bool, action: ?Action = null };
 
 const MenuItem = enum(u32) { open, rename, duplicate, delete, copy_path, reveal, new_folder, new_scene };
 const menu_id_base: u32 = item_id_base - 32;
+/// The List and Grid buttons' ids: `view_id_base` plus the view.
+const view_id_base: u32 = menu_id_base - 4;
 const NameEdit = ui.TextEdit(128);
 
 pub const View = enum { list, grid };
@@ -163,15 +165,14 @@ pub const AssetsPanel = struct {
         };
         var action: ?Action = null;
 
-        // The filter on a line of its own, then list or grid, and New scene, wrapping when narrow.
-        _ = context.textInput("##asset filter", &self.filter, "Find files");
+        // One line: the filter, taking what room is left, then list or grid, and New scene.
         context.begin(.row);
-        var view_index: usize = @intFromEnum(self.view);
-        if (context.tabs(&.{ "List", "Grid" }, &view_index)) self.view = @enumFromInt(view_index);
+        _ = context.textInput("##asset filter", &self.filter, "Find files");
+        page_style.restyle(context, .{ .grow = 1 });
+        for ([_]View{ .list, .grid }) |view| self.viewButton(context, icons, view);
         if (context.buttonVariant("New scene", .outline)) action = .{ .create_scene = self.newFilesFolder() };
         context.end();
-        page_style.restyle(context, .{ .direction = .row, .gap = 8, .align_items = .center });
-        if (context.last_added) |tools| tools.style.wrap = true;
+        page_style.restyle(context, .{ .direction = .row, .gap = 4, .align_items = .center });
 
         self.refresh(dir, context.time_ms);
         const searching = self.filter.text().len > 0;
@@ -276,6 +277,20 @@ pub const AssetsPanel = struct {
         const element = b.node(id, .{ .height = row_height, .direction = .row, .align_items = .center, .gap = 6, .padding = .{ .left = left + 4, .right = 6 } }, highlight(arena, id, self.isSelected(item.entry.path)), &children) catch return;
         element.cursor = .pointer;
         element.accessibility = .{ .role = .menu_item, .label = item.entry.name };
+        context.element(element);
+    }
+
+    /// The button that shows the files as `view` (a list or a grid), lit while they are.
+    fn viewButton(self: *AssetsPanel, context: *ui.Context, icons: *const Icons, view: View) void {
+        const b = context.builder();
+        const id = view_id_base + @intFromEnum(view);
+        if (context.activated(id)) self.view = view;
+        const icon: Icon = if (view == .list) .list else .grid;
+        const element = b.node(id, .{ .width = 24, .height = 24, .padding = .{ .left = 4, .right = 4, .top = 4, .bottom = 4 } }, highlight(b.allocator, id, self.view == view), &.{
+            b.node(0, .{ .width = 16, .height = 16 }, icons.paint(icon, context.theme), &.{}) catch return,
+        }) catch return;
+        element.cursor = .pointer;
+        element.accessibility = .{ .role = .button, .label = if (view == .list) "List" else "Grid" };
         context.element(element);
     }
 

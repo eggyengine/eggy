@@ -350,7 +350,13 @@ pub fn Editor(comptime project: type) type {
                     panels.inspector_page => self.buildInspector(),
                     panels.console_page => self.console.build(page_ui),
                     panels.hierarchy_page => self.entity_editor.buildHierarchy(page_ui, &self.app, self.gamePtr()),
-                    panels.assets_page => if (self.assets_panel.build(page_ui, if (self.project) |opened| opened.dir else null, &self.asset_icons, self.openScenePath())) |action| self.applyAssetAction(action),
+                    panels.assets_page => {
+                        // The view is a preference, so it is the same in the next editor.
+                        const view_before: assets.View = @enumFromInt(@intFromEnum(preferences.editor(&self.app.preference_values).assets_view));
+                        self.assets_panel.view = view_before;
+                        if (self.assets_panel.build(page_ui, if (self.project) |opened| opened.dir else null, &self.asset_icons, self.openScenePath())) |action| self.applyAssetAction(action);
+                        if (self.assets_panel.view != view_before) self.rememberAssetsView();
+                    },
                     else => if (self.game) |*game| game.editorPanelUi(index - panels.first_plugin_page, page_ui),
                 }
                 vertices.* = try page_ui.render();
@@ -1069,6 +1075,13 @@ pub fn Editor(comptime project: type) type {
             self.workspace.setPluginPanels(game.panels);
             preferences.writeRegistry(self.gpa, self.preference_folders, game.preference_manifests) catch |err| std.log.warn("cannot update .eggy/plugins.zon: {t}", .{err});
             game.start(&self.app, self.plugin_switches.off());
+        }
+
+        /// Keep the Assets panel's view as the user's preference, for every project.
+        fn rememberAssetsView(self: *Self) void {
+            const literal = if (self.assets_panel.view == .grid) ".grid" else ".list";
+            self.app.preference_values.set(.global, preferences.editor_key, "assets_view", literal) catch return;
+            preferences.save(self.gpa, &self.app.preference_values, self.preference_folders, .global, preferences.editor_key) catch |err| std.log.warn("cannot keep the Assets view: {t}", .{err});
         }
 
         /// A plugin's switch in Preferences was flipped: carry it out, as a step to undo.

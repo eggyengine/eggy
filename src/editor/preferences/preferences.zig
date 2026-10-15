@@ -19,8 +19,10 @@ pub const Editor = struct {
     theme: enum { system, light, dark } = .system,
     rebuild_on_focus: bool = true,
     show_debug_logs: bool = false,
+    assets_view: enum { list, grid } = .list,
 
     pub const descriptions = .{
+        .assets_view = "Whether the Assets panel shows files as a tree or as a grid of icons. Its buttons set it too.",
         .theme = "The editor's colours. System follows the desktop's light or dark setting.",
         .rebuild_on_focus = "Rebuild the project when you come back to the editor after changing its code.",
         .show_debug_logs = "Show debug messages in the Console when the editor starts.",
@@ -165,6 +167,6 @@ test "the registry lists each plugin's preferences" {
 }
 
 test "the editor's preferences have a manifest" {
-    try std.testing.expectEqual(@as(usize, 3), editor_manifest.fields.len);
+    try std.testing.expectEqual(@as(usize, 4), editor_manifest.fields.len);
     try std.testing.expectEqualStrings("system", editor_manifest.fields[0].options[0]);
 }
