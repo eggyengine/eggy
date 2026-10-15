@@ -135,6 +135,18 @@ pub const Workspace = struct {
         self.arena.deinit();
     }
 
+    /// Show `plugin_panels`, the game's panels after it loaded or was swapped (they must last
+    /// until the next call): panels it no longer has close, and new ones dock as tabs beside the
+    /// Inspector, which stays in front.
+    pub fn setPluginPanels(self: *Workspace, plugin_panels: []const eggy.plugins.EditorPanel) void {
+        const shown = plugin_panels[0..@min(plugin_panels.len, panels.max_pages - panels.first_plugin_page)];
+        const old_len = self.plugin_panels.len;
+        if (shown.len < old_len) for (shown.len..old_len) |i| self.dock.remove(panels.plugin_first + @as(u32, @intCast(i)));
+        self.plugin_panels = shown;
+        if (shown.len > old_len) for (old_len..shown.len) |i| self.dock.add(panels.plugin_first + @as(u32, @intCast(i)), @intFromEnum(Panel.inspector), .center) catch |err| std.log.warn("cannot dock the game's panel {s}: {t}", .{ shown[i].title, err });
+        if (shown.len > old_len) _ = self.dock.activate(dock.first_id + @intFromEnum(Panel.inspector));
+    }
+
     /// The default arrangement: hierarchy left, inspector right (plugin panels as tabs beside it),
     /// console and assets below the scene.
     fn resetLayout(self: *Workspace) !void {
@@ -571,4 +583,17 @@ fn expectRowsHit(workspace: *const Workspace, element: *const L.Element) !usize 
     const at = element.bounds.center();
     try std.testing.expectEqual(element.id, workspace.controlAt(main_slot, at.x, at.y));
     return rows + 1;
+}
+
+test "the game's panels follow it across swaps, and the Inspector stays in front" {
+    var workspace = try testWorkspace();
+    defer workspace.deinit();
+    const inspector = @intFromEnum(Panel.inspector);
+    const two = [_]eggy.plugins.EditorPanel{ .{ .title = "Stats" }, .{ .title = "Level" } };
+    workspace.setPluginPanels(&two);
+    try std.testing.expect(workspace.dock.nodeOf(panels.plugin_first + 1) != null);
+    try std.testing.expect(workspace.dock.isVisible(inspector));
+    workspace.setPluginPanels(&.{});
+    try std.testing.expect(workspace.dock.nodeOf(panels.plugin_first) == null);
+    try std.testing.expect(workspace.dock.nodeOf(panels.plugin_first + 1) == null);
 }

@@ -41,14 +41,29 @@ pub const App = struct {
 
     /// Run the world's PreDeinit, Deinit and PostDeinit stages, then free everything.
     pub fn deinit(self: *App) void {
-        inline for (.{ .PreDeinit, .Deinit, .PostDeinit }) |stage| {
-            self.world.runStage(stage) catch |err| std.log.err("{s} schedule failed: {t}", .{ @tagName(stage), err });
-        }
+        self.stopWorld();
         self.world.deinit();
         self.graphics.deinit();
         self.window.deinit();
         sdl3.quit(self.init_flags);
         sdl3.shutdown();
+    }
+
+    /// Start over with an empty world: run the old one's PreDeinit, Deinit and PostDeinit
+    /// stages and free it. The editor does this before swapping in a rebuilt game, while the old
+    /// game's code, which the world's schedules and storages point into, is still loaded. Run
+    /// `startWorld` once the new game's plugins have registered their schedules.
+    pub fn resetWorld(self: *App) void {
+        self.stopWorld();
+        const allocator = self.world.allocator;
+        self.world.deinit();
+        self.world = .init(allocator);
+    }
+
+    fn stopWorld(self: *App) void {
+        inline for (.{ .PreDeinit, .Deinit, .PostDeinit }) |stage| {
+            self.world.runStage(stage) catch |err| std.log.err("{s} schedule failed: {t}", .{ @tagName(stage), err });
+        }
     }
 
     /// Run the world's PreInit, Init and PostInit stages. Call once, after plugins' `init`, so

@@ -7,7 +7,7 @@ title: Plugins
 
 A plugin is a Zig type that Eggy calls at set points in your game's life: when it starts, every frame, on input, and when it stops. Your game is a plugin too, the first one. Other plugins come from your own package or from other packages.
 
-Plugins are compiled into your game. Eggy finds each hook with `@hasDecl`, so a plugin declares only the hooks it needs.
+Plugins are compiled into your game. Eggy finds each hook with `@hasDecl`, so a plugin declares only the hooks it needs. In the editor they also live in a library of their own, which the editor swaps for a rebuilt one when you change their code: see [Changing code in the editor](#changing-code-in-the-editor).
 
 ## Hooks
 
@@ -115,6 +115,22 @@ Each panel is a page of [Weeoui](https://eggyengine.github.io/weeoui/) UI that y
 New panels open as tabs beside the Inspector. The editor's **Window** menu lists every panel, yours included, so a closed panel can be brought back.
 
 The title appears on the panel's tab, in the Window menu, and on its window when popped out.
+
+## Changing code in the editor
+
+The editor runs your game and its plugins from a library built beside it. When you change their code and come back to the editor, it rebuilds them in the Build progress window and swaps the new library in, while the editor itself keeps running: your layout, panels and Console stay as they were.
+
+The game starts over on each swap. Every plugin's `deinit` runs, the world is emptied, and then every plugin's `init` runs again with the new code, so:
+
+- state kept in plugin fields or in the world starts fresh;
+- systems are registered again by the new `init`;
+- panels follow `editor_panels`: new ones open beside the Inspector, removed ones close.
+
+When a hook or one of the world's systems returns an error in the editor, the error goes to the Console and the game stops until its code is rebuilt; the editor keeps running. In the runtime, an error still ends the game.
+
+Changes to Eggy itself (say, with a project linked to an Eggy checkout) rebuild the whole editor instead. Its **Reload** button, beside the play button, opens the new one.
+
+Use the `event` hook for input rather than calling SDL yourself: the library has no SDL of its own to ask.
 
 ## Using plugins
 

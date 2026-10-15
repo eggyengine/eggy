@@ -26,16 +26,20 @@ const panels = @import("panels.zig");
 /// `std.Options.logFn` for editor executables: keeps every message for the Console panel.
 pub const logFn = @import("console_log.zig").logFn;
 const ProjectFlow = @import("projects/flow.zig").ProjectFlow;
+const HotGame = @import("hot_reload/hot_reload.zig").HotGame;
 
-/// The editor for `project` (see `eggy_runtime.Runtime`). The game and its plugins run as they
-/// do in the runtime, inside a window of dockable panels; each can add to the Inspector through
-/// `editorUi`.
+/// The editor for `project`, which declares `name` and `game_library` (the game library's
+/// `file_name`, beside the editor). The game and its plugins run as they do in the runtime,
+/// inside a window of dockable panels, from a library the editor swaps for a rebuilt one when
+/// their code changes; each can add to the Inspector through `editorUi`.
 pub fn Editor(comptime project: type) type {
-    const Plugins = eggy.plugins.Set(project.plugins);
     return struct {
         gpa: std.mem.Allocator,
         app: eggy.App,
-        plugins: Plugins,
+        /// The game and its plugins, from their library; null if it couldn't load (logged).
+        game: ?HotGame,
+        /// When the game's library was built, to tell whether a rebuild changed it.
+        game_modified: ?std.Io.Timestamp = null,
         /// The Inspector's UI (the game's and plugins' `editorUi`), and the font every page shares.
         ui: ui.Context,
         /// JetBrains Mono, in `ui`'s font's atlas, for terminal output. On the heap, as views keep it.
@@ -43,8 +47,8 @@ pub fn Editor(comptime project: type) type {
         /// The Console panel's UI and state, drawing with `ui`'s font.
         console_ui: ui.Context,
         console: Console,
-        /// A UI of its own for each plugin panel (`Plugins.editor_panels`), drawing with `ui`'s font.
-        plugin_pages: [Plugins.editor_panels.len]ui.Context,
+        /// A UI of its own for each plugin panel there can be, drawing with `ui`'s font.
+        plugin_pages: [panels.max_pages - panels.first_plugin_page]ui.Context,
         /// The page (see `page`) that last took a press, which gets keyboard input.
         focused_page: usize = 0,
         /// The title bar, menus and dockable panels of every window.
@@ -98,8 +102,6 @@ pub fn Editor(comptime project: type) type {
         /// SDL's default double-click time.
         const double_click_ns = 500 * std.time.ns_per_ms;
         const title = project.name ++ " - eggy editor";
-        /// Pages: the Inspector, then each plugin panel.
-        const page_count = panels.first_plugin_page + Plugins.editor_panels.len;
 
         pub fn init(gpa: std.mem.Allocator, args: []const [*:0]const u8) !Self {
             var app = try eggy.App.init(gpa, title);
@@ -121,7 +123,7 @@ pub fn Editor(comptime project: type) type {
             errdefer console_ui.deinit();
             var console = Console.init(gpa, mono);
             errdefer console.deinit();
-            var plugin_pages: [Plugins.editor_panels.len]ui.Context = undefined;
+            var plugin_pages: [panels.max_pages - panels.first_plugin_page]ui.Context = undefined;
             for (&plugin_pages) |*page_ui| page_ui.* = ui.Context.initWithFont(gpa, context.font);
             errdefer for (&plugin_pages) |*page_ui| page_ui.deinit();
             var overlay = try weeoui_vitellus.Renderer.init(app.graphics.device, app.graphics.color_format, context.font);
@@ -131,7 +133,7 @@ pub fn Editor(comptime project: type) type {
 
             // Draw the title bar ourselves, with the menus on it, laid out like the desktop's.
             var threaded: std.Io.Threaded = .init_single_threaded;
-            var workspace = try Workspace.init(gpa, weeoui_sdl3.buttonLayout(gpa, threaded.io()), Plugins.editor_panels);
+            var workspace = try Workspace.init(gpa, weeoui_sdl3.buttonLayout(gpa, threaded.io()), &.{});
             errdefer workspace.deinit();
             workspace.project = opened_project;
             const frame = try gpa.create(weeoui_sdl3.Frame);
@@ -142,17 +144,24 @@ pub fn Editor(comptime project: type) type {
                 workspace.custom_frame = false;
             };
 
-            var plugins = try Plugins.init(gpa, &app);
-            errdefer plugins.deinit();
-            try app.startWorld();
+            // The game, from its library beside the editor.
+            const library_path = try libraryPath(gpa);
+            defer gpa.free(library_path);
+            var game: ?HotGame = HotGame.load(gpa, library_path, &app) catch |err| blk: {
+                std.log.err("cannot load the game from {s}: {t}", .{ library_path, err });
+                break :blk null;
+            };
+            errdefer if (game) |*loaded| loaded.deinit(&app);
+            if (game) |loaded| workspace.setPluginPanels(loaded.panels);
+            app.startWorld() catch if (game) |*loaded| loaded.pause(&app);
             const upgrades = Upgrades.init(gpa, if (opened_project) |opened| opened.dir else null, @import("build_options").source_dir);
-            var self = Self{ .gpa = gpa, .plugins = plugins, .app = app, .ui = context, .mono = mono, .console_ui = console_ui, .console = console, .plugin_pages = plugin_pages, .workspace = workspace, .frame = frame, .scene = scene, .overlay = overlay, .project = opened_project, .editor_modified = if (opened_project) |opened| editorModified(gpa, opened) else null, .upgrades = upgrades };
+            var self = Self{ .gpa = gpa, .game = game, .game_modified = modifiedAt(library_path), .app = app, .ui = context, .mono = mono, .console_ui = console_ui, .console = console, .plugin_pages = plugin_pages, .workspace = workspace, .frame = frame, .scene = scene, .overlay = overlay, .project = opened_project, .editor_modified = if (opened_project) |opened| editorModified(gpa, opened) else null, .upgrades = upgrades };
             self.built_sources = self.sourcesNow();
             return self;
         }
 
         pub fn deinit(self: *Self) void {
-            self.plugins.deinit();
+            if (self.game) |*game| game.deinit(&self.app);
             if (self.project_flow) |flow| flow.close(&self.app.graphics);
             if (self.build_window) |window| window.close(&self.app.graphics);
             if (self.devtools_window) |window| window.close(&self.app.graphics);
@@ -192,10 +201,11 @@ pub fn Editor(comptime project: type) type {
             self.applyPendingMaximize(false);
             const viewport = try self.uiViewport() orelse return .run; // minimized
             // The game stays paused while the Build progress window is up.
-            if (self.build_window == null) {
-                try self.plugins.update(&self.app);
-                try self.app.updateWorld();
-            }
+            if (self.build_window == null) if (self.game) |*game| {
+                game.update(&self.app);
+                // The world's systems are the game's: one failing stops the game, not the editor.
+                self.app.updateWorld() catch game.pause(&self.app);
+            };
             try self.syncPopOuts();
 
             // Lay out every window, then tell the OS where the main title bar is.
@@ -227,8 +237,9 @@ pub fn Editor(comptime project: type) type {
             self.frame.* = self.workspace.titlebarFrame();
 
             // Build each page's UI into its panel, wherever that is.
-            var pages: [page_count][]const ui.Vertex = @splat(&.{});
-            for (&pages, 0..) |*vertices, index| {
+            var pages_buffer: [panels.max_pages][]const ui.Vertex = @splat(&.{});
+            const pages = pages_buffer[0..self.pageCount()];
+            for (pages, 0..) |*vertices, index| {
                 const placed = self.workspace.placed.pages[index] orelse continue;
                 const page_ui = self.page(index);
                 page_ui.theme = self.ui.theme;
@@ -239,17 +250,17 @@ pub fn Editor(comptime project: type) type {
                 switch (index) {
                     panels.inspector_page => self.buildInspector(),
                     panels.console_page => self.console.build(page_ui),
-                    else => self.plugins.editorPanelUi(index - panels.first_plugin_page, page_ui),
+                    else => if (self.game) |*game| game.editorPanelUi(index - panels.first_plugin_page, page_ui),
                 }
                 vertices.* = try page_ui.render();
             }
 
             // Draw each window.
-            try self.present(main_slot, &self.app.graphics.surface, &self.overlay, viewport, &pages);
+            try self.present(main_slot, &self.app.graphics.surface, &self.overlay, viewport, pages);
             for (&self.popouts, 0..) |*popout, i| if (popout.*) |*open| {
                 const area = window_viewports[i] orelse continue;
                 try open.surface.syncSize(self.app.graphics.queue, open.window);
-                try self.present(workspace_zig.windowSlot(i), &open.surface, &open.overlay, area, &pages);
+                try self.present(workspace_zig.windowSlot(i), &open.surface, &open.overlay, area, pages);
             };
             // A folder chosen in File > Open Project's picker: open it, linking it first for Open
             // Project with Developer Eggy once that is confirmed.
@@ -449,7 +460,7 @@ pub fn Editor(comptime project: type) type {
 
             // The pages get the rest, and every pointer move so their hover state stays current.
             if (outcome == .ignored or curr_event == .mouse_motion) self.routeToPages(slot, curr_event);
-            try self.plugins.event(&self.app, curr_event);
+            if (self.game) |*game| game.event(&self.app, curr_event);
             return self.app.event(curr_event);
         }
 
@@ -486,6 +497,18 @@ pub fn Editor(comptime project: type) type {
             gpa.free(opened.name);
             gpa.free(opened.title);
             gpa.free(opened.dir);
+        }
+
+        /// The game's library, beside the editor, absolute. Caller-owned.
+        fn libraryPath(gpa: std.mem.Allocator) ![]u8 {
+            return std.fs.path.join(gpa, &.{ try sdl3.filesystem.getBasePath(), project.game_library.file_name });
+        }
+
+        /// When the file at `path` last changed, or null if it can't be read.
+        fn modifiedAt(path: []const u8) ?std.Io.Timestamp {
+            var threaded: std.Io.Threaded = .init_single_threaded;
+            const stat = std.Io.Dir.cwd().statFile(threaded.io(), path, .{}) catch return null;
+            return stat.mtime;
         }
 
         /// When `opened`'s editor executable last changed, or null if it can't be read.
@@ -648,13 +671,37 @@ pub fn Editor(comptime project: type) type {
                     if (changed) break :blk .ready;
                     // Reload opens it anyway.
                     if (self.reload_when_built) break :blk .ready;
-                    // Nothing new: forget the build.
+                    // The same editor: swap in the game if only it changed.
+                    self.swapGameIfRebuilt();
+                    // Nothing more: forget the build.
                     job.deinit();
                     self.rebuild = null;
                     break :blk .idle;
                 },
                 else => .{ .building = status.detail },
             };
+        }
+
+        /// Swap in the game's library if a build changed it, starting the game over in this
+        /// editor. Only for a library built against this editor's Eggy: when the editor itself
+        /// changed, Reload opens the new one instead.
+        fn swapGameIfRebuilt(self: *Self) void {
+            const library_path = libraryPath(self.gpa) catch return;
+            defer self.gpa.free(library_path);
+            const modified = modifiedAt(library_path);
+            if (std.meta.eql(modified, self.game_modified)) return;
+            self.game_modified = modified;
+            if (self.game) |*game| {
+                game.reload(&self.app) catch |err| std.log.err("cannot load the rebuilt game: {t}", .{err});
+            } else {
+                self.game = HotGame.load(self.gpa, library_path, &self.app) catch |err| {
+                    std.log.err("cannot load the game from {s}: {t}", .{ library_path, err });
+                    return;
+                };
+            }
+            const game = &self.game.?;
+            self.workspace.setPluginPanels(game.panels);
+            self.app.startWorld() catch game.pause(&self.app);
         }
 
         /// Hand `curr_event` from window `slot` to the pages in that window that want it: pointer
@@ -671,7 +718,7 @@ pub fn Editor(comptime project: type) type {
                 const at = input.pointer_down.position;
                 if (self.pageAt(slot, at.x, at.y)) |index| self.focused_page = index;
             }
-            for (0..page_count) |index| {
+            for (0..self.pageCount()) |index| {
                 const placed = self.workspace.placed.pages[index] orelse continue;
                 if (placed.slot != slot) continue;
                 const wanted = switch (input) {
@@ -690,13 +737,18 @@ pub fn Editor(comptime project: type) type {
         /// Page `index`'s UI (see `panels.max_pages`).
         fn page(self: *Self, index: usize) *ui.Context {
             if (index == panels.inspector_page) return &self.ui;
-            if (index == panels.console_page or Plugins.editor_panels.len == 0) return &self.console_ui;
+            if (index == panels.console_page) return &self.console_ui;
             return &self.plugin_pages[index - panels.first_plugin_page];
+        }
+
+        /// How many pages there are: the Inspector, the Console, and the game's panels.
+        fn pageCount(self: *const Self) usize {
+            return panels.first_plugin_page + self.workspace.plugin_panels.len;
         }
 
         /// The page whose panel holds (x, y) in window `slot`.
         fn pageAt(self: *const Self, slot: Slot, x: f32, y: f32) ?usize {
-            for (self.workspace.placed.pages[0..page_count], 0..) |placement, index| {
+            for (self.workspace.placed.pages[0..self.pageCount()], 0..) |placement, index| {
                 const placed = placement orelse continue;
                 if (placed.slot == slot and placed.rect.contains(x, y)) return index;
             }
@@ -755,7 +807,7 @@ pub fn Editor(comptime project: type) type {
         /// The Inspector panel: the project's name, then whatever the game and plugins add.
         fn buildInspector(self: *Self) void {
             self.ui.heading(3, project.name);
-            self.plugins.editorUi(&self.ui);
+            if (self.game) |*game| game.editorUi(&self.ui) else self.ui.muted("The game's library didn't load: see the Console.");
         }
 
         /// `rect` (in UI points) in window pixels.
@@ -797,6 +849,7 @@ test {
     _ = @import("devtools_window.zig");
     _ = @import("hit_test.zig");
     _ = @import("window_placement.zig");
+    _ = @import("hot_reload/hot_reload.zig");
     _ = @import("projects/source_stamp.zig");
     _ = @import("terminal_view.zig");
     _ = @import("console_log.zig");
@@ -806,18 +859,9 @@ test {
 test "the editor compiles for a project" {
     const project = struct {
         pub const name = "test";
-        pub const plugins = .{struct {}};
-    };
-    std.testing.refAllDecls(Editor(project));
-}
-
-test "the editor compiles for a project whose plugins add panels" {
-    const project = struct {
-        pub const name = "test";
-        pub const plugins = .{ struct {}, struct {
-            pub const editor_panels = [_]eggy.plugins.EditorPanel{ .{ .title = "One" }, .{ .title = "Two" } };
-            pub fn editorPanelUi(_: *@This(), _: usize, _: *ui.Context) void {}
-        } };
+        pub const game_library = struct {
+            pub const file_name = "libtest_game.so";
+        };
     };
     std.testing.refAllDecls(Editor(project));
 }

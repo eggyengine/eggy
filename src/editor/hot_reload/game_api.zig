@@ -1,0 +1,45 @@
+//! The C-callable boundary between the editor and a game's library: what each gives the other.
+//! `library.zig` is the library's side, `hot_reload.zig` the editor's. Eggy's own types cross it
+//! as pointers; both sides compile them from the same source with the same options, so they agree
+//! on their layout. Errors don't cross (Zig numbers them per compilation): the library logs its
+//! own and reports failure.
+const std = @import("std");
+
+/// Bumped whenever these types change, so an editor refuses a library built for another.
+pub const version: u32 = 1;
+
+/// The library's one exported function: `fn () callconv(.c) *const Game`.
+pub const entry_symbol = "eggy_game";
+pub const Entry = *const fn () callconv(.c) *const Game;
+
+/// What the editor gives the library.
+pub const Host = extern struct {
+    /// Log a line through the editor (its Console). `level` is a `std.log.Level`.
+    log: *const fn (level: u8, scope_ptr: [*]const u8, scope_len: usize, text_ptr: [*]const u8, text_len: usize) callconv(.c) void,
+};
+
+/// A panel the game or a plugin adds to the editor's dock (`eggy.plugins.EditorPanel`).
+pub const Panel = extern struct {
+    title: [*:0]const u8,
+};
+
+/// What the library gives the editor: the game's and its plugins' hooks (see `eggy.plugins`).
+/// `state` is what `start` returned.
+pub const Game = extern struct {
+    version: u32 = version,
+    /// Start the game and its plugins on `app` (an `*eggy.App`), allocating with `gpa` (an
+    /// `*const std.mem.Allocator`) and logging through `host`; null when one failed to start.
+    start: *const fn (host: *const Host, gpa: *const anyopaque, app: *anyopaque) callconv(.c) ?*anyopaque,
+    /// Stop them all and free `state`.
+    stop: *const fn (state: *anyopaque) callconv(.c) void,
+    /// One frame; false when a hook failed (and logged why).
+    update: *const fn (state: *anyopaque, app: *anyopaque) callconv(.c) bool,
+    /// An `*const eggy.Event`; false when a hook failed (and logged why).
+    event: *const fn (state: *anyopaque, app: *anyopaque, event: *const anyopaque) callconv(.c) bool,
+    /// The Inspector's part: an `*eggy.ui.Context`.
+    editor_ui: *const fn (state: *anyopaque, context: *anyopaque) callconv(.c) void,
+    /// Panel `panel` of `panels`, into an `*eggy.ui.Context`.
+    editor_panel_ui: *const fn (state: *anyopaque, panel: usize, context: *anyopaque) callconv(.c) void,
+    panels: [*]const Panel,
+    panel_count: usize,
+};

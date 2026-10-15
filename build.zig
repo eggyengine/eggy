@@ -22,7 +22,7 @@ pub fn build(b: *std.Build) void {
     // Eggy's own executables, eggy_runtime and eggy_editor: an empty project, built exactly as
     // `addGame` builds a game.
     const empty_game = b.addWriteFiles().add("game.zig", "pub const Game = struct {};\n");
-    addProject(b, b, emscripten, target, optimize, .{
+    const game_library = addProject(b, b, emscripten, target, optimize, .{
         .name = "eggy",
         .game = b.createModule(.{ .root_source_file = empty_game, .target = target, .optimize = optimize }),
     }, "eggy_runtime");
@@ -38,6 +38,21 @@ pub fn build(b: *std.Build) void {
         const editor_tests = &b.addRunArtifact(b.addTest(.{ .root_module = editor, .use_llvm = true })).step;
         b.step("test-editor", "Run eggy_editor's tests").dependOn(editor_tests);
         test_step.dependOn(editor_tests);
+
+        // Hot reload, for real: load the empty game's library, run it, swap it, and unload it.
+        const library_options = b.addOptions();
+        library_options.addOptionPath("path", game_library.?.getEmittedBin());
+        const hot_reload_tests = &b.addRunArtifact(b.addTest(.{ .root_module = b.createModule(.{
+            .root_source_file = b.path("src/editor/hot_reload/library_test.zig"),
+            .target = target,
+            .optimize = optimize,
+            .link_libc = true,
+            .imports = &.{
+                .{ .name = "eggy", .module = engine.eggy },
+                .{ .name = "test_library", .module = library_options.createModule() },
+            },
+        }), .use_llvm = true })).step;
+        editor_tests.dependOn(hot_reload_tests);
     }
 }
 
@@ -62,7 +77,7 @@ pub const GameOptions = struct {
 pub fn addGame(b: *std.Build, options: GameOptions) void {
     const target = options.target orelse b.standardTargetOptions(.{});
     const optimize = options.optimize orelse b.standardOptimizeOption(.{});
-    addProject(b, eggyDependency(b, target, optimize).builder, Emscripten.init(b, target, null), target, optimize, options, options.name);
+    _ = addProject(b, eggyDependency(b, target, optimize).builder, Emscripten.init(b, target, null), target, optimize, options, options.name);
 }
 
 pub const PluginOptions = struct {
@@ -96,9 +111,10 @@ fn eggyDependency(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std
 
 /// `addGame` for any builder: `engine` is Eggy's own builder, which is `b` itself for Eggy's own
 /// executables. The runtime executable is `runtime_name`; the editor is `<options.name>_editor`.
-fn addProject(b: *std.Build, engine: *std.Build, emscripten: Emscripten, target: std.Build.ResolvedTarget, optimize: std.builtin.OptimizeMode, options: GameOptions, runtime_name: []const u8) void {
+/// Returns the editor's game library; null on the web, which has no editor.
+fn addProject(b: *std.Build, engine: *std.Build, emscripten: Emscripten, target: std.Build.ResolvedTarget, optimize: std.builtin.OptimizeMode, options: GameOptions, runtime_name: []const u8) ?*std.Build.Step.Compile {
     // Missing until Eggy's lazy dependencies are fetched; Zig then runs the build again.
-    const eggy = engine.modules.get("eggy") orelse return;
+    const eggy = engine.modules.get("eggy") orelse return null;
     const runtime = engine.modules.get("eggy_runtime").?;
 
     // The project module: the game's name and its plugin types, the game first.
@@ -132,7 +148,7 @@ fn addProject(b: *std.Build, engine: *std.Build, emscripten: Emscripten, target:
         b.step("runtime", "Build the game for the browser").dependOn(&app.install.step);
         b.step("run", "Open the game in a browser").dependOn(&app.run.step);
         all_step.dependOn(&app.install.step);
-        return;
+        return null;
     }
     installRuntimeLibraries(b, engine);
     const runtime_app = addDesktopApp(b, target, runtime_module, runtime_name);
@@ -140,7 +156,17 @@ fn addProject(b: *std.Build, engine: *std.Build, emscripten: Emscripten, target:
     b.step("run-runtime", "Run the game").dependOn(&runtime_app.run.step);
     all_step.dependOn(&runtime_app.install.step);
 
-    // The editor, desktop only.
+    // The editor, desktop only. It loads the game and its plugins from a library of their own,
+    // and swaps in a rebuilt one when their code changes, so its project module has the name only.
+    const game_library = addGameLibrary(b, engine, target, optimize, project, options.name);
+    const library_options = b.addOptions();
+    library_options.addOption([]const u8, "file_name", game_library.out_filename);
+    const editor_project = b.createModule(.{
+        .root_source_file = b.addWriteFiles().add("eggy_editor_project.zig", b.fmt("pub const name = \"{f}\";\npub const game_library = @import(\"game_library\");\n", .{std.zig.fmtString(options.name)})),
+        .target = target,
+        .optimize = optimize,
+    });
+    editor_project.addOptions("game_library", library_options);
     const editor_module = b.createModule(.{
         .root_source_file = engine.path("src/editor/main.zig"),
         .target = target,
@@ -149,17 +175,40 @@ fn addProject(b: *std.Build, engine: *std.Build, emscripten: Emscripten, target:
         .imports = &.{
             .{ .name = "eggy", .module = eggy },
             .{ .name = "eggy_editor", .module = engine.modules.get("eggy_editor").? },
-            .{ .name = "eggy_project", .module = project },
+            .{ .name = "eggy_project", .module = editor_project },
         },
     });
     const editor_app = addDesktopApp(b, target, editor_module, b.fmt("{s}_editor", .{options.name}));
     const resources = installEditorResources(b, engine);
+    // Beside the editor on every platform, where it looks for it.
+    const install_library = b.addInstallArtifact(game_library, .{ .dest_dir = .{ .override = .bin }, .implib_dir = .disabled, .pdb_dir = .disabled });
     const editor_step = b.step("editor", "Build the editor");
     editor_step.dependOn(&editor_app.install.step);
+    editor_step.dependOn(&install_library.step);
     editor_step.dependOn(resources);
+    editor_app.run.step.dependOn(&install_library.step);
     b.step("run", "Run the editor").dependOn(&editor_app.run.step);
     all_step.dependOn(&editor_app.install.step);
+    all_step.dependOn(&install_library.step);
     all_step.dependOn(resources);
+    return game_library;
+}
+
+/// The game and its plugins (`project`) as a shared library for the editor, which loads it and
+/// swaps in a rebuilt one while it runs (see `src/editor/hot_reload`).
+fn addGameLibrary(b: *std.Build, engine: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builtin.OptimizeMode, project: *std.Build.Module, name: []const u8) *std.Build.Step.Compile {
+    const module = b.createModule(.{
+        .root_source_file = engine.path("src/editor/hot_reload/library.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+        .pic = true,
+        .imports = &.{
+            .{ .name = "eggy", .module = engine.modules.get("eggy").? },
+            .{ .name = "eggy_project", .module = project },
+        },
+    });
+    return b.addLibrary(.{ .linkage = .dynamic, .name = b.fmt("{s}_game", .{name}), .root_module = module, .use_llvm = true });
 }
 
 /// The modules and dependencies Eggy's own tests need.
