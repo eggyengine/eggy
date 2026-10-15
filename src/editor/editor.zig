@@ -30,6 +30,8 @@ const HotGame = @import("hot_reload/hot_reload.zig").HotGame;
 const preferences = @import("preferences/preferences.zig");
 const entities = @import("entities/entities.zig");
 const scene_file = @import("scene_file.zig");
+const assets = @import("assets/assets.zig");
+const AssetIcons = @import("assets/icons.zig").Icons;
 
 /// The editor for `project`, which declares `name` and `game_library` (the game library's
 /// `file_name`, beside the editor). The game and its plugins run as they do in the runtime,
@@ -59,6 +61,10 @@ pub fn Editor(comptime project: type) type {
         hierarchy_ui: ui.Context,
         /// The Hierarchy's and the Inspector's entity views, and the entity selected.
         entity_editor: entities.EntityEditor,
+        /// The Assets panel's UI (drawing with `ui`'s font), state, and icons.
+        assets_ui: ui.Context,
+        assets_panel: assets.AssetsPanel,
+        asset_icons: AssetIcons,
         console: Console,
         /// A UI of its own for each plugin panel there can be, drawing with `ui`'s font.
         plugin_pages: [panels.max_pages - panels.first_plugin_page]ui.Context,
@@ -136,6 +142,10 @@ pub fn Editor(comptime project: type) type {
             errdefer console_ui.deinit();
             var hierarchy_ui = ui.Context.initWithFont(gpa, context.font);
             errdefer hierarchy_ui.deinit();
+            var assets_ui = ui.Context.initWithFont(gpa, context.font);
+            errdefer assets_ui.deinit();
+            var asset_icons = AssetIcons.load(gpa, context.font);
+            errdefer asset_icons.deinit(gpa);
             var console = Console.init(gpa, mono);
             errdefer console.deinit();
             var plugin_pages: [panels.max_pages - panels.first_plugin_page]ui.Context = undefined;
@@ -188,7 +198,7 @@ pub fn Editor(comptime project: type) type {
                 loaded.start(&app);
             }
             const upgrades = Upgrades.init(gpa, if (opened_project) |opened| opened.dir else null, @import("build_options").source_dir);
-            var self = Self{ .gpa = gpa, .game = game, .game_modified = modifiedAt(library_path), .app = app, .ui = context, .mono = mono, .console_ui = console_ui, .hierarchy_ui = hierarchy_ui, .entity_editor = .init(gpa), .console = console, .plugin_pages = plugin_pages, .workspace = workspace, .frame = frame, .scene = scene, .overlay = overlay, .project = opened_project, .editor_modified = if (opened_project) |opened| editorModified(gpa, opened) else null, .upgrades = upgrades, .preference_folders = preference_folders, .open_scene = open_scene };
+            var self = Self{ .gpa = gpa, .game = game, .game_modified = modifiedAt(library_path), .app = app, .ui = context, .mono = mono, .console_ui = console_ui, .hierarchy_ui = hierarchy_ui, .assets_ui = assets_ui, .assets_panel = .init(gpa), .asset_icons = asset_icons, .entity_editor = .init(gpa), .console = console, .plugin_pages = plugin_pages, .workspace = workspace, .frame = frame, .scene = scene, .overlay = overlay, .project = opened_project, .editor_modified = if (opened_project) |opened| editorModified(gpa, opened) else null, .upgrades = upgrades, .preference_folders = preference_folders, .open_scene = open_scene };
             self.built_sources = self.sourcesNow();
             return self;
         }
@@ -218,6 +228,9 @@ pub fn Editor(comptime project: type) type {
             self.console.deinit();
             self.console_ui.deinit();
             self.hierarchy_ui.deinit();
+            self.assets_ui.deinit();
+            self.assets_panel.deinit();
+            self.asset_icons.deinit(self.gpa);
             self.entity_editor.deinit();
             self.mono.deinit();
             self.gpa.destroy(self.mono);
@@ -292,6 +305,7 @@ pub fn Editor(comptime project: type) type {
                     panels.inspector_page => self.buildInspector(),
                     panels.console_page => self.console.build(page_ui),
                     panels.hierarchy_page => self.entity_editor.buildHierarchy(page_ui, &self.app, self.gamePtr()),
+                    panels.assets_page => if (self.assets_panel.build(page_ui, if (self.project) |opened| opened.dir else null, &self.asset_icons, self.openScenePath())) |action| self.applyAssetAction(action),
                     else => if (self.game) |*game| game.editorPanelUi(index - panels.first_plugin_page, page_ui),
                 }
                 vertices.* = try page_ui.render();
@@ -352,6 +366,34 @@ pub fn Editor(comptime project: type) type {
             var buffer: [64]u8 = undefined;
             const placement = window_placement.Placement.of(self.app.window.window) orelse return job.launchEditor(&.{});
             try job.launchEditor(&.{ window_placement.flag, try placement.format(&buffer) });
+        }
+
+        /// The open scene's path, relative to the project; null with none.
+        fn openScenePath(self: *const Self) ?[]const u8 {
+            return if (self.open_scene) |*scene| scene.path else null;
+        }
+
+        /// Carry out what the Assets panel asked: open or start a scene, or show a file.
+        fn applyAssetAction(self: *Self, action: assets.Action) void {
+            const opened = self.project orelse return;
+            switch (action) {
+                .open_scene, .create_scene => {
+                    const scene = if (self.open_scene) |*open| open else return;
+                    const game = if (self.game) |*loaded| loaded else return std.log.err("the game's library isn't loaded, so scenes can't be opened", .{});
+                    const result = switch (action) {
+                        .open_scene => |path| scene.open(path, &self.app.world, game.sceneAccess()),
+                        else => scene.create(&self.app.world, game.sceneAccess()),
+                    };
+                    result catch |err| return std.log.err("cannot open the scene: {t}", .{err});
+                    self.entity_editor.selected = null;
+                },
+                .reveal => |path| {
+                    // A file shows as its folder.
+                    const folder = std.fs.path.join(self.gpa, &.{ opened.dir, if (std.mem.lastIndexOfScalar(u8, path, '/')) |slash| path[0..slash] else "" }) catch return;
+                    defer self.gpa.free(folder);
+                    file_manager.showFolder(self.gpa, folder) catch |err| std.log.err("cannot show {s}: {t}", .{ path, err });
+                },
+            }
         }
 
         /// File > Save (Ctrl+S): write the world to the open scene, or a new one.
@@ -831,6 +873,12 @@ pub fn Editor(comptime project: type) type {
                 if (!wanted) continue;
                 // ponytail: only the Inspector is exposed to screen readers; give plugin pages AccessKit too once one adapter can serve several contexts.
                 if (index == panels.console_page and self.console.terminal.handle(input)) continue;
+                // Assets' double-clicks, before its UI.
+                if (index == panels.assets_page) {
+                    const result = self.assets_panel.pointer(&self.assets_ui, input);
+                    if (result.action) |action| self.applyAssetAction(action);
+                    if (result.used) continue;
+                }
                 // The Hierarchy's right-clicks, double-clicks, drags and keys, before its UI.
                 if (index == panels.hierarchy_page) {
                     const used = switch (input) {
@@ -854,6 +902,7 @@ pub fn Editor(comptime project: type) type {
             if (index == panels.inspector_page) return &self.ui;
             if (index == panels.console_page) return &self.console_ui;
             if (index == panels.hierarchy_page) return &self.hierarchy_ui;
+            if (index == panels.assets_page) return &self.assets_ui;
             return &self.plugin_pages[index - panels.first_plugin_page];
         }
 
@@ -969,6 +1018,9 @@ test {
     _ = @import("devtools_window.zig");
     _ = @import("hit_test.zig");
     _ = @import("scene_file.zig");
+    _ = @import("assets/assets.zig");
+    _ = @import("assets/listing.zig");
+    _ = @import("assets/icons.zig");
     _ = @import("window_placement.zig");
     _ = @import("hot_reload/hot_reload.zig");
     _ = @import("preferences/preferences.zig");
