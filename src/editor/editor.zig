@@ -707,7 +707,7 @@ pub fn Editor(comptime project: type) type {
                     self.project_flow = null;
                     return .run;
                 }
-                if (flow.handle(curr_event)) return .run;
+                if (flow.handle(curr_event)) return self.toolWindowTook(curr_event);
             }
             // While the Build progress window is up, it takes its own events and the editor no
             // input. Closing it cancels a build under way.
@@ -717,7 +717,7 @@ pub fn Editor(comptime project: type) type {
                     self.closeBuildWindow();
                     return .run;
                 }
-                if (window.handle(curr_event)) return .run;
+                if (window.handle(curr_event)) return self.toolWindowTook(curr_event);
                 if (weeoui_sdl3.translate(curr_event) != null) return .run;
             }
             // Edit > Preferences' window takes its own events; closing it, or Escape, closes it.
@@ -727,7 +727,7 @@ pub fn Editor(comptime project: type) type {
                     self.preferences_window = null;
                     return .run;
                 }
-                if (window.handle(curr_event)) return .run;
+                if (window.handle(curr_event)) return self.toolWindowTook(curr_event);
             }
             // Help > DevTools' window takes its own events; while inspecting, the main window's
             // pointer moves and presses go to it too.
@@ -736,7 +736,7 @@ pub fn Editor(comptime project: type) type {
                     self.toggleDevtools();
                     return .run;
                 }
-                if (window.handle(curr_event)) return .run;
+                if (window.handle(curr_event)) return self.toolWindowTook(curr_event);
                 if (self.slotOf(curr_event) == main_slot) if (weeoui_sdl3.translate(curr_event)) |input| switch (input) {
                     .pointer_move => |p| window.pointerMove(p.x, p.y),
                     .pointer_down => |down| if (window.pointerDown(down.position.x, down.position.y)) return .run,
@@ -811,6 +811,9 @@ pub fn Editor(comptime project: type) type {
                 try self.rebuildOnFocus();
             }
 
+            // A press anywhere in the window, even on the dock or title bar, can take the keyboard
+            // off a field.
+            if (weeoui_sdl3.translate(curr_event)) |input| if (input == .pointer_down) self.unfocusOnPress(slot, input.pointer_down.position, outcome == .ignored);
             // The pages get the rest, and every pointer move so their hover state stays current.
             if (outcome == .ignored or curr_event == .mouse_motion) self.routeToPages(slot, curr_event);
             // Input reaches the game only while it plays.
@@ -1110,6 +1113,29 @@ pub fn Editor(comptime project: type) type {
             std.log.info("turned {s} {s}", .{ key, if (on) "on" else "off" });
         }
 
+        /// One of the editor's own windows (Preferences, DevTools, Build, a project's) took
+        /// `curr_event`: a press there takes the keyboard off every page's field.
+        fn toolWindowTook(self: *Self, curr_event: sdl3.events.Event) sdl3.AppResult {
+            if (curr_event == .mouse_button_down) for (0..self.pageCount()) |index| {
+                self.page(index).focus = 0;
+            };
+            return .run;
+        }
+
+        /// A press at `at` in window `slot` takes the keyboard off every page's field but the one
+        /// pressed: in every window, and in the pressed page too when it lands on nothing to focus
+        /// there. `reaches_pages` is false when the workspace took the press (a tab, a menu, a
+        /// splitter), which keeps no field.
+        fn unfocusOnPress(self: *Self, slot: Slot, at: ui.Vec2, reaches_pages: bool) void {
+            const pressed = if (reaches_pages) self.pageAt(slot, at.x, at.y) else null;
+            if (pressed) |index| self.focused_page = index;
+            for (0..self.pageCount()) |index| {
+                const page_ui = self.page(index);
+                const keeps = if (pressed) |chosen| chosen == index and page_ui.last_root != null and hit_test.controlAt(page_ui.last_root.?, at.x, at.y) != 0 else false;
+                if (!keeps) page_ui.focus = 0;
+            }
+        }
+
         /// Hand `curr_event` from window `slot` to the pages in that window that want it: pointer
         /// moves and releases to all of them, presses and wheels to the one they land on (a press
         /// also gives it the keyboard), keys and text to the focused one.
@@ -1120,18 +1146,6 @@ pub fn Editor(comptime project: type) type {
                 if (inspector.slot == slot) weeoui_sdl3.handleEvent(&self.ui, curr_event);
                 return;
             };
-            if (input == .pointer_down) {
-                const at = input.pointer_down.position;
-                const pressed = self.pageAt(slot, at.x, at.y);
-                if (pressed) |index| self.focused_page = index;
-                // A press anywhere but a field takes the focus off it: fields in other pages, and
-                // in the pressed page when the press lands on nothing to focus.
-                for (0..self.pageCount()) |index| {
-                    const page_ui = self.page(index);
-                    const keeps = if (pressed) |chosen| chosen == index and page_ui.last_root != null and hit_test.controlAt(page_ui.last_root.?, at.x, at.y) != 0 else false;
-                    if (!keeps) page_ui.focus = 0;
-                }
-            }
             for (0..self.pageCount()) |index| {
                 const placed = self.workspace.placed.pages[index] orelse continue;
                 if (placed.slot != slot) continue;
