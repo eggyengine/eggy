@@ -1348,6 +1348,7 @@ pub fn Editor(comptime project: type) type {
             };
             switch (index) {
                 panels.hierarchy_page => if (self.entity_editor.hierarchy.dragLabel(arena)) |label| return label,
+                panels.assets_page => if (self.assets_panel.dragLabel()) |label| return label,
                 panels.inspector_page => if (self.entity_editor.inspector.fieldAt(&self.ui, self.ui.pointer, if (self.game) |*game| game.component_types else &.{})) |field| if (!dragged.fits(field)) {
                     return switch (field.kind) {
                         .entity => if (field.requires.len > 0) std.fmt.allocPrint(arena, "Needs an entity with {s}", .{field.requires}) catch name else "Takes an entity",
@@ -1360,12 +1361,15 @@ pub fn Editor(comptime project: type) type {
         }
 
         /// A press at `at` in window `slot` takes the keyboard off every page's field but the one
-        /// pressed: in every window, and in the pressed page too when it lands on nothing to focus
-        /// there. `reaches_pages` is false when the workspace took the press (a tab, a menu, a
+        /// pressed, and closes the right-click menus of every other page: in every window, and in
+        /// the pressed page too when it lands on nothing to focus there. `reaches_pages` is false when the workspace took the press (a tab, a menu, a
         /// splitter), which keeps no field.
         fn unfocusOnPress(self: *Self, slot: Slot, at: ui.Vec2, reaches_pages: bool) void {
             const pressed = if (reaches_pages) self.pageAt(slot, at.x, at.y) else null;
             if (pressed) |index| self.focused_page = index;
+            // A right-click menu closes on a press anywhere else; its own page handles presses on it.
+            if (pressed != panels.hierarchy_page) self.entity_editor.hierarchy.menu = null;
+            if (pressed != panels.assets_page) self.assets_panel.menu = null;
             for (0..self.pageCount()) |index| {
                 const page_ui = self.page(index);
                 const keeps = if (pressed) |chosen| chosen == index and page_ui.last_root != null and hit_test.controlAt(page_ui.last_root.?, at.x, at.y) != 0 else false;

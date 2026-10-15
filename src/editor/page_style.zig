@@ -41,6 +41,15 @@ pub fn smallText(context: *ui.Context, size: f32) void {
     if (element.paint_kind == .text) element.paint_kind.text.size = size;
 }
 
+/// Size the text field `context` added last to `text` (plus its padding and room for the caret),
+/// no wider than `max_width`, instead of a field's usual minimum width.
+pub fn fitFieldToText(context: *ui.Context, text: []const u8, max_width: f32) void {
+    const element = context.last_added orelse return;
+    const padding = 20 + 8;
+    element.style.min_width = 0;
+    element.style.width = @min(@max(max_width, 0), @max(40, context.font.measure(text, context.theme.text_size) + padding));
+}
+
 /// `text`, cut with "..." to fit `width` at `size`. In `arena`.
 pub fn fitText(arena: std.mem.Allocator, font: *const ui.Font, text: []const u8, size: f32, width: f32) []const u8 {
     if (font.measure(text, size) <= width) return text;

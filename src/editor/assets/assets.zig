@@ -3,9 +3,13 @@
 //! path to climb back up. A filter searches every folder by name. A scene (`.scene.zon`) opens
 //! with a double-click, and any other file shows in the system's file manager. A right-click
 //! opens a menu (open, rename, duplicate, delete, copy path, show in the file manager, and new
-//! folders and scenes); F2 renames and Delete deletes the selected entry. Dragging an entry onto
-//! a folder moves it there (the editor copies it instead with Ctrl held), and onto a reference
-//! field in the Inspector sets the field.
+//! folders and scenes); F2 renames and Delete deletes the selected entry.
+//!
+//! Dragging an entry works as in the Hierarchy: onto a folder it moves there (the editor copies
+//! it instead with Ctrl held), and onto the zone below the files it moves up, to the project (or
+//! in the grid, to the shown folder's parent). The target is outlined, the entry dims, and a chip
+//! with its name, or why letting go won't move it, follows the pointer; Escape cancels. Onto a
+//! reference field in the Inspector it sets the field.
 //!
 //! Like the Hierarchy, the panel doesn't act itself: `build` and `pointer` return the `Action`.
 const std = @import("std");
@@ -45,6 +49,8 @@ const MenuItem = enum(u32) { open, rename, duplicate, delete, copy_path, reveal,
 const menu_id_base: u32 = item_id_base - 32;
 /// The List and Grid buttons' ids: `view_id_base` plus the view.
 const view_id_base: u32 = menu_id_base - 4;
+/// The zone below the files a drag moves up into.
+const up_zone_id: u32 = view_id_base - 1;
 const NameEdit = ui.TextEdit(128);
 
 pub const View = enum { list, grid };
@@ -87,11 +93,10 @@ pub const AssetsPanel = struct {
     /// Owns the menu's entry's text.
     menu_arena: std.heap.ArenaAllocator,
     /// The entry being renamed, and its new name as typed.
-    renaming: ?struct { path: []u8, edit: NameEdit, started: bool = false } = null,
-    /// A press on an entry, which becomes a drag once it moves: the entry's path (owned).
-    drag: ?struct { path: []u8, from: ui.Vec2, moving: bool = false } = null,
-    /// The folder a drag would go into if let go now, found as the panel is built.
-    drop_into: ?[]const u8 = null,
+    renaming: ?struct { path: []u8, edit: NameEdit, started: bool = false, field_id: u32 = 0 } = null,
+    /// A press on an entry, which becomes a drag once it moves: the entry's path (owned), and
+    /// where it would go if let go now.
+    drag: ?struct { path: []u8, from: ui.Vec2, moving: bool = false, target: Target = .none } = null,
     /// What the listing was read for, to tell when to read it again.
     read_for: struct { view: View = .list, filter: std.ArrayList(u8) = .empty, folder: std.ArrayList(u8) = .empty, expanded: usize = 0 } = .{},
 
@@ -126,14 +131,37 @@ pub const AssetsPanel = struct {
         return if (self.view == .grid) self.folder.items else "";
     }
 
-    /// The folder under `at` that `path` can go into: not itself, nor one inside it.
-    fn folderAt(self: *const AssetsPanel, context: *const ui.Context, at: ui.Vec2, path: []const u8) ?[]const u8 {
-        const item = self.itemAt(context, at) orelse return null;
-        if (item.entry.kind != .folder) return null;
-        const folder = item.entry.path;
-        if (std.mem.eql(u8, folder, path)) return null;
-        if (std.mem.startsWith(u8, folder, path) and folder.len > path.len and folder[path.len] == '/') return null;
-        return folder;
+    /// The chip that follows the pointer while dragging: the entry's name, or why letting go
+    /// here won't move it. Null while nothing is dragged.
+    pub fn dragLabel(self: *const AssetsPanel) ?[]const u8 {
+        const drag = self.drag orelse return null;
+        if (!drag.moving) return null;
+        return switch (drag.target) {
+            .inside_itself => "Can't go inside itself",
+            .already_there => "Already in this folder",
+            .none, .folder => std.fs.path.basename(drag.path),
+        };
+    }
+
+    /// Where a drag of `path` would go with the pointer at `at`: the folder there, or the zone's
+    /// folder, unless that is `path` itself, inside it, or where it already is.
+    fn targetAt(self: *const AssetsPanel, context: *const ui.Context, at: ui.Vec2, path: []const u8) Target {
+        const over_zone = if (context.last_bounds.get(up_zone_id)) |zone| zone.rect.contains(at.x, at.y) else false;
+        const folder = if (over_zone) self.upFolder() else blk: {
+            const item = self.itemAt(context, at) orelse return .none;
+            if (item.entry.kind != .folder) return .none;
+            break :blk item.entry.path;
+        };
+        if (std.mem.eql(u8, folder, path)) return .none;
+        if (std.mem.startsWith(u8, folder, path) and folder.len > path.len and folder[path.len] == '/') return .inside_itself;
+        if (std.mem.eql(u8, folder, listing.parentOf(path))) return .already_there;
+        return .{ .folder = folder };
+    }
+
+    /// The folder the zone below the files moves a drag up into: the grid's parent folder, else
+    /// the project.
+    fn upFolder(self: *const AssetsPanel) []const u8 {
+        return if (self.view == .grid and self.filter.text().len == 0) listing.parentOf(self.folder.items) else "";
     }
 
     fn endDrag(self: *AssetsPanel) void {
@@ -158,9 +186,10 @@ pub const AssetsPanel = struct {
         switch (key_down.key) {
             .enter => if (self.renaming != null) return .{ .used = true, .action = self.finishRename() },
             .escape => {
-                const any = self.menu != null or self.renaming != null;
+                const any = self.menu != null or self.renaming != null or self.drag != null;
                 self.menu = null;
                 self.cancelRename();
+                self.endDrag();
                 return .{ .used = any };
             },
             .delete => if (self.renaming == null and self.selected.items.len > 0) return .{ .used = true, .action = .{ .delete = self.selected.items } },
@@ -214,8 +243,10 @@ pub const AssetsPanel = struct {
         page_style.restyle(context, .{ .direction = .row, .gap = 4, .align_items = .center });
 
         self.refresh(dir, context.time_ms);
-        // The folder a drag would go into, lit below.
-        self.drop_into = if (self.dragged()) |path| self.folderAt(context, context.pointer, path) else null;
+        // Where a drag would go, again: its folder points into the listing just read.
+        if (self.drag) |*drag| if (drag.moving) {
+            drag.target = self.targetAt(context, context.pointer, drag.path);
+        };
         const searching = self.filter.text().len > 0;
         if (self.view == .grid and !searching) self.breadcrumbs(context);
 
@@ -237,6 +268,7 @@ pub const AssetsPanel = struct {
             context.end();
             page_style.restyle(context, .{ .gap = 0 });
         }
+        self.upZone(context);
 
         // A press picks an entry; in the list, a folder opens or closes too.
         for (self.shown, 0..) |item, i| if (context.activated(item_id_base + @as(u32, @intCast(i)))) {
@@ -257,13 +289,18 @@ pub const AssetsPanel = struct {
             .pointer_move => |at| {
                 const drag = if (self.drag) |*drag| drag else return .{ .used = false };
                 if (!drag.moving and @abs(at.x - drag.from.x) + @abs(at.y - drag.from.y) > drag_threshold) drag.moving = true;
-                return .{ .used = drag.moving };
+                if (!drag.moving) return .{ .used = false };
+                drag.target = self.targetAt(context, at, drag.path);
+                return .{ .used = true };
             },
             .pointer_up => |up| {
                 const drag = self.drag orelse return .{ .used = false };
                 defer self.endDrag();
                 if (!drag.moving or up.button != .left) return .{ .used = false };
-                const folder = self.folderAt(context, up.position, drag.path) orelse return .{ .used = true };
+                const folder = switch (self.targetAt(context, up.position, drag.path)) {
+                    .folder => |folder| folder,
+                    .none, .inside_itself, .already_there => return .{ .used = true },
+                };
                 // The action's text must outlive the drag: keep it with the menu's.
                 const arena = self.menu_arena.allocator();
                 return .{ .used = true, .action = .{ .move_into = .{ .path = arena.dupe(u8, drag.path) catch return .{ .used = true }, .folder = arena.dupe(u8, folder) catch return .{ .used = true } } } };
@@ -273,7 +310,7 @@ pub const AssetsPanel = struct {
         // A press outside the menu closes it, and one outside the rename keeps the name.
         if (self.menu != null and !self.onMenu(context, down.position)) self.menu = null;
         if (self.renaming) |renaming| {
-            const on_field = if (self.itemAt(context, down.position)) |item| std.mem.eql(u8, item.entry.path, renaming.path) else false;
+            const on_field = if (context.last_bounds.get(renaming.field_id)) |field| field.rect.contains(down.position.x, down.position.y) else false;
             if (!on_field) return .{ .used = false, .action = self.finishRename() };
         }
         if (down.button == .right) {
@@ -333,10 +370,10 @@ pub const AssetsPanel = struct {
         const children = [_]*L.Element{
             chevron,
             b.node(0, .{ .width = 16, .height = 16 }, icons.paint(icon, context.theme), &.{}) catch return,
-            b.node(0, .{ .grow = 1 }, .{ .text = .{ .value = name, .size = 12 } }, &.{}) catch return,
+            b.node(0, .{ .grow = 1 }, .{ .text = .{ .value = name, .size = 12, .tone = if (self.isDragged(item.entry.path)) .muted else .foreground } }, &.{}) catch return,
             b.node(0, .{}, .{ .text = .{ .value = note_text, .size = 11, .tone = .muted } }, &.{}) catch return,
         };
-        const element = b.node(id, .{ .height = row_height, .direction = .row, .align_items = .center, .gap = 6, .padding = .{ .left = left + 4, .right = 6 } }, highlight(arena, id, self.isSelected(item.entry.path) or self.isDropInto(item.entry.path)), &children) catch return;
+        const element = b.node(id, .{ .height = row_height, .direction = .row, .align_items = .center, .gap = 6, .padding = .{ .left = left + 4, .right = 6 } }, highlight(arena, id, self.isSelected(item.entry.path), self.isDropInto(item.entry.path)), &children) catch return;
         element.cursor = .pointer;
         element.accessibility = .{ .role = .menu_item, .label = item.entry.name };
         context.element(element);
@@ -348,7 +385,7 @@ pub const AssetsPanel = struct {
         const id = view_id_base + @intFromEnum(view);
         if (context.activated(id)) self.view = view;
         const icon: Icon = if (view == .list) .list else .grid;
-        const element = b.node(id, .{ .width = 24, .height = 24, .padding = .{ .left = 4, .right = 4, .top = 4, .bottom = 4 } }, highlight(b.allocator, id, self.view == view), &.{
+        const element = b.node(id, .{ .width = 24, .height = 24, .padding = .{ .left = 4, .right = 4, .top = 4, .bottom = 4 } }, highlight(b.allocator, id, self.view == view, false), &.{
             b.node(0, .{ .width = 16, .height = 16 }, icons.paint(icon, context.theme), &.{}) catch return,
         }) catch return;
         element.cursor = .pointer;
@@ -365,9 +402,9 @@ pub const AssetsPanel = struct {
         // Renamed in a field of its own: a tile is too narrow to type in.
         if (self.renamingThis(item.entry.path)) return self.renameField(context, icons.paint(Icon.of(item.entry.kind), context.theme), 0);
         const name = page_style.fitText(arena, context.font, item.entry.name, 11, tile_width - 12);
-        const element = b.node(id, .{ .width = tile_width, .height = tile_height, .align_items = .center, .gap = 6, .padding = .{ .top = 10, .left = 6, .right = 6 } }, highlight(arena, id, self.isSelected(item.entry.path) or is_open or self.isDropInto(item.entry.path)), &.{
+        const element = b.node(id, .{ .width = tile_width, .height = tile_height, .align_items = .center, .gap = 6, .padding = .{ .top = 10, .left = 6, .right = 6 } }, highlight(arena, id, self.isSelected(item.entry.path) or is_open, self.isDropInto(item.entry.path)), &.{
             b.node(0, .{ .width = 40, .height = 40 }, icons.paint(Icon.of(item.entry.kind), context.theme), &.{}) catch return,
-            b.node(0, .{}, .{ .text = .{ .value = name, .size = 11, .alignment = .center } }, &.{}) catch return,
+            b.node(0, .{}, .{ .text = .{ .value = name, .size = 11, .alignment = .center, .tone = if (self.isDragged(item.entry.path)) .muted else .foreground } }, &.{}) catch return,
         }) catch return;
         element.cursor = .pointer;
         element.accessibility = .{ .role = .button, .label = item.entry.name };
@@ -386,14 +423,18 @@ pub const AssetsPanel = struct {
         context.element(context.builder().node(0, .{ .width = 16, .height = 16 }, icon, &.{}) catch return);
         _ = context.textInput("##rename asset", &renaming.edit, "Name");
         const field = context.last_added;
-        page_style.restyle(context, .{ .grow = 1 });
+        // Only as wide as the name, so a press beside it lands on the panel, not the field.
+        page_style.fitFieldToText(context, renaming.edit.text(), context.contentWidth() - left - 16 - 6);
         context.end();
         page_style.restyle(context, .{ .direction = .row, .gap = 6, .align_items = .center, .padding = .{ .left = left } });
         // Focus the field the first frame, so typing goes straight in.
-        if (field) |input| if (!renaming.started) {
-            context.focus = input.id;
-            renaming.started = true;
-        };
+        if (field) |input| {
+            renaming.field_id = input.id;
+            if (!renaming.started) {
+                context.focus = input.id;
+                renaming.started = true;
+            }
+        }
     }
 
     /// The right-click menu, if open, and what was picked from it.
@@ -569,12 +610,35 @@ pub const AssetsPanel = struct {
         self.folder.appendSlice(self.gpa, copy) catch {};
     }
 
-    /// The entry under `at` in last frame's layout.
+    /// Whether a drag would drop into folder `path` if let go now.
     fn isDropInto(self: *const AssetsPanel, path: []const u8) bool {
-        const folder = self.drop_into orelse return false;
-        return std.mem.eql(u8, folder, path);
+        const drag = self.drag orelse return false;
+        if (!drag.moving or drag.target != .folder) return false;
+        return std.mem.eql(u8, drag.target.folder, path);
     }
 
+    fn isDragged(self: *const AssetsPanel, path: []const u8) bool {
+        const dragged_path = self.dragged() orelse return false;
+        return std.mem.eql(u8, dragged_path, path);
+    }
+
+    /// While dragging, the zone below the files that moves the entry up (see `upFolder`), lit
+    /// while it would.
+    fn upZone(self: *const AssetsPanel, context: *ui.Context) void {
+        const drag = self.drag orelse return;
+        if (!drag.moving) return;
+        const up = self.upFolder();
+        if (std.mem.eql(u8, listing.parentOf(drag.path), up)) return;
+        const b = context.builder();
+        const over = drag.target == .folder and std.mem.eql(u8, drag.target.folder, up);
+        const label = if (up.len == 0) "Drop here to move to the project" else std.fmt.allocPrint(b.allocator, "Drop here to move up to {s}", .{std.fs.path.basename(up)}) catch return;
+        const zone = b.node(up_zone_id, .{ .height = 32, .padding = .{ .left = 10, .right = 10 }, .align_items = .center, .direction = .row }, .{ .surface = if (over) .card else .track }, &.{
+            b.node(0, .{ .grow = 1 }, .{ .text = .{ .value = label, .size = 11, .tone = if (over) .foreground else .muted, .wrap = true } }, &.{}) catch return,
+        }) catch return;
+        context.element(zone);
+    }
+
+    /// The entry under `at` in last frame's layout.
     fn itemAt(self: *const AssetsPanel, context: *const ui.Context, at: ui.Vec2) ?Shown {
         for (self.shown, 0..) |item, i| {
             const target = context.last_bounds.get(item_id_base + @as(u32, @intCast(i))) orelse continue;
@@ -584,22 +648,33 @@ pub const AssetsPanel = struct {
     }
 };
 
-/// A row's or tile's background: lit when selected, lighter under the pointer.
-fn highlight(arena: std.mem.Allocator, id: u32, selected: bool) L.Paint {
+/// Where a drag would go if let go now: into a folder, or nowhere and why.
+const Target = union(enum) {
+    none,
+    folder: []const u8,
+    inside_itself,
+    already_there,
+};
+
+/// A row's or tile's background: lit when selected, lighter under the pointer, outlined as a
+/// drag's target (as the Hierarchy's rows are).
+fn highlight(arena: std.mem.Allocator, id: u32, selected: bool, drop_into: bool) L.Paint {
     const look = arena.create(Highlight) catch return .none;
-    look.* = .{ .id = id, .selected = selected };
+    look.* = .{ .id = id, .selected = selected, .drop_into = drop_into };
     return .{ .custom = .{ .context = look, .draw = Highlight.draw } };
 }
 
 const Highlight = struct {
     id: u32,
     selected: bool,
+    drop_into: bool,
 
     fn draw(context: *const anyopaque, c: *ui.Canvas, r: ui.Rect) anyerror!void {
         const self: *const Highlight = @ptrCast(@alignCast(context));
         if (self.selected) {
             try c.roundRect(r, c.theme.accent, c.theme.radiusSm());
         } else if (c.hot_id == self.id) try c.roundRectAlpha(r, c.theme.accent, c.theme.radiusSm(), 0.5);
+        if (self.drop_into) try c.roundRectStroke(r, c.theme.primary, c.theme.radiusSm(), 1.5);
     }
 };
 
@@ -680,6 +755,8 @@ test "dragging a file onto a folder asks to move it there, but not a folder into
     _ = panel.pointer(&context, .{ .pointer_down = .{ .position = file, .button = .left, .clicks = 1 } });
     _ = panel.pointer(&context, .{ .pointer_move = folder });
     try std.testing.expectEqualStrings("ship.png", panel.dragged().?);
+    try std.testing.expectEqualStrings("ship.png", panel.dragLabel().?);
+    try std.testing.expect(panel.isDropInto("art"));
     const dropped = panel.pointer(&context, .{ .pointer_up = .{ .position = folder, .button = .left } });
     try std.testing.expectEqualStrings("ship.png", dropped.action.?.move_into.path);
     try std.testing.expectEqualStrings("art", dropped.action.?.move_into.folder);

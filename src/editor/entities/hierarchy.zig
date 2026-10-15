@@ -234,6 +234,8 @@ pub const Hierarchy = struct {
         if (self.renaming) |*renaming| if (renaming.entity.eql(row.entity)) {
             context.begin(.row);
             const changed = context.textInput("##rename", &renaming.edit, "Name");
+            // Only as wide as the name, so a press beside it lands on the panel, not the field.
+            page_style.fitFieldToText(context, renaming.edit.text(), context.contentWidth() - left - 4);
             const input = context.last_added;
             context.end();
             page_style.restyle(context, .{ .direction = .row, .padding = .{ .left = left + 4 } });
