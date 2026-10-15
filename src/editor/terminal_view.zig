@@ -19,9 +19,13 @@ pub const TerminalView = struct {
     mono: *const ui.Font,
     /// A copy of the output, so selections and input between frames have it.
     text: std.ArrayList(u8) = .empty,
-    /// `text` cut into the rows it is drawn as, each a byte range.
+    /// `text` cut into the rows it is drawn as, each a byte range, up to `wrapped_to` (the start
+    /// of a line), for `columns` characters a row; 0 when they must all be cut again.
     rows: std.ArrayList(Row) = .empty,
     columns: usize = 0,
+    wrapped_to: usize = 0,
+    /// The output's version, as `add` was last given it.
+    version: ?u64 = null,
     /// Rows scrolled back from the end; 0 follows new output.
     scroll_rows: usize = 0,
     /// Byte offsets into `text`; the selection runs between them.
@@ -43,9 +47,13 @@ pub const TerminalView = struct {
         self.rows.deinit(self.gpa);
     }
 
-    /// Show `output` in a `height` tall view on `context`'s page.
-    pub fn add(self: *TerminalView, context: *ui.Context, output: []const u8, height: f32) void {
-        self.setText(output) catch return;
+    /// Show `output` in a `height` tall view on `context`'s page. `version` changes whenever
+    /// `output` does, so unchanged output costs nothing to show again.
+    pub fn add(self: *TerminalView, context: *ui.Context, output: []const u8, version: u64, height: f32) void {
+        if (self.version != version) {
+            self.setText(output) catch return;
+            self.version = version;
+        }
         const width = context.contentWidth();
         const element = context.builder().node(0, .{ .width = width, .height = height }, .{ .custom = .{ .context = self, .draw = draw } }, &.{}) catch return;
         element.accessibility.label = "Output";
@@ -127,7 +135,8 @@ pub const TerminalView = struct {
         }
     }
 
-    /// Take `output` as the view's text: appended to if it grew, else replaced.
+    /// Take `output` as the view's text: appended to if it grew (only the new part is wrapped),
+    /// else replaced.
     fn setText(self: *TerminalView, output: []const u8) !void {
         if (std.mem.startsWith(u8, output, self.text.items)) {
             if (output.len == self.text.items.len) return;
@@ -136,17 +145,23 @@ pub const TerminalView = struct {
             self.text.clearRetainingCapacity();
             try self.text.appendSlice(self.gpa, output);
             self.selection = null;
+            self.columns = 0; // every row is stale
         }
-        self.columns = 0; // rows are stale
     }
 
-    /// Cut `text` into rows of at most `columns` characters, breaking at newlines.
+    /// Cut `text` into rows of at most `columns` characters, breaking at newlines: all of it at
+    /// a new width, else only what was added since.
     fn wrap(self: *TerminalView, columns: usize) !void {
-        if (columns == self.columns) return;
-        self.columns = columns;
-        self.rows.clearRetainingCapacity();
+        if (columns != self.columns) {
+            self.columns = columns;
+            self.rows.clearRetainingCapacity();
+            self.wrapped_to = 0;
+        }
         const text = std.mem.trimEnd(u8, self.text.items, "\n");
-        var start: usize = 0;
+        if (self.wrapped_to > text.len) return;
+        // The last line wrapped may have grown since: cut it again, with what follows.
+        while (self.rows.items.len > 0 and self.rows.items[self.rows.items.len - 1].start >= self.wrapped_to) _ = self.rows.pop();
+        var start = self.wrapped_to;
         while (start <= text.len) {
             const line_end = std.mem.indexOfScalarPos(u8, text, start, '\n') orelse text.len;
             // At least one row per line, even an empty one.
@@ -156,6 +171,11 @@ pub const TerminalView = struct {
                 try self.rows.append(self.gpa, .{ .start = row_start, .end = row_end });
                 if (row_end >= line_end) break;
                 row_start = row_end;
+            }
+            // The last line stays open to more text; the rows before it are done.
+            if (line_end == text.len) {
+                self.wrapped_to = start;
+                break;
             }
             start = line_end + 1;
         }
@@ -426,4 +446,20 @@ test "a log line is coloured by level, scope and the locations in it" {
     var covered: usize = 0;
     for (spans) |span| covered += span.end - span.start;
     try std.testing.expectEqual(line.len, covered);
+}
+
+test "output added a bit at a time wraps as it would all at once" {
+    var growing = TerminalView.init(std.testing.allocator, undefined);
+    defer growing.deinit();
+    var whole = TerminalView.init(std.testing.allocator, undefined);
+    defer whole.deinit();
+    const output = "a long first line\nsecond\n\nthe last one, and longer\n";
+    // Line by line, and a line in two halves, wrapping after each.
+    for ([_]usize{ 5, 18, 25, 26, 40, output.len }) |end| {
+        try growing.setText(output[0..end]);
+        try growing.wrap(7);
+    }
+    try whole.setText(output);
+    try whole.wrap(7);
+    try std.testing.expectEqualSlices(TerminalView.Row, whole.rows.items, growing.rows.items);
 }

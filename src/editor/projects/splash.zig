@@ -33,7 +33,7 @@ pub const Splash = struct {
 
         if (status.stage == .failed) {
             context.alert("Couldn't open the project", status.detail, true);
-            self.terminal.add(context, status.log, 180);
+            self.terminal.add(context, status.log, status.log.len, 180);
             context.begin(.row);
             defer context.end();
             if (context.buttonVariant("Copy all", .outline)) terminal_view.copyToClipboard(status.log);
@@ -46,7 +46,7 @@ pub const Splash = struct {
         context.muted(if (status.detail.len > 0) status.detail else " ");
 
         // The job's output as it happens, behind a button.
-        if (self.show_output) self.terminal.add(context, status.log, 150) else self.terminal.area = null;
+        if (self.show_output) self.terminal.add(context, status.log, status.log.len, 150) else self.terminal.area = null;
         context.begin(.row);
         defer context.end();
         if (context.buttonVariant("Cancel", .ghost)) return .cancel;

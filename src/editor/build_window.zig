@@ -86,7 +86,8 @@ pub const BuildWindow = struct {
             },
         }
         // The window's height less the heading, status lines and buttons.
-        self.terminal.add(context, status.log, @max(120, context.viewport.h - 200));
+        // The build's output only grows, so its length tells when it changed.
+        self.terminal.add(context, status.log, status.log.len, @max(120, context.viewport.h - 200));
 
         context.begin(.row);
         defer context.end();
