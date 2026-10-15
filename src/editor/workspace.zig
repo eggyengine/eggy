@@ -79,6 +79,22 @@ pub const BuildState = union(enum) {
     ready,
 };
 
+/// How long the Playing light stays on, then off.
+const playing_blink_ms = 600;
+
+/// The status bar's "Playing": red text after a red dot, lit or not.
+const PlayingLight = struct {
+    lit: bool,
+
+    fn draw(context: *const anyopaque, c: *ui.Canvas, r: ui.Rect) anyerror!void {
+        const self: *const PlayingLight = @ptrCast(@alignCast(context));
+        const red = c.theme.destructive;
+        const dot: f32 = 8;
+        if (self.lit) try c.roundRect(.{ .x = r.x, .y = r.y + (r.h - dot) / 2, .w = dot, .h = dot }, red, dot / 2);
+        try c.textIn(.{ .x = r.x + 14, .y = r.y, .w = r.w - 14, .h = r.h }, "Playing", 12, red, .start);
+    }
+};
+
 /// How long a toast stays.
 const toast_ms = 2500;
 
@@ -252,7 +268,7 @@ pub const Workspace = struct {
         const dock_rect = ui.Rect{ .x = viewport.x, .y = viewport.y + bar_height, .w = viewport.w, .h = @max(0, viewport.h - bar_height - status_height) };
         const docked = try self.dock.build(b, .main, dock_rect, panels.Provider{ .placements = &self.placed, .slot = main_slot, .plugin_panels = self.plugin_panels });
         const play = try play_button.element(b, self.playing, viewport.x, viewport.w, bar_height);
-        const status = try self.statusBar(b, viewport.w);
+        const status = try self.statusBar(b, viewport.w, font);
         var main_children: std.ArrayList(*L.Element) = .empty;
         try main_children.appendSlice(b.allocator, &.{ top_bar, docked, status, play });
         const reload = if (self.project != null) try reload_button.element(b, self.build_state == .ready, viewport.x, viewport.w, bar_height) else null;
@@ -313,7 +329,7 @@ pub const Workspace = struct {
 
     /// The bar along the main window's bottom: which project is open (and where), the rebuild,
     /// whether the game is playing, and Eggy's version.
-    fn statusBar(self: *const Workspace, b: L.Builder, width: f32) !*L.Element {
+    fn statusBar(self: *const Workspace, b: L.Builder, width: f32, font: *const ui.Font) !*L.Element {
         var children: std.ArrayList(*L.Element) = .empty;
         const text = struct {
             fn make(builder: L.Builder, value: []const u8, tone: @FieldType(L.Text, "tone")) !*L.Element {
@@ -335,7 +351,14 @@ pub const Workspace = struct {
             .failed => try children.append(b.allocator, try text(b, "Build failed: see the Console", .foreground)),
             .ready => try children.append(b.allocator, try text(b, "Rebuilt", .foreground)),
         }
-        if (self.playing) try children.append(b.allocator, try text(b, "Playing", .foreground));
+        if (self.playing) {
+            // Red, with a dot that blinks like a camera's recording light.
+            const look = try b.allocator.create(PlayingLight);
+            look.* = .{ .lit = (self.time_ms / playing_blink_ms) % 2 == 0 };
+            const light = try b.node(0, .{ .width = 14 + font.measure("Playing", 12), .height = status_height }, .{ .custom = .{ .context = look, .draw = PlayingLight.draw } }, &.{});
+            light.accessibility = .{ .role = .status, .label = "Playing" };
+            try children.append(b.allocator, light);
+        }
         const version = if (self.engine_label) |label|
             try std.fmt.allocPrint(b.allocator, "Eggy {s} ({s})", .{ eggy_version, label })
         else
