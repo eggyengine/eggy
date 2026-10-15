@@ -34,6 +34,17 @@ pub fn editor(store: *const Store) Editor {
     return store.getKeyed(Editor, editor_key);
 }
 
+/// `key` (`snake_case`, as module and field names are) as people read it: `straight_bullshit`
+/// is "Straight bullshit". In `arena`.
+pub fn displayName(arena: std.mem.Allocator, key: []const u8) ![]const u8 {
+    const name = try arena.dupe(u8, key);
+    for (name) |*char| if (char.* == '_') {
+        char.* = ' ';
+    };
+    if (name.len > 0) name[0] = std.ascii.toUpper(name[0]);
+    return name;
+}
+
 /// Where the two layers live, absolute; the project's is null without a project.
 pub const Folders = struct {
     global: []u8,

@@ -338,11 +338,13 @@ pub fn Editor(comptime project: type) type {
         /// titled after the project. In `arena`.
         fn preferenceSections(self: *const Self, arena: std.mem.Allocator) ![]const preferences.Section {
             var sections: std.ArrayList(preferences.Section) = .empty;
-            try sections.append(arena, .{ .title = "Editor", .manifest = preferences.editor_manifest });
+            try sections.append(arena, .{ .title = "Editor", .subtitle = "How the editor looks and behaves.", .manifest = preferences.editor_manifest });
             if (self.game) |game| for (game.preference_manifests) |manifest| {
-                const is_game = std.mem.eql(u8, manifest.key, "game");
-                const section_title = if (is_game) (if (self.project) |opened| opened.title else "Game") else manifest.key;
-                try sections.append(arena, .{ .title = section_title, .manifest = manifest });
+                if (std.mem.eql(u8, manifest.key, "game")) {
+                    try sections.append(arena, .{ .title = if (self.project) |opened| opened.title else "Game", .subtitle = "Your game's own preferences.", .manifest = manifest });
+                } else {
+                    try sections.append(arena, .{ .title = try preferences.displayName(arena, manifest.key), .subtitle = try std.fmt.allocPrint(arena, "From the {s} plugin.", .{manifest.key}), .manifest = manifest });
+                }
             };
             return sections.items;
         }
