@@ -1,7 +1,7 @@
 //! The Inspector's view of the entity selected in the Hierarchy: its name, then a card per
 //! component, each field with the control its kind calls for (the rest as ZON text). A card's
-//! header folds it away; Remove takes the component off; Add component offers the types it
-//! doesn't have. Values are read from the world every frame, so fields a system changes change
+//! header folds it away; Remove takes the component off; Add component opens a search over the
+//! types it doesn't have. Values are read from the world every frame, so fields a system changes change
 //! here too, except one being typed into.
 //!
 //! Like the Hierarchy, the page doesn't change the world itself: `build` returns the `Action` the
@@ -40,6 +40,11 @@ pub const Action = union(enum) {
 };
 
 const FieldEdit = ui.TextEdit(256);
+const SearchEdit = ui.TextEdit(64);
+/// The most component types the search lists at once.
+const max_listed = 12;
+/// The listed types' element ids: `pick_id_base` plus their place in the list.
+const pick_id_base: u32 = 0x6E00_0000;
 const NameEdit = ui.TextEdit(eggy.Name.max_len);
 const control_width: f32 = 160;
 /// A dropdown's text size, and the room its padding and chevron take beside the text.
@@ -60,8 +65,11 @@ pub const EntityInspector = struct {
     folded: std.AutoHashMapUnmanaged(usize, void) = .empty,
     /// The entity the state above is for.
     shown: ?ecs.EntityId = null,
+    /// Add component's search while it is open, and whether it has had the keyboard yet.
+    search: ?struct { edit: SearchEdit, focused: bool = false } = null,
 
     const name_key = std.math.maxInt(u32);
+    const search_key = std.math.maxInt(u32) - 1;
 
     pub fn init(gpa: std.mem.Allocator) EntityInspector {
         return .{ .gpa = gpa };
@@ -79,6 +87,7 @@ pub const EntityInspector = struct {
             self.edits.clearRetainingCapacity();
             self.folded.clearRetainingCapacity();
             self.focused = null;
+            self.search = null;
             self.shown = details.entity;
         }
         var action: ?Action = null;
@@ -96,7 +105,7 @@ pub const EntityInspector = struct {
 
         // Adding a component comes first, above the ones it has.
         const width = context.contentWidth();
-        if (addComponentPicker(context, details.addable, width)) |index| action = .{ .add_component = index };
+        if (self.addComponentSearch(context, details.addable, width, &focused)) |index| action = .{ .add_component = index };
         if (details.components.len == 0) {
             context.muted("No components yet.");
             page_style.smallText(context, 13);
@@ -197,22 +206,67 @@ pub const EntityInspector = struct {
         restyle(context, .{ .direction = .row, .gap = 10, .align_items = .center });
         return action;
     }
-};
 
-/// A dropdown of the component types that can be added; picking one returns its index.
-fn addComponentPicker(context: *ui.Context, addable: []const Details.Addable, width: f32) ?usize {
-    if (addable.len == 0) return null;
-    const arena = context.builder().allocator;
-    const labels = arena.alloc([]const u8, addable.len + 1) catch return null;
-    labels[0] = "Add component...";
-    for (labels[1..], addable) |*label, choice| label.* = page_style.fitText(arena, context.font, choice.label, select_text_size, width - select_chrome);
-    var picked: usize = 0;
-    const changed = context.select("##add component", labels, &picked);
-    if (context.last_added) |trigger| if (trigger.overlay == null) {
-        trigger.style.min_width = 0;
-    };
-    return if (changed and picked > 0) addable[picked - 1].index else null;
-}
+    /// Add component: a button that opens a search over the types `addable` lists, each match a
+    /// row to pick (Enter picks the first). Returns the index of the type picked.
+    fn addComponentSearch(self: *EntityInspector, context: *ui.Context, addable: []const Details.Addable, width: f32, focused: *?u32) ?usize {
+        if (addable.len == 0) return null;
+        const b = context.builder();
+        const arena = b.allocator;
+        if (context.buttonVariant(if (self.search == null) "Add component" else "Close##add component", .outline)) {
+            self.search = if (self.search == null) .{ .edit = SearchEdit.init("") catch unreachable } else null;
+        }
+        page_style.restyle(context, .{ .width = width });
+        const search = &(self.search orelse return null);
+
+        // The search, focused as it opens so typing goes straight in.
+        _ = context.textInput("##component search", &search.edit, "Search components");
+        page_style.restyle(context, .{ .width = width });
+        if (context.last_added) |input| input.style.min_width = 0;
+        // Enter picks the first match; Escape closes the search.
+        var enter = false;
+        if (context.last_added) |input| {
+            if (!search.focused) {
+                context.focus = input.id;
+                search.focused = true;
+            }
+            if (context.focus == input.id) {
+                focused.* = search_key;
+                for (context.pending.items) |item| if (item == .key) switch (item.key.key) {
+                    .enter => enter = true,
+                    .escape => {
+                        self.search = null;
+                        return null;
+                    },
+                    else => {},
+                };
+            }
+        }
+
+        // The types whose name holds what was typed, ignoring case.
+        const query = std.mem.trim(u8, search.edit.text(), " ");
+        var listed: usize = 0;
+        var picked: ?usize = null;
+        for (addable) |choice| {
+            if (query.len > 0 and std.ascii.indexOfIgnoreCase(choice.label, query) == null) continue;
+            if (listed == max_listed) break;
+            const id = pick_id_base + @as(u32, @intCast(listed));
+            if (context.activated(id) or (enter and listed == 0)) picked = choice.index;
+            const label = page_style.fitText(arena, context.font, choice.label, 13, width - 40);
+            const row = b.node(id, .{ .height = 24 }, .{ .menu_item = .{ .label = label } }, &.{}) catch return null;
+            row.cursor = .pointer;
+            row.accessibility = .{ .role = .menu_item, .label = choice.label };
+            context.element(row);
+            listed += 1;
+        }
+        if (listed == 0) {
+            context.muted("No component matches.");
+            page_style.smallText(context, 12);
+        }
+        if (picked != null) self.search = null;
+        return picked;
+    }
+};
 
 /// A field's key in `EntityInspector.edits`.
 fn fieldKey(component: usize, field: usize) u32 {
@@ -251,11 +305,40 @@ test "a component with long names and values fits a narrow Inspector" {
         .components = &.{.{ .index = 0, .info = info, .values = &values }},
         .addable = &.{.{ .index = 1, .label = "AnotherComponentWithALongName (some_plugin)" }},
     };
-    for ([_]f32{ 220, 320, 600 }) |width| {
+    for ([_]bool{ false, true }) |searching| for ([_]f32{ 220, 320, 600 }) |width| {
         const viewport = ui.Rect{ .x = 0, .y = 0, .w = width, .h = 800 };
         context.newFrame(viewport);
+        // Add component's search, open, and searching for one of the types.
+        if (searching) inspector.search = .{ .edit = try SearchEdit.init("another") };
         _ = inspector.build(&context, details);
         _ = try context.render();
         try ui_checks.expectFits(context.last_root.?, context.font, viewport);
-    }
+    };
+}
+
+test "the component search lists only the types that match, ignoring case" {
+    var context = try ui.Context.init(std.testing.allocator);
+    defer context.deinit();
+    var inspector = EntityInspector.init(std.testing.allocator);
+    defer inspector.deinit();
+    const details = Details{ .entity = .init(1, 0), .name = "", .components = &.{}, .addable = &.{
+        .{ .index = 0, .label = "Orbit" },
+        .{ .index = 1, .label = "Position" },
+        .{ .index = 2, .label = "Body" },
+    } };
+    inspector.shown = details.entity;
+    inspector.search = .{ .edit = try SearchEdit.init("OR"), .focused = true };
+    context.newFrame(.{ .x = 0, .y = 0, .w = 300, .h = 400 });
+    _ = inspector.build(&context, details);
+    _ = try context.render();
+    var labels: std.ArrayList([]const u8) = .empty;
+    defer labels.deinit(std.testing.allocator);
+    try collectMenuItems(context.last_root.?, &labels);
+    try std.testing.expectEqual(@as(usize, 1), labels.items.len);
+    try std.testing.expectEqualStrings("Orbit", labels.items[0]);
+}
+
+fn collectMenuItems(element: *const ui.Layout.Element, labels: *std.ArrayList([]const u8)) !void {
+    if (element.paint_kind == .menu_item) try labels.append(std.testing.allocator, element.paint_kind.menu_item.label);
+    for (element.children) |child| try collectMenuItems(child, labels);
 }
