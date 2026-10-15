@@ -22,6 +22,8 @@ pub const Name = @import("name.zig").Name;
 pub const transform = @import("transform.zig");
 pub const Transform = transform.Transform;
 pub const mesh = @import("mesh.zig");
+pub const assets = @import("eggy_assets");
+pub const model_cache = @import("model_cache.zig");
 pub const Mesh = mesh.Mesh;
 pub const camera = @import("camera.zig");
 pub const Camera = camera.Camera;
@@ -45,6 +47,8 @@ test {
     _ = @import("transform.zig");
     _ = @import("mesh.zig");
     _ = @import("mesh_renderer.zig");
+    _ = @import("model_cache.zig");
+    _ = @import("eggy_assets");
     _ = @import("camera.zig");
     _ = @import("refs.zig");
     _ = @import("weeoui");

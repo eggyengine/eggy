@@ -1,5 +1,6 @@
-//! `Mesh`: the simple shape an entity is drawn as, and its colour. A built-in component, drawn by
-//! `mesh_renderer.zig` wherever the entity's `Transform` puts it. `gather` lists what to draw; it
+//! `Mesh`: the shape an entity is drawn as (built in, or a model file of the project), and its
+//! colour. A built-in component, drawn by `mesh_renderer.zig` wherever the entity's `Transform`
+//! puts it. `gather` lists what to draw; it
 //! runs where the component types are known (the runtime, or the editor's game library).
 const std = @import("std");
 const ecs = @import("clutch");
@@ -7,6 +8,7 @@ const math = @import("eggenvector");
 const transform_zig = @import("transform.zig");
 const Transform = transform_zig.Transform;
 const AssetRef = @import("refs.zig").AssetRef;
+const assets = @import("eggy_assets");
 
 /// The shapes there are, each about a metre across, centred on the entity.
 pub const Shape = enum(u32) { cube, sphere, plane, cylinder, cone };
@@ -19,6 +21,13 @@ pub const Source = union(enum) {
     cylinder,
     cone,
     model: AssetRef(.model),
+
+    /// The built-in `shape`, as a `Mesh`'s shape.
+    pub fn of(shape: Shape) Source {
+        return switch (shape) {
+            inline else => |tag| @unionInit(Source, @tagName(tag), {}),
+        };
+    }
 };
 
 pub const Mesh = struct {
@@ -27,17 +36,29 @@ pub const Mesh = struct {
     color: [3]f32 = .{ 0.8, 0.8, 0.8 },
 };
 
-/// One entity to draw: where (its model matrix's columns), in what colour, as what shape, and
-/// which entity it is. Plain data, so it crosses from the editor's game library as is.
+/// One entity to draw: where (its model matrix's columns), in what colour, as what shape or
+/// model file, and which entity it is. Plain data, so it crosses from the editor's game library
+/// as is.
 pub const Drawable = extern struct {
     model: [4][4]f32,
     color: [4]f32,
+    /// A built-in shape's; `.cube` for a model file, as far as picking goes.
     shape: Shape,
     entity_id: u32,
     entity_generation: u32,
+    /// The model file it is drawn as (its path in the project), when not a built-in shape. It
+    /// points into the world's `Mesh`, so it lasts only until the world next changes.
+    model_file_len: u32 = 0,
+    model_file: ?[*]const u8 = null,
 
     pub fn entity(self: Drawable) ecs.EntityId {
         return .init(self.entity_id, self.entity_generation);
+    }
+
+    /// The model file's path, or null for a built-in shape.
+    pub fn modelFile(self: Drawable) ?[]const u8 {
+        const file = self.model_file orelse return null;
+        return file[0..self.model_file_len];
     }
 };
 
@@ -49,24 +70,25 @@ pub fn gather(world: *ecs.World, out: []Drawable) usize {
     while (meshes.next()) |view| {
         if (count == out.len) break;
         const mesh = view.get(*const Mesh);
-        // ponytail: models aren't drawn yet; draw them once they can be loaded.
-        const shape: Shape = switch (mesh.shape) {
-            .model => continue,
-            inline else => |_, tag| @field(Shape, @tagName(tag)),
-        };
         const model = transform_zig.worldMatrix(world, view.entity);
-        out[count] = .{ .model = undefined, .color = .{ mesh.color[0], mesh.color[1], mesh.color[2], 1 }, .shape = shape, .entity_id = view.entity.id, .entity_generation = view.entity.generation };
+        out[count] = .{ .model = undefined, .color = .{ mesh.color[0], mesh.color[1], mesh.color[2], 1 }, .shape = .cube, .entity_id = view.entity.id, .entity_generation = view.entity.generation };
+        switch (mesh.shape) {
+            // A model with no file yet is nothing to draw.
+            .model => |*file| {
+                if (file.len == 0) continue;
+                out[count].model_file = &file.buffer;
+                out[count].model_file_len = file.len;
+            },
+            inline else => |_, tag| out[count].shape = @field(Shape, @tagName(tag)),
+        }
         for (&out[count].model, model.data) |*column, data| column.* = data;
         count += 1;
     }
     return count;
 }
 
-/// A vertex of a shape: where it is, and which way its surface faces.
-pub const Vertex = extern struct {
-    position: [3]f32,
-    normal: [3]f32,
-};
+/// A vertex of a shape or model: where it is, and which way its surface faces.
+pub const Vertex = assets.model.Vertex;
 
 /// Every shape's vertices and triangles in one pair of lists; `ranges[shape]` says which part of
 /// `indices` draws it.
@@ -214,4 +236,20 @@ test "a child's mesh is drawn where its parent's transform puts it" {
     try std.testing.expectEqual(Shape.sphere, drawn[0].shape);
     try std.testing.expect(drawn[0].entity().eql(child));
     try std.testing.expectEqualSlices(f32, &.{ 5, 2, 0, 1 }, &drawn[0].model[3]);
+}
+
+test "a model's mesh is drawn as its file, and one with no file isn't drawn" {
+    var world = ecs.World.init(std.testing.allocator);
+    defer world.deinit();
+    _ = try world.spawn(.{ Transform{}, Mesh{ .shape = .{ .model = .init("ships/fighter.glb") } } });
+    _ = try world.spawn(.{ Transform{}, Mesh{ .shape = .{ .model = .{} } } });
+    _ = try world.spawn(.{ Transform{}, Mesh{ .shape = .of(.cone) } });
+
+    var drawn: [4]Drawable = undefined;
+    try std.testing.expectEqual(@as(usize, 2), gather(&world, &drawn));
+    // In whatever order the world keeps them.
+    const model, const cone = if (drawn[0].modelFile() != null) .{ drawn[0], drawn[1] } else .{ drawn[1], drawn[0] };
+    try std.testing.expectEqualStrings("ships/fighter.glb", model.modelFile().?);
+    try std.testing.expectEqual(Shape.cone, cone.shape);
+    try std.testing.expect(cone.modelFile() == null);
 }

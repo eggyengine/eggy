@@ -1,6 +1,7 @@
 //! A project folder's contents as the Assets panel lists them: folders first, then files, by
-//! name, each with the kind of thing it is; hidden files and build output left out.
+//! name, each with the kind of thing it is; hidden files, descriptors and build output left out.
 const std = @import("std");
+const eggy = @import("eggy");
 
 pub const Kind = enum {
     folder,
@@ -46,7 +47,8 @@ pub fn list(arena: std.mem.Allocator, io: std.Io, project: std.Io.Dir, folder: [
     var entries: std.ArrayList(Entry) = .empty;
     var it = dir.iterate();
     while (it.next(io) catch null) |item| {
-        if (item.name.len == 0 or item.name[0] == '.') continue;
+        // Hidden files, and descriptors, which belong to the file beside them.
+        if (item.name.len == 0 or item.name[0] == '.' or eggy.assets.descriptor.isDescriptor(item.name)) continue;
         const found: ?Kind = switch (item.kind) {
             .directory => blk: {
                 for (skipped) |name| if (std.mem.eql(u8, item.name, name)) break :blk null;

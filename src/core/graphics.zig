@@ -6,6 +6,7 @@ const viewport3d = @import("viewport3d.zig");
 const mesh = @import("mesh.zig");
 const camera = @import("camera.zig");
 const weeoui_vitellus = @import("weeoui_vitellus");
+const ModelCache = @import("model_cache.zig").ModelCache;
 
 /// The GPU device, the main window's `Surface`, and the 3D scene that draws into it.
 pub const Graphics = struct {
@@ -18,6 +19,8 @@ pub const Graphics = struct {
     /// The main window's swapchain.
     surface: Surface,
     preview: viewport3d.Preview,
+    /// The model files meshes are drawn as, shared by every scene drawn; set its `loader`.
+    models: ModelCache,
 
     pub fn init(allocator: std.mem.Allocator, window: sdl_adapter.Sdl3Window) !Graphics {
         // Eggy's shaders are SPIR-V and WGSL; each platform only tries the backends it has.
@@ -44,6 +47,7 @@ pub const Graphics = struct {
             .color_format = color_format,
             .surface = surface,
             .preview = preview,
+            .models = .init(allocator, device),
         };
     }
 
@@ -57,6 +61,7 @@ pub const Graphics = struct {
 
     pub fn deinit(self: *Graphics) void {
         self.queue.waitIdle() catch {};
+        self.models.deinit();
         self.preview.deinit();
         self.surface.deinit();
         self.queue.deinit();
@@ -84,7 +89,7 @@ pub const Graphics = struct {
     /// `view`, over the whole of `frame`. Call outside a render pass.
     pub fn drawScene(self: *Graphics, frame: Frame, drawables: []mesh.Drawable, view: camera.View) !void {
         const window = ui.Rect{ .x = 0, .y = 0, .w = @floatFromInt(frame.extent.width), .h = @floatFromInt(frame.extent.height) };
-        try self.preview.draw(frame.cmd, frame.target, window, window, window, frame.extent, weeoui_vitellus.isSrgb(self.color_format), drawables, view, null);
+        try self.preview.draw(frame.cmd, frame.target, window, window, window, frame.extent, weeoui_vitellus.isSrgb(self.color_format), drawables, &self.models, view, null);
     }
 };
 

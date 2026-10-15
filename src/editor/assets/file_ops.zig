@@ -1,8 +1,11 @@
 //! What the Assets panel does to the project's files: new folders, renaming, duplicating, moving
 //! and copying into folders, importing files from outside, and deleting, which moves things into
 //! `.eggy/trash/` (so a deletion can be undone) rather than erasing them. Paths are relative to
-//! the project, with `/` between parts, and never leave it.
+//! the project, with `/` between parts, and never leave it. A file's descriptor
+//! (`eggy.assets.descriptor`) goes wherever the file does; a copy gets none (`descriptors.zig`
+//! makes it a new one).
 const std = @import("std");
+const descriptor = @import("eggy").assets.descriptor;
 
 pub const trash_dir = ".eggy/trash";
 
@@ -22,6 +25,7 @@ pub fn rename(gpa: std.mem.Allocator, io: std.Io, project: std.Io.Dir, path: []c
     errdefer gpa.free(target);
     if (exists(io, project, target)) return error.PathAlreadyExists;
     try project.rename(path, project, target, io);
+    carryDescriptor(io, project, path, target);
     return target;
 }
 
@@ -83,6 +87,7 @@ pub fn trash(gpa: std.mem.Allocator, io: std.Io, project: std.Io.Dir, path: []co
     const target = try join(gpa, folder, std.fs.path.basename(path));
     errdefer gpa.free(target);
     try project.rename(path, project, target, io);
+    carryDescriptor(io, project, path, target);
     return target;
 }
 
@@ -90,6 +95,7 @@ pub fn trash(gpa: std.mem.Allocator, io: std.Io, project: std.Io.Dir, path: []co
 pub fn move(io: std.Io, project: std.Io.Dir, from: []const u8, to: []const u8) !void {
     if (exists(io, project, to)) return error.PathAlreadyExists;
     try project.rename(from, project, to, io);
+    carryDescriptor(io, project, from, to);
 }
 
 /// Move `from` (in the trash) back to `to`.
@@ -97,6 +103,17 @@ pub fn restore(io: std.Io, project: std.Io.Dir, from: []const u8, to: []const u8
     if (exists(io, project, to)) return error.PathAlreadyExists;
     if (std.fs.path.dirname(to)) |parent| try project.createDirPath(io, parent);
     try project.rename(from, project, to, io);
+    carryDescriptor(io, project, from, to);
+}
+
+/// Move the descriptor of the file moved from `from` to `to` along with it, if it has one. A
+/// descriptor left behind is found and removed later, so a failure here only loses its id.
+fn carryDescriptor(io: std.Io, project: std.Io.Dir, from: []const u8, to: []const u8) void {
+    var from_buffer: [std.fs.max_path_bytes]u8 = undefined;
+    var to_buffer: [std.fs.max_path_bytes]u8 = undefined;
+    const from_descriptor = descriptor.pathOf(&from_buffer, from) catch return;
+    const to_descriptor = descriptor.pathOf(&to_buffer, to) catch return;
+    project.rename(from_descriptor, project, to_descriptor, io) catch {};
 }
 
 /// `name` in `folder`, or `name 2`, `name 3` and so on, whichever is free, with `extension`.
@@ -121,6 +138,8 @@ fn copyTree(gpa: std.mem.Allocator, io: std.Io, from_dir: std.Io.Dir, from: []co
     defer dir.close(io);
     var it = dir.iterate();
     while (try it.next(io)) |entry| {
+        // Descriptors stay with the originals: each copy gets its own.
+        if (descriptor.isDescriptor(entry.name)) continue;
         const inner_from = try join(gpa, from, entry.name);
         defer gpa.free(inner_from);
         const inner_to = try join(gpa, to, entry.name);
@@ -215,4 +234,34 @@ test "moving and copying into folders, and importing from outside" {
     defer gpa.free(imported);
     try std.testing.expectEqualStrings("sounds/boom.ogg", imported);
     try std.testing.expect(exists(io, project, "sounds/boom.ogg"));
+}
+
+test "a file's descriptor goes where it goes, and copies get none" {
+    const gpa = std.testing.allocator;
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const project = tmp.dir;
+    try project.createDirPath(io, "art");
+    try project.writeFile(io, .{ .sub_path = "ship.glb", .data = "x" });
+    try project.writeFile(io, .{ .sub_path = "ship.glb.eggy", .data = ".{ .id = 1, .kind = .model }" });
+
+    const renamed = try rename(gpa, io, project, "ship.glb", "fighter.glb");
+    defer gpa.free(renamed);
+    try std.testing.expect(exists(io, project, "fighter.glb.eggy"));
+    try std.testing.expect(!exists(io, project, "ship.glb.eggy"));
+    const moved = try moveInto(gpa, io, project, "fighter.glb", "art");
+    defer gpa.free(moved);
+    try std.testing.expect(exists(io, project, "art/fighter.glb.eggy"));
+
+    const trashed = try trash(gpa, io, project, "art/fighter.glb");
+    defer gpa.free(trashed);
+    try std.testing.expect(!exists(io, project, "art/fighter.glb.eggy"));
+    try restore(io, project, trashed, "art/fighter.glb");
+    try std.testing.expect(exists(io, project, "art/fighter.glb.eggy"));
+
+    const folder_copy = try duplicate(gpa, io, project, "art");
+    defer gpa.free(folder_copy);
+    try std.testing.expect(exists(io, project, "art copy/fighter.glb"));
+    try std.testing.expect(!exists(io, project, "art copy/fighter.glb.eggy"));
 }

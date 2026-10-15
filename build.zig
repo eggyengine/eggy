@@ -1,6 +1,7 @@
 const std = @import("std");
 const vitellus_build = @import("vitellus");
 const Emscripten = vitellus_build.Emscripten;
+const models = @import("src/build/models.zig");
 
 pub fn build(b: *std.Build) void {
     const update_submodules = b.addSystemCommand(&.{ "git", "submodule", "update", "--init", "--remote", "--recursive" });
@@ -38,6 +39,8 @@ pub fn build(b: *std.Build) void {
         const editor_tests = &b.addRunArtifact(b.addTest(.{ .root_module = editor, .use_llvm = true })).step;
         b.step("test-editor", "Run eggy_editor's tests").dependOn(editor_tests);
         test_step.dependOn(editor_tests);
+        // Importing models through `eggy_assimp`, for real.
+        if (editor.import_table.get("eggy_model_import")) |model_import| editor_tests.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = model_import, .use_llvm = true })).step);
 
         // Hot reload, for real: load the empty game's library, run it, swap it, and unload it.
         const library_options = b.addOptions();
@@ -163,7 +166,14 @@ fn addProject(b: *std.Build, engine: *std.Build, emscripten: Emscripten, target:
     }
     installRuntimeLibraries(b, engine);
     const runtime_app = addDesktopApp(b, target, runtime_module, runtime_name);
-    b.step("runtime", "Build the game").dependOn(&runtime_app.install.step);
+    const runtime_step = b.step("runtime", "Build the game");
+    runtime_step.dependOn(&runtime_app.install.step);
+    // Packaging: the game's models, converted for the runtime, installed beside it.
+    if (models.addPackaging(b, engine, optimize)) |packaged| {
+        runtime_step.dependOn(packaged);
+        runtime_app.run.step.dependOn(packaged);
+        b.getInstallStep().dependOn(packaged);
+    }
     b.step("run-runtime", "Run the game").dependOn(&runtime_app.run.step);
     all_step.dependOn(&runtime_app.install.step);
 
@@ -195,11 +205,14 @@ fn addProject(b: *std.Build, engine: *std.Build, emscripten: Emscripten, target:
     const install_library = b.addInstallArtifact(game_library, .{ .dest_dir = .{ .override = .bin }, .implib_dir = .disabled, .pdb_dir = .disabled });
     const editor_step = b.step("editor", "Build the editor");
     editor_step.dependOn(&editor_app.install.step);
+    const editor_libraries = installEditorLibraries(b, engine);
+    editor_step.dependOn(editor_libraries);
     editor_step.dependOn(&install_library.step);
     editor_step.dependOn(resources);
     editor_app.run.step.dependOn(&install_library.step);
     b.step("run", "Run the editor").dependOn(&editor_app.run.step);
     all_step.dependOn(&editor_app.install.step);
+    all_step.dependOn(editor_libraries);
     all_step.dependOn(&install_library.step);
     all_step.dependOn(resources);
     return game_library;
@@ -273,6 +286,7 @@ const Engine = struct {
     sdl3: *std.Build.Dependency,
     shader_module: *std.Build.Module,
     weeoui_vitellus: *std.Build.Module,
+    assets: *std.Build.Module,
 };
 
 /// Publish Eggy's modules (`eggy`, `eggy_runtime`, and `eggy_editor` on desktop) and the runtime
@@ -360,6 +374,8 @@ fn addEngine(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.buil
     engine.addImport("clutch", b.dependency("clutch", .{ .target = target, .optimize = optimize }).module("clutch"));
     engine.addImport("weeoui", weeoui.module("weeoui"));
     engine.addImport("fatal_dialog", fatal_dialog);
+    const assets = models.assetsModule(b, target, optimize);
+    engine.addImport("eggy_assets", assets);
     // Weeoui's renderer compiled against Eggy's own Vitellus (its -Dvitellus would fetch a second copy).
     const weeoui_vitellus = b.createModule(.{
         .root_source_file = weeoui.path("src/vitellus.zig"),
@@ -440,6 +456,10 @@ fn addEngine(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.buil
         build_options.addOption([]const u8, "source_dir", source_dir);
         editor.addOptions("build_options", build_options);
         editor.addAnonymousImport("mono_font", .{ .root_source_file = b.path("resources/fonts/JetBrainsMono-Regular.ttf") });
+        // Model files, imported through assimp in a library of its own, installed beside the editor.
+        const importer = models.addImporter(b, target, optimize, assets) orelse return null;
+        editor.addImport("eggy_model_import", importer.module);
+        b.addNamedLazyPath(b.fmt(editor_library_prefix ++ "{s}", .{models.installedPath(target.result, importer.library)}), importer.library.getEmittedBin());
     }
 
     return .{
@@ -450,6 +470,7 @@ fn addEngine(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.buil
         .sdl3 = sdl3,
         .shader_module = shader_module,
         .weeoui_vitellus = weeoui_vitellus,
+        .assets = assets,
     };
 }
 
@@ -528,6 +549,21 @@ fn isSubmodule(parent: std.Io.Dir, io: std.Io, name: []const u8) bool {
 }
 
 const runtime_library_prefix = "runtime:";
+/// Like `runtime_library_prefix`, for libraries only the editor loads (`eggy_assimp`).
+const editor_library_prefix = "editor:";
+
+/// Install the libraries only the editor loads (published by `addEngine`) into `b`'s prefix.
+/// Returns the step that does.
+fn installEditorLibraries(b: *std.Build, engine: *std.Build) *std.Build.Step {
+    const step = b.step("editor-libraries", "Install the libraries the editor loads");
+    var it = engine.named_lazy_paths.iterator();
+    while (it.next()) |entry| {
+        if (!std.mem.startsWith(u8, entry.key_ptr.*, editor_library_prefix)) continue;
+        step.dependOn(&b.addInstallFile(entry.value_ptr.*, entry.key_ptr.*[editor_library_prefix.len..]).step);
+    }
+    b.getInstallStep().dependOn(step);
+    return step;
+}
 
 /// Install the libraries Eggy's executables load at runtime (published by `addEngine`) into `b`'s prefix.
 fn installRuntimeLibraries(b: *std.Build, engine: *std.Build) void {
@@ -573,9 +609,11 @@ fn addCoreTests(b: *std.Build, engine: Engine) *std.Build.Step {
             .{ .name = "weeoui_vitellus", .module = engine.weeoui_vitellus },
             .{ .name = "eggenvector", .module = engine.eggy.import_table.get("eggenvector").? },
             .{ .name = "clutch", .module = engine.eggy.import_table.get("clutch").? },
+            .{ .name = "eggy_assets", .module = engine.assets },
         },
     });
     step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = viewport, .use_llvm = true })).step);
+    step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = engine.assets, .use_llvm = true })).step);
     return step;
 }
 

@@ -36,6 +36,12 @@
             .url = "git+https://github.com/ziglibs/s2s#2ad1e7e4eb73f6ed90218d305472d8922b109d69",
             .hash = "s2s-0.0.1-qt8ajXF9AABu59Lb3VhU2fa84NnRRpLsds6qQUOwJcOx",
         },
+        .assimp = .{
+            .url = "https://github.com/assimp/assimp/archive/v5.3.1.tar.gz",
+            .hash = "N-V-__8AACI1agiq-JJtHIb-h7Td-FFZ-HgD1WOpv1g_Vl3w",
+            // Only the editor and packaging import models; the web build never fetches it.
+            .lazy = true,
+        },
     },
     .paths = .{
         "build.zig",

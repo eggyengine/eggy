@@ -91,7 +91,7 @@ pub const SceneTexture = struct {
         // Render, then leave the texture ready for `draw` to sample.
         try cmd.barrier(&.{.{ .texture = .{ .texture = target.texture, .before = if (target.rendered) .sampled else .common, .after = .color_attachment } }});
         const whole = ui.Rect{ .x = 0, .y = 0, .w = @floatFromInt(extent_px.width), .h = @floatFromInt(extent_px.height) };
-        try self.preview.draw(cmd, target.view, whole, whole, whole, extent_px, weeoui_vitellus.isSrgb(graphics.color_format), drawables, view, selected);
+        try self.preview.draw(cmd, target.view, whole, whole, whole, extent_px, weeoui_vitellus.isSrgb(graphics.color_format), drawables, &graphics.models, view, selected);
         try cmd.barrier(&.{.{ .texture = .{ .texture = target.texture, .before = .color_attachment, .after = .sampled } }});
         target.rendered = true;
     }

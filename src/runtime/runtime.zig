@@ -3,6 +3,7 @@ const builtin = @import("builtin");
 const std = @import("std");
 const eggy = @import("eggy");
 const sdl3 = eggy.sdl_adapter.sdl;
+const packaged_models = @import("packaged_models.zig");
 
 const web = builtin.os.tag == .emscripten;
 const fps = 340000;
@@ -25,6 +26,8 @@ pub fn Runtime(comptime project: type) type {
             _ = args;
             var app = try eggy.App.init(gpa, project.name);
             errdefer app.deinit();
+            // Model files, as packaging made them.
+            app.graphics.models.loader = packaged_models.loader;
             // The project's preferences, baked in by `addGame`, before the plugins start.
             if (@hasDecl(project, "preference_files")) for (project.preference_files) |file| {
                 app.preference_values.read(.project, file.key, file.zon) catch |err| std.log.warn("the preferences for {s} don't parse ({t}): they are ignored", .{ file.key, err });

@@ -44,6 +44,8 @@ const hit_test = @import("hit_test.zig");
 const scene_view = @import("scene_view/scene_view.zig");
 const assets = @import("assets/assets.zig");
 const AssetIcons = @import("assets/icons.zig").Icons;
+const descriptors = @import("assets/descriptors.zig");
+const ProjectModels = @import("assets/model_loader.zig").ProjectModels;
 
 /// The editor for `project`, which declares `name` and `game_library` (the game library's
 /// `file_name`, beside the editor). The game and its plugins run as they do in the runtime,
@@ -131,6 +133,8 @@ pub fn Editor(comptime project: type) type {
         hidden: bool = false,
         /// The project this editor opened (`--project <dir>`), from its `eggy.zon`.
         project: ?workspace_zig.Project = null,
+        /// The open project's model files, imported for the scene's model cache.
+        project_models: ?*ProjectModels = null,
         /// The build started when the window regains focus, while it runs or once it made a new
         /// editor (see `rebuildState`).
         rebuild: ?*Job = null,
@@ -260,8 +264,17 @@ pub fn Editor(comptime project: type) type {
                 loaded.start(&app, plugin_switches.off());
             }
             const upgrades = Upgrades.init(gpa, if (opened_project) |opened| opened.dir else null, @import("build_options").source_dir);
-            var self = Self{ .gpa = gpa, .game = game, .game_modified = modifiedAt(library_path), .app = app, .ui = context, .mono = mono, .console_ui = console_ui, .hierarchy_ui = hierarchy_ui, .assets_ui = assets_ui, .assets_panel = .init(gpa), .asset_icons = asset_icons, .entity_editor = .init(gpa), .console = console, .plugin_pages = plugin_pages, .workspace = workspace, .frame = frame, .scene = scene, .drawables = drawables, .overlay = overlay, .project = opened_project, .editor_modified = if (opened_project) |opened| editorModified(gpa, opened) else null, .upgrades = upgrades, .preference_folders = preference_folders, .open_scene = open_scene, .history = .{ .gpa = gpa }, .plugin_switches = plugin_switches };
+            // Model files, imported from the project as the scene first shows each.
+            const project_models: ?*ProjectModels = if (opened_project) |opened| blk: {
+                const models = try gpa.create(ProjectModels);
+                models.* = .{ .project_dir = opened.dir };
+                app.graphics.models.loader = models.loader();
+                break :blk models;
+            } else null;
+            errdefer if (project_models) |models| gpa.destroy(models);
+            var self = Self{ .gpa = gpa, .game = game, .game_modified = modifiedAt(library_path), .app = app, .ui = context, .mono = mono, .console_ui = console_ui, .hierarchy_ui = hierarchy_ui, .assets_ui = assets_ui, .assets_panel = .init(gpa), .asset_icons = asset_icons, .entity_editor = .init(gpa), .console = console, .plugin_pages = plugin_pages, .workspace = workspace, .frame = frame, .scene = scene, .drawables = drawables, .overlay = overlay, .project = opened_project, .editor_modified = if (opened_project) |opened| editorModified(gpa, opened) else null, .upgrades = upgrades, .preference_folders = preference_folders, .open_scene = open_scene, .history = .{ .gpa = gpa }, .plugin_switches = plugin_switches, .project_models = project_models };
             self.built_sources = self.sourcesNow();
+            self.syncDescriptors();
             return self;
         }
 
@@ -282,6 +295,7 @@ pub fn Editor(comptime project: type) type {
             if (self.rebuild) |job| job.deinit();
             if (self.picked_project.swap(null, .acq_rel)) |path| std.heap.c_allocator.free(std.mem.span(path));
             if (self.project) |opened| freeProject(self.gpa, opened);
+            if (self.project_models) |models| self.gpa.destroy(models);
             self.upgrades.deinit();
             for (&self.popouts) |*popout| if (popout.*) |*open| {
                 open.close(&self.app.graphics);
@@ -659,7 +673,7 @@ pub fn Editor(comptime project: type) type {
                     };
                     result catch |err| return std.log.err("cannot open the scene: {t}", .{err});
                     self.entity_editor.selected = null;
-                    self.assets_panel.refreshSoon();
+                    self.filesChanged();
                     // A different scene: its history starts here.
                     self.history.clear();
                     if (self.sceneText()) |text| self.history.setBaseline(text);
@@ -697,7 +711,7 @@ pub fn Editor(comptime project: type) type {
             const io = threaded.io();
             var files = try std.Io.Dir.cwd().openDir(io, project_dir, .{});
             defer files.close(io);
-            defer self.assets_panel.refreshSoon();
+            defer self.filesChanged();
             switch (action) {
                 .create_folder => |parent| self.history.record(.{ .create = .{ .path = try file_ops.createFolder(self.gpa, io, files, parent) } }),
                 .rename => |change| {
@@ -768,7 +782,7 @@ pub fn Editor(comptime project: type) type {
             const io = threaded.io();
             var files = try std.Io.Dir.cwd().openDir(io, opened.dir, .{});
             defer files.close(io);
-            defer self.assets_panel.refreshSoon();
+            defer self.filesChanged();
             switch (step.*) {
                 .scene => |change| {
                     const game = if (self.game) |*loaded| loaded else return error.NoGame;
@@ -1066,6 +1080,10 @@ pub fn Editor(comptime project: type) type {
             if (curr_event == .window_focus_gained and self.cameBack()) {
                 // Another editor may have unpacked a newer Eggy meanwhile.
                 self.upgrades.refresh();
+                // Files may have changed outside: models import again, and descriptors catch up.
+                self.app.graphics.queue.waitIdle() catch {};
+                self.app.graphics.models.forgetAll();
+                self.filesChanged();
                 try self.rebuildOnFocus();
             }
 
@@ -1421,7 +1439,28 @@ pub fn Editor(comptime project: type) type {
             var message: [128]u8 = undefined;
             self.workspace.toast(std.fmt.bufPrint(&message, "Added {s}", .{imported}) catch "Added the file");
             self.history.record(.{ .create = .{ .path = imported } });
+            self.filesChanged();
+        }
+
+        /// The project's files changed: the Assets panel lists them again, and descriptors keep up.
+        fn filesChanged(self: *Self) void {
             self.assets_panel.refreshSoon();
+            self.syncDescriptors();
+        }
+
+        /// Give every file in the project's `resources/` a descriptor, and drop those whose file
+        /// has gone. A model's descriptor may have changed with it, so models import again.
+        fn syncDescriptors(self: *Self) void {
+            const opened = self.project orelse return;
+            var threaded: std.Io.Threaded = .init_single_threaded;
+            const io = threaded.io();
+            var files = std.Io.Dir.cwd().openDir(io, opened.dir, .{}) catch return;
+            defer files.close(io);
+            const changes = descriptors.sync(self.gpa, io, files) catch |err| return std.log.warn("cannot update the resources' descriptors: {t}", .{err});
+            if (!changes.any()) return;
+            std.log.debug("descriptors: {d} made, {d} removed", .{ changes.made, changes.removed });
+            self.app.graphics.queue.waitIdle() catch {};
+            self.app.graphics.models.forgetAll();
         }
 
         /// The chip beside the pointer while `dragged` is over page `index`: its name, or why
@@ -1717,6 +1756,8 @@ test {
     _ = @import("assets/listing.zig");
     _ = @import("assets/icons.zig");
     _ = @import("assets/file_ops.zig");
+    _ = @import("assets/descriptors.zig");
+    _ = @import("assets/model_loader.zig");
     _ = @import("window_placement.zig");
     _ = @import("hot_reload/hot_reload.zig");
     _ = @import("preferences/preferences.zig");
