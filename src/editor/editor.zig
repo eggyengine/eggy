@@ -628,6 +628,17 @@ pub fn Editor(comptime project: type) type {
             self.entity_editor.selected = null;
         }
 
+        /// Keep the selected entity's Transform as it is in play, for when play stops (Ctrl+Shift+K).
+        fn keepSelectedTransform(self: *Self) void {
+            const game = if (self.game) |*loaded| loaded else return;
+            const entity = self.entity_editor.selected orelse return self.workspace.toast("Select an entity to keep its Transform");
+            const kept = self.play_mode.keepTransform(&self.app, game, entity) catch |err| {
+                std.log.err("cannot keep the Transform: {t}", .{err});
+                return self.workspace.toast("Couldn't keep the Transform: see the Console");
+            };
+            self.workspace.toast(if (kept) "Kept its Transform for after Stop" else "Only an entity with a Transform from before Play can keep it");
+        }
+
         /// The open scene's path, relative to the project; null with none.
         fn openScenePath(self: *const Self) ?[]const u8 {
             return if (self.open_scene) |*scene| scene.path else null;
@@ -978,6 +989,12 @@ pub fn Editor(comptime project: type) type {
                     return .run;
                 },
                 else => {},
+            };
+
+            // Ctrl+Shift+K while playing keeps the selected entity's Transform for after Stop.
+            if (curr_event == .key_down) if (curr_event.key_down.key) |key| if (key == .k and !curr_event.key_down.repeat and curr_event.key_down.mod.controlDown() and curr_event.key_down.mod.shiftDown() and self.play_mode.playing()) {
+                self.keepSelectedTransform();
+                return .run;
             };
 
             // Escape three times in a row stops play, whatever else each press does.

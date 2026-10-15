@@ -104,6 +104,8 @@ pub const Scene = struct {
     arena: std.heap.ArenaAllocator,
     /// Parents come before their children.
     entities: []const Entity = &.{},
+    /// For a scene `capture` made: the world's entity each of `entities` was made from.
+    sources: []const ecs.EntityId = &.{},
 
     pub const Entity = struct {
         name: []const u8 = "",
@@ -165,6 +167,7 @@ pub const Scene = struct {
             while (i > 0) : (i -= 1) try pending.append(gpa, children.items[i - 1]);
         }
         self.entities = entities.items;
+        self.sources = try arena.dupe(ecs.EntityId, captured.items);
 
         // References to entities of the scene become their places in it.
         for (self.entities) |entity| for (entity.components) |component| {
@@ -478,6 +481,7 @@ test "capturing roots takes their descendants only, which go under a new parent"
     var scene = try Scene.capture(gpa, &world, access, &.{a});
     defer scene.deinit();
     try std.testing.expectEqual(@as(usize, 2), scene.entities.len);
+    try std.testing.expectEqualSlices(ecs.EntityId, &.{ a, b }, scene.sources);
     const holder = try world.spawn(.{});
     const made = try scene.instantiate(gpa, &world, access, holder);
     defer gpa.free(made.entities);

@@ -2,7 +2,9 @@
 //! playing and not paused; otherwise only its editor tools do (`editorUpdate`), so nothing
 //! changes by itself. Play keeps the scene as it was, and Stop starts the game over on it:
 //! whatever happened while playing, every value goes back. Three presses of Escape in a row
-//! (`escape_presses` within `escape_window_ms`) stop it too.
+//! (`escape_presses` within `escape_window_ms`) stop it too. Ctrl+Shift+K keeps the selected
+//! entity's `Transform` as it is while playing (`keepTransform`): Stop puts the scene back with
+//! that one change.
 const std = @import("std");
 const eggy = @import("eggy");
 const HotGame = @import("hot_reload/hot_reload.zig").HotGame;
@@ -49,6 +51,41 @@ pub const PlayMode = struct {
     pub fn play(self: *PlayMode, gpa: std.mem.Allocator, app: *eggy.App, game: *const HotGame, roots: []const eggy.ecs.EntityId) !void {
         if (self.before != null) return;
         self.before = try eggy.scene.Scene.capture(gpa, &app.world, game.sceneAccess(), roots);
+    }
+
+    /// Keep `entity`'s `Transform` as it is now in the scene that `stop` puts back. Returns
+    /// false, keeping nothing, when not playing, or the entity began during play or has no
+    /// `Transform`.
+    pub fn keepTransform(self: *PlayMode, app: *eggy.App, game: *const HotGame, entity: eggy.ecs.EntityId) !bool {
+        const scene = if (self.before) |*kept| kept else return false;
+        const place = for (scene.sources, 0..) |source, i| {
+            if (source.eql(entity)) break i;
+        } else return false;
+        const access = game.sceneAccess();
+        const component = for (access.types(), 0..) |info, i| {
+            if (std.mem.eql(u8, info.name, "Transform") and std.mem.eql(u8, info.owner, "eggy")) break i;
+        } else return false;
+        if (!access.has(&app.world, entity, component)) return false;
+
+        // Its fields as they are now, in the scene's own memory.
+        const arena = scene.arena.allocator();
+        const info = access.types()[component];
+        const fields = try arena.alloc(eggy.scene.Scene.Field, info.fields.len);
+        for (fields, info.fields, 0..) |*field, field_info, index| {
+            var buffer: [4096]u8 = undefined;
+            const value = access.readField(&app.world, entity, component, index, &buffer) orelse return false;
+            field.* = .{ .name = field_info.name, .value = try arena.dupe(u8, value) };
+        }
+        // In place of the Transform it had when play began, or added if it had none.
+        const kept_entity = &@constCast(scene.entities)[place];
+        for (@constCast(kept_entity.components)) |*kept| {
+            if (std.mem.eql(u8, kept.type, info.name) and std.mem.eql(u8, kept.owner, info.owner)) {
+                kept.fields = fields;
+                return true;
+            }
+        }
+        kept_entity.components = try std.mem.concat(arena, eggy.scene.Scene.Component, &.{ kept_entity.components, &.{.{ .type = info.name, .owner = info.owner, .fields = fields }} });
+        return true;
     }
 
     /// Stop playing: the game starts over on the scene kept by `play`, with the plugins keyed in
