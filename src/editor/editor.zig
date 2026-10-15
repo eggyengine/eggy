@@ -218,6 +218,7 @@ pub fn Editor(comptime project: type) type {
             var frame_arena = std.heap.ArenaAllocator.init(self.gpa);
             defer frame_arena.deinit();
             self.workspace.build_state = try self.rebuildState(frame_arena.allocator());
+            self.workspace.time_ms = sdl3.timer.getMillisecondsSinceInit();
             self.workspace.engine_label = self.upgrades.label;
             self.workspace.can_upgrade = self.upgrades.can_upgrade;
             self.workspace.can_link = self.upgrades.can_link;

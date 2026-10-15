@@ -72,6 +72,9 @@ pub const BuildState = union(enum) {
     ready,
 };
 
+/// How long the pointer rests on a title bar button before its tooltip shows.
+const tooltip_delay_ms = 500;
+
 /// Height of the status bar along the main window's bottom.
 const status_height: f32 = 24;
 
@@ -110,6 +113,11 @@ pub const Workspace = struct {
     shift_held: bool = false,
     pointer: ui.Vec2 = .{ .x = -1, .y = -1 },
     pointer_slot: Slot = main_slot,
+    /// Milliseconds since the editor started, set before each `build`, for tooltips' delay.
+    time_ms: u64 = 0,
+    /// The main window's control under the pointer, and since when, for tooltips.
+    hover_id: u32 = 0,
+    hover_since_ms: u64 = 0,
     /// Each window's tree from the last `build`; lives in `arena` until the next one.
     roots: [slot_count]?*L.Element = @splat(null),
     /// The panels plugins add (`eggy.plugins.Set.editor_panels`); panel i has dock id
@@ -185,7 +193,7 @@ pub const Workspace = struct {
     /// window `i` over `window_viewports[i]` (null until the editor has opened it).
     pub fn build(self: *Workspace, viewport: ui.Rect, window_viewports: [dock.max_windows]?ui.Rect, font: *const ui.Font) !void {
         // Read the hovered menu item before the trees it's found in go away.
-        const hot = self.controlAt(main_slot, self.pointer.x, self.pointer.y);
+        const hot = if (self.pointer_slot == main_slot) self.controlAt(main_slot, self.pointer.x, self.pointer.y) else 0;
         self.roots = @splat(null);
         self.placed = .{};
         _ = self.arena.reset(.retain_capacity);
@@ -219,7 +227,20 @@ pub const Workspace = struct {
         const status = try self.statusBar(b, viewport.w);
         var main_children: std.ArrayList(*L.Element) = .empty;
         try main_children.appendSlice(b.allocator, &.{ top_bar, docked, status, play });
-        if (self.project != null) try main_children.append(b.allocator, try reload_button.element(b, self.build_state == .ready, viewport.x, viewport.w, bar_height));
+        const reload = if (self.project != null) try reload_button.element(b, self.build_state == .ready, viewport.x, viewport.w, bar_height) else null;
+        if (reload) |button| try main_children.append(b.allocator, button);
+        // A tooltip for the play or Reload button once the pointer has rested on it a moment.
+        if (hot != self.hover_id) {
+            self.hover_id = hot;
+            self.hover_since_ms = self.time_ms;
+        }
+        if (self.time_ms -| self.hover_since_ms >= tooltip_delay_ms) if (self.tooltipText(hot)) |text| {
+            const button = if (hot == play_button.id) play else reload orelse unreachable;
+            // Sized to its text: an overlay in this column would otherwise stretch across it.
+            const tooltip = try widgets.tooltipAt(b, button, text);
+            tooltip.style.width = font.measure(text, 13) + 20;
+            try main_children.append(b.allocator, tooltip);
+        };
         const main = try b.node(0, .{ .width = viewport.w, .height = viewport.h, .direction = .column }, .none, main_children.items);
         main.layout(viewport, font);
         self.roots[main_slot] = main;
@@ -233,6 +254,13 @@ pub const Workspace = struct {
             tree.layout(area, font);
             self.roots[slot] = tree;
         }
+    }
+
+    /// What the title bar button `id` (play or Reload) does, for its tooltip; null for others.
+    fn tooltipText(self: *const Workspace, id: u32) ?[]const u8 {
+        if (id == play_button.id) return if (self.playing) "Stop" else "Play";
+        if (id == reload_button.id) return if (self.build_state == .ready) "Reload (ready)" else "Reload";
+        return null;
     }
 
     /// The bar along the main window's bottom: which project is open (and where), the rebuild,
@@ -596,4 +624,28 @@ test "the game's panels follow it across swaps, and the Inspector stays in front
     workspace.setPluginPanels(&.{});
     try std.testing.expect(workspace.dock.nodeOf(panels.plugin_first) == null);
     try std.testing.expect(workspace.dock.nodeOf(panels.plugin_first + 1) == null);
+}
+
+test "the play button's tooltip shows once the pointer rests on it" {
+    var workspace = try testWorkspace();
+    defer workspace.deinit();
+    var font = try ui.Font.init(std.testing.allocator, ui.default_font);
+    defer font.deinit();
+    const viewport = ui.Rect{ .x = 0, .y = 0, .w = 1000, .h = 600 };
+    try workspace.build(viewport, @splat(null), &font);
+    workspace.pointer = workspace.roots[main_slot].?.find(play_button.id).?.bounds.center();
+
+    const tooltipShown = struct {
+        fn f(element: *const L.Element) bool {
+            if (element.paint_kind == .surface and element.paint_kind.surface == .tooltip) return true;
+            for (element.children) |child| if (f(child)) return true;
+            return false;
+        }
+    }.f;
+    workspace.time_ms = 1000;
+    try workspace.build(viewport, @splat(null), &font);
+    try std.testing.expect(!tooltipShown(workspace.roots[main_slot].?));
+    workspace.time_ms = 1000 + tooltip_delay_ms;
+    try workspace.build(viewport, @splat(null), &font);
+    try std.testing.expect(tooltipShown(workspace.roots[main_slot].?));
 }
