@@ -12,6 +12,7 @@ const dock = ui.dock;
 const menus = @import("menus.zig");
 const panels = @import("panels.zig");
 const play_button = @import("play_button.zig");
+const scene_view = @import("scene_view/scene_view.zig");
 const hit_test = @import("hit_test.zig");
 const reload_button = @import("reload_button.zig");
 const Panel = panels.Panel;
@@ -39,6 +40,8 @@ pub const Outcome = union(enum) {
     window: titlebar.Button,
     /// The play button: start the game (true) or stop it (false).
     play: bool,
+    /// A button floating over the Scene panel.
+    scene_button: scene_view.toolbar.Button,
     /// File > New Project.
     new_project,
     /// File > Open Project.
@@ -129,6 +132,8 @@ pub const Workspace = struct {
     window_state: titlebar.State = .{},
     /// Whether the game is playing, which turns the play button into a stop button.
     playing: bool = false,
+    /// What floats over the Scene panel, set by the editor before each `build`.
+    scene_overlay: scene_view.Overlay = .{},
     /// Why Play won't start, shown in the status bar while it won't (borrowed for the frame).
     play_warning: ?[]const u8 = null,
     /// The project open in this editor, shown in the status bar; its text belongs to the editor.
@@ -292,7 +297,7 @@ pub const Workspace = struct {
         };
         const bar_height = if (self.custom_frame) titlebar.height else widgets.window_menubar_height;
         const dock_rect = ui.Rect{ .x = viewport.x, .y = viewport.y + bar_height, .w = viewport.w, .h = @max(0, viewport.h - bar_height - status_height) };
-        const docked = try self.dock.build(b, .main, dock_rect, panels.Provider{ .placements = &self.placed, .slot = main_slot, .plugin_panels = self.plugin_panels });
+        const docked = try self.dock.build(b, .main, dock_rect, panels.Provider{ .placements = &self.placed, .slot = main_slot, .plugin_panels = self.plugin_panels, .scene_overlay = &self.scene_overlay });
         const play = try play_button.element(b, self.playing, viewport.x, viewport.w, bar_height);
         const status = try self.statusBar(b, viewport.w, font);
         var main_children: std.ArrayList(*L.Element) = .empty;
@@ -321,7 +326,7 @@ pub const Workspace = struct {
             const area = window_viewport orelse continue;
             if (self.dock.windows[i] == null) continue;
             const slot = windowSlot(i);
-            const tree = try self.dock.build(b, .{ .window = @intCast(i) }, area, panels.Provider{ .placements = &self.placed, .slot = slot, .plugin_panels = self.plugin_panels });
+            const tree = try self.dock.build(b, .{ .window = @intCast(i) }, area, panels.Provider{ .placements = &self.placed, .slot = slot, .plugin_panels = self.plugin_panels, .scene_overlay = &self.scene_overlay });
             tree.layout(area, font);
             self.roots[slot] = tree;
         }
@@ -540,6 +545,7 @@ pub const Workspace = struct {
                     }
                     if (self.menubar.press(id)) |action| return self.run(action);
                 }
+                if (scene_view.toolbar.buttonOf(id)) |button| return .{ .scene_button = button };
                 if (self.dock.press(id, down.position.x, down.position.y)) return .handled;
                 return if (self.dock.dismissMenu()) .handled else .ignored;
             },

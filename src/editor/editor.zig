@@ -40,7 +40,7 @@ const save_prompt_zig = @import("save_prompt.zig");
 const page_style = @import("page_style.zig");
 const file_ops = @import("assets/file_ops.zig");
 const hit_test = @import("hit_test.zig");
-const SceneCamera = @import("scene_camera.zig").SceneCamera;
+const scene_view = @import("scene_view/scene_view.zig");
 const assets = @import("assets/assets.zig");
 const AssetIcons = @import("assets/icons.zig").Icons;
 
@@ -111,8 +111,8 @@ pub fn Editor(comptime project: type) type {
         scene: eggy.SceneTexture,
         /// The meshes the scene draws, gathered from the world through the game's library.
         drawables: []eggy.mesh.Drawable,
-        /// What the Scene panel is seen from, steered with the mouse over it.
-        scene_camera: SceneCamera = .{},
+        /// The Scene panel's camera, gizmo, picking and buttons.
+        scene_view: scene_view.SceneView = .{},
         /// When the scene camera last flew, to fly by the time since.
         camera_tick_ns: u64 = 0,
         /// Draws the main window's UI into the frame `Graphics` already started.
@@ -328,8 +328,12 @@ pub fn Editor(comptime project: type) type {
             self.keepLayout();
             // The scene camera flies by the keys held, over the time since the last frame.
             const now_ns = sdl3.timer.getNanosecondsSinceInit();
-            if (self.camera_tick_ns != 0) self.scene_camera.fly(@as(f32, @floatFromInt(now_ns - self.camera_tick_ns)) / std.time.ns_per_s);
+            if (self.camera_tick_ns != 0) self.scene_view.camera.fly(@as(f32, @floatFromInt(now_ns - self.camera_tick_ns)) / std.time.ns_per_s);
             self.camera_tick_ns = now_ns;
+            // What the Scene panel is seen from, and the selection's gizmo over it.
+            self.entity_editor.forgetDead(&self.app);
+            self.scene_view.update(self.sceneTarget(), if (self.workspace.placed.scene) |placed| placed.rect else null);
+            self.workspace.scene_overlay = self.scene_view.overlay();
 
             // Lay out every window, then tell the OS where the main title bar is.
             const flags = self.app.window.window.getFlags();
@@ -858,7 +862,8 @@ pub fn Editor(comptime project: type) type {
             const scene_px = if (self.workspace.placed.scene) |placed| if (placed.slot == slot) self.toPixels(placed.rect) else null else null;
             if (scene_px) |rect| {
                 const meshes = if (self.game) |*game| game.gatherMeshes(&self.app, self.drawables) else self.drawables[0..0];
-                try self.scene.render(&self.app.graphics, frame.cmd, .{ .width = @intFromFloat(@round(rect.w)), .height = @intFromFloat(@round(rect.h)) }, meshes, self.scene_camera.view());
+                self.scene_view.drawn = meshes;
+                try self.scene.render(&self.app.graphics, frame.cmd, .{ .width = @intFromFloat(@round(rect.w)), .height = @intFromFloat(@round(rect.h)) }, meshes, self.scene_view.view, self.entity_editor.selected);
             }
 
             // The UI under the Scene panel, the scene texture, then the UI over it.
@@ -944,11 +949,11 @@ pub fn Editor(comptime project: type) type {
             };
 
             // The Scene panel's camera takes presses, drags and wheels over it; F frames the selection.
-            if (self.scene_camera.handle(curr_event, self.sceneRect(slot))) {
+            if (self.scene_view.handleFirst(curr_event, self.sceneRect(slot))) {
                 if (curr_event == .mouse_button_down) self.unfocusOnPress(slot, .{ .x = curr_event.mouse_button_down.x, .y = curr_event.mouse_button_down.y }, false);
                 return .run;
             }
-            if (curr_event == .key_down) if (curr_event.key_down.key) |key| if (key == .f and self.scene_camera.hovered and self.scene_camera.drag == null) {
+            if (curr_event == .key_down) if (curr_event.key_down.key) |key| if (key == .f and self.scene_view.camera.hovered and self.scene_view.camera.drag == null) {
                 self.frameSelected();
                 return .run;
             };
@@ -978,6 +983,7 @@ pub fn Editor(comptime project: type) type {
                     if (weeoui_sdl3.windowAction(self.app.window.window, button)) return .success;
                 },
                 .play => |playing| if (playing) self.startPlaying() else self.stopPlaying(),
+                .scene_button => |button| self.scene_view.press(button),
                 .new_project => if (self.project_flow == null and self.mayLeave(.new_project)) {
                     layout_file.save(self.gpa, self.preference_folders.global, &self.workspace.dock, self.workspace.seen_plugin_panels.items);
                     self.project_flow = try ProjectFlow.create(self.gpa, &self.app.graphics, self.ui.font, self.mono);
@@ -1019,6 +1025,10 @@ pub fn Editor(comptime project: type) type {
             // A press anywhere in the window, even on the dock or title bar, can take the keyboard
             // off a field.
             if (weeoui_sdl3.translate(curr_event)) |input| if (input == .pointer_down) self.unfocusOnPress(slot, input.pointer_down.position, outcome == .ignored);
+            // Left presses on the Scene panel select, or take the gizmo; moves drag it.
+            if (outcome == .ignored or curr_event == .mouse_motion) if (self.sceneTarget()) |target| {
+                if (self.scene_view.handlePointer(curr_event, self.sceneRect(slot), target)) return .run;
+            };
             // The pages get the rest, and every pointer move so their hover state stays current.
             if (outcome == .ignored or curr_event == .mouse_motion) self.routeToPages(slot, curr_event);
             // Input reaches the game only while it plays.
@@ -1571,6 +1581,12 @@ pub fn Editor(comptime project: type) type {
             return if (placed.slot == slot) placed.rect else null;
         }
 
+        /// What the Scene panel works on; null without the game's library.
+        fn sceneTarget(self: *Self) ?scene_view.Target {
+            const game = if (self.game) |*loaded| loaded else return null;
+            return .{ .game = game, .app = &self.app, .selected = &self.entity_editor.selected };
+        }
+
         /// Point the scene camera at the entity selected in the Hierarchy, close enough to see it.
         fn frameSelected(self: *Self) void {
             const entity = self.entity_editor.selected orelse return;
@@ -1579,7 +1595,7 @@ pub fn Editor(comptime project: type) type {
             // Its size: the longest of its axes, as scaled.
             var radius: f32 = 0.5;
             for (placed[0..3]) |axis| radius = @max(radius, @sqrt(axis[0] * axis[0] + axis[1] * axis[1] + axis[2] * axis[2]));
-            self.scene_camera.frame(.{ placed[3][0], placed[3][1], placed[3][2] }, radius);
+            self.scene_view.camera.frame(.{ placed[3][0], placed[3][1], placed[3][2] }, radius);
         }
 
         /// `rect` (in UI points) in window pixels.
@@ -1626,7 +1642,7 @@ test {
     _ = @import("history.zig");
     _ = @import("plugin_switches.zig");
     _ = @import("dragged.zig");
-    _ = @import("scene_camera.zig");
+    _ = @import("scene_view/scene_view.zig");
     _ = @import("save_prompt.zig");
     _ = @import("assets/assets.zig");
     _ = @import("assets/listing.zig");

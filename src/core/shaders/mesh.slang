@@ -24,13 +24,22 @@ cbuffer Camera : register(b0, space0) {
     float4 view_projection3;
     float4 light;            // xyz: the direction towards the light
     float4 options;          // x: 1 when the target is sRGB
+    float4 outline;          // the selection outline's colour
+    float4 outline_size;     // xy: the viewport in pixels; z: the outline's width in pixels
 };
+
+// How far behind its object an outline's hull sits, in depth, so the object covers its middle.
+static const float outline_depth_bias = 0.0015;
+
+float4 toClip(float4 world) {
+    return view_projection0 * world.x + view_projection1 * world.y + view_projection2 * world.z + view_projection3 * world.w;
+}
 
 [shader("vertex")]
 VertexOutput vertexMain(VertexInput input) {
     float4 world = input.model0 * input.position.x + input.model1 * input.position.y + input.model2 * input.position.z + input.model3;
     VertexOutput output;
-    output.position = view_projection0 * world.x + view_projection1 * world.y + view_projection2 * world.z + view_projection3 * world.w;
+    output.position = toClip(world);
     output.normal = input.model0.xyz * input.normal.x + input.model1.xyz * input.normal.y + input.model2.xyz * input.normal.z;
     output.color = input.color;
     return output;
@@ -42,4 +51,28 @@ float4 fragmentMain(VertexOutput input) : SV_Target0 {
     float3 color = input.color.rgb * lit;
     color = options.x > 0.5 ? pow(color, float3(2.2, 2.2, 2.2)) : color;
     return float4(color, input.color.a);
+}
+
+// The selection outline: the object's hull, pushed outwards on screen from its centre by the
+// outline's width, and a little back in depth.
+[shader("vertex")]
+VertexOutput vertexOutline(VertexInput input) {
+    float4 world = input.model0 * input.position.x + input.model1 * input.position.y + input.model2 * input.position.z + input.model3;
+    float4 clip = toClip(world);
+    float4 centre = toClip(input.model3);
+    float2 half_viewport = outline_size.xy * 0.5;
+    float2 away = (clip.xy / clip.w - centre.xy / centre.w) * half_viewport;
+    float distance = length(away);
+    float2 push = distance > 0.0001 ? away / distance * outline_size.z / half_viewport : float2(0.0, 0.0);
+    VertexOutput output;
+    output.position = float4(clip.xy + push * clip.w, clip.z + outline_depth_bias * clip.w, clip.w);
+    output.normal = float3(0.0, 1.0, 0.0);
+    output.color = outline;
+    return output;
+}
+
+[shader("pixel")]
+float4 fragmentOutline(VertexOutput input) : SV_Target0 {
+    float3 color = options.x > 0.5 ? pow(input.color.rgb, float3(2.2, 2.2, 2.2)) : input.color.rgb;
+    return float4(color, 1.0);
 }

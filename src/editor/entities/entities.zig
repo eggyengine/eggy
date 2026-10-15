@@ -192,7 +192,8 @@ pub const EntityEditor = struct {
         }
     }
 
-    fn forgetDead(self: *EntityEditor, app: *eggy.App) void {
+    /// Drop the selection once its entity is gone.
+    pub fn forgetDead(self: *EntityEditor, app: *eggy.App) void {
         if (self.selected) |entity| if (!app.world.isAlive(entity)) {
             self.selected = null;
         };

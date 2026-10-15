@@ -27,6 +27,47 @@ pub fn worldMatrix(world: *ecs.World, entity: ecs.EntityId) math.Mat4 {
     return math.mul(f32, 4, 4, 4, worldMatrix(world, parent), local);
 }
 
+/// The inverse of `m`, a transform's matrix (as columns: no projection), or null when it
+/// squashes space flat (a scale of 0).
+pub fn invert(m: [4][4]f32) ?[4][4]f32 {
+    // The inverse of the turn-and-scale part, by cofactors.
+    const a = m[0];
+    const b = m[1];
+    const c = m[2];
+    const det = a[0] * (b[1] * c[2] - c[1] * b[2]) - b[0] * (a[1] * c[2] - c[1] * a[2]) + c[0] * (a[1] * b[2] - b[1] * a[2]);
+    if (@abs(det) < 1e-12) return null;
+    var inverse: [4][4]f32 = .{ .{ 0, 0, 0, 0 }, .{ 0, 0, 0, 0 }, .{ 0, 0, 0, 0 }, .{ 0, 0, 0, 1 } };
+    inverse[0][0] = (b[1] * c[2] - c[1] * b[2]) / det;
+    inverse[0][1] = -(a[1] * c[2] - c[1] * a[2]) / det;
+    inverse[0][2] = (a[1] * b[2] - b[1] * a[2]) / det;
+    inverse[1][0] = -(b[0] * c[2] - c[0] * b[2]) / det;
+    inverse[1][1] = (a[0] * c[2] - c[0] * a[2]) / det;
+    inverse[1][2] = -(a[0] * b[2] - b[0] * a[2]) / det;
+    inverse[2][0] = (b[0] * c[1] - c[0] * b[1]) / det;
+    inverse[2][1] = -(a[0] * c[1] - c[0] * a[1]) / det;
+    inverse[2][2] = (a[0] * b[1] - b[0] * a[1]) / det;
+    // Then undo the move, turned and scaled back.
+    for (0..3) |row| inverse[3][row] = -(inverse[0][row] * m[3][0] + inverse[1][row] * m[3][1] + inverse[2][row] * m[3][2]);
+    return inverse;
+}
+
+/// `point` taken through `m` (as columns), or as a direction (`w` 0) without its move.
+pub fn apply(m: [4][4]f32, point: [3]f32, w: f32) [3]f32 {
+    var out: [3]f32 = undefined;
+    for (&out, 0..) |*value, row| value.* = m[0][row] * point[0] + m[1][row] * point[1] + m[2][row] * point[2] + m[3][row] * w;
+    return out;
+}
+
+test "a transform's inverse takes its points back" {
+    const transform = Transform{ .position = .{ 3, -1, 2 }, .rotation_deg = .{ 30, 45, 10 }, .scale = .{ 2, 0.5, 1 } };
+    var forward: [4][4]f32 = undefined;
+    for (&forward, transform.matrix().data) |*column, data| column.* = data;
+    const back = invert(forward).?;
+    const moved = apply(forward, .{ 1, 2, 3 }, 1);
+    for (apply(back, moved, 1), [_]f32{ 1, 2, 3 }) |got, want| try std.testing.expectApproxEqAbs(want, got, 0.001);
+    try std.testing.expect(invert(.{ .{ 0, 0, 0, 0 }, .{ 0, 1, 0, 0 }, .{ 0, 0, 1, 0 }, .{ 0, 0, 0, 1 } }) == null);
+}
+
 test "a transform scales, then turns, then moves" {
     const transform = Transform{ .position = .{ 10, 0, 0 }, .rotation_deg = .{ 0, 0, 90 }, .scale = .{ 2, 2, 2 } };
     const corner = math.mat.transformPoint4x4(f32, transform.matrix(), .{ .x = 1, .y = 0, .z = 0 });

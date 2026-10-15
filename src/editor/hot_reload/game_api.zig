@@ -7,7 +7,7 @@ const std = @import("std");
 const eggy = @import("eggy");
 
 /// Bumped whenever these types change, so an editor refuses a library built for another.
-pub const version: u32 = 9;
+pub const version: u32 = 10;
 
 /// The library's one exported function: `fn () callconv(.c) *const Game`.
 pub const entry_symbol = "eggy_game";
@@ -121,4 +121,6 @@ pub const Game = extern struct {
     /// The entity's transform within the world (`eggy.transform.worldMatrix`), as columns, into
     /// `out`; false if it isn't alive.
     world_matrix: *const fn (world: *anyopaque, entity: Entity, out: *[4][4]f32) callconv(.c) bool,
+    /// The view through the game's camera (`eggy.camera.find`) into `out`; false without one.
+    find_camera: *const fn (world: *anyopaque, out: *eggy.camera.View) callconv(.c) bool,
 };

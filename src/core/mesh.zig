@@ -16,12 +16,18 @@ pub const Mesh = struct {
     color: [3]f32 = .{ 0.8, 0.8, 0.8 },
 };
 
-/// One entity to draw: where (its model matrix's columns), in what colour, and as what shape.
-/// Plain data, so it crosses from the editor's game library as is.
+/// One entity to draw: where (its model matrix's columns), in what colour, as what shape, and
+/// which entity it is. Plain data, so it crosses from the editor's game library as is.
 pub const Drawable = extern struct {
     model: [4][4]f32,
     color: [4]f32,
     shape: Shape,
+    entity_id: u32,
+    entity_generation: u32,
+
+    pub fn entity(self: Drawable) ecs.EntityId {
+        return .init(self.entity_id, self.entity_generation);
+    }
 };
 
 /// Every entity of `world` with a `Mesh` and a `Transform`, placed through its parents'
@@ -33,7 +39,7 @@ pub fn gather(world: *ecs.World, out: []Drawable) usize {
         if (count == out.len) break;
         const mesh = view.get(*const Mesh);
         const model = transform_zig.worldMatrix(world, view.entity);
-        out[count] = .{ .model = undefined, .color = .{ mesh.color[0], mesh.color[1], mesh.color[2], 1 }, .shape = mesh.shape };
+        out[count] = .{ .model = undefined, .color = .{ mesh.color[0], mesh.color[1], mesh.color[2], 1 }, .shape = mesh.shape, .entity_id = view.entity.id, .entity_generation = view.entity.generation };
         for (&out[count].model, model.data) |*column, data| column.* = data;
         count += 1;
     }
@@ -190,5 +196,6 @@ test "a child's mesh is drawn where its parent's transform puts it" {
     var drawn: [4]Drawable = undefined;
     try std.testing.expectEqual(@as(usize, 1), gather(&world, &drawn));
     try std.testing.expectEqual(Shape.sphere, drawn[0].shape);
+    try std.testing.expect(drawn[0].entity().eql(child));
     try std.testing.expectEqualSlices(f32, &.{ 5, 2, 0, 1 }, &drawn[0].model[3]);
 }

@@ -92,6 +92,7 @@ const game = api.Game{
     .write_name = writeName,
     .gather_meshes = gatherMeshes,
     .world_matrix = worldMatrix,
+    .find_camera = findCamera,
 };
 
 /// Names go through the same code the runtime uses (`eggy.scene.registryAccess`).
@@ -236,6 +237,11 @@ fn worldMatrix(world: *anyopaque, entity: api.Entity, out: *[4][4]f32) callconv(
     const id = entityOf(entity);
     if (!worldOf(world).isAlive(id)) return false;
     for (out, eggy.transform.worldMatrix(worldOf(world), id).data) |*column, data| column.* = data;
+    return true;
+}
+
+fn findCamera(world: *anyopaque, out: *eggy.camera.View) callconv(.c) bool {
+    out.* = eggy.camera.find(worldOf(world)) orelse return false;
     return true;
 }
 

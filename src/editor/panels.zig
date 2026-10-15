@@ -1,11 +1,12 @@
 //! The editor's dock panels and what each shows. Scene marks where the editor draws the scene
-//! texture; the "pages" (Inspector, Console, Hierarchy, Assets and each plugin's `editor_panels`) mark
+//! texture, with its gizmo and buttons floating over it; the "pages" (Inspector, Console, Hierarchy, Assets and each plugin's `editor_panels`) mark
 //! where it draws a `ui.Context` of their own.
 const std = @import("std");
 const eggy = @import("eggy");
 const ui = eggy.ui;
 const L = ui.Layout;
 const EditorPanel = eggy.plugins.EditorPanel;
+const scene_view = @import("scene_view/scene_view.zig");
 
 /// The built-in panels' dock ids (nonzero, below `dock.max_panel`).
 pub const Panel = enum(u32) {
@@ -70,6 +71,8 @@ pub const Provider = struct {
     placements: *Placements,
     slot: usize,
     plugin_panels: []const EditorPanel,
+    /// What floats over the Scene panel.
+    scene_overlay: *const scene_view.Overlay = &scene_view.Overlay.none,
 
     pub fn title(self: Provider, panel: u32) []const u8 {
         return panelTitle(panel, self.plugin_panels);
@@ -84,7 +87,9 @@ pub const Provider = struct {
         return switch (std.enums.fromInt(Panel, panel) orelse return placeholder(b, "")) {
             .scene => blk: {
                 placed.scene = .{ .slot = self.slot, .rect = rect };
-                const scene = try b.node(0, .{ .width = rect.w, .height = rect.h }, marker(&placed.scene_mark), &.{});
+                // The scene texture goes in at the mark; the gizmo and buttons float over it.
+                const floating = try scene_view.overlayElements(b, self.scene_overlay.*, rect);
+                const scene = try b.node(0, .{ .width = rect.w, .height = rect.h }, marker(&placed.scene_mark), floating);
                 scene.accessibility = .{ .role = .image, .label = "Scene view" };
                 break :blk scene;
             },

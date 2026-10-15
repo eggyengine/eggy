@@ -84,7 +84,7 @@ pub const Graphics = struct {
     /// `view`, over the whole of `frame`. Call outside a render pass.
     pub fn drawScene(self: *Graphics, frame: Frame, drawables: []mesh.Drawable, view: camera.View) !void {
         const window = ui.Rect{ .x = 0, .y = 0, .w = @floatFromInt(frame.extent.width), .h = @floatFromInt(frame.extent.height) };
-        try self.preview.draw(frame.cmd, frame.target, window, window, window, frame.extent, weeoui_vitellus.isSrgb(self.color_format), drawables, view);
+        try self.preview.draw(frame.cmd, frame.target, window, window, window, frame.extent, weeoui_vitellus.isSrgb(self.color_format), drawables, view, null);
     }
 };
 

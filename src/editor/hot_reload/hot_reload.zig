@@ -249,6 +249,13 @@ pub const HotGame = struct {
         return matrix;
     }
 
+    /// The view through the game's camera (`eggy.camera.find`); null without one.
+    pub fn findCamera(self: *const HotGame, app: *eggy.App) ?eggy.camera.View {
+        if (self.library == null) return null;
+        var view: eggy.camera.View = undefined;
+        return if (self.game.find_camera(&app.world, &view)) view else null;
+    }
+
     /// The typed steps scenes need, through the library (see `eggy.scene.Access`).
     pub fn sceneAccess(self: *const HotGame) eggy.scene.Access {
         return .{ .context = self, .vtable = &scene_vtable };
