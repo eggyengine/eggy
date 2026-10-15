@@ -7,7 +7,7 @@ const L = ui.Layout;
 /// Its element id, below `dock.first_id`.
 pub const id: u32 = 0x5000_0001;
 pub const width: f32 = 34;
-const height: f32 = 26;
+pub const height: f32 = 26;
 
 /// The button for a bar `bar_height` tall spanning `bar_width` from `bar_x`, centred on it. It
 /// floats over the bar, so it stays centred whatever the menus and window buttons take.
@@ -27,11 +27,8 @@ fn draw(context: *const anyopaque, c: *ui.Canvas, r: ui.Rect) anyerror!void {
     const glyph: *const Glyph = @ptrCast(@alignCast(context));
     const hot = c.hot_id == id;
 
-    // A bordered box; playing, it stays lit, otherwise it lights up under the pointer.
-    const radius = c.theme.radiusMd();
-    try c.roundRect(r, c.theme.input, radius);
-    const fill = if (glyph.playing) c.theme.primary else if (hot) c.theme.accent else c.theme.secondary;
-    try c.roundRect(r.inset(1), fill, @max(0, radius - 1));
+    // Playing, the box stays lit; otherwise it lights up under the pointer.
+    try drawBox(c, r, glyph.playing, hot);
 
     const center = r.center();
     if (glyph.playing) {
@@ -43,4 +40,13 @@ fn draw(context: *const anyopaque, c: *ui.Canvas, r: ui.Rect) anyerror!void {
         const color = c.theme.foreground ++ [_]f32{1};
         try c.triangle(.{ .{ center.x - half + 1.5, center.y - half }, .{ center.x + half + 1.5, center.y }, .{ center.x - half + 1.5, center.y + half } }, .{ color, color, color });
     }
+}
+
+/// The bordered box behind a title bar button (this one, and Reload): `lit` in the theme's
+/// primary colour, else lighter under the pointer (`hot`).
+pub fn drawBox(c: *ui.Canvas, r: ui.Rect, lit: bool, hot: bool) !void {
+    const radius = c.theme.radiusMd();
+    try c.roundRect(r, c.theme.input, radius);
+    const fill = if (lit) c.theme.primary else if (hot) c.theme.accent else c.theme.secondary;
+    try c.roundRect(r.inset(1), fill, @max(0, radius - 1));
 }

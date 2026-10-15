@@ -13,6 +13,7 @@ const menus = @import("menus.zig");
 const panels = @import("panels.zig");
 const play_button = @import("play_button.zig");
 const hit_test = @import("hit_test.zig");
+const reload_button = @import("reload_button.zig");
 const Panel = panels.Panel;
 /// Eggy's version, from its `build.zig.zon`.
 const eggy_version = @import("build_options").version;
@@ -70,9 +71,6 @@ pub const BuildState = union(enum) {
     /// Done, and the editor changed: Reload opens the new one.
     ready,
 };
-
-/// The status bar's Reload button, below `dock.first_id`.
-const reload_id: u32 = 0x5000_0002;
 
 /// Height of the status bar along the main window's bottom.
 const status_height: f32 = 24;
@@ -209,7 +207,7 @@ pub const Workspace = struct {
         const status = try self.statusBar(b, viewport.w);
         var main_children: std.ArrayList(*L.Element) = .empty;
         try main_children.appendSlice(b.allocator, &.{ top_bar, docked, status, play });
-        if (self.project != null) try main_children.append(b.allocator, try self.reloadButton(b, viewport, bar_height));
+        if (self.project != null) try main_children.append(b.allocator, try reload_button.element(b, self.build_state == .ready, viewport.x, viewport.w, bar_height));
         const main = try b.node(0, .{ .width = viewport.w, .height = viewport.h, .direction = .column }, .none, main_children.items);
         main.layout(viewport, font);
         self.roots[main_slot] = main;
@@ -223,18 +221,6 @@ pub const Workspace = struct {
             tree.layout(area, font);
             self.roots[slot] = tree;
         }
-    }
-
-    /// Reload, floating on the title bar just right of the play button: lit once a rebuild made a
-    /// new editor.
-    fn reloadButton(self: *const Workspace, b: L.Builder, viewport: ui.Rect, bar_height: f32) !*L.Element {
-        const height = widgets.flush_trigger_height;
-        const variant: @FieldType(@FieldType(L.Paint, "button"), "variant") = if (self.build_state == .ready) .default else .outline;
-        const reload = try b.node(reload_id, .{ .height = height, .z_index = 50 }, .{ .button = .{ .label = "Reload", .variant = variant, .size = .sm } }, &.{});
-        reload.overlay = .{ .point = .init(viewport.x + (viewport.w + play_button.width) / 2 + 8, (bar_height - height) / 2) };
-        reload.cursor = .pointer;
-        reload.accessibility = .{ .role = .button, .label = "Reload", .description = "Rebuild the project's editor and open it" };
-        return reload;
     }
 
     /// The bar along the main window's bottom: which project is open (and where), the rebuild,
@@ -286,7 +272,7 @@ pub const Workspace = struct {
         };
         if (controls) |rect| frame.controls = rect;
         // The play and Reload buttons float on the bar, and take presses too.
-        for ([_]u32{ play_button.id, reload_id }) |id| if (root.find(id)) |button| {
+        for ([_]u32{ play_button.id, reload_button.id }) |id| if (root.find(id)) |button| {
             frame.extra_controls[frame.extra_count] = button.bounds;
             frame.extra_count += 1;
         };
@@ -397,7 +383,7 @@ pub const Workspace = struct {
                 }
                 if (slot == main_slot) {
                     if (titlebarButton(id)) |button| return .{ .window = button };
-                    if (id == reload_id) return .reload;
+                    if (id == reload_button.id) return .reload;
                     if (id == play_button.id) {
                         self.playing = !self.playing;
                         return .{ .play = self.playing };
