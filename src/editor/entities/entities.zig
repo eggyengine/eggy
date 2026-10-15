@@ -68,11 +68,10 @@ pub const EntityEditor = struct {
     pub fn dropOnInspector(self: *EntityEditor, context: *const ui.Context, app: *eggy.App, game: ?*const HotGame, at: ui.Vec2, dragging: Dragged) bool {
         const entity = self.selected orelse return false;
         const loaded = game orelse return false;
-        var buffer: [1024]u8 = undefined;
+        var buffer: [8192]u8 = undefined;
         var fba = std.heap.FixedBufferAllocator.init(&buffer);
-        const action = self.inspector.dropAt(context, at, loaded.component_types, dragging, fba.allocator()) orelse return false;
-        var text_buffer: [600]u8 = undefined;
-        const text = std.fmt.bufPrintZ(&text_buffer, "{s}", .{action.set_field.text}) catch return false;
+        const action = self.inspector.dropAt(context, at, dragging, fba.allocator()) orelse return false;
+        const text = fba.allocator().dupeZ(u8, action.set_field.text) catch return false;
         return loaded.writeField(app, entity, action.set_field.component, action.set_field.field, text);
     }
 
@@ -94,8 +93,7 @@ pub const EntityEditor = struct {
         if (self.inspector.build(context, details)) |action| switch (action) {
             .rename => |name| loaded.writeName(app, entity, name),
             .set_field => |change| {
-                var buffer: [257]u8 = undefined;
-                const text = std.fmt.bufPrintZ(&buffer, "{s}", .{change.text}) catch return true;
+                const text = arena.dupeZ(u8, change.text) catch return true;
                 // Text that doesn't parse yet is left until it does.
                 _ = loaded.writeField(app, entity, change.component, change.field, text);
             },
@@ -222,7 +220,7 @@ fn collectDetails(arena: std.mem.Allocator, app: *eggy.App, game: *const HotGame
         const values = try arena.alloc(?[]const u8, info.fields.len);
         const shown = try arena.alloc(?[]const u8, info.fields.len);
         for (values, shown, info.fields, 0..) |*value, *label, field_info, field| {
-            var buffer: [512]u8 = undefined;
+            var buffer: [4096]u8 = undefined;
             value.* = if (game.readField(app, entity, index, field, &buffer)) |text| try arena.dupe(u8, text) else null;
             label.* = try referenceLabel(arena, app, game, field_info.kind, value.* orelse "");
         }
@@ -264,6 +262,8 @@ test {
     _ = @import("tree.zig");
     _ = @import("hierarchy.zig");
     _ = @import("inspector.zig");
+    _ = @import("field_editor.zig");
+    _ = @import("field_value.zig");
 }
 
 test "moves place an entity before or after a sibling, at the top level or under a parent" {

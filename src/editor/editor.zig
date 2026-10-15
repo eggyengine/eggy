@@ -363,8 +363,8 @@ pub fn Editor(comptime project: type) type {
                 if (self.sceneText()) |text| {
                     const hash = std.hash.Wyhash.hash(0, text);
                     self.workspace.scene_unsaved = if (self.open_scene) |*scene| scene.unsavedHash(hash, &self.app.world) else false;
-                    // A gizmo drag becomes one step, once let go.
-                    if (self.scene_view.drag == null) self.history.watch(text, self.workspace.time_ms, self.typing()) else self.gpa.free(text);
+                    // A gizmo drag, or a number dragged in the Inspector, becomes one step once let go.
+                    if (self.scene_view.drag == null and !self.entity_editor.inspector.scrubbing()) self.history.watch(text, self.workspace.time_ms, self.typing()) else self.gpa.free(text);
                 }
                 self.workspace.play_warning = self.playWarning();
             }
@@ -1417,10 +1417,11 @@ pub fn Editor(comptime project: type) type {
             switch (index) {
                 panels.hierarchy_page => if (self.entity_editor.hierarchy.dragLabel(arena)) |label| return label,
                 panels.assets_page => if (self.assets_panel.dragLabel()) |label| return label,
-                panels.inspector_page => if (self.entity_editor.inspector.fieldAt(&self.ui, self.ui.pointer, if (self.game) |*game| game.component_types else &.{})) |field| if (!dragged.fits(field)) {
-                    return switch (field.kind) {
-                        .entity => if (field.requires.len > 0) std.fmt.allocPrint(arena, "Needs an entity with {s}", .{field.requires}) catch name else "Takes an entity",
-                        else => if (field.accepts == .any) "Takes a file" else std.fmt.allocPrint(arena, "Takes a {s} file", .{@tagName(field.accepts)}) catch name,
+                panels.inspector_page => if (self.entity_editor.inspector.targetAt(&self.ui, self.ui.pointer)) |target| if (!dragged.fits(target)) {
+                    const requires = std.mem.span(target.requires);
+                    return switch (target.kind) {
+                        .entity => if (requires.len > 0) std.fmt.allocPrint(arena, "Needs an entity with {s}", .{requires}) catch name else "Takes an entity",
+                        else => if (target.accepts == .any) "Takes a file" else std.fmt.allocPrint(arena, "Takes a {s} file", .{@tagName(target.accepts)}) catch name,
                     };
                 },
                 else => {},

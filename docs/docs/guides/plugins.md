@@ -107,13 +107,22 @@ pub const Plugin = struct {
 };
 ```
 
-A component is a struct. The Inspector edits bools with a switch, enums with a dropdown, and numbers and other plain data (arrays, nested structs) as [ZON](https://ziglang.org/documentation/master/#ZON) text, applied once it parses. Fields holding pointers are shown but not edited. **Add component** offers the components whose fields all have defaults, which is what an added one starts with.
+A component is a struct, and the Inspector gives every field of plain data a control by its type:
+
+- Numbers are boxes: drag one sideways to change it, or click it to type a value (Enter or Escape finishes).
+- Vectors (two to four numbers in an array, a `@Vector`, a struct of `x`, `y`, `z` and `w`, or `eggy.math.Vec2`, `Vec3` and `Vec4`) get a box per axis, tagged X, Y, Z and W in red, green, blue and purple.
+- Colours (`eggy.Color`, any struct of `r`, `g`, `b` and maybe `a`, or three or four numbers in a field named `color`, `colour` or ending `_color`) get a swatch and a box per channel, filled as far as the channel goes.
+- `eggy.math.Quat` shows as turns about X, Y and Z in degrees.
+- Bools get a switch, enums a dropdown, and tagged unions a dropdown of their variants with the chosen variant's fields under it.
+- Nested structs, arrays and optionals get a row for each part, further in; an optional has a switch to set it or clear it.
+
+Fields holding pointers (or strings) are shown but not edited. **Add component** offers the components whose fields all have defaults, which is what an added one starts with.
 
 The values shown are read from the world every frame, so fields your systems change update as they run.
 
 ### Drawing shapes
 
-Every project also has Eggy's own components, listed as from `eggy`. Give an entity a `Transform` (position, rotation in degrees, scale) and a `Mesh`, and it is drawn in the scene as the `Mesh`'s shape (cube, sphere, plane, cylinder or cone) in its colour. An entity inside another is placed relative to its parent's `Transform`.
+Every project also has Eggy's own components, listed as from `eggy`. Give an entity a `Transform` (position, rotation in degrees, scale) and a `Mesh`, and it is drawn in the scene as the `Mesh`'s shape (cube, sphere, plane, cylinder or cone) in its colour. A `Mesh`'s shape can also be a model file: drag one from Assets onto the shape's dropdown. An entity inside another is placed relative to its parent's `Transform`.
 
 Give an entity a `Camera` (field of view, near and far) and a `Transform`, and the game is seen through it: it looks down its -z, with its +y up. Without one, the game looks at the middle of the world from above. The editor's Scene panel has a camera of its own: right-drag to look around and, while held, W, A, S, D, Q and E to fly (Shift to go faster); Alt+left-drag to orbit; middle-drag to pan; the wheel to zoom; and F to frame the entity selected in the Hierarchy. To move something, change its `Transform` from a system:
 
@@ -137,7 +146,7 @@ pub const Orbit = struct {
 };
 ```
 
-In the Inspector these fields are slots: drag an entity from the Hierarchy (or a file from Assets) onto one to set it, and the x clears it. While you drag, the slots that would take what you hold light up; an `EntityRef(T)` takes only entities with component `T` (`EntityRef(void)` takes any), and an `AssetRef` only files of its kind (`.any`, `.scene`, `.image`, `.audio`, `.text` or `.code`). In code, `orbit.around.entity` is the entity (or null), and `orbit.sound.path()` the file's path in the project. A scene saves a reference to one of its own entities by its place, so it points at the right entity when loaded again.
+In the Inspector these fields are slots: drag an entity from the Hierarchy (or a file from Assets) onto one to set it, and the x clears it. While you drag, the slots that would take what you hold light up; an `EntityRef(T)` takes only entities with component `T` (`EntityRef(void)` takes any), and an `AssetRef` only files of its kind (`.any`, `.scene`, `.image`, `.audio`, `.text`, `.code` or `.model`). References work anywhere in a field, a union's variant included: a union with a reference variant also takes a drop on its dropdown, which picks that variant. In code, `orbit.around.entity` is the entity (or null), and `orbit.sound.path()` the file's path in the project. A scene saves a reference to one of its own entities by its place, so it points at the right entity when loaded again.
 
 ## Editor panels
 

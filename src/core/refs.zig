@@ -64,6 +64,8 @@ pub const AssetKind = enum(u8) {
     audio,
     text,
     code,
+    /// A 3D model.
+    model,
 
     /// The kind of the file at `path`; `any` for a kind Eggy doesn't know.
     pub fn of(path: []const u8) AssetKind {
@@ -74,6 +76,7 @@ pub const AssetKind = enum(u8) {
             .{ &.{ ".zon", ".md", ".txt", ".json", ".toml" }, .text },
             .{ &.{ ".png", ".jpg", ".jpeg", ".gif", ".svg", ".bmp", ".webp" }, .image },
             .{ &.{ ".wav", ".ogg", ".mp3", ".flac" }, .audio },
+            .{ &.{ ".glb", ".gltf", ".obj", ".fbx", ".dae", ".blend", ".3ds", ".ply", ".stl" }, .model },
         };
         for (kinds) |entry| for (entry[0]) |known| {
             if (std.ascii.eqlIgnoreCase(extension, known)) return entry[1];

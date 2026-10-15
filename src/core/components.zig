@@ -17,6 +17,9 @@ pub const Kind = enum(u8) { bool, int, float, @"enum", other, entity, asset };
 pub const Field = struct {
     name: [:0]const u8,
     kind: Kind,
+    /// Its type part by part, for the Inspector to draw a control for each: `parts[0]` is the
+    /// field's own type, and each part's children follow later in the list.
+    parts: []const Part = &.{},
     /// An enum's values, in order; empty otherwise.
     options: []const [:0]const u8 = &.{},
     /// An entity reference's: the component (its short name) an entity needs to be set here;
@@ -27,6 +30,66 @@ pub const Field = struct {
     /// Whether the Inspector can change it: its type is plain data, which ZON can parse without
     /// allocating. The others are shown, if they can be, but not edited.
     editable: bool,
+};
+
+/// What a part of a field's type is, for the control the Inspector draws for it.
+pub const PartKind = enum(u8) {
+    bool,
+    int,
+    float,
+    @"enum",
+    /// Two to four numbers: an array or `@Vector` of them, a struct of `x`, `y`, `z` and `w`, or
+    /// an `eggy.math` vector. Its one child is the number's part.
+    vector,
+    /// Red, green, blue and maybe alpha: a struct of `r`, `g`, `b` (and `a`), or numbers in a
+    /// field named `color` or `colour` (or ending `_color`, `_colour`). Its one child is the number's part.
+    color,
+    /// An `eggy.math` quaternion, shown as turns in degrees.
+    quaternion,
+    /// Its children are its fields.
+    @"struct",
+    /// A tagged union: its children are its variants, each named after its tag.
+    @"union",
+    /// Its one child is the element's part; `len` says how many.
+    array,
+    /// Its one child is what it holds when set.
+    optional,
+    entity,
+    asset,
+    /// A `void` union variant: nothing to show.
+    none,
+    /// Anything else (strings, pointers): shown as ZON where it can be, not edited.
+    other,
+};
+
+/// One part of a field's type. Plain C data, so the list crosses from the editor's game library.
+pub const Part = extern struct {
+    kind: PartKind,
+    /// Its name in the part holding it: a struct's field, a union's variant; empty otherwise.
+    name: [*:0]const u8 = "",
+    /// Its children: `parts[first..][0..count]` of the list it is in.
+    first: u32 = 0,
+    count: u32 = 0,
+    /// A vector's, colour's or array's length.
+    len: u32 = 0,
+    /// An int's: whether it can't go below 0.
+    unsigned: bool = false,
+    /// A vector's or colour's: whether it is a struct (`.{ .x = 1, .y = 2 }`) rather than a list.
+    named: bool = false,
+    /// An enum's values, in order.
+    options: [*]const [*:0]const u8 = &.{},
+    option_count: u32 = 0,
+    /// An entity reference's required component (empty for any), an asset reference's kind of file.
+    requires: [*:0]const u8 = "",
+    accepts: refs.AssetKind = .any,
+
+    pub fn children(self: Part, parts: []const Part) []const Part {
+        return parts[self.first..][0..self.count];
+    }
+
+    pub fn optionNames(self: Part) []const [*:0]const u8 {
+        return self.options[0..self.option_count];
+    }
 };
 
 pub const Info = struct {
@@ -75,14 +138,8 @@ pub fn Registry(comptime types: []const type, comptime owners: []const [:0]const
             inline for (types, 0..) |T, i| if (i == component) {
                 const value = world.get(entity, T) orelse return error.NoComponent;
                 inline for (@typeInfo(T).@"struct".fields, 0..) |struct_field, j| if (j == field) {
-                    const current = @field(value.*, struct_field.name);
-                    // References as what they point at: `null`, an entity, or a path.
-                    if (comptime refs.refKind(struct_field.type)) |kind| return switch (kind) {
-                        .entity => std.zon.stringify.serialize(current.entity, .{ .whitespace = false }, writer),
-                        .asset => std.zon.stringify.serialize(current.path(), .{ .whitespace = false }, writer),
-                    };
                     if (comptime !showable(struct_field.type)) return writer.writeAll("...");
-                    return std.zon.stringify.serialize(current, .{ .whitespace = false }, writer);
+                    return std.zon.stringify.serialize(store(struct_field.type, &@field(value.*, struct_field.name)), .{ .whitespace = false }, writer);
                 };
             };
             return error.NoSuchComponent;
@@ -98,14 +155,8 @@ pub fn Registry(comptime types: []const type, comptime owners: []const [:0]const
                     var scratch: [16 * 1024]u8 = undefined;
                     var fba = std.heap.FixedBufferAllocator.init(&scratch);
                     const target = &@field(value.*, struct_field.name);
-                    if (comptime refs.refKind(struct_field.type)) |kind| switch (kind) {
-                        .entity => target.* = .init(try std.zon.parse.fromSlice(?ecs.EntityId, fba.allocator(), text, null, .{})),
-                        .asset => {
-                            const path = try std.zon.parse.fromSliceAlloc([]const u8, fba.allocator(), text, null, .{});
-                            if (path.len > refs.max_path_len) return error.ParseZon;
-                            target.* = .init(path);
-                        },
-                    } else target.* = try std.zon.parse.fromSlice(struct_field.type, fba.allocator(), text, null, .{});
+                    const stored = try std.zon.parse.fromSliceAlloc(Stored(struct_field.type), fba.allocator(), text, null, .{});
+                    target.* = try restore(struct_field.type, stored);
                     world.markChanged(entity, T);
                     return;
                 };
@@ -133,7 +184,7 @@ fn infoOf(comptime T: type, comptime owner: [:0]const u8) Info {
     var addable = true;
     for (struct_fields, &fields) |struct_field, *field| {
         if (struct_field.defaultValue() == null) addable = false;
-        field.* = .{ .name = struct_field.name, .kind = kindOf(struct_field.type), .editable = editableType(struct_field.type) };
+        field.* = .{ .name = struct_field.name, .kind = kindOf(struct_field.type), .editable = editableType(struct_field.type), .parts = partsOf(struct_field.type, struct_field.name) };
         if (refs.refKind(struct_field.type)) |kind| switch (kind) {
             .entity => field.requires = if (struct_field.type.Required == void) "" else shortName(struct_field.type.Required),
             .asset => field.accepts = struct_field.type.accepts,
@@ -182,8 +233,245 @@ fn editableType(comptime T: type) bool {
         .@"struct" => |info| for (info.fields) |field| {
             if (field.is_comptime or !editableType(field.type)) break false;
         } else true,
+        .@"union" => |info| info.tag_type != null and for (info.fields) |field| {
+            if (field.type != void and !editableType(field.type)) break false;
+        } else true,
+        .void => true,
         else => false,
     };
+}
+
+/// `T` as scenes and the Inspector write it: each reference (anywhere inside) as what it points
+/// at, `null` or an entity for an `EntityRef`, a path for an `AssetRef`.
+fn Stored(comptime T: type) type {
+    if (refs.refKind(T)) |kind| return switch (kind) {
+        .entity => ?ecs.EntityId,
+        .asset => []const u8,
+    };
+    if (!holdsRef(T)) return T;
+    return switch (@typeInfo(T)) {
+        .array => |info| [info.len]Stored(info.child),
+        .optional => |info| ?Stored(info.child),
+        .@"struct" => |info| blk: {
+            var names: [info.fields.len][]const u8 = undefined;
+            var types_list: [info.fields.len]type = undefined;
+            for (info.fields, &names, &types_list) |field, *name, *Type| {
+                name.* = field.name;
+                Type.* = Stored(field.type);
+            }
+            break :blk @Struct(.auto, null, &names, &types_list, &@splat(.{}));
+        },
+        .@"union" => |info| blk: {
+            var names: [info.fields.len][]const u8 = undefined;
+            var types_list: [info.fields.len]type = undefined;
+            for (info.fields, &names, &types_list) |field, *name, *Type| {
+                name.* = field.name;
+                Type.* = Stored(field.type);
+            }
+            break :blk @Union(.auto, info.tag_type, &names, &types_list, &@splat(.{}));
+        },
+        else => T,
+    };
+}
+
+/// Whether `T` has a reference anywhere inside it.
+fn holdsRef(comptime T: type) bool {
+    if (refs.refKind(T) != null) return true;
+    return switch (@typeInfo(T)) {
+        .array => |info| holdsRef(info.child),
+        .optional => |info| holdsRef(info.child),
+        .@"struct" => |info| for (info.fields) |field| {
+            if (holdsRef(field.type)) break true;
+        } else false,
+        .@"union" => |info| for (info.fields) |field| {
+            if (holdsRef(field.type)) break true;
+        } else false,
+        else => false,
+    };
+}
+
+/// `value` as `Stored(T)`; an asset path points into `value`, so it must outlive the result.
+fn store(comptime T: type, value: *const T) Stored(T) {
+    if (comptime refs.refKind(T)) |kind| return switch (kind) {
+        .entity => value.entity,
+        .asset => value.path(),
+    };
+    if (comptime !holdsRef(T)) return value.*;
+    var out: Stored(T) = undefined;
+    switch (@typeInfo(T)) {
+        .array => for (&out, value) |*part, *source| {
+            part.* = store(@TypeOf(source.*), source);
+        },
+        .optional => |info| out = if (value.*) |*inner| store(info.child, inner) else null,
+        .@"struct" => |info| inline for (info.fields) |field| {
+            @field(out, field.name) = store(field.type, &@field(value.*, field.name));
+        },
+        .@"union" => switch (value.*) {
+            inline else => |*payload, tag| out = @unionInit(Stored(T), @tagName(tag), store(@TypeOf(payload.*), payload)),
+        },
+        else => comptime unreachable,
+    }
+    return out;
+}
+
+/// `stored` back as a `T`. Fails with `error.ParseZon` for a path too long for an `AssetRef`.
+fn restore(comptime T: type, stored: Stored(T)) error{ParseZon}!T {
+    if (comptime refs.refKind(T)) |kind| switch (kind) {
+        .entity => return .init(stored),
+        .asset => {
+            if (stored.len > refs.max_path_len) return error.ParseZon;
+            return .init(stored);
+        },
+    };
+    if (comptime !holdsRef(T)) return stored;
+    var out: T = undefined;
+    switch (@typeInfo(T)) {
+        .array => for (&out, stored) |*part, source| {
+            part.* = try restore(@TypeOf(part.*), source);
+        },
+        .optional => |info| out = if (stored) |inner| try restore(info.child, inner) else null,
+        .@"struct" => |info| inline for (info.fields) |field| {
+            @field(out, field.name) = try restore(field.type, @field(stored, field.name));
+        },
+        .@"union" => switch (stored) {
+            inline else => |payload, tag| out = @unionInit(T, @tagName(tag), try restore(@FieldType(T, @tagName(tag)), payload)),
+        },
+        else => comptime unreachable,
+    }
+    return out;
+}
+
+/// The parts of type `T` (a field named `name`), breadth first so each part's children sit
+/// together: `[0]` is `T` itself.
+fn partsOf(comptime T: type, comptime name: [:0]const u8) []const Part {
+    comptime {
+        @setEvalBranchQuota(100_000);
+        var queue: []const type = &.{T};
+        var names: []const [:0]const u8 = &.{name};
+        var parts: []const Part = &.{};
+        var next = 0;
+        while (next < queue.len) : (next += 1) {
+            const Type = queue[next];
+            var part = describePart(Type, names[next]);
+            part.name = if (next == 0) "" else names[next].ptr;
+            // Children: a vector's, colour's, array's or optional's one; a struct's fields; a union's variants.
+            var child_types: []const type = &.{};
+            var child_names: []const [:0]const u8 = &.{};
+            switch (part.kind) {
+                .vector, .color => {
+                    child_types = &.{numberOf(Type).?};
+                    child_names = &.{""};
+                },
+                .array => {
+                    child_types = &.{@typeInfo(Type).array.child};
+                    child_names = &.{""};
+                },
+                .optional => {
+                    child_types = &.{@typeInfo(Type).optional.child};
+                    child_names = &.{""};
+                },
+                .@"struct", .@"union" => for (std.meta.fields(Type)) |field| {
+                    child_types = child_types ++ &[_]type{field.type};
+                    child_names = child_names ++ &[_][:0]const u8{field.name};
+                },
+                else => {},
+            }
+            part.first = queue.len;
+            part.count = child_types.len;
+            queue = queue ++ child_types;
+            names = names ++ child_names;
+            parts = parts ++ &[_]Part{part};
+        }
+        const frozen = parts[0..parts.len].*;
+        return &frozen;
+    }
+}
+
+/// `T`'s part, without its children; `name` is the field's (or struct field's) name.
+fn describePart(comptime T: type, comptime name: []const u8) Part {
+    if (refs.refKind(T)) |kind| return switch (kind) {
+        .entity => .{ .kind = .entity, .requires = if (T.Required == void) "" else shortName(T.Required) },
+        .asset => .{ .kind = .asset, .accepts = T.accepts },
+    };
+    if (isQuaternion(T)) return .{ .kind = .quaternion, .len = 4 };
+    const named = @typeInfo(T) == .@"struct";
+    if (colorLen(T, name)) |len| return .{ .kind = .color, .len = len, .named = named };
+    if (vectorLen(T)) |len| return .{ .kind = .vector, .len = len, .named = named };
+    return switch (@typeInfo(T)) {
+        .bool => .{ .kind = .bool },
+        .int => |info| .{ .kind = .int, .unsigned = info.signedness == .unsigned },
+        .float => .{ .kind = .float },
+        .@"enum" => |info| blk: {
+            var options: [info.fields.len][*:0]const u8 = undefined;
+            for (info.fields, &options) |tag, *option| option.* = tag.name;
+            const frozen = options;
+            break :blk .{ .kind = .@"enum", .options = &frozen, .option_count = frozen.len };
+        },
+        .void => .{ .kind = .none },
+        .@"struct" => |info| if (info.fields.len > 0 and editableType(T)) .{ .kind = .@"struct" } else .{ .kind = .other },
+        .@"union" => |info| if (info.tag_type != null and editableType(T)) .{ .kind = .@"union" } else .{ .kind = .other },
+        .array => |info| if (editableType(info.child)) .{ .kind = .array, .len = info.len } else .{ .kind = .other },
+        .optional => |info| if (editableType(info.child)) .{ .kind = .optional } else .{ .kind = .other },
+        else => .{ .kind = .other },
+    };
+}
+
+/// The number type a vector or colour `T` is made of, if it is one.
+fn numberOf(comptime T: type) ?type {
+    const Number = switch (@typeInfo(T)) {
+        .array => |info| info.child,
+        .vector => |info| info.child,
+        .@"struct" => |info| if (info.fields.len > 0) info.fields[0].type else return null,
+        else => return null,
+    };
+    return switch (@typeInfo(Number)) {
+        .int, .float => Number,
+        else => null,
+    };
+}
+
+/// How many numbers vector `T` has: 2 to 4 in an array, a `@Vector`, or a struct of `x`, `y`,
+/// `z` and `w` (as `eggy.math` vectors are); null for anything else.
+fn vectorLen(comptime T: type) ?u32 {
+    return numbersLen(T, &.{ "x", "y", "z", "w" });
+}
+
+/// How many channels colour `T` has (3 or 4): a struct of `r`, `g`, `b` and maybe `a`, or numbers
+/// in a field named after a colour.
+fn colorLen(comptime T: type, comptime name: []const u8) ?u32 {
+    const len = numbersLen(T, &.{ "r", "g", "b", "a" }) orelse return null;
+    if (len < 3) return null;
+    if (@typeInfo(T) == .@"struct") return len;
+    for ([_][]const u8{ "color", "colour" }) |word| {
+        if (std.mem.eql(u8, name, word) or (std.mem.endsWith(u8, name, word) and name.len > word.len and name[name.len - word.len - 1] == '_')) return len;
+    }
+    return null;
+}
+
+/// How many numbers `T` holds, 2 to 4: an array or `@Vector` of one number type, or a struct of
+/// fields named `labels` in order, all of one number type.
+fn numbersLen(comptime T: type, comptime labels: []const []const u8) ?u32 {
+    const Number = numberOf(T) orelse return null;
+    const len: u32 = switch (@typeInfo(T)) {
+        .array => |info| info.len,
+        .vector => |info| info.len,
+        .@"struct" => |info| blk: {
+            if (info.fields.len > labels.len) return null;
+            for (info.fields, 0..) |field, i| {
+                if (field.type != Number or !std.mem.eql(u8, field.name, labels[i])) return null;
+            }
+            break :blk info.fields.len;
+        },
+        else => return null,
+    };
+    return if (len >= 2 and len <= 4) len else null;
+}
+
+/// Whether `T` is an `eggy.math` quaternion: four numbers in one `@Vector` field `v`.
+fn isQuaternion(comptime T: type) bool {
+    if (@typeInfo(T) != .@"struct" or !@hasDecl(T, "fromAxisAngle")) return false;
+    const fields = @typeInfo(T).@"struct".fields;
+    return fields.len == 1 and std.mem.eql(u8, fields[0].name, "v") and vectorLen(fields[0].type) == 4;
 }
 
 /// Whether ZON can show values of `T`: plain data, or strings.
@@ -264,4 +552,49 @@ test "references are read and written as what they point at" {
     try std.testing.expectEqualStrings("\"sounds/hum.ogg\"", text.written());
     try Components.setField(&world, entity, 0, 0, "null");
     try std.testing.expect(world.get(entity, Orbit).?.around.entity == null);
+}
+
+test "a field's parts describe vectors, colours, unions and what they hold" {
+    const Shape = union(enum) { cube, model: refs.AssetRef(.any) };
+    const Look = struct {
+        position: [3]f32 = .{ 0, 0, 0 },
+        tint_color: [4]f32 = .{ 1, 1, 1, 1 },
+        shape: Shape = .cube,
+        count: ?u8 = null,
+    };
+    const fields = Registry(&.{Look}, &.{"game"}).infos[0].fields;
+    try std.testing.expectEqual(PartKind.vector, fields[0].parts[0].kind);
+    try std.testing.expectEqual(@as(u32, 3), fields[0].parts[0].len);
+    try std.testing.expectEqual(PartKind.float, fields[0].parts[0].children(fields[0].parts)[0].kind);
+    try std.testing.expectEqual(PartKind.color, fields[1].parts[0].kind);
+
+    const shape = fields[2].parts;
+    try std.testing.expectEqual(PartKind.@"union", shape[0].kind);
+    const variants = shape[0].children(shape);
+    try std.testing.expectEqualStrings("cube", std.mem.span(variants[0].name));
+    try std.testing.expectEqual(PartKind.none, variants[0].kind);
+    try std.testing.expectEqual(PartKind.asset, variants[1].kind);
+
+    const count = fields[3].parts;
+    try std.testing.expectEqual(PartKind.optional, count[0].kind);
+    try std.testing.expect(count[0].children(count)[0].unsigned);
+}
+
+test "references inside a union are written as what they point at" {
+    const Shape = union(enum) { cube, model: refs.AssetRef(.any) };
+    const Look = struct { shape: Shape = .cube };
+    const Components = Registry(&.{Look}, &.{"game"});
+    var world = ecs.World.init(std.testing.allocator);
+    defer world.deinit();
+    const entity = try world.spawn(.{Look{}});
+    var text: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer text.deinit();
+    try Components.writeField(&world, entity, 0, 0, &text.writer);
+    try std.testing.expectEqualStrings(".cube", text.written());
+
+    try Components.setField(&world, entity, 0, 0, ".{ .model = \"art/ship.glb\" }");
+    try std.testing.expectEqualStrings("art/ship.glb", world.get(entity, Look).?.shape.model.path());
+    text.clearRetainingCapacity();
+    try Components.writeField(&world, entity, 0, 0, &text.writer);
+    try std.testing.expectEqualStrings(".{.model=\"art/ship.glb\"}", text.written());
 }

@@ -6,12 +6,23 @@ const ecs = @import("clutch");
 const math = @import("eggenvector");
 const transform_zig = @import("transform.zig");
 const Transform = transform_zig.Transform;
+const AssetRef = @import("refs.zig").AssetRef;
 
 /// The shapes there are, each about a metre across, centred on the entity.
 pub const Shape = enum(u32) { cube, sphere, plane, cylinder, cone };
 
+/// What a `Mesh` is: one of the built-in shapes, or a model file of the project.
+pub const Source = union(enum) {
+    cube,
+    sphere,
+    plane,
+    cylinder,
+    cone,
+    model: AssetRef(.model),
+};
+
 pub const Mesh = struct {
-    shape: Shape = .cube,
+    shape: Source = .cube,
     /// Red, green and blue, 0 to 1.
     color: [3]f32 = .{ 0.8, 0.8, 0.8 },
 };
@@ -38,8 +49,13 @@ pub fn gather(world: *ecs.World, out: []Drawable) usize {
     while (meshes.next()) |view| {
         if (count == out.len) break;
         const mesh = view.get(*const Mesh);
+        // ponytail: models aren't drawn yet; draw them once they can be loaded.
+        const shape: Shape = switch (mesh.shape) {
+            .model => continue,
+            inline else => |_, tag| @field(Shape, @tagName(tag)),
+        };
         const model = transform_zig.worldMatrix(world, view.entity);
-        out[count] = .{ .model = undefined, .color = .{ mesh.color[0], mesh.color[1], mesh.color[2], 1 }, .shape = mesh.shape, .entity_id = view.entity.id, .entity_generation = view.entity.generation };
+        out[count] = .{ .model = undefined, .color = .{ mesh.color[0], mesh.color[1], mesh.color[2], 1 }, .shape = shape, .entity_id = view.entity.id, .entity_generation = view.entity.generation };
         for (&out[count].model, model.data) |*column, data| column.* = data;
         count += 1;
     }

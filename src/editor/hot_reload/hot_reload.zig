@@ -356,11 +356,25 @@ fn copyComponentTypes(arena: std.mem.Allocator, types: []const api.ComponentType
                 .editable = field_source.editable,
                 .requires = try arena.dupeZ(u8, std.mem.span(field_source.requires)),
                 .accepts = std.enums.fromInt(eggy.refs.AssetKind, field_source.accepts) orelse return error.GameLibraryVersionMismatch,
+                .parts = try copyParts(arena, field_source.parts[0..field_source.part_count]),
             };
         }
         info.* = .{ .name = try arena.dupeZ(u8, std.mem.span(source.name)), .owner = try arena.dupeZ(u8, std.mem.span(source.owner)), .fields = fields, .addable = source.addable };
     }
     return infos;
+}
+
+/// A field's parts, with their text copied into `arena`.
+fn copyParts(arena: std.mem.Allocator, source: []const eggy.components.Part) ![]const eggy.components.Part {
+    const parts = try arena.dupe(eggy.components.Part, source);
+    for (parts) |*part| {
+        part.name = (try arena.dupeZ(u8, std.mem.span(part.name))).ptr;
+        part.requires = (try arena.dupeZ(u8, std.mem.span(part.requires))).ptr;
+        const options = try arena.alloc([*:0]const u8, part.option_count);
+        for (options, part.optionNames()) |*option, name| option.* = (try arena.dupeZ(u8, std.mem.span(name))).ptr;
+        part.options = options.ptr;
+    }
+    return parts;
 }
 
 fn entityOf(entity: eggy.ecs.EntityId) api.Entity {

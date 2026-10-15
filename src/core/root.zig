@@ -26,6 +26,7 @@ pub const Mesh = mesh.Mesh;
 pub const camera = @import("camera.zig");
 pub const Camera = camera.Camera;
 pub const max_drawables = @import("mesh_renderer.zig").max_drawables;
+pub const Color = @import("color.zig").Color;
 pub const refs = @import("refs.zig");
 pub const EntityRef = refs.EntityRef;
 pub const AssetRef = refs.AssetRef;

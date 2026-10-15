@@ -53,7 +53,7 @@ const component_types = blk: {
             var options: [source.options.len][*:0]const u8 = undefined;
             for (&options, source.options) |*option, name| option.* = name.ptr;
             const frozen_options = options;
-            field.* = .{ .name = source.name.ptr, .kind = @intFromEnum(source.kind), .options = &frozen_options, .option_count = frozen_options.len, .editable = source.editable, .requires = source.requires.ptr, .accepts = @intFromEnum(source.accepts) };
+            field.* = .{ .name = source.name.ptr, .kind = @intFromEnum(source.kind), .options = &frozen_options, .option_count = frozen_options.len, .editable = source.editable, .requires = source.requires.ptr, .accepts = @intFromEnum(source.accepts), .parts = source.parts.ptr, .part_count = source.parts.len };
         }
         const frozen_fields = fields;
         component_type.* = .{ .name = info.name.ptr, .owner = info.owner.ptr, .fields = &frozen_fields, .field_count = frozen_fields.len, .addable = info.addable };

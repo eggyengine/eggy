@@ -15,14 +15,15 @@ pub const Dragged = union(enum) {
     /// A project file, relative to the project with `/` between parts.
     asset: []const u8,
 
-    /// Whether a field of `field`'s kind takes this: an entity reference an entity with the
+    /// Whether a reference part `target` takes this: an entity reference an entity with the
     /// component it requires, an asset reference a file of its kind.
-    pub fn fits(self: Dragged, field: eggy.components.Field) bool {
+    pub fn fits(self: Dragged, target: eggy.components.Part) bool {
+        const requires = std.mem.span(target.requires);
         return switch (self) {
-            .entity => |dragged| field.kind == .entity and (field.requires.len == 0 or for (dragged.components) |name| {
-                if (std.mem.eql(u8, name, field.requires)) break true;
+            .entity => |dragged| target.kind == .entity and (requires.len == 0 or for (dragged.components) |name| {
+                if (std.mem.eql(u8, name, requires)) break true;
             } else false),
-            .asset => |path| field.kind == .asset and field.accepts.takes(path),
+            .asset => |path| target.kind == .asset and target.accepts.takes(path),
         };
     }
 
@@ -36,14 +37,14 @@ pub const Dragged = union(enum) {
 };
 
 test "an entity reference takes an entity with the component it requires" {
-    const field = eggy.components.Field{ .name = "around", .kind = .entity, .editable = true, .requires = "Body" };
+    const field = eggy.components.Part{ .kind = .entity, .requires = "Body" };
     const sun = Dragged{ .entity = .{ .entity = .init(1, 0), .name = "Sun", .components = &.{ "Name", "Body" } } };
     const rock = Dragged{ .entity = .{ .entity = .init(2, 0), .name = "Rock", .components = &.{"Name"} } };
     try std.testing.expect(sun.fits(field));
     try std.testing.expect(!rock.fits(field));
     try std.testing.expect(!(Dragged{ .asset = "sun.png" }).fits(field));
 
-    const sound = eggy.components.Field{ .name = "hum", .kind = .asset, .editable = true, .accepts = .audio };
+    const sound = eggy.components.Part{ .kind = .asset, .accepts = .audio };
     try std.testing.expect((Dragged{ .asset = "sounds/hum.ogg" }).fits(sound));
     try std.testing.expect(!(Dragged{ .asset = "art/hum.png" }).fits(sound));
     var buffer: [64]u8 = undefined;
