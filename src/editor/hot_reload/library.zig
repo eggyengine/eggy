@@ -43,6 +43,24 @@ const preference_sets = blk: {
     break :blk sets;
 };
 
+/// The component types, as C data.
+const component_types = blk: {
+    const infos = Plugins.Components.infos;
+    var types: [infos.len]api.ComponentType = undefined;
+    for (&types, infos) |*component_type, info| {
+        var fields: [info.fields.len]api.ComponentField = undefined;
+        for (&fields, info.fields) |*field, source| {
+            var options: [source.options.len][*:0]const u8 = undefined;
+            for (&options, source.options) |*option, name| option.* = name.ptr;
+            const frozen_options = options;
+            field.* = .{ .name = source.name.ptr, .kind = @intFromEnum(source.kind), .options = &frozen_options, .option_count = frozen_options.len, .editable = source.editable };
+        }
+        const frozen_fields = fields;
+        component_type.* = .{ .name = info.name.ptr, .owner = info.owner.ptr, .fields = &frozen_fields, .field_count = frozen_fields.len, .addable = info.addable };
+    }
+    break :blk types;
+};
+
 const game = api.Game{
     .start = start,
     .stop = stop,
@@ -54,6 +72,13 @@ const game = api.Game{
     .panel_count = panels.len,
     .preferences = &preference_sets,
     .preference_count = preference_sets.len,
+    .components = &component_types,
+    .component_count = component_types.len,
+    .has_component = hasComponent,
+    .add_component = addComponent,
+    .remove_component = removeComponent,
+    .read_field = readField,
+    .write_field = writeField,
 };
 
 export fn eggy_game() callconv(.c) *const api.Game {
@@ -102,6 +127,44 @@ fn editorUi(state_ptr: *anyopaque, context: *anyopaque) callconv(.c) void {
 
 fn editorPanelUi(state_ptr: *anyopaque, panel: usize, context: *anyopaque) callconv(.c) void {
     stateOf(state_ptr).plugins.editorPanelUi(panel, @ptrCast(@alignCast(context)));
+}
+
+fn hasComponent(world: *anyopaque, entity: api.Entity, component: usize) callconv(.c) bool {
+    return Plugins.Components.has(worldOf(world), entityOf(entity), component);
+}
+
+fn addComponent(world: *anyopaque, entity: api.Entity, component: usize) callconv(.c) bool {
+    Plugins.Components.add(worldOf(world), entityOf(entity), component) catch |err| {
+        std.log.err("cannot add component {d}: {t}", .{ component, err });
+        return false;
+    };
+    return true;
+}
+
+fn removeComponent(world: *anyopaque, entity: api.Entity, component: usize) callconv(.c) void {
+    Plugins.Components.remove(worldOf(world), entityOf(entity), component);
+}
+
+fn readField(world: *anyopaque, entity: api.Entity, component: usize, field: usize, buffer: [*]u8, capacity: usize) callconv(.c) usize {
+    var writer: std.Io.Writer = .fixed(buffer[0..capacity]);
+    Plugins.Components.writeField(worldOf(world), entityOf(entity), component, field, &writer) catch |err| return switch (err) {
+        error.WriteFailed => capacity + 1,
+        else => 0,
+    };
+    return writer.end;
+}
+
+fn writeField(world: *anyopaque, entity: api.Entity, component: usize, field: usize, text: [*:0]const u8) callconv(.c) bool {
+    Plugins.Components.setField(worldOf(world), entityOf(entity), component, field, std.mem.span(text)) catch return false;
+    return true;
+}
+
+fn worldOf(ptr: *anyopaque) *eggy.ecs.World {
+    return @ptrCast(@alignCast(ptr));
+}
+
+fn entityOf(entity: api.Entity) eggy.ecs.EntityId {
+    return .init(entity.id, entity.generation);
 }
 
 fn stateOf(ptr: *anyopaque) *State {

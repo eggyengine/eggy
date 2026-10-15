@@ -3,6 +3,24 @@
 //! Every hook is optional; see eggy's `plugins.zig` for the full list.
 const std = @import("std");
 const eggy = @import("eggy");
+const ecs = eggy.ecs;
+
+/// A component: an entity with one turns a little every frame (see `spin`). The plugin lists it
+/// in `components`, so the editor's Hierarchy and Inspector show it, and can add and edit it.
+pub const Spin = struct {
+    /// Turns per frame.
+    speed: f32 = 0.001,
+    turns: f32 = 0,
+};
+
+/// A system: turns every entity with a `Spin` by its speed, once a frame.
+fn spin(spinners: ecs.Query(.{*Spin})) !void {
+    var iter = spinners;
+    while (iter.next()) |view| {
+        const turning = view.get(*Spin);
+        turning.turns += turning.speed;
+    }
+}
 
 pub const Plugin = struct {
     clicks: u32 = 0,
@@ -17,6 +35,17 @@ pub const Plugin = struct {
 
         pub const descriptions = .{ .clicks_per_press = "How many clicks each press of the panel's button counts." };
     };
+
+    /// The components this plugin brings (see `Spin`).
+    pub const components = .{Spin};
+
+    /// Runs once at start-up: registers the `spin` system and spawns an entity to turn.
+    pub fn init(gpa: std.mem.Allocator, app: *eggy.App) !Plugin {
+        _ = gpa;
+        app.world.addSchedule(ecs.Schedule(.Update, .{spin}));
+        _ = try app.world.spawn(.{Spin{}});
+        return .{};
+    }
 
     /// Runs once per frame: picks up preference changes as they are made.
     pub fn update(self: *Plugin, app: *eggy.App) !void {

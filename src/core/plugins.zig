@@ -19,6 +19,11 @@
 //!     pub const Preferences = struct { volume: f32 = 0.8, show_gizmos: bool = true };
 //!     // in any hook: app.preferences(Preferences).volume
 //!
+//! And it can list its ECS components, which the editor's Hierarchy and Inspector then show,
+//! add and edit (see `components.zig`):
+//!
+//!     pub const components = .{ Spin, Health };
+//!
 //! Plugins are stored by value and may move after `init`: keep no pointers to `self`, and use the
 //! `app` each hook is given rather than storing it.
 //!
@@ -30,6 +35,7 @@ const App = @import("app.zig").App;
 const Event = @import("vitellus_sdl3").sdl.events.Event;
 const ui = @import("weeoui");
 const preferences = @import("preferences.zig");
+const components = @import("components.zig");
 
 /// A panel a plugin adds to the editor's dock (see `editor_panels` above).
 pub const EditorPanel = struct {
@@ -64,6 +70,20 @@ pub fn Set(comptime types: anytype, comptime keys: []const [:0]const u8) type {
                 all = all ++ .{preferences.manifest(T.Preferences, key)};
             };
             break :blk all;
+        };
+
+        /// Every component the plugins list (their `components`), in plugin order, each once, and
+        /// what the editor does with them.
+        pub const Components = blk: {
+            var listed: []const type = &.{};
+            var owners: []const [:0]const u8 = &.{};
+            for (list, keys) |T, key| for (components.listedBy(T)) |C| {
+                if (std.mem.indexOfScalar(type, listed, C) == null) {
+                    listed = listed ++ .{C};
+                    owners = owners ++ .{key};
+                }
+            };
+            break :blk components.Registry(listed, owners);
         };
 
         /// Start every plugin. If one fails, those already started are stopped again.
@@ -216,4 +236,19 @@ test "plugins' preferences are listed under their keys" {
     try std.testing.expectEqual(@as(usize, 1), manifests.len);
     try std.testing.expectEqualStrings("game", manifests[0].key);
     try std.testing.expectEqualStrings("volume", manifests[0].fields[0].name);
+}
+
+test "plugins' components are listed once each, under the plugin that lists them first" {
+    const Spin = struct { speed: f32 = 1 };
+    const Health = struct { points: u32 = 100 };
+    const Game = struct {
+        pub const components = .{Spin};
+    };
+    const Combat = struct {
+        pub const components = .{ Health, Spin };
+    };
+    const infos = Set(.{ Game, Combat }, &.{ "game", "combat" }).Components.infos;
+    try std.testing.expectEqual(@as(usize, 2), infos.len);
+    try std.testing.expectEqualStrings("game", infos[0].owner);
+    try std.testing.expectEqualStrings("combat", infos[1].owner);
 }

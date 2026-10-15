@@ -12,6 +12,10 @@ const Store = prefs.Store;
 const weeoui_sdl3 = @import("weeoui_sdl3");
 const ToolWindow = @import("../tool_window.zig").ToolWindow;
 const files = @import("preferences.zig");
+const page_style = @import("../page_style.zig");
+const restyle = page_style.restyle;
+const smallText = page_style.smallText;
+const noteText = page_style.noteText;
 const log = std.log.scoped(.preferences);
 
 /// A section of the window: whose preferences, as the window titles them, and a line on what
@@ -238,43 +242,6 @@ pub const PreferencesWindow = struct {
         files.save(self.gpa, store, folders, layer, key) catch |err| log.err("cannot save {s}'s preferences: {t}", .{ key, err });
     }
 };
-
-/// Restyle the element `context` added last: a widget, or a container just ended. `layout`
-/// sets the fields that matter for this window; a container keeps its children.
-fn restyle(context: *ui.Context, layout: struct {
-    width: ?f32 = null,
-    height: ?f32 = null,
-    grow: ?f32 = null,
-    gap: ?f32 = null,
-    direction: ?@FieldType(ui.Layout.Style, "direction") = null,
-    align_items: ?@FieldType(ui.Layout.Style, "align_items") = null,
-    padding: ?@FieldType(ui.Layout.Style, "padding") = null,
-}) void {
-    const element = context.last_added orelse return;
-    if (layout.width) |width| element.style.width = width;
-    if (layout.height) |height| element.style.height = height;
-    if (layout.grow) |grow| element.style.grow = grow;
-    if (layout.gap) |gap| element.style.gap = gap;
-    if (layout.direction) |direction| element.style.direction = direction;
-    if (layout.align_items) |align_items| element.style.align_items = align_items;
-    if (layout.padding) |padding| element.style.padding = padding;
-    // Rows here keep to one line, and cards fill the width rather than stopping at 640.
-    element.style.wrap = false;
-    element.style.max_width = null;
-}
-
-/// Make the text `context` added last a small note under a control, right-aligned with it.
-fn noteText(context: *ui.Context) void {
-    smallText(context, 12);
-    const element = context.last_added orelse return;
-    if (element.paint_kind == .text) element.paint_kind.text.alignment = .end;
-}
-
-/// Make the text `context` added last `size` tall.
-fn smallText(context: *ui.Context, size: f32) void {
-    const element = context.last_added orelse return;
-    if (element.paint_kind == .text) element.paint_kind.text.size = size;
-}
 
 /// What `field` of `key` is in `layer`: its own value, else (for the project) the global one,
 /// else the default.

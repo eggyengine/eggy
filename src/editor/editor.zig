@@ -28,6 +28,7 @@ pub const logFn = @import("console_log.zig").logFn;
 const ProjectFlow = @import("projects/flow.zig").ProjectFlow;
 const HotGame = @import("hot_reload/hot_reload.zig").HotGame;
 const preferences = @import("preferences/preferences.zig");
+const entities = @import("entities/entities.zig");
 
 /// The editor for `project`, which declares `name` and `game_library` (the game library's
 /// `file_name`, beside the editor). The game and its plugins run as they do in the runtime,
@@ -51,6 +52,11 @@ pub fn Editor(comptime project: type) type {
         mono: *ui.Font,
         /// The Console panel's UI and state, drawing with `ui`'s font.
         console_ui: ui.Context,
+        /// The Hierarchy panel's UI, drawing with `ui`'s font, and the entity selected there,
+        /// whose components the Inspector shows.
+        hierarchy_ui: ui.Context,
+        selected_entity: ?eggy.ecs.EntityId = null,
+        entity_inspector: entities.EntityInspector,
         console: Console,
         /// A UI of its own for each plugin panel there can be, drawing with `ui`'s font.
         plugin_pages: [panels.max_pages - panels.first_plugin_page]ui.Context,
@@ -126,6 +132,8 @@ pub fn Editor(comptime project: type) type {
             errdefer mono.deinit();
             var console_ui = ui.Context.initWithFont(gpa, context.font);
             errdefer console_ui.deinit();
+            var hierarchy_ui = ui.Context.initWithFont(gpa, context.font);
+            errdefer hierarchy_ui.deinit();
             var console = Console.init(gpa, mono);
             errdefer console.deinit();
             var plugin_pages: [panels.max_pages - panels.first_plugin_page]ui.Context = undefined;
@@ -169,7 +177,7 @@ pub fn Editor(comptime project: type) type {
             }
             app.startWorld() catch if (game) |*loaded| loaded.pause(&app);
             const upgrades = Upgrades.init(gpa, if (opened_project) |opened| opened.dir else null, @import("build_options").source_dir);
-            var self = Self{ .gpa = gpa, .game = game, .game_modified = modifiedAt(library_path), .app = app, .ui = context, .mono = mono, .console_ui = console_ui, .console = console, .plugin_pages = plugin_pages, .workspace = workspace, .frame = frame, .scene = scene, .overlay = overlay, .project = opened_project, .editor_modified = if (opened_project) |opened| editorModified(gpa, opened) else null, .upgrades = upgrades, .preference_folders = preference_folders };
+            var self = Self{ .gpa = gpa, .game = game, .game_modified = modifiedAt(library_path), .app = app, .ui = context, .mono = mono, .console_ui = console_ui, .hierarchy_ui = hierarchy_ui, .entity_inspector = .init(gpa), .console = console, .plugin_pages = plugin_pages, .workspace = workspace, .frame = frame, .scene = scene, .overlay = overlay, .project = opened_project, .editor_modified = if (opened_project) |opened| editorModified(gpa, opened) else null, .upgrades = upgrades, .preference_folders = preference_folders };
             self.built_sources = self.sourcesNow();
             return self;
         }
@@ -197,6 +205,8 @@ pub fn Editor(comptime project: type) type {
             for (&self.plugin_pages) |*page_ui| page_ui.deinit();
             self.console.deinit();
             self.console_ui.deinit();
+            self.hierarchy_ui.deinit();
+            self.entity_inspector.deinit();
             self.mono.deinit();
             self.gpa.destroy(self.mono);
             self.ui.deinit();
@@ -272,6 +282,7 @@ pub fn Editor(comptime project: type) type {
                 switch (index) {
                     panels.inspector_page => self.buildInspector(),
                     panels.console_page => self.console.build(page_ui),
+                    panels.hierarchy_page => entities.hierarchy.build(page_ui, &self.app, if (self.game) |*game| game else null, &self.selected_entity),
                     else => if (self.game) |*game| game.editorPanelUi(index - panels.first_plugin_page, page_ui),
                 }
                 vertices.* = try page_ui.render();
@@ -795,10 +806,12 @@ pub fn Editor(comptime project: type) type {
         fn page(self: *Self, index: usize) *ui.Context {
             if (index == panels.inspector_page) return &self.ui;
             if (index == panels.console_page) return &self.console_ui;
+            if (index == panels.hierarchy_page) return &self.hierarchy_ui;
             return &self.plugin_pages[index - panels.first_plugin_page];
         }
 
-        /// How many pages there are: the Inspector, the Console, and the game's panels.
+        /// How many pages there are: the Inspector, the Console, the Hierarchy, and the game's
+        /// panels.
         fn pageCount(self: *const Self) usize {
             return panels.first_plugin_page + self.workspace.plugin_panels.len;
         }
@@ -861,10 +874,15 @@ pub fn Editor(comptime project: type) type {
             return main_slot;
         }
 
-        /// The Inspector panel: the project's name, then whatever the game and plugins add.
+        /// The Inspector panel: the entity selected in the Hierarchy, else the project's name and
+        /// whatever the game and plugins add.
         fn buildInspector(self: *Self) void {
+            if (self.selected_entity) |entity| if (self.app.world.isAlive(entity)) {
+                return self.entity_inspector.build(&self.ui, &self.app, if (self.game) |*game| game else null, entity);
+            };
             self.ui.heading(3, project.name);
             if (self.game) |*game| game.editorUi(&self.ui) else self.ui.muted("The game's library didn't load: see the Console.");
+            self.ui.muted("Select an entity in the Hierarchy to see its components.");
         }
 
         /// `rect` (in UI points) in window pixels.
@@ -909,6 +927,8 @@ test {
     _ = @import("hot_reload/hot_reload.zig");
     _ = @import("preferences/preferences.zig");
     _ = @import("preferences/window.zig");
+    _ = @import("entities/entities.zig");
+    _ = @import("page_style.zig");
     _ = @import("projects/source_stamp.zig");
     _ = @import("terminal_view.zig");
     _ = @import("console_log.zig");

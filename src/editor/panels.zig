@@ -1,6 +1,6 @@
-//! The editor's dock panels and what each shows. Most built-in ones are stubs for now. Scene
-//! marks where the editor draws the scene texture; the "pages" (Inspector, Console and each
-//! plugin's `editor_panels`) mark where it draws a `ui.Context` of their own.
+//! The editor's dock panels and what each shows. Scene marks where the editor draws the scene
+//! texture; the "pages" (Inspector, Console, Hierarchy and each plugin's `editor_panels`) mark
+//! where it draws a `ui.Context` of their own. Assets is a stub for now.
 const std = @import("std");
 const eggy = @import("eggy");
 const ui = eggy.ui;
@@ -28,17 +28,19 @@ pub const Panel = enum(u32) {
 
 /// Plugin panel i (of `Set.editor_panels`) has dock id `plugin_first + i`.
 pub const plugin_first: u32 = 100;
-/// Pages: the Inspector (`inspector_page`), the Console (`console_page`), then the plugin
-/// panels (`first_plugin_page + i`).
+/// Pages: the Inspector (`inspector_page`), the Console (`console_page`), the Hierarchy
+/// (`hierarchy_page`), then the plugin panels (`first_plugin_page + i`).
 pub const max_pages = 32;
 pub const inspector_page = 0;
 pub const console_page = 1;
-pub const first_plugin_page = 2;
+pub const hierarchy_page = 2;
+pub const first_plugin_page = 3;
 
 /// Page index of dock panel `id`, if it is a page.
 pub fn pageOf(id: u32) ?usize {
     if (id == @intFromEnum(Panel.inspector)) return inspector_page;
     if (id == @intFromEnum(Panel.console)) return console_page;
+    if (id == @intFromEnum(Panel.hierarchy)) return hierarchy_page;
     if (id >= plugin_first and id < plugin_first + max_pages - first_plugin_page) return first_plugin_page + (id - plugin_first);
     return null;
 }
@@ -84,9 +86,8 @@ pub const Provider = struct {
                 scene.accessibility = .{ .role = .image, .label = "Scene view" };
                 break :blk scene;
             },
-            .hierarchy => placeholder(b, "No entities yet."),
             .assets => placeholder(b, "No assets yet."),
-            .inspector, .console => unreachable, // pages
+            .inspector, .console, .hierarchy => unreachable, // pages
         };
     }
 };
@@ -107,10 +108,11 @@ fn placeholder(b: L.Builder, message: []const u8) !*L.Element {
     });
 }
 
-test "pages are the Inspector, the Console and the plugin panels, numbered in that order" {
+test "pages are the Inspector, the Console, the Hierarchy and the plugin panels, in that order" {
     try std.testing.expectEqual(@as(?usize, 0), pageOf(@intFromEnum(Panel.inspector)));
     try std.testing.expectEqual(@as(?usize, 1), pageOf(@intFromEnum(Panel.console)));
-    try std.testing.expectEqual(@as(?usize, 3), pageOf(plugin_first + 1));
+    try std.testing.expectEqual(@as(?usize, 2), pageOf(@intFromEnum(Panel.hierarchy)));
+    try std.testing.expectEqual(@as(?usize, 4), pageOf(plugin_first + 1));
     try std.testing.expectEqual(@as(?usize, null), pageOf(@intFromEnum(Panel.scene)));
     const plugin_panels = [_]EditorPanel{ .{ .title = "Stats" }, .{ .title = "Level" } };
     try std.testing.expectEqualStrings("Level", panelTitle(plugin_first + 1, &plugin_panels));

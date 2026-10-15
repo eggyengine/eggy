@@ -38,6 +38,7 @@ pub const Plugin = struct {
 | `editorUi` | Each frame in the editor, to add to the Inspector panel. |
 | `editor_panels`, `editorPanelUi` | In the editor, to add dock panels of your own. See [Editor panels](#editor-panels). |
 | `Preferences` | Settings people change in the editor's Preferences window. See [Preferences](#preferences). |
+| `components` | ECS components the editor's Hierarchy and Inspector show, add and edit. See [Components](#components). |
 
 The editor-only hooks never run in the runtime, so the runtime pays nothing for them.
 
@@ -83,6 +84,33 @@ pub fn init(gpa: std.mem.Allocator, app: *eggy.App) !Plugin {
     return .{};
 }
 ```
+
+## Components
+
+A plugin lists the ECS components it brings in `components`. The editor's **Hierarchy** panel then shows every entity with the components it has, and selecting one shows its components in the **Inspector**, where each field can be edited and components added or removed:
+
+```zig
+pub const Spin = struct {
+    speed: f32 = 0.001,
+    turns: f32 = 0,
+};
+
+pub const Plugin = struct {
+    pub const components = .{Spin};
+
+    pub fn init(gpa: std.mem.Allocator, app: *eggy.App) !Plugin {
+        _ = gpa;
+        _ = try app.world.spawn(.{Spin{}});
+        return .{};
+    }
+};
+```
+
+A component is a struct. The Inspector edits bools with a switch, enums with a dropdown, and numbers and other plain data (arrays, nested structs) as [ZON](https://ziglang.org/documentation/master/#ZON) text, applied once it parses. Fields holding pointers are shown but not edited. **Add component** offers the components whose fields all have defaults, which is what an added one starts with.
+
+The values shown are read from the world every frame, so fields your systems change update as they run.
+
+The Hierarchy's **Add entity** spawns an empty entity (under the selected one, if any), and **Delete** despawns the selected entity and its children. Until scenes can be saved, entities added in the editor go when the game's code is rebuilt, as the world starts over.
 
 ## Editor panels
 

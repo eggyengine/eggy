@@ -6,7 +6,7 @@
 const std = @import("std");
 
 /// Bumped whenever these types change, so an editor refuses a library built for another.
-pub const version: u32 = 2;
+pub const version: u32 = 3;
 
 /// The library's one exported function: `fn () callconv(.c) *const Game`.
 pub const entry_symbol = "eggy_game";
@@ -41,6 +41,28 @@ pub const Preferences = extern struct {
     field_count: usize,
 };
 
+/// A field of a component type (`eggy.components.Field`).
+pub const ComponentField = extern struct {
+    name: [*:0]const u8,
+    /// An `eggy.components.Kind`.
+    kind: u8,
+    options: [*]const [*:0]const u8,
+    option_count: usize,
+    editable: bool,
+};
+
+/// A component type the game or a plugin lists (`eggy.components.Info`).
+pub const ComponentType = extern struct {
+    name: [*:0]const u8,
+    owner: [*:0]const u8,
+    fields: [*]const ComponentField,
+    field_count: usize,
+    addable: bool,
+};
+
+/// An entity of the app's world (`eggy.ecs.EntityId`).
+pub const Entity = extern struct { id: u32, generation: u32 };
+
 /// What the library gives the editor: the game's and its plugins' hooks (see `eggy.plugins`).
 /// `state` is what `start` returned.
 pub const Game = extern struct {
@@ -63,4 +85,17 @@ pub const Game = extern struct {
     /// Each plugin's preferences, for the Preferences window.
     preferences: [*]const Preferences,
     preference_count: usize,
+    /// The component types the game and plugins list, for the Hierarchy and Inspector, and what
+    /// the editor does with them on `world` (an `*eggy.ecs.World`); `component` indexes them.
+    components: [*]const ComponentType,
+    component_count: usize,
+    has_component: *const fn (world: *anyopaque, entity: Entity, component: usize) callconv(.c) bool,
+    /// Add it with its defaults; false if it can't be (logged).
+    add_component: *const fn (world: *anyopaque, entity: Entity, component: usize) callconv(.c) bool,
+    remove_component: *const fn (world: *anyopaque, entity: Entity, component: usize) callconv(.c) void,
+    /// Write a field's value as ZON into `buffer`; returns its length, more than `capacity`
+    /// when it didn't fit (and was cut off), or 0 if it couldn't be read.
+    read_field: *const fn (world: *anyopaque, entity: Entity, component: usize, field: usize, buffer: [*]u8, capacity: usize) callconv(.c) usize,
+    /// Set a field from ZON `text`; false if it doesn't parse as the field's type.
+    write_field: *const fn (world: *anyopaque, entity: Entity, component: usize, field: usize, text: [*:0]const u8) callconv(.c) bool,
 };

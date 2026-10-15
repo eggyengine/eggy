@@ -27,6 +27,8 @@ pub const HotGame = struct {
     panels: []eggy.plugins.EditorPanel,
     /// Each plugin's preferences, copied out of the library into `manifest_arena`.
     preference_manifests: []const eggy.preferences.Manifest = &.{},
+    /// The component types the game and plugins list, copied into `manifest_arena` too.
+    component_types: []const eggy.components.Info = &.{},
     manifest_arena: std.heap.ArenaAllocator,
     /// How many copies this editor has loaded, which names the next one.
     loads: u32 = 0,
@@ -112,7 +114,8 @@ pub const HotGame = struct {
         for (panels, game.panels[0..game.panel_count]) |*panel, source| panel.* = .{ .title = try gpa.dupeZ(u8, std.mem.span(source.title)) };
 
         const manifests = try copyManifests(self.manifest_arena.allocator(), game.preferences[0..game.preference_count]);
-        self.* = .{ .gpa = gpa, .path = self.path, .copy_path = copy_path, .library = library, .game = game, .state = null, .panels = panels, .loads = self.loads, .preference_manifests = manifests, .manifest_arena = self.manifest_arena };
+        const component_types = try copyComponentTypes(self.manifest_arena.allocator(), game.components[0..game.component_count]);
+        self.* = .{ .gpa = gpa, .path = self.path, .copy_path = copy_path, .library = library, .game = game, .state = null, .panels = panels, .loads = self.loads, .preference_manifests = manifests, .component_types = component_types, .manifest_arena = self.manifest_arena };
         self.state = game.start(&host, &self.gpa, app);
         if (self.state == null) log.err("the game didn't start: see the errors above. It starts again when its code is rebuilt.", .{});
     }
@@ -129,6 +132,7 @@ pub const HotGame = struct {
         self.gpa.free(self.panels);
         self.panels = &.{};
         self.preference_manifests = &.{};
+        self.component_types = &.{};
         _ = self.manifest_arena.reset(.free_all);
         library.close();
         self.library = null;
@@ -136,6 +140,41 @@ pub const HotGame = struct {
         std.Io.Dir.cwd().deleteFile(threaded.io(), self.copy_path) catch {};
         self.gpa.free(self.copy_path);
         self.copy_path = &.{};
+    }
+
+    /// Whether `entity` of `app`'s world has component type `component` (of `component_types`).
+    pub fn hasComponent(self: *const HotGame, app: *eggy.App, entity: eggy.ecs.EntityId, component: usize) bool {
+        if (self.library == null or component >= self.component_types.len) return false;
+        return self.game.has_component(&app.world, entityOf(entity), component);
+    }
+
+    /// Give `entity` component type `component` with its defaults; false if it couldn't (logged).
+    pub fn addComponent(self: *const HotGame, app: *eggy.App, entity: eggy.ecs.EntityId, component: usize) bool {
+        if (self.library == null or component >= self.component_types.len) return false;
+        return self.game.add_component(&app.world, entityOf(entity), component);
+    }
+
+    pub fn removeComponent(self: *const HotGame, app: *eggy.App, entity: eggy.ecs.EntityId, component: usize) void {
+        if (self.library == null or component >= self.component_types.len) return;
+        self.game.remove_component(&app.world, entityOf(entity), component);
+    }
+
+    /// Field `field` of `entity`'s component `component` as ZON, in `buffer` (cut short with
+    /// "..." when it doesn't fit); null if it can't be read.
+    pub fn readField(self: *const HotGame, app: *eggy.App, entity: eggy.ecs.EntityId, component: usize, field: usize, buffer: []u8) ?[]const u8 {
+        if (self.library == null or component >= self.component_types.len) return null;
+        const len = self.game.read_field(&app.world, entityOf(entity), component, field, buffer.ptr, buffer.len);
+        if (len == 0) return null;
+        if (len <= buffer.len) return buffer[0..len];
+        @memcpy(buffer[buffer.len - 3 ..], "...");
+        return buffer;
+    }
+
+    /// Set field `field` of `entity`'s component `component` from ZON `text`; false if it
+    /// doesn't parse as the field's type.
+    pub fn writeField(self: *const HotGame, app: *eggy.App, entity: eggy.ecs.EntityId, component: usize, field: usize, text: [:0]const u8) bool {
+        if (self.library == null or component >= self.component_types.len) return false;
+        return self.game.write_field(&app.world, entityOf(entity), component, field, text.ptr);
     }
 
     /// A hook or one of the world's systems failed (and the game logged why): stop the game,
@@ -167,6 +206,30 @@ fn copyManifests(arena: std.mem.Allocator, sets: []const api.Preferences) ![]con
         manifest.* = .{ .key = try arena.dupeZ(u8, std.mem.span(set.key)), .fields = fields };
     }
     return manifests;
+}
+
+/// The library's component types, copied into `arena`.
+fn copyComponentTypes(arena: std.mem.Allocator, types: []const api.ComponentType) ![]const eggy.components.Info {
+    const infos = try arena.alloc(eggy.components.Info, types.len);
+    for (infos, types) |*info, source| {
+        const fields = try arena.alloc(eggy.components.Field, source.field_count);
+        for (fields, source.fields[0..source.field_count]) |*field, field_source| {
+            const options = try arena.alloc([:0]const u8, field_source.option_count);
+            for (options, field_source.options[0..field_source.option_count]) |*option, name| option.* = try arena.dupeZ(u8, std.mem.span(name));
+            field.* = .{
+                .name = try arena.dupeZ(u8, std.mem.span(field_source.name)),
+                .kind = std.enums.fromInt(eggy.components.Kind, field_source.kind) orelse return error.GameLibraryVersionMismatch,
+                .options = options,
+                .editable = field_source.editable,
+            };
+        }
+        info.* = .{ .name = try arena.dupeZ(u8, std.mem.span(source.name)), .owner = try arena.dupeZ(u8, std.mem.span(source.owner)), .fields = fields, .addable = source.addable };
+    }
+    return infos;
+}
+
+fn entityOf(entity: eggy.ecs.EntityId) api.Entity {
+    return .{ .id = entity.id, .generation = entity.generation };
 }
 
 /// What the library may call in the editor.
