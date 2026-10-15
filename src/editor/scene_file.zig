@@ -69,16 +69,16 @@ pub const OpenScene = struct {
         return hash != saved;
     }
 
-    /// Write `world` to the open scene; with none open, to a new one in `scenes/`, which
-    /// becomes the open one.
-    pub fn save(self: *OpenScene, world: *eggy.ecs.World, access: eggy.scene.Access) !void {
+    /// Write `world`, from its top-level entities `roots` in order, to the open scene; with none
+    /// open, to a new one in `scenes/`, which becomes the open one.
+    pub fn save(self: *OpenScene, world: *eggy.ecs.World, access: eggy.scene.Access, roots: ?[]const eggy.ecs.EntityId) !void {
         if (self.path == null) {
             const fresh = try self.freshPath();
             defer self.gpa.free(fresh);
             try self.setPath(fresh);
         }
         const path = self.path.?;
-        var scene = try eggy.scene.Scene.capture(self.gpa, world, access, null);
+        var scene = try eggy.scene.Scene.capture(self.gpa, world, access, roots);
         defer scene.deinit();
         var text: std.Io.Writer.Allocating = .init(self.gpa);
         defer text.deinit();
@@ -102,7 +102,7 @@ pub const OpenScene = struct {
         const fresh = try self.freshPathIn(folder);
         defer self.gpa.free(fresh);
         try self.setPath(fresh);
-        try self.save(world, access);
+        try self.save(world, access, null);
     }
 
     fn setPath(self: *OpenScene, path: []const u8) !void {
@@ -186,7 +186,8 @@ pub const OpenScene = struct {
     }
 };
 
-/// A hash of `world` as a scene file would hold it.
+/// A hash of `world` as a scene file would hold it, its top-level entities in id order (as a
+/// world just loaded has them).
 fn hashOf(gpa: std.mem.Allocator, world: *eggy.ecs.World, access: eggy.scene.Access) !u64 {
     var scene = try eggy.scene.Scene.capture(gpa, world, access, null);
     defer scene.deinit();
@@ -228,7 +229,7 @@ test "a saved scene is remembered, and a new one gets a free name" {
     const named = try world.spawn(.{});
     access.setName(&world, named, "Sun");
     try std.testing.expect(first.unsaved(&world, access)); // an entity, and nowhere saved
-    try first.save(&world, access);
+    try first.save(&world, access, null);
     try std.testing.expectEqualStrings("untitled.scene.zon", first.name().?);
     try std.testing.expect(!first.unsaved(&world, access));
     access.setName(&world, named, "Sol");

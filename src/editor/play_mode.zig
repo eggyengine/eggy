@@ -18,10 +18,11 @@ pub const PlayMode = struct {
         return self.before != null;
     }
 
-    /// Start playing: keep the scene as it is now, for `stop`.
-    pub fn play(self: *PlayMode, gpa: std.mem.Allocator, app: *eggy.App, game: *const HotGame) !void {
+    /// Start playing: keep the scene as it is now, from its top-level entities `roots` in order,
+    /// for `stop`.
+    pub fn play(self: *PlayMode, gpa: std.mem.Allocator, app: *eggy.App, game: *const HotGame, roots: []const eggy.ecs.EntityId) !void {
         if (self.before != null) return;
-        self.before = try eggy.scene.Scene.capture(gpa, &app.world, game.sceneAccess(), null);
+        self.before = try eggy.scene.Scene.capture(gpa, &app.world, game.sceneAccess(), roots);
     }
 
     /// Stop playing: the game starts over on the scene kept by `play`, with the plugins keyed in

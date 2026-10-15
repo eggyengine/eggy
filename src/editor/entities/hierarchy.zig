@@ -2,9 +2,10 @@
 //! children to their parent, filtered by name or component, to pick one for the Inspector. Each
 //! row shows the entity's name, and its components as far as they fit beside it.
 //!
-//! Dragging a row moves the entity: dropped onto another row it becomes that row's child, dropped
-//! in the space below the tree it moves to the top level. While dragging, the target lights up and
-//! a label beside the pointer says what letting go will do; anywhere else (or onto its own
+//! Dragging a row moves the entity: dropped on the top or bottom quarter of another row it goes
+//! before or after that row, as its sibling (a line shows where); on the middle it becomes that
+//! row's child; in the space below the tree it moves to the end of the top level. While dragging,
+//! the target lights up and a label beside the pointer says what letting go will do; anywhere else (or onto its own
 //! children) letting go does nothing, and Escape cancels. A right-click opens a menu (rename, add
 //! a child, duplicate, move to the top level, delete); a double-click or Ctrl+R renames, Delete
 //! deletes.
@@ -25,8 +26,8 @@ pub const Action = union(enum) {
     spawn: ?ecs.EntityId,
     delete: ecs.EntityId,
     rename: struct { entity: ecs.EntityId, name: []const u8 },
-    /// Move `entity` under `parent`, or to the top level when null.
-    reparent: struct { entity: ecs.EntityId, parent: ?ecs.EntityId },
+    /// Move `entity` to `place`.
+    move: struct { entity: ecs.EntityId, place: Place },
     duplicate: ecs.EntityId,
 };
 
@@ -48,14 +49,22 @@ const components_size: f32 = 11;
 
 const MenuItem = enum(u32) { rename, add_child, duplicate, to_top, delete, add_entity };
 
+/// Where an entity moves to.
+pub const Place = union(enum) {
+    /// Under this entity, after its children.
+    into: ecs.EntityId,
+    /// Beside this entity, as its sibling: just before it, or just after it.
+    before: ecs.EntityId,
+    after: ecs.EntityId,
+    /// At the end of the top level.
+    top_level,
+};
+
 /// Where a drag would drop if let go now.
 const Target = union(enum) {
     /// Nowhere: letting go cancels.
     none,
-    /// Under this entity.
-    into: ecs.EntityId,
-    /// At the top level.
-    top_level,
+    place: Place,
     /// Onto itself or one of its children, which can't be.
     blocked,
 };
@@ -117,7 +126,7 @@ pub const Hierarchy = struct {
         // While dragging: the space below the tree is the top level, and a label beside the
         // pointer says what letting go will do.
         if (self.drag) |drag| if (drag.moving) {
-            const over_top = drag.target == .top_level;
+            const over_top = drag.target == .place and drag.target.place == .top_level;
             const zone = b.node(top_level_id, .{ .height = 32, .padding = .{ .left = 10, .right = 10 }, .align_items = .center, .direction = .row }, .{ .surface = if (over_top) .card else .track }, &.{
                 b.node(0, .{ .grow = 1 }, .{ .text = .{ .value = "Drop here to move to the top level", .size = 11, .tone = if (over_top) .foreground else .muted, .wrap = true } }, &.{}) catch return action,
             }) catch return action;
@@ -163,12 +172,11 @@ pub const Hierarchy = struct {
             .pointer_up => |up| if (up.button == .left) if (self.drag) |drag| {
                 self.drag = null;
                 if (!drag.moving) return .{ .used = false };
-                const parent: ?ecs.EntityId = switch (self.targetAt(context, drag.entity, up.position)) {
-                    .into => |entity| entity,
-                    .top_level => null,
+                const place = switch (self.targetAt(context, drag.entity, up.position)) {
+                    .place => |place| place,
                     .none, .blocked => return .{ .used = true },
                 };
-                return .{ .used = true, .action = .{ .reparent = .{ .entity = drag.entity, .parent = parent } } };
+                return .{ .used = true, .action = .{ .move = .{ .entity = drag.entity, .place = place } } };
             },
             else => {},
         }
@@ -257,7 +265,7 @@ pub const Hierarchy = struct {
             .last = row.last,
             .lines = row.lines,
             .selected = if (selected) |entity| entity.eql(row.entity) else false,
-            .drop_target = if (self.drag) |drag| drag.moving and drag.target == .into and drag.target.into.eql(row.entity) else false,
+            .drop = if (self.drag) |drag| if (drag.moving) dropOn(drag.target, row.entity) else .none else .none,
             .dragged = if (self.drag) |drag| drag.moving and drag.entity.eql(row.entity) else false,
         };
         const element = b.node(id, .{ .height = row_height }, .{ .custom = .{ .context = paint, .draw = RowPaint.draw } }, &.{}) catch return null;
@@ -274,11 +282,18 @@ pub const Hierarchy = struct {
         const name = self.nameOf(dragged);
         const shown = if (name.len > 0) name else "the entity";
         const text = switch (target) {
-            .into => |entity| std.fmt.allocPrint(arena, "Move {s} into {s}", .{ shown, blk: {
-                const into = self.nameOf(entity);
-                break :blk if (into.len > 0) into else "that entity";
-            } }) catch return,
-            .top_level => std.fmt.allocPrint(arena, "Move {s} to the top level", .{shown}) catch return,
+            .place => |place| switch (place) {
+                inline .into, .before, .after => |entity, how| std.fmt.allocPrint(arena, "Move {s} {s} {s}", .{ shown, switch (how) {
+                    .into => "into",
+                    .before => "before",
+                    .after => "after",
+                    else => unreachable,
+                }, blk: {
+                    const other = self.nameOf(entity);
+                    break :blk if (other.len > 0) other else "that entity";
+                } }) catch return,
+                .top_level => std.fmt.allocPrint(arena, "Move {s} to the end of the top level", .{shown}) catch return,
+            },
             .blocked => "Can't move it into itself or its children",
             .none => std.fmt.allocPrint(arena, "Moving {s}: drop it on a row, or below the tree", .{shown}) catch return,
         };
@@ -330,7 +345,7 @@ pub const Hierarchy = struct {
                 },
                 .add_child => .{ .spawn = entity },
                 .duplicate => .{ .duplicate = entity.? },
-                .to_top => .{ .reparent = .{ .entity = entity.?, .parent = null } },
+                .to_top => .{ .move = .{ .entity = entity.?, .place = .top_level } },
                 .delete => .{ .delete = entity.? },
                 .add_entity => .{ .spawn = null },
             };
@@ -342,14 +357,21 @@ pub const Hierarchy = struct {
         return menu_id_base + @intFromEnum(item);
     }
 
-    /// Where a drag of `dragged` would drop with the pointer at `at`: onto the row there (not
-    /// itself or one of its children), or the top level below the tree, else nowhere.
+    /// Where a drag of `dragged` would drop with the pointer at `at`: beside the row there (its
+    /// top or bottom quarter) or into it (the middle), unless that row is the dragged one or
+    /// below it; the top level below the tree; else nowhere.
     fn targetAt(self: *const Hierarchy, context: *const ui.Context, dragged: ecs.EntityId, at: ui.Vec2) Target {
-        if (self.rowAt(context, at)) |row| return if (self.isWithin(row.entity, dragged)) .blocked else .{ .into = row.entity };
-        if (context.last_bounds.get(top_level_id)) |zone| if (zone.rect.contains(at.x, at.y)) return .top_level;
+        if (self.rowAt(context, at)) |row| {
+            if (row.entity.eql(dragged)) return .none;
+            if (self.isWithin(row.entity, dragged)) return .blocked;
+            const bounds = context.last_bounds.get(row_id_base + row.entity.id).?.rect;
+            const along = (at.y - bounds.y) / bounds.h;
+            return .{ .place = if (along < 0.25) .{ .before = row.entity } else if (along > 0.75) .{ .after = row.entity } else .{ .into = row.entity } };
+        }
+        if (context.last_bounds.get(top_level_id)) |zone| if (zone.rect.contains(at.x, at.y)) return .{ .place = .top_level };
         // Below the last row, inside the page, counts as the top level too.
         const last = if (self.rows.items.len > 0) context.last_bounds.get(row_id_base + self.rows.items[self.rows.items.len - 1].entity.id) else null;
-        if (last) |row| if (at.y > row.rect.y + row.rect.h and context.viewport.contains(at.x, at.y)) return .top_level;
+        if (last) |row| if (at.y > row.rect.y + row.rect.h and context.viewport.contains(at.x, at.y)) return .{ .place = .top_level };
         return .none;
     }
 
@@ -400,6 +422,19 @@ pub const Hierarchy = struct {
     }
 };
 
+/// What a drag shows on a row it would drop on: an outline (into it) or a line above or below.
+const Drop = enum { none, into, before, after };
+
+fn dropOn(target: Target, entity: ecs.EntityId) Drop {
+    if (target != .place) return .none;
+    return switch (target.place) {
+        .into => |other| if (other.eql(entity)) .into else .none,
+        .before => |other| if (other.eql(entity)) .before else .none,
+        .after => |other| if (other.eql(entity)) .after else .none,
+        .top_level => .none,
+    };
+}
+
 /// How a row is drawn: guide lines, highlight, name, and components.
 const RowPaint = struct {
     id: u32,
@@ -411,7 +446,7 @@ const RowPaint = struct {
     last: bool,
     lines: []const bool,
     selected: bool,
-    drop_target: bool,
+    drop: Drop,
     dragged: bool,
 
     fn draw(context: *const anyopaque, c: *ui.Canvas, r: ui.Rect) anyerror!void {
@@ -424,7 +459,12 @@ const RowPaint = struct {
         if (self.selected) {
             try c.roundRect(body, t.accent, t.radiusSm());
         } else if (c.hot_id == self.id) try c.roundRectAlpha(body, t.accent, t.radiusSm(), 0.5);
-        if (self.drop_target) try c.roundRectStroke(body, t.primary, t.radiusSm(), 1.5);
+        switch (self.drop) {
+            .none => {},
+            .into => try c.roundRectStroke(body, t.primary, t.radiusSm(), 1.5),
+            .before => try c.rect(.{ .x = left, .y = r.y, .w = body.w, .h = 2 }, t.primary),
+            .after => try c.rect(.{ .x = left, .y = r.y + r.h - 2, .w = body.w, .h = 2 }, t.primary),
+        }
 
         // Guides: a line down each open level above, and an elbow into this row.
         const guide = t.border;
@@ -518,7 +558,7 @@ test "the right-click menu and the drag label stay inside the page" {
     hierarchy.menu = .{ .at = .{ .x = 250, .y = 590 }, .entity = rows[0].entity, .has_parent = false };
     try buildPage(&context, &hierarchy, &rows, 260);
     hierarchy.menu = null;
-    hierarchy.drag = .{ .entity = rows[0].entity, .from = .{ .x = 0, .y = 0 }, .moving = true, .target = .top_level };
+    hierarchy.drag = .{ .entity = rows[0].entity, .from = .{ .x = 0, .y = 0 }, .moving = true, .target = .{ .place = .top_level } };
     context.pointer = .{ .x = 250, .y = 100 };
     try buildPage(&context, &hierarchy, &rows, 260);
 }
@@ -537,4 +577,28 @@ test "a drag can't drop an entity into itself or its children" {
     try std.testing.expect(hierarchy.isWithin(rows[1].entity, rows[1].entity));
     try std.testing.expect(!hierarchy.isWithin(rows[3].entity, rows[0].entity));
     try std.testing.expect(!hierarchy.isWithin(rows[0].entity, rows[1].entity));
+}
+
+test "a row's top and bottom quarters drop beside it, the middle into it" {
+    var context = try ui.Context.init(std.testing.allocator);
+    defer context.deinit();
+    var hierarchy = Hierarchy.init(std.testing.allocator);
+    defer hierarchy.deinit();
+    const rows = [_]Row{
+        .{ .entity = .init(0, 0), .name = "Sun", .depth = 0, .has_parent = false, .components = &.{} },
+        .{ .entity = .init(1, 0), .name = "Comet", .depth = 0, .has_parent = false, .components = &.{} },
+    };
+    try buildPage(&context, &hierarchy, &rows, 300);
+    const sun = context.last_bounds.get(row_id_base + 0).?.rect;
+    const dragged = rows[1].entity;
+    const at = struct {
+        fn y(rect: ui.Rect, along: f32) ui.Vec2 {
+            return .{ .x = rect.x + 20, .y = rect.y + rect.h * along };
+        }
+    }.y;
+    try std.testing.expectEqual(rows[0].entity, hierarchy.targetAt(&context, dragged, at(sun, 0.1)).place.before);
+    try std.testing.expectEqual(rows[0].entity, hierarchy.targetAt(&context, dragged, at(sun, 0.5)).place.into);
+    try std.testing.expectEqual(rows[0].entity, hierarchy.targetAt(&context, dragged, at(sun, 0.9)).place.after);
+    // Onto itself: nowhere.
+    try std.testing.expect(hierarchy.targetAt(&context, rows[0].entity, at(sun, 0.5)) == .none);
 }

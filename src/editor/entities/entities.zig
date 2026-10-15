@@ -10,6 +10,7 @@ const HotGame = @import("../hot_reload/hot_reload.zig").HotGame;
 const tree = @import("tree.zig");
 const hierarchy_zig = @import("hierarchy.zig");
 const inspector_zig = @import("inspector.zig");
+const RootOrder = @import("root_order.zig").RootOrder;
 const log = std.log.scoped(.entities);
 
 pub const EntityEditor = struct {
@@ -18,21 +19,29 @@ pub const EntityEditor = struct {
     inspector: inspector_zig.EntityInspector,
     /// The entity the Inspector shows.
     selected: ?ecs.EntityId = null,
+    /// The top-level entities' order.
+    root_order: RootOrder,
 
     pub fn init(gpa: std.mem.Allocator) EntityEditor {
-        return .{ .gpa = gpa, .hierarchy = .init(gpa), .inspector = .init(gpa) };
+        return .{ .gpa = gpa, .hierarchy = .init(gpa), .inspector = .init(gpa), .root_order = .{ .gpa = gpa } };
     }
 
     pub fn deinit(self: *EntityEditor) void {
         self.hierarchy.deinit();
         self.inspector.deinit();
+        self.root_order.deinit();
+    }
+
+    /// `world`'s top-level entities in the Hierarchy's order, for capturing the scene in it.
+    pub fn roots(self: *EntityEditor, world: *ecs.World) []const ecs.EntityId {
+        return self.root_order.of(world);
     }
 
     /// Draw the Hierarchy page into `context`, and carry out what it asks.
     pub fn buildHierarchy(self: *EntityEditor, context: *ui.Context, app: *eggy.App, game: ?*const HotGame) void {
         self.forgetDead(app);
         const access = if (game) |loaded| loaded.sceneAccess() else null;
-        const rows = tree.collect(context.builder().allocator, &app.world, access, self.hierarchy.filterText()) catch &.{};
+        const rows = tree.collect(context.builder().allocator, &app.world, self.roots(&app.world), access, self.hierarchy.filterText()) catch &.{};
         if (self.hierarchy.build(context, rows, self.selected)) |action| self.apply(app, game, action);
     }
 
@@ -98,14 +107,9 @@ pub const EntityEditor = struct {
                 self.selected = null;
             },
             .rename => |change| if (game) |loaded| loaded.writeName(app, change.entity, change.name),
-            .reparent => |move| {
-                if (!world.isAlive(move.entity)) return;
-                if (move.parent) |parent| {
-                    world.setParent(move.entity, parent) catch |err| switch (err) {
-                        error.InvalidHierarchy => log.warn("an entity can't go under itself or one of its children", .{}),
-                        else => log.err("cannot move the entity: {t}", .{err}),
-                    };
-                } else world.removeParent(move.entity);
+            .move => |change| self.moveEntity(world, change.entity, change.place) catch |err| switch (err) {
+                error.InvalidHierarchy => log.warn("an entity can't go under itself or one of its children", .{}),
+                else => log.err("cannot move the entity: {t}", .{err}),
             },
             .duplicate => |entity| {
                 const loaded = game orelse return;
@@ -113,7 +117,43 @@ pub const EntityEditor = struct {
                 defer copy.deinit();
                 const made = copy.instantiate(self.gpa, world, loaded.sceneAccess(), world.getParent(entity)) catch |err| return log.err("cannot duplicate: {t}", .{err});
                 defer self.gpa.free(made.entities);
-                if (made.entities.len > 0) self.selected = made.entities[0];
+                if (made.entities.len == 0) return;
+                // The copy goes right after the original.
+                self.moveEntity(world, made.entities[0], .{ .after = entity }) catch {};
+                self.selected = made.entities[0];
+            },
+        }
+    }
+
+    /// Move `entity` to `place`: under a parent (last), beside a sibling, or to the end of the
+    /// top level.
+    fn moveEntity(self: *EntityEditor, world: *ecs.World, entity: ecs.EntityId, place: hierarchy_zig.Place) !void {
+        if (!world.isAlive(entity)) return;
+        _ = self.roots(world);
+        switch (place) {
+            .into => |parent| try world.insertChild(parent, entity, std.math.maxInt(usize)),
+            .top_level => {
+                world.removeParent(entity);
+                try self.root_order.place(entity, std.math.maxInt(usize));
+            },
+            inline .before, .after => |sibling, side| {
+                if (!world.isAlive(sibling) or sibling.eql(entity)) return;
+                const offset: usize = if (side == .after) 1 else 0;
+                if (world.getParent(sibling)) |parent| {
+                    // Its place among the siblings once it has left them.
+                    var index: usize = 0;
+                    var it = world.children(parent);
+                    while (it.next()) |child| {
+                        if (child.eql(sibling)) break;
+                        if (!child.eql(entity)) index += 1;
+                    }
+                    try world.insertChild(parent, entity, index + offset);
+                } else {
+                    world.removeParent(entity);
+                    if (self.root_order.indexOf(entity)) |at| _ = self.root_order.entities.orderedRemove(at);
+                    const index = self.root_order.indexOf(sibling) orelse return;
+                    try self.root_order.place(entity, index + offset);
+                }
             },
         }
     }
@@ -147,7 +187,37 @@ fn collectDetails(arena: std.mem.Allocator, app: *eggy.App, game: *const HotGame
 }
 
 test {
+    _ = @import("root_order.zig");
     _ = @import("tree.zig");
     _ = @import("hierarchy.zig");
     _ = @import("inspector.zig");
+}
+
+test "moves place an entity before or after a sibling, at the top level or under a parent" {
+    const gpa = std.testing.allocator;
+    var world = ecs.World.init(gpa);
+    defer world.deinit();
+    var editor = EntityEditor.init(gpa);
+    defer editor.deinit();
+    const a = try world.spawn(.{});
+    const b = try world.spawn(.{});
+    const c = try world.spawn(.{});
+
+    try editor.moveEntity(&world, c, .{ .before = a });
+    try std.testing.expectEqualSlices(ecs.EntityId, &.{ c, a, b }, editor.roots(&world));
+    try editor.moveEntity(&world, c, .{ .after = b });
+    try std.testing.expectEqualSlices(ecs.EntityId, &.{ a, b, c }, editor.roots(&world));
+
+    // Under `a`, then reordered among its children.
+    try editor.moveEntity(&world, b, .{ .into = a });
+    try editor.moveEntity(&world, c, .{ .into = a });
+    try editor.moveEntity(&world, c, .{ .before = b });
+    var it = world.children(a);
+    try std.testing.expectEqual(c, it.next().?);
+    try std.testing.expectEqual(b, it.next().?);
+    try std.testing.expectEqualSlices(ecs.EntityId, &.{a}, editor.roots(&world));
+
+    // Beside a top-level entity takes it out of its parent.
+    try editor.moveEntity(&world, b, .{ .before = a });
+    try std.testing.expectEqualSlices(ecs.EntityId, &.{ b, a }, editor.roots(&world));
 }

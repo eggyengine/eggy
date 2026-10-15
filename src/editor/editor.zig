@@ -429,7 +429,7 @@ pub fn Editor(comptime project: type) type {
                 self.workspace.playing = false;
                 return std.log.err("play: the game's library isn't loaded", .{});
             };
-            self.play_mode.play(self.gpa, &self.app, game) catch |err| {
+            self.play_mode.play(self.gpa, &self.app, game, self.entity_editor.roots(&self.app.world)) catch |err| {
                 self.workspace.playing = false;
                 return std.log.err("cannot start playing: {t}", .{err});
             };
@@ -518,7 +518,7 @@ pub fn Editor(comptime project: type) type {
         /// The world as a scene file's text (caller-owned); null without a game library.
         fn sceneText(self: *Self) ?[]u8 {
             const game = if (self.game) |*loaded| loaded else return null;
-            var scene = eggy.scene.Scene.capture(self.gpa, &self.app.world, game.sceneAccess(), null) catch return null;
+            var scene = eggy.scene.Scene.capture(self.gpa, &self.app.world, game.sceneAccess(), self.entity_editor.roots(&self.app.world)) catch return null;
             defer scene.deinit();
             var text: std.Io.Writer.Allocating = .init(self.gpa);
             scene.write(&text.writer) catch {
@@ -608,7 +608,7 @@ pub fn Editor(comptime project: type) type {
             if (self.play_mode.playing()) return std.log.info("save: stop playing first; Stop puts the scene back as it was", .{});
             const scene = if (self.open_scene) |*open| open else return std.log.info("save: open a project first; scenes are kept in it", .{});
             const game = if (self.game) |*loaded| loaded else return std.log.err("save: the game's library isn't loaded, so its components can't be saved", .{});
-            scene.save(&self.app.world, game.sceneAccess()) catch |err| {
+            scene.save(&self.app.world, game.sceneAccess(), self.entity_editor.roots(&self.app.world)) catch |err| {
                 self.workspace.toast("Couldn't save the scene: see the Console");
                 return std.log.err("cannot save the scene: {t}", .{err});
             };
@@ -1055,7 +1055,7 @@ pub fn Editor(comptime project: type) type {
             var kept: ?eggy.scene.Scene = null;
             defer if (kept) |*scene| scene.deinit();
             if (self.game) |*game| {
-                kept = eggy.scene.Scene.capture(self.gpa, &self.app.world, game.sceneAccess(), null) catch |err| blk: {
+                kept = eggy.scene.Scene.capture(self.gpa, &self.app.world, game.sceneAccess(), self.entity_editor.roots(&self.app.world)) catch |err| blk: {
                     std.log.err("cannot keep the scene across the swap ({t}): the game starts over", .{err});
                     break :blk null;
                 };
@@ -1104,7 +1104,7 @@ pub fn Editor(comptime project: type) type {
             const game = if (self.game) |*loaded| loaded else return error.NoGame;
             try self.plugin_switches.set(key, on);
             try preferences.writeRegistry(self.gpa, self.preference_folders, game.plugin_keys, game.preference_manifests, self.plugin_switches.off());
-            var scene = try eggy.scene.Scene.capture(self.gpa, &self.app.world, game.sceneAccess(), null);
+            var scene = try eggy.scene.Scene.capture(self.gpa, &self.app.world, game.sceneAccess(), self.entity_editor.roots(&self.app.world));
             defer scene.deinit();
             game.restart(&self.app, &scene, self.plugin_switches.off());
             self.entity_editor.selected = null;

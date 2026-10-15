@@ -19,16 +19,13 @@ pub const Row = struct {
     lines: []const bool = &.{},
 };
 
-/// Every entity of `world` in tree order, named and described through `access` (null: no game
-/// library, so neither), into `arena`. With a `filter`, only the entities whose name or a
-/// component's name contains it (ignoring case) are listed, with their ancestors to place them.
-pub fn collect(arena: std.mem.Allocator, world: *ecs.World, access: ?eggy.scene.Access, filter: []const u8) ![]const Row {
+/// Every entity of `world` in tree order from `roots` (its top-level entities, in order), named
+/// and described through `access` (null: no game library, so neither), into `arena`. With a
+/// `filter`, only the entities whose name or a component's name contains it (ignoring case) are
+/// listed, with their ancestors to place them.
+pub fn collect(arena: std.mem.Allocator, world: *ecs.World, roots: []const ecs.EntityId, access: ?eggy.scene.Access, filter: []const u8) ![]const Row {
     var rows: std.ArrayList(Row) = .empty;
-    for (world.slots.items, 0..) |slot, index| {
-        if (!slot.alive) continue;
-        const entity = ecs.EntityId.init(@intCast(index), slot.generation);
-        if (world.getParent(entity) == null) try addSubtree(arena, &rows, world, access, entity, 0);
-    }
+    for (roots) |entity| try addSubtree(arena, &rows, world, access, entity, 0);
     const query = std.mem.trim(u8, filter, " ");
     if (query.len == 0) return guides(arena, rows.items);
 
@@ -112,16 +109,17 @@ test "rows come in tree order, and a filter keeps matches with their ancestors" 
 
     var arena = std.heap.ArenaAllocator.init(gpa);
     defer arena.deinit();
-    const all = try collect(arena.allocator(), &world, access, "");
+    const roots = [_]ecs.EntityId{ sun, comet };
+    const all = try collect(arena.allocator(), &world, &roots, access, "");
     try std.testing.expectEqual(@as(usize, 4), all.len);
     try std.testing.expectEqualStrings("Moon", all[2].name);
     try std.testing.expectEqual(@as(usize, 2), all[2].depth);
     try std.testing.expectEqualStrings("Spin", all[2].components[0]);
 
-    const spinning = try collect(arena.allocator(), &world, access, "spin");
+    const spinning = try collect(arena.allocator(), &world, &roots, access, "spin");
     try std.testing.expectEqual(@as(usize, 3), spinning.len); // Sun, Earth, Moon
     try std.testing.expectEqualStrings("Moon", spinning[2].name);
-    const comets = try collect(arena.allocator(), &world, access, "COMET");
+    const comets = try collect(arena.allocator(), &world, &roots, access, "COMET");
     try std.testing.expectEqual(@as(usize, 1), comets.len);
 
     // Earth is the Sun's only child, so its line ends there; the Sun's level carries on past

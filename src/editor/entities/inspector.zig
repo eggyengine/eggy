@@ -44,7 +44,7 @@ const SearchEdit = ui.TextEdit(64);
 /// The most component types the search lists at once.
 const max_listed = 12;
 /// The listed types' element ids: `pick_id_base` plus their place in the list.
-const pick_id_base: u32 = 0x6E00_0000;
+const pick_id_base: u32 = 0x6D00_0000;
 const NameEdit = ui.TextEdit(eggy.Name.max_len);
 const control_width: f32 = 160;
 /// A dropdown's text size, and the room its padding and chevron take beside the text.
