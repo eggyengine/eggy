@@ -27,7 +27,8 @@
 //!
 //! A project can turn plugins off (not the game): one that is off doesn't start, and none of its
 //! hooks run, but its preferences and components stay known, so scenes keep their values. The
-//! project lists them in `off_file`, which the editor writes and the runtime has baked in.
+//! project's `registry_file` says which are on; the editor writes it and the runtime has it baked
+//! in.
 //!
 //! Plugins are stored by value and may move after `init`: keep no pointers to `self`, and use the
 //! `app` each hook is given rather than storing it.
@@ -42,16 +43,27 @@ const ui = @import("weeoui");
 const preferences = @import("preferences.zig");
 const components = @import("components.zig");
 
-/// Where a project lists the plugins it has turned off (by key), relative to the project.
-pub const off_file = ".eggy/plugins_off.zon";
+/// Where a project lists its plugins, relative to the project: each one's key, whether it is on,
+/// and the preferences it declares.
+pub const registry_file = ".eggy/plugins.zon";
 
-/// `off_file`'s contents.
-pub const OffList = struct { off: []const []const u8 = &.{} };
+/// `registry_file`'s contents.
+pub const Registry = struct {
+    plugins: []const Entry = &.{},
 
-/// The keys `source` (an `off_file`) turns off, in `arena`.
+    pub const Entry = struct {
+        key: []const u8,
+        on: bool = true,
+        preferences: []const []const u8 = &.{},
+    };
+};
+
+/// The keys of the plugins `source` (a `registry_file`) has off, in `arena`.
 pub fn parseOff(arena: std.mem.Allocator, source: [:0]const u8) ![]const []const u8 {
-    const list = try std.zon.parse.fromSliceAlloc(OffList, arena, source, null, .{ .ignore_unknown_fields = true });
-    return list.off;
+    const registry = try std.zon.parse.fromSliceAlloc(Registry, arena, source, null, .{ .ignore_unknown_fields = true });
+    var off: std.ArrayList([]const u8) = .empty;
+    for (registry.plugins) |entry| if (!entry.on) try off.append(arena, entry.key);
+    return off.items;
 }
 
 /// A panel a plugin adds to the editor's dock (see `editor_panels` above).
@@ -296,10 +308,16 @@ test "a plugin that is off doesn't start or run, and the game can't be turned of
     try std.testing.expectEqual(@as(u32, 1), Log.started);
 }
 
-test "an off file lists keys" {
+test "the registry says which plugins are off" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
-    const off = try parseOff(arena.allocator(), ".{ .off = .{ \"stats\" } }");
+    const off = try parseOff(arena.allocator(),
+        \\.{ .plugins = .{
+        \\    .{ .key = "game", .preferences = .{"volume"} },
+        \\    .{ .key = "stats", .on = false },
+        \\} }
+    );
+    try std.testing.expectEqual(@as(usize, 1), off.len);
     try std.testing.expectEqualStrings("stats", off[0]);
 }
 

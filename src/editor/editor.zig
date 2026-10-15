@@ -209,7 +209,7 @@ pub fn Editor(comptime project: type) type {
             errdefer if (game) |*loaded| loaded.deinit(&app);
             if (game) |loaded| {
                 workspace.setPluginPanels(loaded.panels);
-                preferences.writeRegistry(gpa, preference_folders, loaded.preference_manifests) catch |err| std.log.warn("cannot update .eggy/plugins.zon: {t}", .{err});
+                preferences.writeRegistry(gpa, preference_folders, loaded.plugin_keys, loaded.preference_manifests, plugin_switches.off()) catch |err| std.log.warn("cannot update .eggy/plugins.zon: {t}", .{err});
             }
             // The project's scene first, so the game's plugins start among its entities.
             if (game) |*loaded| {
@@ -1073,7 +1073,7 @@ pub fn Editor(comptime project: type) type {
                 if (made.skipped > 0) std.log.warn("{d} components or fields didn't carry over the swap (see above)", .{made.skipped});
             } else |err| std.log.err("cannot put the scene back: {t}", .{err});
             self.workspace.setPluginPanels(game.panels);
-            preferences.writeRegistry(self.gpa, self.preference_folders, game.preference_manifests) catch |err| std.log.warn("cannot update .eggy/plugins.zon: {t}", .{err});
+            preferences.writeRegistry(self.gpa, self.preference_folders, game.plugin_keys, game.preference_manifests, self.plugin_switches.off()) catch |err| std.log.warn("cannot update .eggy/plugins.zon: {t}", .{err});
             game.start(&self.app, self.plugin_switches.off());
         }
 
@@ -1098,8 +1098,9 @@ pub fn Editor(comptime project: type) type {
         /// scene as it is, so the plugin starts or stops.
         fn switchPlugin(self: *Self, key: []const u8, on: bool) !void {
             self.stopPlaying();
+            const game = if (self.game) |*loaded| loaded else return error.NoGame;
             try self.plugin_switches.set(key, on);
-            const game = if (self.game) |*loaded| loaded else return;
+            try preferences.writeRegistry(self.gpa, self.preference_folders, game.plugin_keys, game.preference_manifests, self.plugin_switches.off());
             var scene = try eggy.scene.Scene.capture(self.gpa, &self.app.world, game.sceneAccess(), null);
             defer scene.deinit();
             game.restart(&self.app, &scene, self.plugin_switches.off());

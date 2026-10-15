@@ -26,11 +26,11 @@ pub fn Runtime(comptime project: type) type {
             if (@hasDecl(project, "preference_files")) for (project.preference_files) |file| {
                 app.preference_values.read(.project, file.key, file.zon) catch |err| std.log.warn("the preferences for {s} don't parse ({t}): they are ignored", .{ file.key, err });
             };
-            // The plugins the project turned off (`eggy.plugins.off_file`), also baked in.
+            // The plugins the project turned off (`eggy.plugins.registry_file`), also baked in.
             var off_arena = std.heap.ArenaAllocator.init(gpa);
             defer off_arena.deinit();
-            const off: []const []const u8 = if (@hasDecl(project, "plugins_off")) eggy.plugins.parseOff(off_arena.allocator(), project.plugins_off) catch |err| blk: {
-                std.log.warn("the list of plugins turned off doesn't parse ({t}): every plugin runs", .{err});
+            const off: []const []const u8 = if (@hasDecl(project, "plugin_registry")) eggy.plugins.parseOff(off_arena.allocator(), project.plugin_registry) catch |err| blk: {
+                std.log.warn("{s} doesn't parse ({t}): every plugin runs", .{ eggy.plugins.registry_file, err });
                 break :blk &.{};
             } else &.{};
             var plugins = try Plugins.init(gpa, &app, Plugins.enabledExcept(off));

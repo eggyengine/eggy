@@ -178,7 +178,7 @@ A project's `.eggy` folder holds:
 | --- | --- |
 | `preferences.zon` | The editor's own preferences for this project, overriding those set for all projects. |
 | `plugins/<plugin>.zon` | Each plugin's preferences, by the plugin's module name (`game.zon` for the game's). |
-| `plugins.zon` | Written by the editor: the plugins the project has, and the preferences each declares. Don't edit it. |
+| `plugins.zon` | Written by the editor: the plugins the project has, whether each is on (Preferences > Plugins), and the preferences each declares. The game is built without the plugins that are off. |
 
 The files are plain ZON, such as `.{ .volume = 0.5 }`, so they can be edited by hand and committed with the project. A value that doesn't fit its field's type is ignored, and the default applies.
 

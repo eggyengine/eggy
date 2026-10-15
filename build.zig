@@ -219,8 +219,9 @@ fn pluginKey(b: *std.Build, plugin: *std.Build.Module, index: usize) []const u8 
 }
 
 /// `project_source` (the project module's) with `preference_files` added: each of the project's
-/// `.eggy/plugins/<key>.zon`, embedded, for the runtime to read at start; and, when the project
-/// turned plugins off, `plugins_off`: its `.eggy/plugins_off.zon` (see `eggy.plugins.off_file`).
+/// `.eggy/plugins/<key>.zon`, embedded, for the runtime to read at start; and, when it has one,
+/// `plugin_registry`: its `.eggy/plugins.zon`, which says which plugins are on (see
+/// `eggy.plugins.registry_file`).
 fn addPreferenceFiles(b: *std.Build, project_source: []const u8) std.Build.LazyPath {
     const io = b.graph.io;
     const files = b.addWriteFiles();
@@ -239,9 +240,9 @@ fn addPreferenceFiles(b: *std.Build, project_source: []const u8) std.Build.LazyP
         }
     } else |_| {}
     source.appendSlice(b.allocator, "};\n") catch @panic("OOM");
-    if (b.build_root.handle.access(io, ".eggy/plugins_off.zon", .{})) {
-        _ = files.addCopyFile(b.path(".eggy/plugins_off.zon"), "plugins_off.zon");
-        source.appendSlice(b.allocator, "pub const plugins_off = @embedFile(\"plugins_off.zon\");\n") catch @panic("OOM");
+    if (b.build_root.handle.access(io, ".eggy/plugins.zon", .{})) {
+        _ = files.addCopyFile(b.path(".eggy/plugins.zon"), "plugins.zon");
+        source.appendSlice(b.allocator, "pub const plugin_registry = @embedFile(\"plugins.zon\");\n") catch @panic("OOM");
     } else |_| {}
     return files.add("eggy_project.zig", source.items);
 }

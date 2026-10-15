@@ -125,15 +125,16 @@ pub fn save(gpa: std.mem.Allocator, store: *const Store, folders: Folders, layer
     try dir.writeFile(io, .{ .sub_path = sub_path, .data = text.written() });
 }
 
-/// Keep the project's `plugins.zon` listing `manifests` (the game's plugins' preferences),
-/// rewriting it only when that changed, so the file's time says when the plugins did.
-pub fn writeRegistry(gpa: std.mem.Allocator, folders: Folders, manifests: []const prefs.Manifest) !void {
+/// Keep the project's `plugins.zon` (`eggy.plugins.registry_file`) listing its plugins (`keys`,
+/// the game first), whether each is on (those in `off` aren't), and the preferences each declares
+/// (`manifests`), rewriting it only when that changed, so the file's time says when they did.
+pub fn writeRegistry(gpa: std.mem.Allocator, folders: Folders, keys: []const [:0]const u8, manifests: []const prefs.Manifest, off: []const []const u8) !void {
     const folder = folders.project orelse return;
     var threaded: std.Io.Threaded = .init_single_threaded;
     const io = threaded.io();
     var text: std.Io.Writer.Allocating = .init(gpa);
     defer text.deinit();
-    try formatRegistry(&text.writer, manifests);
+    try formatRegistry(&text.writer, keys, manifests, off);
 
     var dir = try openMaking(io, folder);
     defer dir.close(io);
@@ -143,12 +144,18 @@ pub fn writeRegistry(gpa: std.mem.Allocator, folders: Folders, manifests: []cons
     try dir.writeFile(io, .{ .sub_path = "plugins.zon", .data = text.written() });
 }
 
-fn formatRegistry(writer: *std.Io.Writer, manifests: []const prefs.Manifest) !void {
-    try writer.writeAll("// Kept up to date by the Eggy editor: the plugins this project has, and the preferences each\n// declares. Don't edit it; set preferences in plugins/<plugin>.zon, or in the editor.\n.{\n    .plugins = .{\n");
-    for (manifests) |manifest| {
-        try writer.print("        .{{ .key = \"{f}\", .preferences = .{{", .{std.zig.fmtString(manifest.key)});
-        for (manifest.fields, 0..) |field, i| try writer.print("{s}\"{f}\"", .{ if (i == 0) " " else ", ", std.zig.fmtString(field.name) });
-        try writer.writeAll(if (manifest.fields.len > 0) " } },\n" else "} },\n");
+fn formatRegistry(writer: *std.Io.Writer, keys: []const [:0]const u8, manifests: []const prefs.Manifest, off: []const []const u8) !void {
+    try writer.writeAll("// Kept up to date by the Eggy editor: the plugins this project has, whether each is on\n// (Preferences > Plugins), and the preferences each declares (set them in plugins/<plugin>.zon,\n// or in the editor). The game is built with the plugins that are off left out.\n.{\n    .plugins = .{\n");
+    for (keys) |key| {
+        const on = for (off) |off_key| {
+            if (std.mem.eql(u8, off_key, key)) break false;
+        } else true;
+        try writer.print("        .{{ .key = \"{f}\", .on = {}, .preferences = .{{", .{ std.zig.fmtString(key), on });
+        const fields: []const prefs.Field = for (manifests) |manifest| {
+            if (std.mem.eql(u8, manifest.key, key)) break manifest.fields;
+        } else &.{};
+        for (fields, 0..) |field, i| try writer.print("{s}\"{f}\"", .{ if (i == 0) " " else ", ", std.zig.fmtString(field.name) });
+        try writer.writeAll(if (fields.len > 0) " } },\n" else "} },\n");
     }
     try writer.writeAll("    },\n}\n");
 }
@@ -158,12 +165,20 @@ fn openMaking(io: std.Io, path: []const u8) !std.Io.Dir {
     return std.Io.Dir.cwd().openDir(io, path, .{});
 }
 
-test "the registry lists each plugin's preferences" {
+test "the registry lists each plugin, whether it is on, and its preferences" {
     const Example = struct { volume: f32 = 1, muted: bool = false };
     var text: std.Io.Writer.Allocating = .init(std.testing.allocator);
     defer text.deinit();
-    try formatRegistry(&text.writer, &.{prefs.manifest(Example, "example")});
-    try std.testing.expect(std.mem.indexOf(u8, text.written(), ".{ .key = \"example\", .preferences = .{ \"volume\", \"muted\" } },") != null);
+    try formatRegistry(&text.writer, &.{ "game", "example" }, &.{prefs.manifest(Example, "example")}, &.{"example"});
+    try std.testing.expect(std.mem.indexOf(u8, text.written(), ".{ .key = \"game\", .on = true, .preferences = .{} },") != null);
+    try std.testing.expect(std.mem.indexOf(u8, text.written(), ".{ .key = \"example\", .on = false, .preferences = .{ \"volume\", \"muted\" } },") != null);
+
+    // The runtime reads it back the same.
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const source = try arena.allocator().dupeZ(u8, text.written());
+    const off = try eggy.plugins.parseOff(arena.allocator(), source);
+    try std.testing.expectEqualStrings("example", off[0]);
 }
 
 test "the editor's preferences have a manifest" {
