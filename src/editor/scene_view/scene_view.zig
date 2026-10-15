@@ -156,11 +156,11 @@ pub const SceneView = struct {
         const component = transformIndex(target.game) orelse return null;
         const tool = self.tools.tool;
         var buffer: [160]u8 = undefined;
-        const text = target.game.readField(target.app, entity, component, @intFromEnum(fieldFor(tool)), buffer[0 .. buffer.len - 1]) orelse return null;
-        buffer[text.len] = 0;
-        var scratch: [256]u8 = undefined;
-        var fba = std.heap.FixedBufferAllocator.init(&scratch);
-        const start = std.zon.parse.fromSlice([3]f32, fba.allocator(), buffer[0..text.len :0], null, .{}) catch return null;
+        const text = target.game.readField(target.app, entity, component, @intFromEnum(fieldFor(tool)), &buffer) orelse return null;
+        const start = parseVector(text) orelse {
+            std.log.err("the gizmo can't read the Transform's {t}: {s}", .{ fieldFor(tool), text });
+            return null;
+        };
         // A move is made in the parent's space: the world's at the top level.
         var to_local = [4][4]f32{ .{ 1, 0, 0, 0 }, .{ 0, 1, 0, 0 }, .{ 0, 0, 1, 0 }, .{ 0, 0, 0, 1 } };
         if (target.app.world.getParent(entity)) |parent| if (target.game.worldMatrix(target.app, parent)) |placed| {
@@ -169,6 +169,16 @@ pub const SceneView = struct {
         return .{ .tool = tool, .handle = handle, .from = at, .start = start, .gizmo = layout, .to_local = to_local };
     }
 };
+
+/// Three numbers, `.{ x, y, z }` in ZON; null when `text` isn't that.
+fn parseVector(text: []const u8) ?[3]f32 {
+    var source: [160]u8 = undefined;
+    const terminated = std.fmt.bufPrintZ(&source, "{s}", .{text}) catch return null;
+    // ZON's parser needs room for its syntax tree, as the Inspector's does.
+    var scratch: [16 * 1024]u8 = undefined;
+    var fba = std.heap.FixedBufferAllocator.init(&scratch);
+    return std.zon.parse.fromSlice([3]f32, fba.allocator(), terminated, null, .{}) catch null;
+}
 
 fn fieldFor(tool: gizmo.Tool) Field {
     return switch (tool) {
@@ -200,4 +210,12 @@ test "the buttons pick the gizmo, and the game camera button turns it on and off
     view.press(.game_camera);
     view.press(.game_camera);
     try std.testing.expect(!view.tools.through_game_camera);
+}
+
+test "a Transform field's ZON, as the game's library writes it, reads back for a drag" {
+    var written: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer written.deinit();
+    try std.zon.stringify.serialize([3]f32{ 0, 0.75, -2 }, .{ .whitespace = false }, &written.writer);
+    try std.testing.expectEqualSlices(f32, &.{ 0, 0.75, -2 }, &parseVector(written.written()).?);
+    try std.testing.expect(parseVector("sideways") == null);
 }

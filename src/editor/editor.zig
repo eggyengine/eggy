@@ -363,7 +363,8 @@ pub fn Editor(comptime project: type) type {
                 if (self.sceneText()) |text| {
                     const hash = std.hash.Wyhash.hash(0, text);
                     self.workspace.scene_unsaved = if (self.open_scene) |*scene| scene.unsavedHash(hash, &self.app.world) else false;
-                    self.history.watch(text, self.workspace.time_ms, self.typing());
+                    // A gizmo drag becomes one step, once let go.
+                    if (self.scene_view.drag == null) self.history.watch(text, self.workspace.time_ms, self.typing()) else self.gpa.free(text);
                 }
                 self.workspace.play_warning = self.playWarning();
             }
