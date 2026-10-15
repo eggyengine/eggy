@@ -961,14 +961,23 @@ pub fn Editor(comptime project: type) type {
                 return .run;
             };
 
-            // The Scene panel's camera takes presses, drags and wheels over it; F frames the selection.
+            // The Scene panel's camera takes presses, drags and wheels over it; F frames the
+            // selection, and Delete deletes it.
             if (self.scene_view.handleFirst(curr_event, self.sceneRect(slot))) {
                 if (curr_event == .mouse_button_down) self.unfocusOnPress(slot, .{ .x = curr_event.mouse_button_down.x, .y = curr_event.mouse_button_down.y }, false);
                 return .run;
             }
-            if (curr_event == .key_down) if (curr_event.key_down.key) |key| if (key == .f and self.scene_view.camera.hovered and self.scene_view.camera.drag == null) {
-                self.frameSelected();
-                return .run;
+            if (curr_event == .key_down) if (curr_event.key_down.key) |key| if (self.scene_view.camera.hovered and self.scene_view.camera.drag == null and self.scene_view.drag == null) switch (key) {
+                .f => {
+                    self.frameSelected();
+                    return .run;
+                },
+                // Delete (or Backspace) deletes the selection, as the Hierarchy's Delete does.
+                .delete, .backspace => if (self.entity_editor.selected != null) {
+                    self.entity_editor.deleteSelected(&self.app, self.gamePtr());
+                    return .run;
+                },
+                else => {},
             };
 
             // Escape three times in a row stops play, whatever else each press does.

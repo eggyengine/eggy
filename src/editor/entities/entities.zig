@@ -126,6 +126,12 @@ pub const EntityEditor = struct {
         return result.used;
     }
 
+    /// Delete the selected entity and its children, as the Hierarchy's Delete does.
+    pub fn deleteSelected(self: *EntityEditor, app: *eggy.App, game: ?*const HotGame) void {
+        const entity = self.selected orelse return;
+        self.apply(app, game, .{ .delete = entity });
+    }
+
     fn apply(self: *EntityEditor, app: *eggy.App, game: ?*const HotGame, action: hierarchy_zig.Action) void {
         const world = &app.world;
         switch (action) {
