@@ -1,8 +1,13 @@
-//! The Hierarchy panel: the world's entities as a tree (see `tree.zig`), filtered by name or
-//! component, to pick one for the Inspector. Each row shows the entity's name, and its components
-//! as far as they fit beside it. Rows are dragged onto another to reparent them, or below the tree
-//! to move them to the top level; a right-click opens a menu (rename, add a child, duplicate, move
-//! to the top level, delete); a double-click or Ctrl+R renames, Delete deletes.
+//! The Hierarchy panel: the world's entities as a tree (see `tree.zig`), with guide lines joining
+//! children to their parent, filtered by name or component, to pick one for the Inspector. Each
+//! row shows the entity's name, and its components as far as they fit beside it.
+//!
+//! Dragging a row moves the entity: dropped onto another row it becomes that row's child, dropped
+//! in the space below the tree it moves to the top level. While dragging, the target lights up and
+//! a label beside the pointer says what letting go will do; anywhere else (or onto its own
+//! children) letting go does nothing, and Escape cancels. A right-click opens a menu (rename, add
+//! a child, duplicate, move to the top level, delete); a double-click or Ctrl+R renames, Delete
+//! deletes.
 //!
 //! The page doesn't change the world itself: `build`, `pointer` and `key` return the `Action` the
 //! user took, for the editor to carry out.
@@ -31,10 +36,11 @@ const FilterEdit = ui.TextEdit(64);
 /// Row `entity.id` has element id `row_id_base + entity.id`, the same every frame, so presses
 /// can be matched to rows by last frame's layout.
 const row_id_base: u32 = 0x6E00_0000;
-const drop_zone_id: u32 = row_id_base - 2;
+const top_level_id: u32 = row_id_base - 2;
 const menu_id_base: u32 = row_id_base - 16;
-const indent: f32 = 14;
-const max_indent_depth = 10;
+const row_height: f32 = 24;
+/// How far each level steps in; less when the tree is deep for the panel.
+const indent: f32 = 16;
 /// How far a press moves before it is a drag.
 const drag_threshold: f32 = 5;
 const name_size: f32 = 12;
@@ -42,14 +48,26 @@ const components_size: f32 = 11;
 
 const MenuItem = enum(u32) { rename, add_child, duplicate, to_top, delete, add_entity };
 
+/// Where a drag would drop if let go now.
+const Target = union(enum) {
+    /// Nowhere: letting go cancels.
+    none,
+    /// Under this entity.
+    into: ecs.EntityId,
+    /// At the top level.
+    top_level,
+    /// Onto itself or one of its children, which can't be.
+    blocked,
+};
+
 pub const Hierarchy = struct {
     filter: FilterEdit = FilterEdit.init("") catch unreachable,
     /// The row being renamed, and its text.
     renaming: ?struct { entity: ecs.EntityId, edit: NameEdit, started: bool = false } = null,
     /// The right-click menu: where, and for which row (none: the empty space below the rows).
     menu: ?struct { at: ui.Vec2, entity: ?ecs.EntityId, has_parent: bool } = null,
-    /// A press on a row, which becomes a drag once it moves.
-    drag: ?struct { entity: ecs.EntityId, from: ui.Vec2, moving: bool = false } = null,
+    /// A press on a row, which becomes a drag once it moves, and where it would drop.
+    drag: ?struct { entity: ecs.EntityId, from: ui.Vec2, moving: bool = false, target: Target = .none } = null,
     /// The rows last built, to match presses to.
     rows: std.ArrayList(Row) = .empty,
     rows_arena: std.heap.ArenaAllocator,
@@ -72,6 +90,7 @@ pub const Hierarchy = struct {
     pub fn build(self: *Hierarchy, context: *ui.Context, rows: []const Row, selected: ?ecs.EntityId) ?Action {
         var action: ?Action = null;
         self.keepRows(rows);
+        const b = context.builder();
 
         // The filter, and a button to add an entity at the top level.
         context.begin(.row);
@@ -86,31 +105,33 @@ pub const Hierarchy = struct {
             page_style.smallText(context, 13);
         }
 
-        // The rows, then (while dragging) the place to drop for the top level.
+        // The rows, each drawn with its guide lines.
+        const step = self.indentFor(context, rows);
         context.begin(.column);
-        for (rows) |row| if (self.rowElement(context, row, selected)) |row_action| {
+        for (rows) |row| if (self.rowElement(context, row, selected, step)) |row_action| {
             action = row_action;
         };
+        context.end();
+        page_style.restyle(context, .{ .gap = 0 });
+
+        // While dragging: the space below the tree is the top level, and a label beside the
+        // pointer says what letting go will do.
         if (self.drag) |drag| if (drag.moving) {
-            const zone = context.builder().node(drop_zone_id, .{ .height = 30, .padding = .{ .left = 8 }, .align_items = .center, .direction = .row }, .{ .surface = .track }, &.{
-                context.builder().node(0, .{}, .{ .text = .{ .value = "Drop here to move to the top level", .size = 11, .tone = .muted } }, &.{}) catch return action,
+            const over_top = drag.target == .top_level;
+            const zone = b.node(top_level_id, .{ .height = 32, .padding = .{ .left = 10, .right = 10 }, .align_items = .center, .direction = .row }, .{ .surface = if (over_top) .card else .track }, &.{
+                b.node(0, .{ .grow = 1 }, .{ .text = .{ .value = "Drop here to move to the top level", .size = 11, .tone = if (over_top) .foreground else .muted, .wrap = true } }, &.{}) catch return action,
             }) catch return action;
             context.element(zone);
+            self.ghostElement(context, drag.target, drag.entity);
         };
-        context.end();
-        page_style.restyle(context, .{ .gap = 1 });
 
         if (self.menuElement(context)) |menu_action| action = menu_action;
-        if (action) |chosen| if (chosen == .rename) {
-            // Typed names arrive as they are typed; the row stays in rename mode.
-        };
         return action;
     }
 
     /// Route a pointer event over the page, before the page's own UI sees it: right-clicks open
-    /// the menu, double-clicks rename, and presses become drags that drop onto rows. `context`
-    /// is the page's, with last frame's layout. Returns whether the event was used, and the
-    /// action it led to.
+    /// the menu, double-clicks rename, and presses become drags. `context` is the page's, with
+    /// last frame's layout. Returns whether the event was used, and the action it led to.
     pub fn pointer(self: *Hierarchy, context: *const ui.Context, event: ui.input.Event) struct { used: bool, action: ?Action = null } {
         switch (event) {
             .pointer_down => |down| {
@@ -135,23 +156,28 @@ pub const Hierarchy = struct {
             },
             .pointer_move => |at| if (self.drag) |*drag| {
                 if (!drag.moving and @abs(at.x - drag.from.x) + @abs(at.y - drag.from.y) > drag_threshold) drag.moving = true;
-                return .{ .used = drag.moving };
+                if (!drag.moving) return .{ .used = false };
+                drag.target = self.targetAt(context, drag.entity, at);
+                return .{ .used = true };
             },
             .pointer_up => |up| if (up.button == .left) if (self.drag) |drag| {
                 self.drag = null;
                 if (!drag.moving) return .{ .used = false };
-                // Onto a row: under it. Anywhere else: to the top level.
-                const target: ?ecs.EntityId = if (self.rowAt(context, up.position)) |row| row.entity else null;
-                if (target) |onto| if (onto.eql(drag.entity)) return .{ .used = true };
-                return .{ .used = true, .action = .{ .reparent = .{ .entity = drag.entity, .parent = target } } };
+                const parent: ?ecs.EntityId = switch (self.targetAt(context, drag.entity, up.position)) {
+                    .into => |entity| entity,
+                    .top_level => null,
+                    .none, .blocked => return .{ .used = true },
+                };
+                return .{ .used = true, .action = .{ .reparent = .{ .entity = drag.entity, .parent = parent } } };
             },
             else => {},
         }
         return .{ .used = false };
     }
 
-    /// A key while the page has the keyboard: Ctrl+R renames `selected`, Delete deletes it, Escape
-    /// closes the menu or stops renaming or dragging. Returns whether it was used, and the action.
+    /// A key while the page has the keyboard: Ctrl+R renames `selected`, Delete deletes it,
+    /// Escape closes the menu or stops renaming or dragging. Returns whether it was used, and
+    /// the action.
     pub fn key(self: *Hierarchy, key_down: @FieldType(ui.input.Event, "key_down"), selected: ?ecs.EntityId) struct { used: bool, action: ?Action = null } {
         switch (key_down.key) {
             .escape => {
@@ -167,10 +193,7 @@ pub const Hierarchy = struct {
             },
             // ponytail: Weeoui has no F2 key yet; Ctrl+R renames until it does.
             .r => if (key_down.modifiers.control) if (selected) |entity| if (self.renaming == null) {
-                const name = for (self.rows.items) |row| {
-                    if (row.entity.eql(entity)) break row.name;
-                } else "";
-                self.startRename(entity, name);
+                self.startRename(entity, self.nameOf(entity));
                 return .{ .used = true };
             },
             .delete => if (selected) |entity| if (self.renaming == null) return .{ .used = true, .action = .{ .delete = entity } },
@@ -185,19 +208,29 @@ pub const Hierarchy = struct {
         self.menu = null;
     }
 
-    /// `row`'s element: its name and components, or a text field while it is being renamed.
-    fn rowElement(self: *Hierarchy, context: *ui.Context, row: Row, selected: ?ecs.EntityId) ?Action {
+    /// How far each level steps in: `indent`, less when the deepest row would leave its name
+    /// less than two thirds of the panel.
+    fn indentFor(_: *const Hierarchy, context: *const ui.Context, rows: []const Row) f32 {
+        var deepest: usize = 0;
+        for (rows) |row| deepest = @max(deepest, row.depth);
+        if (deepest == 0) return indent;
+        const room = @max(0, context.viewport.w - 32) / 3;
+        return @min(indent, room / @as(f32, @floatFromInt(deepest)));
+    }
+
+    /// `row`'s element: guides, name and components, or a text field while it is renamed.
+    fn rowElement(self: *Hierarchy, context: *ui.Context, row: Row, selected: ?ecs.EntityId, step: f32) ?Action {
         const arena = context.builder().allocator;
         const b = context.builder();
         const id = row_id_base + row.entity.id;
-        const left = indent * @as(f32, @floatFromInt(@min(row.depth, max_indent_depth)));
+        const left = step * @as(f32, @floatFromInt(row.depth));
 
         if (self.renaming) |*renaming| if (renaming.entity.eql(row.entity)) {
             context.begin(.row);
             const changed = context.textInput("##rename", &renaming.edit, "Name");
             const input = context.last_added;
             context.end();
-            page_style.restyle(context, .{ .direction = .row, .padding = .{ .left = left } });
+            page_style.restyle(context, .{ .direction = .row, .padding = .{ .left = left + 4 } });
             // Focus the field once, then stop renaming when it loses focus.
             if (input) |field| {
                 if (!renaming.started) {
@@ -208,22 +241,57 @@ pub const Hierarchy = struct {
             return if (changed) .{ .rename = .{ .entity = row.entity, .name = arena.dupe(u8, renaming.edit.text()) catch return null } } else null;
         };
 
-        const chosen = if (selected) |entity| entity.eql(row.entity) else false;
-        const dragging_onto = if (self.drag) |drag| drag.moving and !drag.entity.eql(row.entity) and context.last_bounds.get(id) != null and context.last_bounds.get(id).?.rect.contains(context.pointer.x, context.pointer.y) else false;
-
         // The name comes first; the components fill what room is left.
-        const width = @max(0, context.viewport.w - 32 - left);
-        const shown_name = fitText(arena, context.font, if (row.name.len > 0) row.name else (std.fmt.allocPrint(arena, "Entity {d}", .{row.entity.id}) catch "Entity"), name_size, width - 16);
-        const room = width - 16 - context.font.measure(shown_name, name_size) - 12;
-        const summary = summarize(arena, context.font, row.components, room);
-
-        const item = b.node(id, .{ .height = 26, .grow = 1 }, .{ .menu_item = .{ .label = shown_name, .shortcut = summary, .hot = chosen or dragging_onto, .size = .sm } }, &.{}) catch return null;
-        item.cursor = .pointer;
-        item.accessibility = .{ .role = .menu_item, .label = shown_name };
-        const holder = b.node(0, .{ .direction = .row, .padding = .{ .left = left } }, .none, &.{item}) catch return null;
-        context.element(holder);
+        const width = @max(0, context.viewport.w - 32);
+        const text_left = left + 8;
+        const name = page_style.fitText(arena, context.font, if (row.name.len > 0) row.name else (std.fmt.allocPrint(arena, "Entity {d}", .{row.entity.id}) catch "Entity"), name_size, width - text_left - 8);
+        const room = width - text_left - context.font.measure(name, name_size) - 20;
+        const paint = arena.create(RowPaint) catch return null;
+        paint.* = .{
+            .id = id,
+            .name = name,
+            .unnamed = row.name.len == 0,
+            .summary = summarize(arena, context.font, row.components, room),
+            .depth = row.depth,
+            .step = step,
+            .last = row.last,
+            .lines = row.lines,
+            .selected = if (selected) |entity| entity.eql(row.entity) else false,
+            .drop_target = if (self.drag) |drag| drag.moving and drag.target == .into and drag.target.into.eql(row.entity) else false,
+            .dragged = if (self.drag) |drag| drag.moving and drag.entity.eql(row.entity) else false,
+        };
+        const element = b.node(id, .{ .height = row_height }, .{ .custom = .{ .context = paint, .draw = RowPaint.draw } }, &.{}) catch return null;
+        element.cursor = .pointer;
+        element.accessibility = .{ .role = .menu_item, .label = name };
+        context.element(element);
         if (context.activated(id) and !(self.drag != null and self.drag.?.moving)) return .{ .select = row.entity };
         return null;
+    }
+
+    /// The label that follows the pointer while dragging: what letting go will do.
+    fn ghostElement(self: *const Hierarchy, context: *ui.Context, target: Target, dragged: ecs.EntityId) void {
+        const arena = context.builder().allocator;
+        const name = self.nameOf(dragged);
+        const shown = if (name.len > 0) name else "the entity";
+        const text = switch (target) {
+            .into => |entity| std.fmt.allocPrint(arena, "Move {s} into {s}", .{ shown, blk: {
+                const into = self.nameOf(entity);
+                break :blk if (into.len > 0) into else "that entity";
+            } }) catch return,
+            .top_level => std.fmt.allocPrint(arena, "Move {s} to the top level", .{shown}) catch return,
+            .blocked => "Can't move it into itself or its children",
+            .none => std.fmt.allocPrint(arena, "Moving {s}: drop it on a row, or below the tree", .{shown}) catch return,
+        };
+        const max_width = @max(80, context.viewport.w * 0.6);
+        const label = page_style.fitText(arena, context.font, text, 12, max_width - 20);
+        const b = context.builder();
+        const ghost = b.node(0, .{ .padding = .{ .left = 10, .right = 10, .top = 5, .bottom = 5 }, .z_index = 250 }, .{ .surface = .tooltip }, &.{
+            b.node(0, .{}, .{ .text = .{ .value = label, .size = 12 } }, &.{}) catch return,
+        }) catch return;
+        // Beside the pointer, kept inside the page.
+        const width = context.font.measure(label, 12) + 20;
+        ghost.overlay = .{ .point = .init(@min(context.pointer.x + 14, context.viewport.x + context.viewport.w - width), context.pointer.y + 14) };
+        context.element(ghost);
     }
 
     /// The right-click menu, if open, and what was picked from it.
@@ -242,7 +310,7 @@ pub const Hierarchy = struct {
         } else choices.append(arena, .{ .id = menuId(.add_entity), .label = "Add entity" }) catch return null;
 
         // Kept inside the page: it opens left of or above the pointer near an edge.
-        const width: f32 = 200;
+        const width: f32 = @min(200, context.viewport.w);
         const height = 8 + 32 * @as(f32, @floatFromInt(choices.items.len));
         const at = ui.Vec2{
             .x = @max(context.viewport.x, @min(menu.at.x, context.viewport.x + context.viewport.w - width)),
@@ -257,10 +325,7 @@ pub const Hierarchy = struct {
             const entity = menu.entity;
             return switch (@as(MenuItem, @enumFromInt(choice.id - menu_id_base))) {
                 .rename => blk: {
-                    const name = for (self.rows.items) |row| {
-                        if (row.entity.eql(entity.?)) break row.name;
-                    } else "";
-                    self.startRename(entity.?, name);
+                    self.startRename(entity.?, self.nameOf(entity.?));
                     break :blk null;
                 },
                 .add_child => .{ .spawn = entity },
@@ -275,6 +340,36 @@ pub const Hierarchy = struct {
 
     fn menuId(item: MenuItem) u32 {
         return menu_id_base + @intFromEnum(item);
+    }
+
+    /// Where a drag of `dragged` would drop with the pointer at `at`: onto the row there (not
+    /// itself or one of its children), or the top level below the tree, else nowhere.
+    fn targetAt(self: *const Hierarchy, context: *const ui.Context, dragged: ecs.EntityId, at: ui.Vec2) Target {
+        if (self.rowAt(context, at)) |row| return if (self.isWithin(row.entity, dragged)) .blocked else .{ .into = row.entity };
+        if (context.last_bounds.get(top_level_id)) |zone| if (zone.rect.contains(at.x, at.y)) return .top_level;
+        // Below the last row, inside the page, counts as the top level too.
+        const last = if (self.rows.items.len > 0) context.last_bounds.get(row_id_base + self.rows.items[self.rows.items.len - 1].entity.id) else null;
+        if (last) |row| if (at.y > row.rect.y + row.rect.h and context.viewport.contains(at.x, at.y)) return .top_level;
+        return .none;
+    }
+
+    /// Whether `entity` is `ancestor` or below it, by the rows' order and depths.
+    fn isWithin(self: *const Hierarchy, entity: ecs.EntityId, ancestor: ecs.EntityId) bool {
+        const rows = self.rows.items;
+        const start = for (rows, 0..) |row, i| {
+            if (row.entity.eql(ancestor)) break i;
+        } else return false;
+        if (rows[start].entity.eql(entity)) return true;
+        for (rows[start + 1 ..]) |row| {
+            if (row.depth <= rows[start].depth) return false;
+            if (row.entity.eql(entity)) return true;
+        }
+        return false;
+    }
+
+    fn nameOf(self: *const Hierarchy, entity: ecs.EntityId) []const u8 {
+        for (self.rows.items) |row| if (row.entity.eql(entity)) return row.name;
+        return "";
     }
 
     /// The row under `at` in last frame's layout.
@@ -304,18 +399,55 @@ pub const Hierarchy = struct {
     }
 };
 
-/// `text`, cut with "..." to fit `width` at `size`. In `arena`.
-fn fitText(arena: std.mem.Allocator, font: *const ui.Font, text: []const u8, size: f32, width: f32) []const u8 {
-    if (font.measure(text, size) <= width) return text;
-    var end = text.len;
-    while (end > 0) {
-        end -= 1;
-        while (end > 0 and (text[end] & 0xC0) == 0x80) end -= 1;
-        const cut = std.fmt.allocPrint(arena, "{s}...", .{text[0..end]}) catch return "";
-        if (font.measure(cut, size) <= width) return cut;
+/// How a row is drawn: guide lines, highlight, name, and components.
+const RowPaint = struct {
+    id: u32,
+    name: []const u8,
+    unnamed: bool,
+    summary: []const u8,
+    depth: usize,
+    step: f32,
+    last: bool,
+    lines: []const bool,
+    selected: bool,
+    drop_target: bool,
+    dragged: bool,
+
+    fn draw(context: *const anyopaque, c: *ui.Canvas, r: ui.Rect) anyerror!void {
+        const self: *const RowPaint = @ptrCast(@alignCast(context));
+        const t = c.theme;
+        const left = r.x + self.step * @as(f32, @floatFromInt(self.depth));
+
+        // The highlight starts where the row's own content does, right of the guides.
+        const body = ui.Rect{ .x = left + 2, .y = r.y + 1, .w = @max(0, r.x + r.w - left - 2), .h = r.h - 2 };
+        if (self.selected) {
+            try c.roundRect(body, t.accent, t.radiusSm());
+        } else if (c.hot_id == self.id) try c.roundRectAlpha(body, t.accent, t.radiusSm(), 0.5);
+        if (self.drop_target) try c.roundRectStroke(body, t.primary, t.radiusSm(), 1.5);
+
+        // Guides: a line down each open level above, and an elbow into this row.
+        const guide = t.border;
+        const mid_y = r.y + r.h / 2;
+        for (0..self.depth) |level| {
+            const x = r.x + self.step * @as(f32, @floatFromInt(level)) + self.step / 2;
+            if (level + 1 < self.depth) {
+                if (self.lines[level]) try c.rect(.{ .x = x, .y = r.y, .w = 1, .h = r.h }, guide);
+            } else {
+                try c.rect(.{ .x = x, .y = r.y, .w = 1, .h = if (self.last) r.h / 2 else r.h }, guide);
+                try c.rect(.{ .x = x, .y = mid_y, .w = @max(0, left - x + 2), .h = 1 }, guide);
+            }
+        }
+
+        // The name, dimmed while it is being dragged or has none, and the components right.
+        const text_left = left + 8;
+        const name_color = if (self.dragged or self.unnamed) t.muted_foreground else if (self.selected) t.accent_foreground else t.foreground;
+        try c.textIn(.{ .x = text_left, .y = r.y, .w = @max(0, r.x + r.w - text_left - 8), .h = r.h }, self.name, name_size, name_color, .start);
+        if (self.summary.len > 0) {
+            const width = c.font.measure(self.summary, components_size);
+            try c.textIn(.{ .x = r.x + r.w - 8 - width, .y = r.y, .w = width, .h = r.h }, self.summary, components_size, t.muted_foreground, .end);
+        }
     }
-    return "";
-}
+};
 
 /// As many of `names` as fit `width`, then "+N" for the rest; nothing if not even that fits.
 fn summarize(arena: std.mem.Allocator, font: *const ui.Font, names: []const []const u8, width: f32) []const u8 {
@@ -341,18 +473,29 @@ fn buildPage(context: *ui.Context, hierarchy: *Hierarchy, rows: []const Row, wid
     _ = hierarchy.build(context, rows, rows[0].entity);
     _ = try context.render();
     try ui_checks.expectFits(context.last_root.?, context.font, viewport);
+    // Each row's own text fits beside its guides.
+    for (rows) |row| {
+        const element = context.last_root.?.find(row_id_base + row.entity.id) orelse continue;
+        const paint: *const RowPaint = @ptrCast(@alignCast(element.paint_kind.custom.context));
+        const text_left = paint.step * @as(f32, @floatFromInt(paint.depth)) + 8;
+        const used = text_left + context.font.measure(paint.name, name_size) + 8 + (if (paint.summary.len > 0) context.font.measure(paint.summary, components_size) + 12 else 0);
+        if (used > element.bounds.w + 0.5) {
+            std.debug.print("row {s} needs {d:.1} of {d:.1}\n", .{ paint.name, used, element.bounds.w });
+            return error.TextOverflows;
+        }
+    }
 }
 
-test "long names and many components fit a narrow Hierarchy, the name first" {
+test "long names, deep trees and many components fit a narrow Hierarchy, the name first" {
     var context = try ui.Context.init(std.testing.allocator);
     defer context.deinit();
     var hierarchy = Hierarchy.init(std.testing.allocator);
     defer hierarchy.deinit();
     const many = [_][]const u8{ "Transform", "MeshRenderer", "RigidBody", "Collider", "AudioSource", "Health", "Inventory" };
     const rows = [_]Row{
-        .{ .entity = .init(0, 0), .name = "A planet with a very long name indeed, longer than any panel", .depth = 0, .has_parent = false, .components = &many },
-        .{ .entity = .init(1, 0), .name = "Moon", .depth = 1, .has_parent = true, .components = &many },
-        .{ .entity = .init(2, 0), .name = "", .depth = 12, .has_parent = true, .components = &.{"Orbit"} },
+        .{ .entity = .init(0, 0), .name = "A planet with a very long name indeed, longer than any panel", .depth = 0, .has_parent = false, .components = &many, .last = true },
+        .{ .entity = .init(1, 0), .name = "Moon", .depth = 1, .has_parent = true, .components = &many, .lines = &.{false} },
+        .{ .entity = .init(2, 0), .name = "", .depth = 12, .has_parent = true, .components = &.{"Orbit"}, .lines = &(.{true} ** 12) },
     };
     for ([_]f32{ 180, 260, 420, 900 }) |width| try buildPage(&context, &hierarchy, &rows, width);
 
@@ -365,7 +508,7 @@ test "long names and many components fit a narrow Hierarchy, the name first" {
     try std.testing.expectEqualStrings("", summarize(arena.allocator(), context.font, &many, 5));
 }
 
-test "the right-click menu stays inside the page" {
+test "the right-click menu and the drag label stay inside the page" {
     var context = try ui.Context.init(std.testing.allocator);
     defer context.deinit();
     var hierarchy = Hierarchy.init(std.testing.allocator);
@@ -373,4 +516,24 @@ test "the right-click menu stays inside the page" {
     const rows = [_]Row{.{ .entity = .init(0, 0), .name = "Sun", .depth = 0, .has_parent = false, .components = &.{} }};
     hierarchy.menu = .{ .at = .{ .x = 250, .y = 590 }, .entity = rows[0].entity, .has_parent = false };
     try buildPage(&context, &hierarchy, &rows, 260);
+    hierarchy.menu = null;
+    hierarchy.drag = .{ .entity = rows[0].entity, .from = .{ .x = 0, .y = 0 }, .moving = true, .target = .top_level };
+    context.pointer = .{ .x = 250, .y = 100 };
+    try buildPage(&context, &hierarchy, &rows, 260);
+}
+
+test "a drag can't drop an entity into itself or its children" {
+    var hierarchy = Hierarchy.init(std.testing.allocator);
+    defer hierarchy.deinit();
+    const rows = [_]Row{
+        .{ .entity = .init(0, 0), .name = "Sun", .depth = 0, .has_parent = false, .components = &.{} },
+        .{ .entity = .init(1, 0), .name = "Earth", .depth = 1, .has_parent = true, .components = &.{} },
+        .{ .entity = .init(2, 0), .name = "Moon", .depth = 2, .has_parent = true, .components = &.{} },
+        .{ .entity = .init(3, 0), .name = "Comet", .depth = 0, .has_parent = false, .components = &.{} },
+    };
+    hierarchy.keepRows(&rows);
+    try std.testing.expect(hierarchy.isWithin(rows[2].entity, rows[1].entity));
+    try std.testing.expect(hierarchy.isWithin(rows[1].entity, rows[1].entity));
+    try std.testing.expect(!hierarchy.isWithin(rows[3].entity, rows[0].entity));
+    try std.testing.expect(!hierarchy.isWithin(rows[0].entity, rows[1].entity));
 }

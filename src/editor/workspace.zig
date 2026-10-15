@@ -106,6 +106,9 @@ pub const Workspace = struct {
     /// Which Eggy this editor was built with, for the status bar: a packaged engine's short
     /// version or the codebase it is linked to. Its text belongs to the editor.
     engine_label: ?[]const u8 = null,
+    /// The open scene's file name, for the status bar; null with none open. Its text belongs to
+    /// the editor.
+    scene_name: ?[]const u8 = null,
     /// Whether a newer engine than the project's is unpacked, for File > Upgrade Editor.
     can_upgrade: bool = false,
     /// Whether the project can be linked to the Eggy codebase being developed.
@@ -278,6 +281,7 @@ pub const Workspace = struct {
         }.make;
         if (self.project) |project| {
             try children.append(b.allocator, try text(b, project.title, .foreground));
+            try children.append(b.allocator, try text(b, self.scene_name orelse "No scene open: open one in Assets", if (self.scene_name != null) .foreground else .muted));
             try children.append(b.allocator, try text(b, project.dir, .muted));
         } else try children.append(b.allocator, try text(b, "No project open: File > New Project or Open Project", .muted));
         try children.append(b.allocator, try b.node(0, .{ .grow = 1 }, .none, &.{}));

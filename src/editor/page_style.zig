@@ -1,6 +1,7 @@
 //! Small layout touches for pages built with `ui.Context` (Preferences, the Inspector, the
 //! Hierarchy): restyling the element just added, since `Context`'s widgets and containers take
 //! no style of their own.
+const std = @import("std");
 const ui = @import("eggy").ui;
 
 /// Restyle the element `context` added last: a widget, or a container just ended. `layout`
@@ -38,4 +39,17 @@ pub fn noteText(context: *ui.Context) void {
 pub fn smallText(context: *ui.Context, size: f32) void {
     const element = context.last_added orelse return;
     if (element.paint_kind == .text) element.paint_kind.text.size = size;
+}
+
+/// `text`, cut with "..." to fit `width` at `size`. In `arena`.
+pub fn fitText(arena: std.mem.Allocator, font: *const ui.Font, text: []const u8, size: f32, width: f32) []const u8 {
+    if (font.measure(text, size) <= width) return text;
+    var end = text.len;
+    while (end > 0) {
+        end -= 1;
+        while (end > 0 and (text[end] & 0xC0) == 0x80) end -= 1;
+        const cut = std.fmt.allocPrint(arena, "{s}...", .{text[0..end]}) catch return "";
+        if (font.measure(cut, size) <= width) return cut;
+    }
+    return "";
 }

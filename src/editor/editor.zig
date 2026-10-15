@@ -43,6 +43,8 @@ pub fn Editor(comptime project: type) type {
         game: ?HotGame,
         /// When the game's library was built, to tell whether a rebuild changed it.
         game_modified: ?std.Io.Timestamp = null,
+        /// The scene open in the project, if any (with no project, none).
+        open_scene: ?scene_file.OpenScene = null,
         /// Where the user's and the project's preferences are (their values are in `app`).
         preference_folders: preferences.Folders,
         /// Edit > Preferences, while open.
@@ -163,7 +165,9 @@ pub fn Editor(comptime project: type) type {
             preferences.load(gpa, &app.preference_values, preference_folders);
             console.levels[@intFromEnum(std.log.Level.debug)] = preferences.editor(&app.preference_values).show_debug_logs;
 
-            // The game, from its library beside the editor.
+            // The game, from its library beside the editor, and the scene open last.
+            var open_scene: ?scene_file.OpenScene = null;
+            errdefer if (open_scene) |*remembered| remembered.deinit();
             const library_path = try libraryPath(gpa);
             defer gpa.free(library_path);
             var game: ?HotGame = HotGame.load(gpa, library_path) catch |err| blk: {
@@ -177,11 +181,14 @@ pub fn Editor(comptime project: type) type {
             }
             // The project's scene first, so the game's plugins start among its entities.
             if (game) |*loaded| {
-                if (opened_project) |opened| scene_file.load(gpa, opened.dir, &app.world, loaded.sceneAccess());
+                if (opened_project) |opened| {
+                    open_scene = .{ .gpa = gpa, .project_dir = opened.dir };
+                    open_scene.?.reopen(&app.world, loaded.sceneAccess());
+                }
                 loaded.start(&app);
             }
             const upgrades = Upgrades.init(gpa, if (opened_project) |opened| opened.dir else null, @import("build_options").source_dir);
-            var self = Self{ .gpa = gpa, .game = game, .game_modified = modifiedAt(library_path), .app = app, .ui = context, .mono = mono, .console_ui = console_ui, .hierarchy_ui = hierarchy_ui, .entity_editor = .init(gpa), .console = console, .plugin_pages = plugin_pages, .workspace = workspace, .frame = frame, .scene = scene, .overlay = overlay, .project = opened_project, .editor_modified = if (opened_project) |opened| editorModified(gpa, opened) else null, .upgrades = upgrades, .preference_folders = preference_folders };
+            var self = Self{ .gpa = gpa, .game = game, .game_modified = modifiedAt(library_path), .app = app, .ui = context, .mono = mono, .console_ui = console_ui, .hierarchy_ui = hierarchy_ui, .entity_editor = .init(gpa), .console = console, .plugin_pages = plugin_pages, .workspace = workspace, .frame = frame, .scene = scene, .overlay = overlay, .project = opened_project, .editor_modified = if (opened_project) |opened| editorModified(gpa, opened) else null, .upgrades = upgrades, .preference_folders = preference_folders, .open_scene = open_scene };
             self.built_sources = self.sourcesNow();
             return self;
         }
@@ -193,6 +200,7 @@ pub fn Editor(comptime project: type) type {
             if (self.devtools_window) |window| window.close(&self.app.graphics);
             if (self.preferences_window) |window| window.close(&self.app.graphics);
             self.preference_folders.deinit(self.gpa);
+            if (self.open_scene) |*scene| scene.deinit();
             if (self.rebuild) |job| job.deinit();
             if (self.picked_project.swap(null, .acq_rel)) |path| std.heap.c_allocator.free(std.mem.span(path));
             if (self.project) |opened| freeProject(self.gpa, opened);
@@ -251,6 +259,7 @@ pub fn Editor(comptime project: type) type {
                 .dark => ui.Theme.dark,
             };
             self.workspace.engine_label = self.upgrades.label;
+            self.workspace.scene_name = if (self.open_scene) |*scene| scene.name() else null;
             self.workspace.can_upgrade = self.upgrades.can_upgrade;
             self.workspace.can_link = self.upgrades.can_link;
             self.workspace.developer_known = self.upgrades.developer_dir != null;
@@ -345,11 +354,11 @@ pub fn Editor(comptime project: type) type {
             try job.launchEditor(&.{ window_placement.flag, try placement.format(&buffer) });
         }
 
-        /// File > Save (Ctrl+S): write the world to the project's scene.
+        /// File > Save (Ctrl+S): write the world to the open scene, or a new one.
         fn saveScene(self: *Self) void {
-            const opened = self.project orelse return std.log.info("save: open a project first; its scene is where entities are kept", .{});
+            const scene = if (self.open_scene) |*open| open else return std.log.info("save: open a project first; scenes are kept in it", .{});
             const game = if (self.game) |*loaded| loaded else return std.log.err("save: the game's library isn't loaded, so its components can't be saved", .{});
-            scene_file.save(self.gpa, opened.dir, &self.app.world, game.sceneAccess()) catch |err| std.log.err("cannot save {s}: {t}", .{ scene_file.relative_path, err });
+            scene.save(&self.app.world, game.sceneAccess()) catch |err| std.log.err("cannot save the scene: {t}", .{err});
         }
 
         /// The Preferences window's sections: the editor's, then (with a project) each plugin's that
@@ -781,7 +790,10 @@ pub fn Editor(comptime project: type) type {
                     std.log.err("cannot load the game from {s}: {t}", .{ library_path, err });
                     return;
                 };
-                if (self.project) |opened| scene_file.load(self.gpa, opened.dir, &self.app.world, self.game.?.sceneAccess());
+                if (self.project) |opened| {
+                    if (self.open_scene == null) self.open_scene = .{ .gpa = self.gpa, .project_dir = opened.dir };
+                    self.open_scene.?.reopen(&self.app.world, self.game.?.sceneAccess());
+                }
             }
             const game = &self.game.?;
             if (kept) |*scene| if (scene.instantiate(self.gpa, &self.app.world, game.sceneAccess(), null)) |made| {
@@ -956,6 +968,7 @@ test {
     _ = @import("build_window.zig");
     _ = @import("devtools_window.zig");
     _ = @import("hit_test.zig");
+    _ = @import("scene_file.zig");
     _ = @import("window_placement.zig");
     _ = @import("hot_reload/hot_reload.zig");
     _ = @import("preferences/preferences.zig");

@@ -12,6 +12,11 @@ pub const Row = struct {
     has_parent: bool,
     /// The names of its components, in type order.
     components: []const []const u8,
+    /// Whether it is the last of its siblings shown: the tree's guide line ends at it.
+    last: bool = true,
+    /// For each level above it (`depth` of them), whether that level's guide line carries on
+    /// past this row, to a later sibling of its ancestor there.
+    lines: []const bool = &.{},
 };
 
 /// Every entity of `world` in tree order, named and described through `access` (null: no game
@@ -25,7 +30,7 @@ pub fn collect(arena: std.mem.Allocator, world: *ecs.World, access: ?eggy.scene.
         if (world.getParent(entity) == null) try addSubtree(arena, &rows, world, access, entity, 0);
     }
     const query = std.mem.trim(u8, filter, " ");
-    if (query.len == 0) return rows.items;
+    if (query.len == 0) return guides(arena, rows.items);
 
     // Keep the matches and every row above one at a lower depth: its ancestors.
     const keep = try arena.alloc(bool, rows.items.len);
@@ -45,7 +50,26 @@ pub fn collect(arena: std.mem.Allocator, world: *ecs.World, access: ?eggy.scene.
     }
     var kept: std.ArrayList(Row) = .empty;
     for (rows.items, keep) |row, wanted| if (wanted) try kept.append(arena, row);
-    return kept.items;
+    return guides(arena, kept.items);
+}
+
+/// `rows` with their guide lines worked out (`last` and `lines`), from the rows shown.
+fn guides(arena: std.mem.Allocator, rows: []Row) ![]const Row {
+    // Backwards: `later[d]` says a row at depth `d` comes later, before anything shallower.
+    var later: std.ArrayList(bool) = .empty;
+    var i = rows.len;
+    while (i > 0) {
+        i -= 1;
+        const row = &rows[i];
+        while (later.items.len <= row.depth) try later.append(arena, false);
+        row.last = !later.items[row.depth];
+        const lines = try arena.alloc(bool, row.depth);
+        for (lines, 0..) |*line, level| line.* = later.items[level + 1];
+        row.lines = lines;
+        later.items[row.depth] = true;
+        for (later.items[row.depth + 1 ..]) |*deeper| deeper.* = false;
+    }
+    return rows;
 }
 
 fn addSubtree(arena: std.mem.Allocator, rows: *std.ArrayList(Row), world: *ecs.World, access: ?eggy.scene.Access, entity: ecs.EntityId, depth: usize) !void {
@@ -99,4 +123,11 @@ test "rows come in tree order, and a filter keeps matches with their ancestors" 
     try std.testing.expectEqualStrings("Moon", spinning[2].name);
     const comets = try collect(arena.allocator(), &world, access, "COMET");
     try std.testing.expectEqual(@as(usize, 1), comets.len);
+
+    // Earth is the Sun's only child, so its line ends there; the Sun's level carries on past
+    // the Moon to the Comet, the last at the top.
+    try std.testing.expect(all[1].last);
+    try std.testing.expect(!all[0].last);
+    try std.testing.expect(all[3].last);
+    try std.testing.expectEqualSlices(bool, &.{ false, false }, all[2].lines);
 }

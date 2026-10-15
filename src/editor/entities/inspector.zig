@@ -42,6 +42,9 @@ pub const Action = union(enum) {
 const FieldEdit = ui.TextEdit(256);
 const NameEdit = ui.TextEdit(eggy.Name.max_len);
 const control_width: f32 = 160;
+/// A dropdown's text size, and the room its padding and chevron take beside the text.
+const select_text_size: f32 = 14;
+const select_chrome: f32 = 48;
 /// The narrowest a field's control gets in a narrow Inspector.
 const min_control_width: f32 = 80;
 
@@ -102,7 +105,7 @@ pub const EntityInspector = struct {
         };
         self.focused = focused;
 
-        if (addComponentPicker(context, details.addable)) |index| action = .{ .add_component = index };
+        if (addComponentPicker(context, details.addable, width)) |index| action = .{ .add_component = index };
         return action;
     }
 
@@ -169,7 +172,7 @@ pub const EntityInspector = struct {
                 const options = arena.alloc([]const u8, field.options.len) catch return null;
                 var selected: usize = 0;
                 for (options, field.options, 0..) |*option, name, i| {
-                    option.* = displayName(arena, name);
+                    option.* = page_style.fitText(arena, context.font, displayName(arena, name), select_text_size, field_control - select_chrome);
                     if (value.len > 1 and std.mem.eql(u8, value[1..], name)) selected = i;
                 }
                 if (context.select(hidden, options, &selected)) action = .{ .set_field = .{ .component = component, .field = index, .text = std.fmt.allocPrint(arena, ".{s}", .{field.options[selected]}) catch return null } };
@@ -197,12 +200,12 @@ pub const EntityInspector = struct {
 };
 
 /// A dropdown of the component types that can be added; picking one returns its index.
-fn addComponentPicker(context: *ui.Context, addable: []const Details.Addable) ?usize {
+fn addComponentPicker(context: *ui.Context, addable: []const Details.Addable, width: f32) ?usize {
     if (addable.len == 0) return null;
     const arena = context.builder().allocator;
     const labels = arena.alloc([]const u8, addable.len + 1) catch return null;
     labels[0] = "Add component...";
-    for (labels[1..], addable) |*label, choice| label.* = choice.label;
+    for (labels[1..], addable) |*label, choice| label.* = page_style.fitText(arena, context.font, choice.label, select_text_size, width - select_chrome);
     var picked: usize = 0;
     const changed = context.select("##add component", labels, &picked);
     if (context.last_added) |trigger| if (trigger.overlay == null) {

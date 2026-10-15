@@ -1,43 +1,184 @@
-//! The project's scene on disk, `scenes/main.scene.zon` (see `eggy.scene`): put into the world
-//! when the editor starts, before the game's plugins, and written by File > Save.
+//! The project's open scene on disk (see `eggy.scene`). The editor reopens the scene that was
+//! open last, which `.eggy/scene.zon` remembers; with none, the world starts empty until one is
+//! opened from the Assets panel. File > Save writes the open scene, or a new one when none is.
 const std = @import("std");
 const eggy = @import("eggy");
 const log = std.log.scoped(.scene);
 
-/// Where the scene is, relative to the project.
-pub const relative_path = "scenes" ++ std.fs.path.sep_str ++ "main.scene.zon";
+/// Where the open scene is remembered, relative to the project.
+const memory_path = ".eggy" ++ std.fs.path.sep_str ++ "scene.zon";
+/// Where new scenes go, relative to the project.
+const scenes_dir = "scenes";
+pub const extension = ".scene.zon";
 
-/// Put the scene saved in `project_dir` into `world`, if there is one. Problems are logged.
-pub fn load(gpa: std.mem.Allocator, project_dir: []const u8, world: *eggy.ecs.World, access: eggy.scene.Access) void {
-    var threaded: std.Io.Threaded = .init_single_threaded;
-    const io = threaded.io();
-    const path = std.fs.path.join(gpa, &.{ project_dir, relative_path }) catch return;
-    defer gpa.free(path);
-    const source = std.Io.Dir.cwd().readFileAllocOptions(io, path, gpa, .limited(64 << 20), .of(u8), 0) catch |err| {
-        if (err != error.FileNotFound) log.err("cannot read {s}: {t}", .{ path, err });
-        return;
-    };
-    defer gpa.free(source);
-    var scene = eggy.scene.Scene.parse(gpa, source) catch |err| return log.err("{s} isn't a scene ({t}): it isn't loaded", .{ relative_path, err });
-    defer scene.deinit();
-    const made = scene.instantiate(gpa, world, access, null) catch |err| return log.err("cannot load {s}: {t}", .{ relative_path, err });
-    defer gpa.free(made.entities);
-    if (made.skipped > 0) log.warn("loaded {s}: {d} entities, {d} components or fields left out (see above)", .{ relative_path, made.entities.len, made.skipped }) else log.info("loaded {s}: {d} entities", .{ relative_path, made.entities.len });
+/// The scene open in the editor, if any: its path relative to the project. Owned.
+pub const OpenScene = struct {
+    gpa: std.mem.Allocator,
+    project_dir: []const u8,
+    path: ?[]u8 = null,
+
+    pub fn deinit(self: *OpenScene) void {
+        if (self.path) |path| self.gpa.free(path);
+    }
+
+    /// Its file name, for the status bar; null with none open.
+    pub fn name(self: *const OpenScene) ?[]const u8 {
+        return std.fs.path.basename(self.path orelse return null);
+    }
+
+    /// Reopen the scene that was open last into `world`, if it still exists.
+    pub fn reopen(self: *OpenScene, world: *eggy.ecs.World, access: eggy.scene.Access) void {
+        const remembered = self.readMemory() orelse return;
+        defer self.gpa.free(remembered);
+        self.open(remembered, world, access) catch |err| log.err("cannot reopen {s}: {t}", .{ remembered, err });
+    }
+
+    /// Replace `world`'s entities with the scene at `path` (relative to the project), and
+    /// remember it as the open one.
+    pub fn open(self: *OpenScene, path: []const u8, world: *eggy.ecs.World, access: eggy.scene.Access) !void {
+        if (!isProjectPath(path)) return error.BadPathName;
+        var threaded: std.Io.Threaded = .init_single_threaded;
+        const io = threaded.io();
+        var project = try std.Io.Dir.cwd().openDir(io, self.project_dir, .{});
+        defer project.close(io);
+        const source = try project.readFileAllocOptions(io, path, self.gpa, .limited(64 << 20), .of(u8), 0);
+        defer self.gpa.free(source);
+        var scene = try eggy.scene.Scene.parse(self.gpa, source);
+        defer scene.deinit();
+
+        world.clear();
+        const made = try scene.instantiate(self.gpa, world, access, null);
+        defer self.gpa.free(made.entities);
+        if (made.skipped > 0) log.warn("opened {s}: {d} entities, {d} components or fields left out (see above)", .{ path, made.entities.len, made.skipped }) else log.info("opened {s}: {d} entities", .{ path, made.entities.len });
+        try self.setPath(path);
+    }
+
+    /// Write `world` to the open scene; with none open, to a new one in `scenes/`, which
+    /// becomes the open one.
+    pub fn save(self: *OpenScene, world: *eggy.ecs.World, access: eggy.scene.Access) !void {
+        if (self.path == null) {
+            const fresh = try self.freshPath();
+            defer self.gpa.free(fresh);
+            try self.setPath(fresh);
+        }
+        const path = self.path.?;
+        var scene = try eggy.scene.Scene.capture(self.gpa, world, access, null);
+        defer scene.deinit();
+        var text: std.Io.Writer.Allocating = .init(self.gpa);
+        defer text.deinit();
+        try scene.write(&text.writer);
+
+        var threaded: std.Io.Threaded = .init_single_threaded;
+        const io = threaded.io();
+        var project = try std.Io.Dir.cwd().openDir(io, self.project_dir, .{});
+        defer project.close(io);
+        if (std.fs.path.dirname(path)) |parent| try project.createDirPath(io, parent);
+        try project.writeFile(io, .{ .sub_path = path, .data = text.written() });
+        log.info("saved {d} entities to {s}", .{ scene.entities.len, path });
+    }
+
+    /// Start a new, empty scene in `scenes/`, written at once, and open it: `world` empties.
+    pub fn create(self: *OpenScene, world: *eggy.ecs.World, access: eggy.scene.Access) !void {
+        world.clear();
+        const fresh = try self.freshPath();
+        defer self.gpa.free(fresh);
+        try self.setPath(fresh);
+        try self.save(world, access);
+    }
+
+    fn setPath(self: *OpenScene, path: []const u8) !void {
+        const copy = try self.gpa.dupe(u8, path);
+        if (self.path) |old| self.gpa.free(old);
+        self.path = copy;
+        self.writeMemory() catch |err| log.warn("cannot remember the open scene: {t}", .{err});
+    }
+
+    /// `scenes/untitled.scene.zon`, or `untitled-2` and so on when that is taken. Caller-owned.
+    fn freshPath(self: *const OpenScene) ![]u8 {
+        var threaded: std.Io.Threaded = .init_single_threaded;
+        const io = threaded.io();
+        var project = try std.Io.Dir.cwd().openDir(io, self.project_dir, .{});
+        defer project.close(io);
+        var n: usize = 1;
+        while (true) : (n += 1) {
+            const path = if (n == 1)
+                try std.fmt.allocPrint(self.gpa, "{s}{c}untitled{s}", .{ scenes_dir, std.fs.path.sep, extension })
+            else
+                try std.fmt.allocPrint(self.gpa, "{s}{c}untitled-{d}{s}", .{ scenes_dir, std.fs.path.sep, n, extension });
+            project.access(io, path, .{}) catch return path;
+            self.gpa.free(path);
+        }
+    }
+
+    fn readMemory(self: *const OpenScene) ?[]u8 {
+        var threaded: std.Io.Threaded = .init_single_threaded;
+        const io = threaded.io();
+        var project = std.Io.Dir.cwd().openDir(io, self.project_dir, .{}) catch return null;
+        defer project.close(io);
+        const source = project.readFileAllocOptions(io, memory_path, self.gpa, .limited(4096), .of(u8), 0) catch return null;
+        defer self.gpa.free(source);
+        const Memory = struct { scene: []const u8 };
+        var arena = std.heap.ArenaAllocator.init(self.gpa);
+        defer arena.deinit();
+        const memory = std.zon.parse.fromSliceAlloc(Memory, arena.allocator(), source, null, .{ .ignore_unknown_fields = true }) catch return null;
+        if (!isProjectPath(memory.scene)) return null;
+        project.access(io, memory.scene, .{}) catch return null;
+        return self.gpa.dupe(u8, memory.scene) catch null;
+    }
+
+    fn writeMemory(self: *const OpenScene) !void {
+        var threaded: std.Io.Threaded = .init_single_threaded;
+        const io = threaded.io();
+        var project = try std.Io.Dir.cwd().openDir(io, self.project_dir, .{});
+        defer project.close(io);
+        try project.createDirPath(io, ".eggy");
+        const text = try std.fmt.allocPrint(self.gpa, "// The scene the editor has open, reopened when it starts.\n.{{ .scene = \"{f}\" }}\n", .{std.zig.fmtString(self.path.?)});
+        defer self.gpa.free(text);
+        try project.writeFile(io, .{ .sub_path = memory_path, .data = text });
+    }
+};
+
+/// Whether `path` stays inside the project: relative, with no `..`.
+pub fn isProjectPath(path: []const u8) bool {
+    if (path.len == 0 or std.fs.path.isAbsolute(path)) return false;
+    var parts = std.mem.tokenizeAny(u8, path, "/\\");
+    while (parts.next()) |part| if (std.mem.eql(u8, part, "..")) return false;
+    return true;
 }
 
-/// Write every entity of `world` to the scene in `project_dir`.
-pub fn save(gpa: std.mem.Allocator, project_dir: []const u8, world: *eggy.ecs.World, access: eggy.scene.Access) !void {
-    var threaded: std.Io.Threaded = .init_single_threaded;
-    const io = threaded.io();
-    var scene = try eggy.scene.Scene.capture(gpa, world, access, null);
-    defer scene.deinit();
-    var text: std.Io.Writer.Allocating = .init(gpa);
-    defer text.deinit();
-    try scene.write(&text.writer);
+test "scene paths stay inside the project" {
+    try std.testing.expect(isProjectPath("scenes/main.scene.zon"));
+    try std.testing.expect(!isProjectPath("../elsewhere.scene.zon"));
+    try std.testing.expect(!isProjectPath("scenes/../../x.scene.zon"));
+    try std.testing.expect(!isProjectPath("/etc/passwd"));
+}
 
-    var project = try std.Io.Dir.cwd().openDir(io, project_dir, .{});
-    defer project.close(io);
-    try project.createDirPath(io, std.fs.path.dirname(relative_path).?);
-    try project.writeFile(io, .{ .sub_path = relative_path, .data = text.written() });
-    log.info("saved {d} entities to {s}", .{ scene.entities.len, relative_path });
+test "a saved scene is remembered, and a new one gets a free name" {
+    const gpa = std.testing.allocator;
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const dir = try tmp.dir.realPathFileAlloc(io, ".", gpa);
+    defer gpa.free(dir);
+    const access = eggy.scene.registryAccess(eggy.components.Registry(&.{}, &.{}));
+    var world = eggy.ecs.World.init(gpa);
+    defer world.deinit();
+
+    var first = OpenScene{ .gpa = gpa, .project_dir = dir };
+    defer first.deinit();
+    try std.testing.expect(first.readMemory() == null);
+    const named = try world.spawn(.{});
+    access.setName(&world, named, "Sun");
+    try first.save(&world, access);
+    try std.testing.expectEqualStrings("untitled.scene.zon", first.name().?);
+    try first.create(&world, access);
+    try std.testing.expectEqualStrings("untitled-2.scene.zon", first.name().?);
+
+    // A later editor reopens the last one, and opening the first brings its entity back.
+    var second = OpenScene{ .gpa = gpa, .project_dir = dir };
+    defer second.deinit();
+    second.reopen(&world, access);
+    try std.testing.expectEqualStrings("untitled-2.scene.zon", second.name().?);
+    try second.open("scenes" ++ std.fs.path.sep_str ++ "untitled.scene.zon", &world, access);
+    try std.testing.expectEqual(@as(usize, 1), world.entityCount());
 }
