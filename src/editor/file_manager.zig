@@ -1,4 +1,5 @@
-//! Showing a folder in the system's file manager: Explorer, Finder, or whatever the desktop uses.
+//! Showing a folder in the system's file manager (Explorer, Finder, or whatever the desktop
+//! uses), or a file in the app the system opens it with.
 const builtin = @import("builtin");
 const std = @import("std");
 const sdl3 = @import("eggy").sdl_adapter.sdl;
@@ -6,6 +7,13 @@ const sdl3 = @import("eggy").sdl_adapter.sdl;
 /// Open `dir` (absolute) in the file manager. Returns once one is launched, not once it shows.
 pub fn showFolder(gpa: std.mem.Allocator, dir: []const u8) !void {
     const url = try folderUrl(gpa, dir);
+    defer gpa.free(url);
+    try sdl3.openURL(url);
+}
+
+/// Open `file` (absolute) in the app the system opens it with.
+pub fn openFile(gpa: std.mem.Allocator, file: []const u8) !void {
+    const url = try folderUrl(gpa, file);
     defer gpa.free(url);
     try sdl3.openURL(url);
 }

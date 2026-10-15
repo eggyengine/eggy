@@ -39,6 +39,7 @@ const Dragged = @import("dragged.zig").Dragged;
 const save_prompt_zig = @import("save_prompt.zig");
 const page_style = @import("page_style.zig");
 const file_ops = @import("assets/file_ops.zig");
+const code_editor = @import("code_editor.zig");
 const hit_test = @import("hit_test.zig");
 const scene_view = @import("scene_view/scene_view.zig");
 const assets = @import("assets/assets.zig");
@@ -649,6 +650,15 @@ pub fn Editor(comptime project: type) type {
                     // A different scene: its history starts here.
                     self.history.clear();
                     if (self.sceneText()) |text| self.history.setBaseline(text);
+                },
+                .open_code => |path| {
+                    const file = std.fs.path.join(self.gpa, &.{ opened.dir, path }) catch return;
+                    defer self.gpa.free(file);
+                    const choice = preferences.editor(&self.app.preference_values).code_editor;
+                    code_editor.open(self.gpa, choice, opened.dir, file) catch |err| {
+                        std.log.err("cannot open {s} in {t}: {t}. Pick another code editor in Edit > Preferences.", .{ path, choice, err });
+                        self.workspace.toast("Couldn't open it: see the Console");
+                    };
                 },
                 .reveal => |path| {
                     // A file shows as its folder.
@@ -1650,6 +1660,7 @@ test {
     _ = @import("layout_file.zig");
     _ = @import("play_mode.zig");
     _ = @import("pause_button.zig");
+    _ = @import("code_editor.zig");
     _ = @import("history.zig");
     _ = @import("plugin_switches.zig");
     _ = @import("dragged.zig");

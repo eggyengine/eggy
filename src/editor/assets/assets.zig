@@ -1,9 +1,10 @@
 //! The Assets panel: the project's files, to find, open and manage them. As a list it is a tree
 //! of the whole project, folders opening in place; as a grid it is one folder's tiles, with a
 //! path to climb back up. A filter searches every folder by name. A scene (`.scene.zon`) opens
-//! with a double-click, and any other file shows in the system's file manager. A right-click
-//! opens a menu (open, rename, duplicate, delete, copy path, show in the file manager, and new
-//! folders and scenes); F2 renames and Delete deletes the selected entry.
+//! with a double-click, a code or text file opens in the code editor chosen in Preferences, and
+//! any other file shows in the system's file manager. A right-click opens a menu (open, rename,
+//! duplicate, delete, copy path, show in the file manager, and new folders and scenes); F2
+//! renames and Delete deletes the selected entry.
 //!
 //! Dragging an entry works as in the Hierarchy: onto a folder it moves there (the editor copies
 //! it instead with Ctrl held), and onto the zone below the files it moves up, to the project (or
@@ -38,6 +39,8 @@ pub const Action = union(enum) {
     copy_path: []const u8,
     /// Show this file or folder in the system's file manager.
     reveal: []const u8,
+    /// Open this code or text file in the code editor people chose.
+    open_code: []const u8,
     /// Move (or copy) `path` into `folder` ("" for the project).
     move_into: struct { path: []const u8, folder: []const u8 },
 };
@@ -343,6 +346,7 @@ pub const AssetsPanel = struct {
                 }
                 break :blk .{ .used = false }; // the list opens folders with one press
             },
+            .code, .text => .{ .used = true, .action = .{ .open_code = entry.path } },
             else => .{ .used = true, .action = .{ .reveal = entry.path } },
         };
     }
@@ -766,4 +770,27 @@ test "dragging a file onto a folder asks to move it there, but not a folder into
     _ = panel.pointer(&context, .{ .pointer_down = .{ .position = folder, .button = .left, .clicks = 1 } });
     _ = panel.pointer(&context, .{ .pointer_move = .{ .x = folder.x, .y = folder.y + 8 } });
     try std.testing.expect(panel.pointer(&context, .{ .pointer_up = .{ .position = folder, .button = .left } }).action == null);
+}
+
+test "double-clicking a code file asks to open it in the code editor" {
+    const gpa = std.testing.allocator;
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.writeFile(io, .{ .sub_path = "main.zig", .data = "" });
+    const dir = try tmp.dir.realPathFileAlloc(io, ".", gpa);
+    defer gpa.free(dir);
+
+    var context = try ui.Context.init(gpa);
+    defer context.deinit();
+    var icons = Icons.load(gpa, context.font);
+    defer icons.deinit(gpa);
+    var panel = AssetsPanel.init(gpa);
+    defer panel.deinit();
+    context.newFrame(.{ .x = 0, .y = 0, .w = 300, .h = 400 });
+    _ = panel.build(&context, dir, &icons, null);
+    _ = try context.render();
+    const file = context.last_bounds.get(item_id_base + 0).?.rect.center();
+    const opened = panel.pointer(&context, .{ .pointer_down = .{ .position = file, .button = .left, .clicks = 2 } });
+    try std.testing.expectEqualStrings("main.zig", opened.action.?.open_code);
 }

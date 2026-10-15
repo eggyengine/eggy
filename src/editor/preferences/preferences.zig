@@ -21,8 +21,10 @@ pub const Editor = struct {
     show_debug_logs: bool = false,
     assets_view: enum { list, grid } = .list,
     autosave_seconds: u32 = 60,
+    code_editor: @import("../code_editor.zig").Choice = .vscode,
 
     pub const descriptions = .{
+        .code_editor = "What double-clicking a code or text file in Assets opens it in. System uses the app your desktop opens it with.",
         .autosave_seconds = "How often the open scene saves itself while it has changes, in seconds. 0 turns it off.",
         .assets_view = "Whether the Assets panel shows files as a tree or as a grid of icons. Its buttons set it too.",
         .theme = "The editor's colours. System follows the desktop's light or dark setting.",
@@ -184,6 +186,7 @@ test "the registry lists each plugin, whether it is on, and its preferences" {
 }
 
 test "the editor's preferences have a manifest" {
-    try std.testing.expectEqual(@as(usize, 5), editor_manifest.fields.len);
+    try std.testing.expectEqual(@as(usize, 6), editor_manifest.fields.len);
     try std.testing.expectEqualStrings("system", editor_manifest.fields[0].options[0]);
+    try std.testing.expectEqualStrings("vscode", editor_manifest.fields[5].default[1..]);
 }
