@@ -160,7 +160,7 @@ fn writeDefault(writer: *std.Io.Writer, parts: []const Part, index: usize) std.I
         .asset => try writer.writeAll("\"\""),
         .optional => try writer.writeAll("null"),
         .quaternion => try writer.writeAll(".{ .v = .{ 0, 0, 0, 1 } }"),
-        .vector, .color => {
+        .vector, .color, .euler => {
             const labels = if (part.kind == .color) "rgba" else "xyzw";
             try writer.writeAll(".{ ");
             for (0..part.len) |i| {

@@ -111,8 +111,8 @@ A component is a struct, and the Inspector gives every field of plain data a con
 
 - Numbers are boxes: drag one sideways to change it, or click it to type a value (Enter or Escape finishes).
 - Vectors (two to four numbers in an array, a `@Vector`, a struct of `x`, `y`, `z` and `w`, or `eggy.math.Vec2`, `Vec3` and `Vec4`) get a box per axis, tagged X, Y, Z and W in red, green, blue and purple.
-- Colours (`eggy.Color`, any struct of `r`, `g`, `b` and maybe `a`, or three or four numbers in a field named `color`, `colour` or ending `_color`) get a swatch and a box per channel, filled as far as the channel goes.
-- `eggy.math.Quat` shows as turns about X, Y and Z in degrees.
+- Colours (`eggy.Color`, any struct of `r`, `g`, `b` and maybe `a`, or three or four numbers in a field named `color`, `colour` or ending `_color`) get a swatch and a box per channel, filled as far as the channel goes. Click the swatch for a colour picker (a wheel, sliders, hex codes and presets) that floats over the Inspector; click elsewhere to keep the colour, or Cancel to put it back.
+- Rotations (`eggy.math.Quat`, or three floats in a field with `rotation`, `orientation` or `euler` in its name, in degrees, or radians when the name ends `_rad`) get a dropdown to show them as Euler angles in degrees or radians, a quaternion, or an axis and angle. The field keeps its own type whichever you pick.
 - Bools get a switch, enums a dropdown, and tagged unions a dropdown of their variants with the chosen variant's fields under it.
 - Nested structs, arrays and optionals get a row for each part, further in; an optional has a switch to set it or clear it.
 

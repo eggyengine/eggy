@@ -1,7 +1,9 @@
 //! The Inspector's control for each part of a component field's value, by what the part is
 //! (`eggy.components.PartKind`): numbers are boxes to drag sideways or click and type into,
 //! vectors a box per axis tagged X, Y, Z and W in red, green, blue and purple, colours a swatch
-//! and R, G, B and A boxes, quaternions turns in degrees, enums and unions dropdowns, structs,
+//! (which opens weeoui's colour picker, `color_popup.zig`) and R, G, B and A boxes, turns
+//! (quaternions, and rotations kept as turns about x, y and z) a dropdown of formats to show them
+//! in (Euler degrees or radians, quaternion, axis and angle), enums and unions dropdowns, structs,
 //! arrays and optionals rows of their parts, and references slots to drop an entity or a file
 //! on. A union with a reference variant (a `Mesh`'s shape takes a model) takes a drop on its
 //! dropdown too. A change comes back as the field's whole new ZON, the rest of it kept as it was.
@@ -13,6 +15,7 @@ const page_style = @import("../page_style.zig");
 const restyle = page_style.restyle;
 const Dragged = @import("../dragged.zig").Dragged;
 const field_value = @import("field_value.zig");
+const ColorPopup = @import("color_popup.zig").ColorPopup;
 const Value = field_value.Value;
 const Node = field_value.Node;
 
@@ -38,6 +41,80 @@ const channel_tags = [_]Tag{
     .{ .letter = "G", .color = .{ 0.38, 0.72, 0.25 } },
     .{ .letter = "B", .color = .{ 0.27, 0.49, 0.9 } },
     .{ .letter = "A", .color = .{ 0.55, 0.55, 0.55 } },
+};
+
+/// How the Inspector shows something that turns.
+const RotationFormat = enum(u8) {
+    euler_deg,
+    euler_rad,
+    quaternion,
+    axis_angle,
+
+    fn label(self: RotationFormat) []const u8 {
+        return switch (self) {
+            .euler_deg => "Euler (degrees)",
+            .euler_rad => "Euler (radians)",
+            .quaternion => "Quaternion",
+            .axis_angle => "Axis and angle",
+        };
+    }
+
+    /// How many numbers it shows.
+    fn len(self: RotationFormat) usize {
+        return if (self == .euler_deg or self == .euler_rad) 3 else 4;
+    }
+
+    /// `turn`'s numbers in this format.
+    fn show(self: RotationFormat, turn: Turn) [4]f64 {
+        return switch (self) {
+            .euler_deg => blk: {
+                const turns = turn.toEulerDeg();
+                break :blk .{ turns[0], turns[1], turns[2], 0 };
+            },
+            .euler_rad => blk: {
+                const turns = turn.toEulerDeg();
+                break :blk .{ turns[0] * std.math.rad_per_deg, turns[1] * std.math.rad_per_deg, turns[2] * std.math.rad_per_deg, 0 };
+            },
+            .quaternion => turn.toQuaternion(),
+            .axis_angle => axisAngleOf(turn.toQuaternion()),
+        };
+    }
+
+    /// The turn `numbers` (in this format) say. Euler turns stay euler, so editing one doesn't
+    /// wobble the others through a quaternion.
+    fn read(self: RotationFormat, numbers: [4]f64) Turn {
+        return switch (self) {
+            .euler_deg => .{ .euler_deg = numbers[0..3].* },
+            .euler_rad => .{ .euler_deg = .{ numbers[0] * std.math.deg_per_rad, numbers[1] * std.math.deg_per_rad, numbers[2] * std.math.deg_per_rad } },
+            .quaternion => .{ .quaternion = normalized(numbers) },
+            .axis_angle => .{ .quaternion = quaternionOfAxisAngle(numbers) },
+        };
+    }
+};
+const rotation_formats = std.enums.values(RotationFormat);
+/// An axis and angle's angle, after the axis's X, Y and Z.
+const angle_tag = Tag{ .letter = "°", .color = .{ 0.55, 0.55, 0.55 } };
+
+/// A turn, as a format gives it.
+const Turn = union(enum) {
+    /// About x, then y, then z, in degrees.
+    euler_deg: [3]f64,
+    /// x, y, z, w.
+    quaternion: [4]f64,
+
+    fn toQuaternion(self: Turn) [4]f64 {
+        return switch (self) {
+            .euler_deg => |turns| quaternionOf(turns),
+            .quaternion => |q| q,
+        };
+    }
+
+    fn toEulerDeg(self: Turn) [3]f64 {
+        return switch (self) {
+            .euler_deg => |turns| turns,
+            .quaternion => |q| eulerOf(q),
+        };
+    }
 };
 
 /// What a drop on a slot sets: the field, and its whole new text around what was dropped.
@@ -69,6 +146,10 @@ pub const FieldEditor = struct {
     /// The number box being dragged: its key, where the pointer and the number were when pressed,
     /// and whether it has moved enough to count as a drag.
     scrub: ?struct { key: u64, from_x: f32, from: f64, moved: bool = false } = null,
+    /// The colour picker open, if one is.
+    color: ?ColorPopup = null,
+    /// The format each turning field is shown in, by its key, once one is picked.
+    rotation_formats: std.AutoHashMapUnmanaged(u64, RotationFormat) = .empty,
     /// The drop targets built last frame, with what each sets; in `slot_arena`.
     slots: std.ArrayList(Slot) = .empty,
     slot_arena: std.heap.ArenaAllocator,
@@ -78,6 +159,7 @@ pub const FieldEditor = struct {
     }
 
     pub fn deinit(self: *FieldEditor) void {
+        self.rotation_formats.deinit(self.gpa);
         self.slots.deinit(self.gpa);
         self.slot_arena.deinit();
     }
@@ -92,11 +174,12 @@ pub const FieldEditor = struct {
     pub fn reset(self: *FieldEditor) void {
         self.typing = null;
         self.scrub = null;
+        self.color = null;
     }
 
     /// Whether a number box is being dragged: its changes aren't an undo step until let go.
     pub fn scrubbing(self: *const FieldEditor) bool {
-        return self.scrub != null;
+        return self.scrub != null or self.color != null;
     }
 
     /// The slot under `at` in last frame's layout.
@@ -198,7 +281,7 @@ const Draw = struct {
                 if (self.dropdown(key, names[0..count], current)) |picked| self.set(node, std.fmt.allocPrint(self.scratch(), ".{s}", .{names[picked]}) catch return);
             },
             .vector, .color => self.numbers(node, this, key, width),
-            .quaternion => self.quaternion(node, key, width),
+            .quaternion, .euler => self.rotation(node, this, key, width),
             .entity, .asset => self.slot(key, node, this, if (depth == 0) self.shown else self.referenceText(node), width, ""),
             .@"union" => self.unionControl(index, node, key, width),
             .optional => {
@@ -308,13 +391,7 @@ const Draw = struct {
         const box_width = (width - swatch_width - gap * @as(f32, @floatFromInt(found))) / @as(f32, @floatFromInt(@max(found, 1)));
 
         context.begin(.row);
-        if (is_color) {
-            var rgb: ui.Color = .{ 0, 0, 0 };
-            for (nodes[0..@min(found, 3)], &rgb) |inner, *channel| channel.* = @floatCast(std.math.clamp((self.value.number(inner) orelse 0) / range.?[1], 0, 1));
-            const look = self.scratch().create(SwatchPaint) catch return;
-            look.* = .{ .color = rgb };
-            context.element(context.builder().node(0, .{ .width = swatch_width, .height = 22 }, .{ .custom = .{ .context = look, .draw = SwatchPaint.draw } }, &.{}) catch return);
-        }
+        if (is_color) self.colorSwatch(nodes[0..found], number_part, range.?[1], key, swatch_width);
         for (nodes[0..found], 0..) |inner, i| {
             const tag = if (is_color) channel_tags[i] else axis_tags[i];
             const number = self.value.number(inner) orelse 0;
@@ -324,26 +401,93 @@ const Draw = struct {
         restyle(context, .{ .direction = .row, .gap = gap, .align_items = .center, .width = width });
     }
 
-    /// A quaternion as turns about X, Y and Z in degrees (as `Transform`'s), set back as a quaternion.
-    fn quaternion(self: *Draw, node: Node, key: u64, width: f32) void {
+    /// A colour's swatch, which opens its picker (`color_popup.zig`) when pressed; `nodes` are its
+    /// channels, each `full` at most.
+    fn colorSwatch(self: *Draw, nodes: []const Node, number_part: Part, full: f64, key: u64, width: f32) void {
         const context = self.context;
-        var nodes: [4]Node = undefined;
-        if (self.value.numbers(node, &nodes) < 4) return context.muted(self.value.text(node));
-        var q: [4]f64 = undefined;
-        for (&q, nodes) |*component, inner| component.* = self.value.number(inner) orelse 0;
-        const turns = eulerOf(q);
-        const gap: f32 = 3;
-        const box_width = (width - gap * 3) / 3;
-        context.begin(.row);
-        for (0..3) |i| {
-            if (self.numberBox(childKey(key, i), turns[i], .{ .kind = .float }, axis_tags[i], null, box_width)) |new| {
-                var changed = turns;
-                changed[i] = new;
-                const turned = quaternionOf(changed);
-                var texts: [4][]const u8 = undefined;
-                for (&texts, turned) |*text, component| text.* = field_value.numberText(self.scratch(), component, .{ .kind = .float });
-                self.changed = self.value.replaceAll(self.scratch(), &nodes, &texts) catch return;
+        const editor = self.editor;
+        var rgba: [4]f32 = .{ 0, 0, 0, 1 };
+        for (nodes, rgba[0..nodes.len]) |inner, *channel| channel.* = @floatCast(std.math.clamp((self.value.number(inner) orelse 0) / full, 0, 1));
+
+        const id = context.idFor(std.fmt.allocPrint(self.scratch(), "##swatch {x}", .{key}) catch return);
+        const open = if (editor.color) |popup| popup.key == key and context.open_popup == id else false;
+        if (context.activated(id)) {
+            if (open) {
+                editor.color = null;
+                context.open_popup = 0;
+            } else {
+                editor.color = .open(key, rgba);
+                context.open_popup = id;
             }
+        } else if (editor.color != null and editor.color.?.key == key and !open) {
+            // Something else took the page's popup (a dropdown, a press in another panel).
+            editor.color = null;
+        }
+        const look = self.scratch().create(SwatchPaint) catch return;
+        look.* = .{ .color = .{ rgba[0], rgba[1], rgba[2] } };
+        const swatch = context.builder().node(id, .{ .width = width, .height = 22 }, .{ .custom = .{ .context = look, .draw = SwatchPaint.draw } }, &.{}) catch return;
+        swatch.cursor = .pointer;
+        swatch.accessibility = .{ .role = .button, .label = "Pick a colour", .expanded = editor.color != null and editor.color.?.key == key };
+        context.element(swatch);
+
+        // The picker, while open: its colour goes straight into the field.
+        const popup = if (editor.color) |*popup| (if (popup.key == key) popup else return) else return;
+        const result = popup.build(context, swatch, @as(u32, @truncate(key)) & ~@as(u32, 63) | 0x8000_0000);
+        if (result.color) |color| {
+            var texts: [4][]const u8 = undefined;
+            for (texts[0..nodes.len], color[0..nodes.len]) |*text, channel| text.* = field_value.numberText(self.scratch(), channel * full, number_part);
+            self.changed = self.value.replaceAll(self.scratch(), nodes, texts[0..nodes.len]) catch return;
+        }
+        if (result.closed) {
+            editor.color = null;
+            context.open_popup = 0;
+        }
+    }
+
+    /// Something that turns (a quaternion, or turns about x, y and z): a dropdown of the formats
+    /// it can be shown in, then its numbers in the one picked. Whatever the format, it is kept
+    /// as its own type.
+    fn rotation(self: *Draw, node: Node, this: Part, key: u64, width: f32) void {
+        const context = self.context;
+        const editor = self.editor;
+        const stored_len: usize = if (this.kind == .quaternion) 4 else 3;
+        var nodes: [4]Node = undefined;
+        if (self.value.numbers(node, nodes[0..stored_len]) < stored_len) return context.muted(self.value.text(node));
+        var stored: [4]f64 = .{ 0, 0, 0, 1 };
+        for (stored[0..stored_len], nodes[0..stored_len]) |*number, inner| number.* = self.value.number(inner) orelse 0;
+        const unit: f64 = if (this.radians) std.math.deg_per_rad else 1;
+        const turned: Turn = if (this.kind == .quaternion) .{ .quaternion = stored } else .{ .euler_deg = .{ stored[0] * unit, stored[1] * unit, stored[2] * unit } };
+
+        // The format, remembered per field, picked from a dropdown above the numbers.
+        const format = editor.rotation_formats.get(key) orelse if (this.kind == .quaternion) RotationFormat.quaternion else .euler_deg;
+        var names: [rotation_formats.len][]const u8 = undefined;
+        for (&names, rotation_formats) |*name, option| name.* = page_style.fitText(self.scratch(), context.font, option.label(), select_text_size, width - select_chrome);
+        var picked: usize = @intFromEnum(format);
+        if (context.select(hiddenLabel(self.scratch(), childKey(key, 99)), &names, &picked)) editor.rotation_formats.put(editor.gpa, key, @enumFromInt(picked)) catch {};
+        if (context.last_added) |trigger| if (trigger.overlay == null) {
+            trigger.style.min_width = 0;
+            trigger.style.width = width;
+        };
+
+        // Its numbers in that format; a change goes back into the field as its own type.
+        const shown = format.show(turned);
+        const count = format.len();
+        const gap: f32 = 3;
+        const box_width = (width - gap * @as(f32, @floatFromInt(count - 1))) / @as(f32, @floatFromInt(count));
+        context.begin(.row);
+        for (0..count) |i| {
+            const tag = if (format == .axis_angle and i == 3) angle_tag else axis_tags[i];
+            const new = self.numberBox(childKey(key, i), shown[i], .{ .kind = .float }, tag, null, box_width) orelse continue;
+            var edited = shown;
+            edited[i] = new;
+            const back = format.read(edited);
+            var texts: [4][]const u8 = undefined;
+            const kept: [4]f64 = if (this.kind == .quaternion) back.toQuaternion() else blk: {
+                const turns = back.toEulerDeg();
+                break :blk .{ turns[0] / unit, turns[1] / unit, turns[2] / unit, 0 };
+            };
+            for (texts[0..stored_len], kept[0..stored_len]) |*text, number| text.* = field_value.numberText(self.scratch(), number, .{ .kind = .float });
+            self.changed = self.value.replaceAll(self.scratch(), nodes[0..stored_len], texts[0..stored_len]) catch return;
         }
         context.end();
         restyle(context, .{ .direction = .row, .gap = gap, .align_items = .center, .width = width });
@@ -577,6 +721,31 @@ fn quaternionOf(turns_deg: [3]f64) [4]f64 {
     };
 }
 
+/// `q` scaled to length 1; no turn at all for one of length 0.
+fn normalized(q: [4]f64) [4]f64 {
+    const length = @sqrt(q[0] * q[0] + q[1] * q[1] + q[2] * q[2] + q[3] * q[3]);
+    if (length < 1e-9) return .{ 0, 0, 0, 1 };
+    return .{ q[0] / length, q[1] / length, q[2] / length, q[3] / length };
+}
+
+/// Quaternion `q` as an axis (x, y, z) and an angle about it in degrees; about x for no turn.
+fn axisAngleOf(q: [4]f64) [4]f64 {
+    const unit = normalized(q);
+    const angle = 2 * std.math.acos(std.math.clamp(unit[3], -1, 1));
+    const s = @sqrt(@max(1 - unit[3] * unit[3], 0));
+    if (s < 1e-6) return .{ 1, 0, 0, angle * std.math.deg_per_rad };
+    return .{ unit[0] / s, unit[1] / s, unit[2] / s, angle * std.math.deg_per_rad };
+}
+
+/// An axis (x, y, z) and an angle about it in degrees as a quaternion.
+fn quaternionOfAxisAngle(axis_angle: [4]f64) [4]f64 {
+    const length = @sqrt(axis_angle[0] * axis_angle[0] + axis_angle[1] * axis_angle[1] + axis_angle[2] * axis_angle[2]);
+    if (length < 1e-9) return .{ 0, 0, 0, 1 };
+    const half = axis_angle[3] * std.math.rad_per_deg / 2;
+    const s = @sin(half) / length;
+    return .{ axis_angle[0] * s, axis_angle[1] * s, axis_angle[2] * s, @cos(half) };
+}
+
 /// How a number box is drawn: a field's box (filled as far as its value goes, if it has a
 /// range), its tag on the left, and the number.
 const NumberPaint = struct {
@@ -649,4 +818,12 @@ test "numbers are shown short" {
     try std.testing.expectEqualStrings("1.5", shortNumber(arena.allocator(), 1.5, .{ .kind = .float }));
     try std.testing.expectEqualStrings("2", shortNumber(arena.allocator(), 2.0004, .{ .kind = .float }));
     try std.testing.expectEqualStrings("0", shortNumber(arena.allocator(), -0.0001, .{ .kind = .float }));
+}
+
+test "a turn reads back the same in every format" {
+    const turn = Turn{ .euler_deg = .{ 30, -45, 80 } };
+    for (rotation_formats) |format| {
+        const back = format.read(format.show(turn)).toEulerDeg();
+        for (back, [_]f64{ 30, -45, 80 }) |got, want| try std.testing.expectApproxEqAbs(want, got, 1e-6);
+    }
 }

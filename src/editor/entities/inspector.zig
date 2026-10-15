@@ -106,7 +106,8 @@ pub const EntityInspector = struct {
         return .{ .set_field = .{ .component = slot.component, .field = slot.field, .text = text } };
     }
 
-    /// Whether a number is being dragged: its changes become an undo step once let go.
+    /// Whether a number is being dragged or a colour picked: the changes become one undo step
+    /// once that ends.
     pub fn scrubbing(self: *const EntityInspector) bool {
         return self.values.scrubbing();
     }

@@ -44,8 +44,12 @@ pub const PartKind = enum(u8) {
     /// Red, green, blue and maybe alpha: a struct of `r`, `g`, `b` (and `a`), or numbers in a
     /// field named `color` or `colour` (or ending `_color`, `_colour`). Its one child is the number's part.
     color,
-    /// An `eggy.math` quaternion, shown as turns in degrees.
+    /// An `eggy.math` quaternion. Like `euler`, the Inspector shows it in a format to pick.
     quaternion,
+    /// Three turns, about x, then y, then z: three numbers in a field named for a rotation
+    /// (`rotation`, `orientation` or `euler` in its name), in degrees, or radians when the name
+    /// ends `_rad`. Its one child is the number's part.
+    euler,
     /// Its children are its fields.
     @"struct",
     /// A tagged union: its children are its variants, each named after its tag.
@@ -76,6 +80,8 @@ pub const Part = extern struct {
     unsigned: bool = false,
     /// A vector's or colour's: whether it is a struct (`.{ .x = 1, .y = 2 }`) rather than a list.
     named: bool = false,
+    /// An `euler`'s: whether its turns are in radians rather than degrees.
+    radians: bool = false,
     /// An enum's values, in order.
     options: [*]const [*:0]const u8 = &.{},
     option_count: u32 = 0,
@@ -358,7 +364,7 @@ fn partsOf(comptime T: type, comptime name: [:0]const u8) []const Part {
             var child_types: []const type = &.{};
             var child_names: []const [:0]const u8 = &.{};
             switch (part.kind) {
-                .vector, .color => {
+                .vector, .color, .euler => {
                     child_types = &.{numberOf(Type).?};
                     child_names = &.{""};
                 },
@@ -396,6 +402,7 @@ fn describePart(comptime T: type, comptime name: []const u8) Part {
     if (isQuaternion(T)) return .{ .kind = .quaternion, .len = 4 };
     const named = @typeInfo(T) == .@"struct";
     if (colorLen(T, name)) |len| return .{ .kind = .color, .len = len, .named = named };
+    if (isEuler(T, name)) return .{ .kind = .euler, .len = 3, .named = named, .radians = std.mem.endsWith(u8, name, "_rad") };
     if (vectorLen(T)) |len| return .{ .kind = .vector, .len = len, .named = named };
     return switch (@typeInfo(T)) {
         .bool => .{ .kind = .bool },
@@ -465,6 +472,15 @@ fn numbersLen(comptime T: type, comptime labels: []const []const u8) ?u32 {
         else => return null,
     };
     return if (len >= 2 and len <= 4) len else null;
+}
+
+/// Whether `T`, in a field named `name`, holds turns: three floats in a field named for a rotation.
+fn isEuler(comptime T: type, comptime name: []const u8) bool {
+    if (vectorLen(T) != 3 or @typeInfo(numberOf(T).?) != .float) return false;
+    for ([_][]const u8{ "rotation", "orientation", "euler" }) |word| {
+        if (std.mem.indexOf(u8, name, word) != null) return true;
+    }
+    return false;
 }
 
 /// Whether `T` is an `eggy.math` quaternion: four numbers in one `@Vector` field `v`.
@@ -567,6 +583,12 @@ test "a field's parts describe vectors, colours, unions and what they hold" {
     try std.testing.expectEqual(@as(u32, 3), fields[0].parts[0].len);
     try std.testing.expectEqual(PartKind.float, fields[0].parts[0].children(fields[0].parts)[0].kind);
     try std.testing.expectEqual(PartKind.color, fields[1].parts[0].kind);
+    const Turned = struct { rotation_deg: [3]f32 = .{ 0, 0, 0 }, spin_rad: [3]f32 = .{ 0, 0, 0 }, orientation_rad: [3]f32 = .{ 0, 0, 0 } };
+    const turned = Registry(&.{Turned}, &.{"game"}).infos[0].fields;
+    try std.testing.expectEqual(PartKind.euler, turned[0].parts[0].kind);
+    try std.testing.expect(!turned[0].parts[0].radians);
+    try std.testing.expectEqual(PartKind.vector, turned[1].parts[0].kind); // not named for a rotation
+    try std.testing.expect(turned[2].parts[0].radians);
 
     const shape = fields[2].parts;
     try std.testing.expectEqual(PartKind.@"union", shape[0].kind);
