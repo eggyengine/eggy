@@ -49,6 +49,8 @@ pub fn Editor(comptime project: type) type {
         game: ?HotGame,
         /// When the game's library was built, to tell whether a rebuild changed it.
         game_modified: ?std.Io.Timestamp = null,
+        /// When the world was last compared with the saved scene, for the status bar's `*`.
+        unsaved_checked_ms: u64 = 0,
         /// Whether the game is playing, and the scene to go back to when it stops.
         play_mode: PlayMode = .{},
         /// The scene open in the project, if any (with no project, none).
@@ -291,6 +293,12 @@ pub fn Editor(comptime project: type) type {
             self.ui.theme.small_text_size = 11;
             self.workspace.engine_label = self.upgrades.label;
             self.workspace.scene_name = if (self.open_scene) |*scene| scene.name() else null;
+            // Whether there are changes to save, looked at a few times a second (not while
+            // playing: Stop puts the scene back).
+            if (self.workspace.time_ms -| self.unsaved_checked_ms >= 400 and !self.play_mode.playing()) {
+                self.unsaved_checked_ms = self.workspace.time_ms;
+                self.workspace.scene_unsaved = if (self.open_scene) |*scene| (if (self.game) |*game| scene.unsaved(&self.app.world, game.sceneAccess()) else false) else false;
+            }
             self.workspace.can_upgrade = self.upgrades.can_upgrade;
             self.workspace.can_link = self.upgrades.can_link;
             self.workspace.developer_known = self.upgrades.developer_dir != null;
@@ -446,7 +454,13 @@ pub fn Editor(comptime project: type) type {
             if (self.play_mode.playing()) return std.log.info("save: stop playing first; Stop puts the scene back as it was", .{});
             const scene = if (self.open_scene) |*open| open else return std.log.info("save: open a project first; scenes are kept in it", .{});
             const game = if (self.game) |*loaded| loaded else return std.log.err("save: the game's library isn't loaded, so its components can't be saved", .{});
-            scene.save(&self.app.world, game.sceneAccess()) catch |err| std.log.err("cannot save the scene: {t}", .{err});
+            scene.save(&self.app.world, game.sceneAccess()) catch |err| {
+                self.workspace.toast("Couldn't save the scene: see the Console");
+                return std.log.err("cannot save the scene: {t}", .{err});
+            };
+            var message: [96]u8 = undefined;
+            self.workspace.toast(std.fmt.bufPrint(&message, "Saved {s}", .{scene.name() orelse "the scene"}) catch "Saved");
+            self.workspace.scene_unsaved = false;
         }
 
         /// The Preferences window's sections: the editor's, then (with a project) each plugin's that

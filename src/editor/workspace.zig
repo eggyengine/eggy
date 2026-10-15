@@ -76,6 +76,9 @@ pub const BuildState = union(enum) {
     ready,
 };
 
+/// How long a toast stays.
+const toast_ms = 2500;
+
 /// How long the pointer rests on a title bar button before its tooltip shows.
 const tooltip_delay_ms = 500;
 
@@ -109,6 +112,12 @@ pub const Workspace = struct {
     /// The open scene's file name, for the status bar; null with none open. Its text belongs to
     /// the editor.
     scene_name: ?[]const u8 = null,
+    /// Whether the world has changes the open scene doesn't: the status bar marks it with `*`.
+    scene_unsaved: bool = false,
+    /// A short note in the window's bottom-right corner (say, "Saved"), until `toast_until_ms`.
+    toast_buffer: [96]u8 = undefined,
+    toast_len: usize = 0,
+    toast_until_ms: u64 = 0,
     /// Whether a newer engine than the project's is unpacked, for File > Upgrade Editor.
     can_upgrade: bool = false,
     /// Whether the project can be linked to the Eggy codebase being developed.
@@ -257,6 +266,7 @@ pub const Workspace = struct {
             tooltip.style.width = font.measure(text, 13) + 20;
             try main_children.append(b.allocator, tooltip);
         };
+        if (self.time_ms < self.toast_until_ms) try main_children.append(b.allocator, try self.toastElement(b, viewport, font));
         const main = try b.node(0, .{ .width = viewport.w, .height = viewport.h, .direction = .column }, .none, main_children.items);
         main.layout(viewport, font);
         self.roots[main_slot] = main;
@@ -270,6 +280,25 @@ pub const Workspace = struct {
             tree.layout(area, font);
             self.roots[slot] = tree;
         }
+    }
+
+    /// Show `message` in the bottom-right corner for a couple of seconds.
+    pub fn toast(self: *Workspace, message: []const u8) void {
+        self.toast_len = @min(message.len, self.toast_buffer.len);
+        @memcpy(self.toast_buffer[0..self.toast_len], message[0..self.toast_len]);
+        self.toast_until_ms = self.time_ms + toast_ms;
+    }
+
+    /// The toast: a small note floating just above the status bar, at the right.
+    fn toastElement(self: *const Workspace, b: L.Builder, viewport: ui.Rect, font: *const ui.Font) !*L.Element {
+        const message = self.toast_buffer[0..self.toast_len];
+        const width = font.measure(message, 12) + 24;
+        const note = try b.node(0, .{ .width = width, .height = 28, .padding = .{ .left = 12, .right = 12 }, .align_items = .center, .direction = .row, .z_index = 260 }, .{ .surface = .tooltip }, &.{
+            try b.node(0, .{}, .{ .text = .{ .value = message, .size = 12 } }, &.{}),
+        });
+        note.overlay = .{ .point = .init(viewport.x + viewport.w - width - 12, viewport.y + viewport.h - status_height - 28 - 10) };
+        note.accessibility = .{ .role = .status, .label = message };
+        return note;
     }
 
     /// What the title bar button `id` (play or Reload) does, for its tooltip; null for others.
@@ -290,7 +319,10 @@ pub const Workspace = struct {
         }.make;
         if (self.project) |project| {
             try children.append(b.allocator, try text(b, project.title, .foreground));
-            try children.append(b.allocator, try text(b, self.scene_name orelse "No scene open: open one in Assets", if (self.scene_name != null) .foreground else .muted));
+            const scene_label = if (self.scene_name) |name|
+                try std.fmt.allocPrint(b.allocator, "{s}{s}", .{ name, if (self.scene_unsaved) "*" else "" })
+            else if (self.scene_unsaved) "Unsaved scene*" else "No scene open: open one in Assets";
+            try children.append(b.allocator, try text(b, scene_label, if (self.scene_name != null or self.scene_unsaved) .foreground else .muted));
             try children.append(b.allocator, try text(b, project.dir, .muted));
         } else try children.append(b.allocator, try text(b, "No project open: File > New Project or Open Project", .muted));
         try children.append(b.allocator, try b.node(0, .{ .grow = 1 }, .none, &.{}));
@@ -667,4 +699,22 @@ test "the play button's tooltip shows once the pointer rests on it" {
     workspace.time_ms = 1000 + tooltip_delay_ms;
     try workspace.build(viewport, @splat(null), &font);
     try std.testing.expect(tooltipShown(workspace.roots[main_slot].?));
+}
+
+test "the save toast shows for a while, inside the window" {
+    var workspace = try testWorkspace();
+    defer workspace.deinit();
+    var font = try ui.Font.init(std.testing.allocator, ui.default_font);
+    defer font.deinit();
+    const viewport = ui.Rect{ .x = 0, .y = 0, .w = 640, .h = 480 };
+    workspace.time_ms = 1000;
+    workspace.toast("Saved main.scene.zon");
+    try workspace.build(viewport, @splat(null), &font);
+    const root = workspace.roots[main_slot].?;
+    const note = root.children[root.children.len - 1];
+    try std.testing.expectEqual(ui.Layout.Paint{ .surface = .tooltip }, note.paint_kind);
+    try std.testing.expect(note.bounds.x + note.bounds.w <= viewport.w);
+    workspace.time_ms = 1000 + toast_ms;
+    try workspace.build(viewport, @splat(null), &font);
+    try std.testing.expect(workspace.roots[main_slot].?.children[workspace.roots[main_slot].?.children.len - 1].paint_kind != .surface);
 }

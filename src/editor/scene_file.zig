@@ -16,6 +16,8 @@ pub const OpenScene = struct {
     gpa: std.mem.Allocator,
     project_dir: []const u8,
     path: ?[]u8 = null,
+    /// A hash of the world as last saved or opened, to tell when it has changed since.
+    saved_hash: ?u64 = null,
 
     pub fn deinit(self: *OpenScene) void {
         if (self.path) |path| self.gpa.free(path);
@@ -51,6 +53,15 @@ pub const OpenScene = struct {
         defer self.gpa.free(made.entities);
         if (made.skipped > 0) log.warn("opened {s}: {d} entities, {d} components or fields left out (see above)", .{ path, made.entities.len, made.skipped }) else log.info("opened {s}: {d} entities", .{ path, made.entities.len });
         try self.setPath(path);
+        self.saved_hash = hashOf(self.gpa, world, access) catch null;
+    }
+
+    /// Whether `world` has changes not saved to the open scene: it differs from what was last
+    /// saved or opened, or (with no scene open) it has entities at all.
+    pub fn unsaved(self: *const OpenScene, world: *eggy.ecs.World, access: eggy.scene.Access) bool {
+        const saved = self.saved_hash orelse return world.entityCount() > 0;
+        const now = hashOf(self.gpa, world, access) catch return false;
+        return now != saved;
     }
 
     /// Write `world` to the open scene; with none open, to a new one in `scenes/`, which
@@ -74,6 +85,7 @@ pub const OpenScene = struct {
         defer project.close(io);
         if (std.fs.path.dirname(path)) |parent| try project.createDirPath(io, parent);
         try project.writeFile(io, .{ .sub_path = path, .data = text.written() });
+        self.saved_hash = std.hash.Wyhash.hash(0, text.written());
         log.info("saved {d} entities to {s}", .{ scene.entities.len, path });
     }
 
@@ -138,6 +150,16 @@ pub const OpenScene = struct {
     }
 };
 
+/// A hash of `world` as a scene file would hold it.
+fn hashOf(gpa: std.mem.Allocator, world: *eggy.ecs.World, access: eggy.scene.Access) !u64 {
+    var scene = try eggy.scene.Scene.capture(gpa, world, access, null);
+    defer scene.deinit();
+    var text: std.Io.Writer.Allocating = .init(gpa);
+    defer text.deinit();
+    try scene.write(&text.writer);
+    return std.hash.Wyhash.hash(0, text.written());
+}
+
 /// Whether `path` stays inside the project: relative, with no `..`.
 pub fn isProjectPath(path: []const u8) bool {
     if (path.len == 0 or std.fs.path.isAbsolute(path)) return false;
@@ -169,8 +191,12 @@ test "a saved scene is remembered, and a new one gets a free name" {
     try std.testing.expect(first.readMemory() == null);
     const named = try world.spawn(.{});
     access.setName(&world, named, "Sun");
+    try std.testing.expect(first.unsaved(&world, access)); // an entity, and nowhere saved
     try first.save(&world, access);
     try std.testing.expectEqualStrings("untitled.scene.zon", first.name().?);
+    try std.testing.expect(!first.unsaved(&world, access));
+    access.setName(&world, named, "Sol");
+    try std.testing.expect(first.unsaved(&world, access));
     try first.create(&world, access);
     try std.testing.expectEqualStrings("untitled-2.scene.zon", first.name().?);
 
