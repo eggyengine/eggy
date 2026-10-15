@@ -126,9 +126,20 @@ fn addProject(b: *std.Build, engine: *std.Build, emscripten: Emscripten, target:
         source.print(b.allocator, ", @import(\"plugin_{d}\").Plugin", .{i}) catch @panic("OOM");
     }
     source.appendSlice(b.allocator, " };\n") catch @panic("OOM");
+    // Whose preferences each is (`plugins/<key>.zon`): the game's are `game`, a plugin's are its
+    // module's name, as its package publishes it with `addPlugin`.
+    source.appendSlice(b.allocator, "pub const plugin_keys = [_][:0]const u8{ \"game\"") catch @panic("OOM");
+    for (options.plugins, 0..) |plugin, i| source.print(b.allocator, ", \"{f}\"", .{std.zig.fmtString(pluginKey(b, plugin, i))}) catch @panic("OOM");
+    source.appendSlice(b.allocator, " };\n") catch @panic("OOM");
     const project = b.createModule(.{ .root_source_file = b.addWriteFiles().add("eggy_project.zig", source.items), .target = target, .optimize = optimize });
     project.addImport("game", options.game);
     for (options.plugins, 0..) |plugin, i| project.addImport(b.fmt("plugin_{d}", .{i}), plugin);
+
+    // The runtime's project module also carries the project's preferences (`.eggy/plugins`),
+    // baked in. The editor's game library doesn't, so changing them doesn't rebuild it.
+    const runtime_project = b.createModule(.{ .root_source_file = addPreferenceFiles(b, source.items), .target = target, .optimize = optimize });
+    runtime_project.addImport("game", options.game);
+    for (options.plugins, 0..) |plugin, i| runtime_project.addImport(b.fmt("plugin_{d}", .{i}), plugin);
 
     // The runtime, on every platform.
     const runtime_module = b.createModule(.{
@@ -139,7 +150,7 @@ fn addProject(b: *std.Build, engine: *std.Build, emscripten: Emscripten, target:
         .imports = &.{
             .{ .name = "eggy", .module = eggy },
             .{ .name = "eggy_runtime", .module = runtime },
-            .{ .name = "eggy_project", .module = project },
+            .{ .name = "eggy_project", .module = runtime_project },
         },
     });
     const all_step = b.step("all", "Build every executable for this target");
@@ -192,6 +203,36 @@ fn addProject(b: *std.Build, engine: *std.Build, emscripten: Emscripten, target:
     all_step.dependOn(&install_library.step);
     all_step.dependOn(resources);
     return game_library;
+}
+
+/// The name `plugin`'s package published it under (`addPlugin`), else `plugin_<index>`.
+fn pluginKey(b: *std.Build, plugin: *std.Build.Module, index: usize) []const u8 {
+    var it = plugin.owner.modules.iterator();
+    while (it.next()) |entry| if (entry.value_ptr.* == plugin) return entry.key_ptr.*;
+    return b.fmt("plugin_{d}", .{index});
+}
+
+/// `project_source` (the project module's) with `preference_files` added: each of the project's
+/// `.eggy/plugins/<key>.zon`, embedded, for the runtime to read at start.
+fn addPreferenceFiles(b: *std.Build, project_source: []const u8) std.Build.LazyPath {
+    const io = b.graph.io;
+    const files = b.addWriteFiles();
+    var source: std.ArrayList(u8) = .empty;
+    source.appendSlice(b.allocator, project_source) catch @panic("OOM");
+    source.appendSlice(b.allocator, "pub const preference_files = [_]struct { key: []const u8, zon: [:0]const u8 }{\n") catch @panic("OOM");
+    if (b.build_root.handle.openDir(io, ".eggy/plugins", .{ .iterate = true })) |opened| {
+        var dir = opened;
+        defer dir.close(io);
+        var it = dir.iterate();
+        while (it.next(io) catch null) |entry| {
+            if (entry.kind != .file or !std.mem.endsWith(u8, entry.name, ".zon")) continue;
+            const key = entry.name[0 .. entry.name.len - ".zon".len];
+            _ = files.addCopyFile(b.path(b.pathJoin(&.{ ".eggy", "plugins", entry.name })), b.pathJoin(&.{ "preferences", entry.name }));
+            source.print(b.allocator, "    .{{ .key = \"{f}\", .zon = @embedFile(\"preferences/{f}\") }},\n", .{ std.zig.fmtString(key), std.zig.fmtString(entry.name) }) catch @panic("OOM");
+        }
+    } else |_| {}
+    source.appendSlice(b.allocator, "};\n") catch @panic("OOM");
+    return files.add("eggy_project.zig", source.items);
 }
 
 /// The game and its plugins (`project`) as a shared library for the editor, which loads it and

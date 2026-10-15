@@ -6,7 +6,7 @@ const eggy = @import("eggy");
 const project = @import("eggy_project");
 const api = @import("game_api.zig");
 
-const Plugins = eggy.plugins.Set(project.plugins);
+const Plugins = eggy.plugins.Set(project.plugins, &project.plugin_keys);
 
 /// The library's own log goes to the editor's Console.
 pub const std_options: std.Options = .{ .logFn = logThroughEditor };
@@ -25,6 +25,24 @@ const panels = blk: {
     break :blk list;
 };
 
+/// Each plugin's preferences, as C data.
+const preference_sets = blk: {
+    const manifests = Plugins.preference_manifests;
+    var sets: [manifests.len]api.Preferences = undefined;
+    for (&sets, manifests) |*set, manifest| {
+        var fields: [manifest.fields.len]api.PreferenceField = undefined;
+        for (&fields, manifest.fields) |*field, source| {
+            var options: [source.options.len][*:0]const u8 = undefined;
+            for (&options, source.options) |*option, name| option.* = name.ptr;
+            const frozen_options = options;
+            field.* = .{ .name = source.name.ptr, .kind = @intFromEnum(source.kind), .default = source.default.ptr, .options = &frozen_options, .option_count = frozen_options.len, .description = source.description.ptr };
+        }
+        const frozen_fields = fields;
+        set.* = .{ .key = manifest.key.ptr, .fields = &frozen_fields, .field_count = frozen_fields.len };
+    }
+    break :blk sets;
+};
+
 const game = api.Game{
     .start = start,
     .stop = stop,
@@ -34,6 +52,8 @@ const game = api.Game{
     .editor_panel_ui = editorPanelUi,
     .panels = &panels,
     .panel_count = panels.len,
+    .preferences = &preference_sets,
+    .preference_count = preference_sets.len,
 };
 
 export fn eggy_game() callconv(.c) *const api.Game {

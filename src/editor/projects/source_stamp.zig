@@ -2,8 +2,9 @@
 //! to tell whether rebuilding its editor could change anything.
 const std = @import("std");
 
-/// Folders of build output, caches and history, which a build doesn't read.
-const ignored = [_][]const u8{ ".zig-cache", "zig-out", "zig-pkg", ".git", "node_modules" };
+/// Folders of build output, caches and history, which the editor's build doesn't read. `.eggy`
+/// (preferences) only goes into the runtime, which its own build picks up.
+const ignored = [_][]const u8{ ".zig-cache", "zig-out", "zig-pkg", ".git", "node_modules", ".eggy" };
 
 pub const Stamp = struct {
     newest_ns: i96 = 0,

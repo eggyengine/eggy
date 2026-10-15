@@ -13,6 +13,12 @@
 //!     pub const editor_panels = [_]eggy.plugins.EditorPanel{.{ .title = "Stats" }};
 //!     pub fn editorPanelUi(self: *Self, panel: usize, ui: *eggy.ui.Context) void  // in the editor only
 //!
+//! A plugin can declare preferences, which people set in the editor's Preferences window, kept in
+//! the user's and the project's `.eggy/` folder and baked into the runtime (see `preferences.zig`):
+//!
+//!     pub const Preferences = struct { volume: f32 = 0.8, show_gizmos: bool = true };
+//!     // in any hook: app.preferences(Preferences).volume
+//!
 //! Plugins are stored by value and may move after `init`: keep no pointers to `self`, and use the
 //! `app` each hook is given rather than storing it.
 //!
@@ -23,6 +29,7 @@ const std = @import("std");
 const App = @import("app.zig").App;
 const Event = @import("vitellus_sdl3").sdl.events.Event;
 const ui = @import("weeoui");
+const preferences = @import("preferences.zig");
 
 /// A panel a plugin adds to the editor's dock (see `editor_panels` above).
 pub const EditorPanel = struct {
@@ -32,8 +39,10 @@ pub const EditorPanel = struct {
 
 /// One instance of each type in `types` (a tuple such as `.{ Game, Stats }`). Hooks run in list
 /// order, so the game, listed first, sees each frame before its plugins; `deinit` runs in reverse.
-pub fn Set(comptime types: anytype) type {
+/// `keys` names each one's preferences (see `preferences.Manifest`), in the same order.
+pub fn Set(comptime types: anytype, comptime keys: []const [:0]const u8) type {
     const list: [types.len]type = types;
+    if (keys.len != list.len) @compileError("one preference key per plugin");
     return struct {
         instances: std.meta.Tuple(&list),
 
@@ -48,8 +57,19 @@ pub fn Set(comptime types: anytype) type {
             break :blk all;
         };
 
+        /// The preferences each plugin declares (its `Preferences`), in plugin order.
+        pub const preference_manifests: []const preferences.Manifest = blk: {
+            var all: []const preferences.Manifest = &.{};
+            for (list, keys) |T, key| if (@hasDecl(T, "Preferences")) {
+                all = all ++ .{preferences.manifest(T.Preferences, key)};
+            };
+            break :blk all;
+        };
+
         /// Start every plugin. If one fails, those already started are stopped again.
         pub fn init(gpa: std.mem.Allocator, app: *App) !Self {
+            // Their preferences first, so each `init` can read them.
+            inline for (list, keys) |T, key| if (@hasDecl(T, "Preferences")) try app.preference_values.register(T.Preferences, key);
             var self: Self = undefined;
             inline for (list, 0..) |T, i| {
                 self.instances[i] = start(T, gpa, app) catch |err| {
@@ -136,7 +156,7 @@ test "plugins start in order, stop in reverse, and skip hooks they don't declare
         }
     };
 
-    var set = try Set(.{ Game, Quiet, Stats }).init(std.testing.allocator, undefined);
+    var set = try Set(.{ Game, Quiet, Stats }, &.{ "game", "quiet", "stats" }).init(std.testing.allocator, undefined);
     try set.update(undefined);
     set.deinit();
     try std.testing.expectEqualStrings("gsuSG", Log.entries[0..Log.len]);
@@ -161,7 +181,7 @@ test "editor panels from every plugin are listed in order and reach the plugin t
             Log.len += 1;
         }
     };
-    const Plugins = Set(.{ Game, struct {}, Stats });
+    const Plugins = Set(.{ Game, struct {}, Stats }, &.{ "game", "empty", "stats" });
     try std.testing.expectEqual(@as(usize, 3), Plugins.editor_panels.len);
     try std.testing.expectEqualStrings("Memory", Plugins.editor_panels[2].title);
     var set = try Plugins.init(std.testing.allocator, undefined);
@@ -184,6 +204,16 @@ test "a plugin that fails to start stops the ones started before it" {
         }
     };
 
-    try std.testing.expectError(error.NoAudioDevice, Set(.{ Started, Failing, Started }).init(std.testing.allocator, undefined));
+    try std.testing.expectError(error.NoAudioDevice, Set(.{ Started, Failing, Started }, &.{ "a", "b", "c" }).init(std.testing.allocator, undefined));
     try std.testing.expectEqual(@as(u32, 1), Log.stopped);
+}
+
+test "plugins' preferences are listed under their keys" {
+    const Game = struct {
+        pub const Preferences = struct { volume: f32 = 0.8 };
+    };
+    const manifests = Set(.{ Game, struct {} }, &.{ "game", "empty" }).preference_manifests;
+    try std.testing.expectEqual(@as(usize, 1), manifests.len);
+    try std.testing.expectEqualStrings("game", manifests[0].key);
+    try std.testing.expectEqualStrings("volume", manifests[0].fields[0].name);
 }

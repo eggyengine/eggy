@@ -10,7 +10,7 @@ const fps = 340000;
 /// The runtime for `project`, which declares `name` (the window title) and `plugins` (a tuple of
 /// plugin types, the game first). `addGame` generates it from the game's build.
 pub fn Runtime(comptime project: type) type {
-    const Plugins = eggy.plugins.Set(project.plugins);
+    const Plugins = eggy.plugins.Set(project.plugins, &project.plugin_keys);
     return struct {
         app: eggy.App,
         plugins: Plugins,
@@ -22,6 +22,10 @@ pub fn Runtime(comptime project: type) type {
             _ = args;
             var app = try eggy.App.init(gpa, project.name);
             errdefer app.deinit();
+            // The project's preferences, baked in by `addGame`, before the plugins start.
+            if (@hasDecl(project, "preference_files")) for (project.preference_files) |file| {
+                app.preference_values.read(.project, file.key, file.zon) catch |err| std.log.warn("the preferences for {s} don't parse ({t}): they are ignored", .{ file.key, err });
+            };
             var plugins = try Plugins.init(gpa, &app);
             errdefer plugins.deinit();
             try app.startWorld();
@@ -60,6 +64,7 @@ test "the runtime compiles for a project" {
     const project = struct {
         pub const name = "test";
         pub const plugins = .{struct {}};
+        pub const plugin_keys = [_][:0]const u8{"game"};
     };
     std.testing.refAllDecls(Runtime(project));
 }

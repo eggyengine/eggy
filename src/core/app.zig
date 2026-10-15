@@ -5,6 +5,7 @@ const sdl_adapter = @import("vitellus_sdl3");
 const sdl3 = sdl_adapter.sdl;
 const Graphics = @import("graphics.zig").Graphics;
 const clutch = @import("clutch");
+const preferences_zig = @import("preferences.zig");
 
 const web = builtin.os.tag == .emscripten;
 const width = 900;
@@ -18,6 +19,9 @@ pub const App = struct {
     /// Entities, components, resources and schedules. Plugins register schedules in `init`;
     /// `startWorld`, `updateWorld` and `deinit` run clutch's stages.
     world: clutch.World,
+    /// Plugins' preference values (see `preferences`): the editor fills it from the user's and
+    /// the project's files, the runtime from the project's, baked in.
+    preference_values: preferences_zig.Store,
 
     pub fn init(gpa: std.mem.Allocator, title: [:0]const u8) !App {
         const init_flags = sdl3.InitFlags{ .video = true };
@@ -36,17 +40,25 @@ pub const App = struct {
         errdefer graphics.deinit();
         if (builtin.os.tag == .windows) try window.window.show();
 
-        return .{ .window = window, .init_flags = init_flags, .graphics = graphics, .world = .init(gpa) };
+        return .{ .window = window, .init_flags = init_flags, .graphics = graphics, .world = .init(gpa), .preference_values = .init(gpa) };
     }
 
     /// Run the world's PreDeinit, Deinit and PostDeinit stages, then free everything.
     pub fn deinit(self: *App) void {
         self.stopWorld();
         self.world.deinit();
+        self.preference_values.deinit();
         self.graphics.deinit();
         self.window.deinit();
         sdl3.quit(self.init_flags);
         sdl3.shutdown();
+    }
+
+    /// The values of `T`, a plugin's `Preferences` struct (see `eggy.preferences`): its defaults,
+    /// overridden by what the user and the project set. Cheap enough to call every frame, which
+    /// follows changes made in the Preferences window as they happen.
+    pub fn preferences(self: *const App, comptime T: type) T {
+        return self.preference_values.get(T);
     }
 
     /// Start over with an empty world: run the old one's PreDeinit, Deinit and PostDeinit

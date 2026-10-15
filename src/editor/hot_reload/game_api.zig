@@ -6,7 +6,7 @@
 const std = @import("std");
 
 /// Bumped whenever these types change, so an editor refuses a library built for another.
-pub const version: u32 = 1;
+pub const version: u32 = 2;
 
 /// The library's one exported function: `fn () callconv(.c) *const Game`.
 pub const entry_symbol = "eggy_game";
@@ -21,6 +21,24 @@ pub const Host = extern struct {
 /// A panel the game or a plugin adds to the editor's dock (`eggy.plugins.EditorPanel`).
 pub const Panel = extern struct {
     title: [*:0]const u8,
+};
+
+/// A field of a plugin's preferences (`eggy.preferences.Field`).
+pub const PreferenceField = extern struct {
+    name: [*:0]const u8,
+    /// An `eggy.preferences.Kind`.
+    kind: u8,
+    default: [*:0]const u8,
+    options: [*]const [*:0]const u8,
+    option_count: usize,
+    description: [*:0]const u8,
+};
+
+/// A plugin's preferences (`eggy.preferences.Manifest`).
+pub const Preferences = extern struct {
+    key: [*:0]const u8,
+    fields: [*]const PreferenceField,
+    field_count: usize,
 };
 
 /// What the library gives the editor: the game's and its plugins' hooks (see `eggy.plugins`).
@@ -42,4 +60,7 @@ pub const Game = extern struct {
     editor_panel_ui: *const fn (state: *anyopaque, panel: usize, context: *anyopaque) callconv(.c) void,
     panels: [*]const Panel,
     panel_count: usize,
+    /// Each plugin's preferences, for the Preferences window.
+    preferences: [*]const Preferences,
+    preference_count: usize,
 };

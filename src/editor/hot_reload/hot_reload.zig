@@ -25,14 +25,18 @@ pub const HotGame = struct {
     state: ?*anyopaque,
     /// The game's panels, copied out of the library, as the editor shows them across swaps.
     panels: []eggy.plugins.EditorPanel,
+    /// Each plugin's preferences, copied out of the library into `manifest_arena`.
+    preference_manifests: []const eggy.preferences.Manifest = &.{},
+    manifest_arena: std.heap.ArenaAllocator,
     /// How many copies this editor has loaded, which names the next one.
     loads: u32 = 0,
 
     /// Load the library at `path` (absolute) and start the game on `app`. Then run
     /// `app.startWorld`, once, as for any start.
     pub fn load(gpa: std.mem.Allocator, path: []const u8, app: *eggy.App) !HotGame {
-        var self = HotGame{ .gpa = gpa, .path = try gpa.dupe(u8, path), .copy_path = &.{}, .library = null, .game = undefined, .state = null, .panels = &.{} };
+        var self = HotGame{ .gpa = gpa, .path = try gpa.dupe(u8, path), .copy_path = &.{}, .library = null, .game = undefined, .state = null, .panels = &.{}, .manifest_arena = .init(gpa) };
         errdefer gpa.free(self.path);
+        errdefer self.manifest_arena.deinit();
         try self.open(app);
         return self;
     }
@@ -40,6 +44,7 @@ pub const HotGame = struct {
     /// Stop the game, empty the world, and unload the library.
     pub fn deinit(self: *HotGame, app: *eggy.App) void {
         self.close(app);
+        self.manifest_arena.deinit();
         self.gpa.free(self.path);
     }
 
@@ -106,7 +111,8 @@ pub const HotGame = struct {
         errdefer gpa.free(panels);
         for (panels, game.panels[0..game.panel_count]) |*panel, source| panel.* = .{ .title = try gpa.dupeZ(u8, std.mem.span(source.title)) };
 
-        self.* = .{ .gpa = gpa, .path = self.path, .copy_path = copy_path, .library = library, .game = game, .state = null, .panels = panels, .loads = self.loads };
+        const manifests = try copyManifests(self.manifest_arena.allocator(), game.preferences[0..game.preference_count]);
+        self.* = .{ .gpa = gpa, .path = self.path, .copy_path = copy_path, .library = library, .game = game, .state = null, .panels = panels, .loads = self.loads, .preference_manifests = manifests, .manifest_arena = self.manifest_arena };
         self.state = game.start(&host, &self.gpa, app);
         if (self.state == null) log.err("the game didn't start: see the errors above. It starts again when its code is rebuilt.", .{});
     }
@@ -117,9 +123,13 @@ pub const HotGame = struct {
         if (self.state) |state| self.game.stop(state);
         self.state = null;
         app.resetWorld();
+        // The types the game registered its preferences under go with its code.
+        app.preference_values.forgetTypes();
         for (self.panels) |panel| self.gpa.free(panel.title);
         self.gpa.free(self.panels);
         self.panels = &.{};
+        self.preference_manifests = &.{};
+        _ = self.manifest_arena.reset(.free_all);
         library.close();
         self.library = null;
         var threaded: std.Io.Threaded = .init_single_threaded;
@@ -137,6 +147,27 @@ pub const HotGame = struct {
         app.resetWorld();
     }
 };
+
+/// The library's preference manifests, copied into `arena`.
+fn copyManifests(arena: std.mem.Allocator, sets: []const api.Preferences) ![]const eggy.preferences.Manifest {
+    const manifests = try arena.alloc(eggy.preferences.Manifest, sets.len);
+    for (manifests, sets) |*manifest, set| {
+        const fields = try arena.alloc(eggy.preferences.Field, set.field_count);
+        for (fields, set.fields[0..set.field_count]) |*field, source| {
+            const options = try arena.alloc([:0]const u8, source.option_count);
+            for (options, source.options[0..source.option_count]) |*option, name| option.* = try arena.dupeZ(u8, std.mem.span(name));
+            field.* = .{
+                .name = try arena.dupeZ(u8, std.mem.span(source.name)),
+                .kind = std.enums.fromInt(eggy.preferences.Kind, source.kind) orelse return error.GameLibraryVersionMismatch,
+                .default = try arena.dupeZ(u8, std.mem.span(source.default)),
+                .options = options,
+                .description = try arena.dupeZ(u8, std.mem.span(source.description)),
+            };
+        }
+        manifest.* = .{ .key = try arena.dupeZ(u8, std.mem.span(set.key)), .fields = fields };
+    }
+    return manifests;
+}
 
 /// What the library may call in the editor.
 const host = api.Host{ .log = logFromGame };

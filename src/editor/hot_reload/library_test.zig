@@ -12,6 +12,8 @@ test "the game's library loads, runs, swaps for a fresh copy, and unloads cleanl
     var app: eggy.App = undefined;
     app.world = .init(gpa);
     defer app.world.deinit();
+    app.preference_values = .init(gpa);
+    defer app.preference_values.deinit();
 
     var game = try HotGame.load(gpa, path, &app);
     try app.startWorld();

@@ -15,6 +15,7 @@ pub const SceneTexture = @import("scene_texture.zig").SceneTexture;
 pub const entry = @import("entry.zig");
 pub const plugins = @import("plugins.zig");
 pub const project = @import("project.zig");
+pub const preferences = @import("preferences.zig");
 pub const ui = @import("weeoui");
 pub const Event = sdl_adapter.sdl.events.Event;
 
@@ -23,5 +24,6 @@ test {
     _ = @import("scene_texture.zig");
     _ = @import("plugins.zig");
     _ = @import("project.zig");
+    _ = @import("preferences.zig");
     _ = @import("weeoui");
 }

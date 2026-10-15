@@ -37,6 +37,7 @@ pub const Plugin = struct {
 | `update` | Once per frame, before the frame is drawn. |
 | `editorUi` | Each frame in the editor, to add to the Inspector panel. |
 | `editor_panels`, `editorPanelUi` | In the editor, to add dock panels of your own. See [Editor panels](#editor-panels). |
+| `Preferences` | Settings people change in the editor's Preferences window. See [Preferences](#preferences). |
 
 The editor-only hooks never run in the runtime, so the runtime pays nothing for them.
 
@@ -115,6 +116,48 @@ Each panel is a page of [Weeoui](https://eggyengine.github.io/weeoui/) UI that y
 New panels open as tabs beside the Inspector. The editor's **Window** menu lists every panel, yours included, so a closed panel can be brought back.
 
 The title appears on the panel's tab, in the Window menu, and on its window when popped out.
+
+## Preferences
+
+A plugin declares its preferences as a struct of defaults named `Preferences`: its manifest. The editor's **Edit > Preferences** window gives the plugin a tab of its own, with a control for each field, and your code reads the values with `app.preferences`:
+
+```zig
+pub const Plugin = struct {
+    pub const Preferences = struct {
+        volume: f32 = 0.8,
+        show_gizmos: bool = true,
+        difficulty: enum { easy, normal, hard } = .normal,
+
+        // Optional: a line under each field in the Preferences window.
+        pub const descriptions = .{ .volume = "How loud the game is, 0 to 1." };
+    };
+
+    pub fn update(self: *Plugin, app: *eggy.App) !void {
+        const prefs = app.preferences(Preferences);
+        if (prefs.show_gizmos) { ... }
+    }
+};
+```
+
+Fields are bools, integers, floats or enums, and each needs a default. Reading them is cheap, so reading them in `update` follows changes as they are made in the window. Values read in `init` apply the next time the game starts.
+
+Each preference has three layers, each overriding the one below:
+
+1. the default in `Preferences`;
+2. the value set for **All projects**, kept in Eggy's data folder;
+3. the value set for **This project**, kept in the project's `.eggy` folder.
+
+The project's values are also baked into the game when its runtime is built, so the game you ship uses them. Values set for all projects apply in the editor only.
+
+A project's `.eggy` folder holds:
+
+| File | What it is |
+| --- | --- |
+| `preferences.zon` | The editor's own preferences for this project. |
+| `plugins/<plugin>.zon` | Each plugin's preferences, by the plugin's module name (`game.zon` for the game's). |
+| `plugins.zon` | Written by the editor: the plugins the project has, and the preferences each declares. Don't edit it. |
+
+The files are plain ZON, such as `.{ .volume = 0.5 }`, so they can be edited by hand and committed with the project. A value that doesn't fit its field's type is ignored, and the default applies.
 
 ## Changing code in the editor
 

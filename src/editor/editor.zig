@@ -27,6 +27,7 @@ const panels = @import("panels.zig");
 pub const logFn = @import("console_log.zig").logFn;
 const ProjectFlow = @import("projects/flow.zig").ProjectFlow;
 const HotGame = @import("hot_reload/hot_reload.zig").HotGame;
+const preferences = @import("preferences/preferences.zig");
 
 /// The editor for `project`, which declares `name` and `game_library` (the game library's
 /// `file_name`, beside the editor). The game and its plugins run as they do in the runtime,
@@ -40,6 +41,10 @@ pub fn Editor(comptime project: type) type {
         game: ?HotGame,
         /// When the game's library was built, to tell whether a rebuild changed it.
         game_modified: ?std.Io.Timestamp = null,
+        /// Where the user's and the project's preferences are (their values are in `app`).
+        preference_folders: preferences.Folders,
+        /// Edit > Preferences, while open.
+        preferences_window: ?*preferences.PreferencesWindow = null,
         /// The Inspector's UI (the game's and plugins' `editorUi`), and the font every page shares.
         ui: ui.Context,
         /// JetBrains Mono, in `ui`'s font's atlas, for terminal output. On the heap, as views keep it.
@@ -144,6 +149,12 @@ pub fn Editor(comptime project: type) type {
                 workspace.custom_frame = false;
             };
 
+            // Preferences, before the game starts so its plugins see them.
+            const preference_folders = try preferences.Folders.init(gpa, if (opened_project) |opened| opened.dir else null);
+            errdefer preference_folders.deinit(gpa);
+            preferences.load(gpa, &app.preference_values, preference_folders);
+            console.levels[@intFromEnum(std.log.Level.debug)] = preferences.editor(&app.preference_values).show_debug_logs;
+
             // The game, from its library beside the editor.
             const library_path = try libraryPath(gpa);
             defer gpa.free(library_path);
@@ -152,10 +163,13 @@ pub fn Editor(comptime project: type) type {
                 break :blk null;
             };
             errdefer if (game) |*loaded| loaded.deinit(&app);
-            if (game) |loaded| workspace.setPluginPanels(loaded.panels);
+            if (game) |loaded| {
+                workspace.setPluginPanels(loaded.panels);
+                preferences.writeRegistry(gpa, preference_folders, loaded.preference_manifests) catch |err| std.log.warn("cannot update .eggy/plugins.zon: {t}", .{err});
+            }
             app.startWorld() catch if (game) |*loaded| loaded.pause(&app);
             const upgrades = Upgrades.init(gpa, if (opened_project) |opened| opened.dir else null, @import("build_options").source_dir);
-            var self = Self{ .gpa = gpa, .game = game, .game_modified = modifiedAt(library_path), .app = app, .ui = context, .mono = mono, .console_ui = console_ui, .console = console, .plugin_pages = plugin_pages, .workspace = workspace, .frame = frame, .scene = scene, .overlay = overlay, .project = opened_project, .editor_modified = if (opened_project) |opened| editorModified(gpa, opened) else null, .upgrades = upgrades };
+            var self = Self{ .gpa = gpa, .game = game, .game_modified = modifiedAt(library_path), .app = app, .ui = context, .mono = mono, .console_ui = console_ui, .console = console, .plugin_pages = plugin_pages, .workspace = workspace, .frame = frame, .scene = scene, .overlay = overlay, .project = opened_project, .editor_modified = if (opened_project) |opened| editorModified(gpa, opened) else null, .upgrades = upgrades, .preference_folders = preference_folders };
             self.built_sources = self.sourcesNow();
             return self;
         }
@@ -165,6 +179,8 @@ pub fn Editor(comptime project: type) type {
             if (self.project_flow) |flow| flow.close(&self.app.graphics);
             if (self.build_window) |window| window.close(&self.app.graphics);
             if (self.devtools_window) |window| window.close(&self.app.graphics);
+            if (self.preferences_window) |window| window.close(&self.app.graphics);
+            self.preference_folders.deinit(self.gpa);
             if (self.rebuild) |job| job.deinit();
             if (self.picked_project.swap(null, .acq_rel)) |path| std.heap.c_allocator.free(std.mem.span(path));
             if (self.project) |opened| freeProject(self.gpa, opened);
@@ -219,6 +235,11 @@ pub fn Editor(comptime project: type) type {
             defer frame_arena.deinit();
             self.workspace.build_state = try self.rebuildState(frame_arena.allocator());
             self.workspace.time_ms = sdl3.timer.getMillisecondsSinceInit();
+            self.ui.theme = switch (preferences.editor(&self.app.preference_values).theme) {
+                .system => weeoui_sdl3.systemTheme(),
+                .light => .{},
+                .dark => ui.Theme.dark,
+            };
             self.workspace.engine_label = self.upgrades.label;
             self.workspace.can_upgrade = self.upgrades.can_upgrade;
             self.workspace.can_link = self.upgrades.can_link;
@@ -274,6 +295,8 @@ pub fn Editor(comptime project: type) type {
             }
             // File > New/Open Project's window, if open.
             if (self.project_flow) |flow| if (try self.updateProjectFlow(flow) == .success) return .success;
+            // Edit > Preferences, if open.
+            if (self.preferences_window) |window| try window.update(&self.app.graphics, &self.ui, try self.preferenceSections(frame_arena.allocator()), &self.app.preference_values, self.preference_folders);
             // The Build progress window, if open.
             if (self.build_window) |window| if (try self.updateBuildWindow(window, frame_arena.allocator())) return .success;
 
@@ -309,6 +332,19 @@ pub fn Editor(comptime project: type) type {
             var buffer: [64]u8 = undefined;
             const placement = window_placement.Placement.of(self.app.window.window) orelse return job.launchEditor(&.{});
             try job.launchEditor(&.{ window_placement.flag, try placement.format(&buffer) });
+        }
+
+        /// The Preferences window's tabs: the editor's, then each plugin's that has any, the game's
+        /// titled after the project. In `arena`.
+        fn preferenceSections(self: *const Self, arena: std.mem.Allocator) ![]const preferences.Section {
+            var sections: std.ArrayList(preferences.Section) = .empty;
+            try sections.append(arena, .{ .title = "Editor", .manifest = preferences.editor_manifest });
+            if (self.game) |game| for (game.preference_manifests) |manifest| {
+                const is_game = std.mem.eql(u8, manifest.key, "game");
+                const section_title = if (is_game) (if (self.project) |opened| opened.title else "Game") else manifest.key;
+                try sections.append(arena, .{ .title = section_title, .manifest = manifest });
+            };
+            return sections.items;
         }
 
         /// Help > DevTools (F12): open the DevTools window, or close it.
@@ -391,6 +427,15 @@ pub fn Editor(comptime project: type) type {
                 if (window.handle(curr_event)) return .run;
                 if (weeoui_sdl3.translate(curr_event) != null) return .run;
             }
+            // Edit > Preferences' window takes its own events; closing it, or Escape, closes it.
+            if (self.preferences_window) |window| {
+                if (window.closeRequested(curr_event)) {
+                    window.close(&self.app.graphics);
+                    self.preferences_window = null;
+                    return .run;
+                }
+                if (window.handle(curr_event)) return .run;
+            }
             // Help > DevTools' window takes its own events; while inspecting, the main window's
             // pointer moves and presses go to it too.
             if (self.devtools_window) |window| {
@@ -448,10 +493,15 @@ pub fn Editor(comptime project: type) type {
                 },
                 .upgrade_editor => if (self.upgrades.can_upgrade) try self.upgradeEditor() else self.upgrades.logUnavailable(.upgrade),
                 .toggle_devtools => self.toggleDevtools(),
+                .preferences => if (self.preferences_window == null) {
+                    self.preferences_window = preferences.PreferencesWindow.open(self.gpa, &self.app.graphics, self.ui.font) catch |err| blk: {
+                        std.log.err("cannot open Preferences: {t}", .{err});
+                        break :blk null;
+                    };
+                },
                 .link_developer => if (self.upgrades.can_link) try self.linkDeveloper() else self.upgrades.logUnavailable(.link),
                 else => {},
             }
-            if (curr_event == .system_theme_changed) self.ui.theme = weeoui_sdl3.systemTheme();
             if (curr_event == .window_focus_lost and self.focus_lost_ms == null) self.focus_lost_ms = sdl3.timer.getMillisecondsSinceInit();
             if (curr_event == .window_focus_gained and self.cameBack()) {
                 // Another editor may have unpacked a newer Eggy meanwhile.
@@ -536,6 +586,7 @@ pub fn Editor(comptime project: type) type {
         fn rebuildOnFocus(self: *Self) !void {
             const opened = self.project orelse return;
             if (self.project_flow != null or self.build_window != null or self.buildRunning()) return;
+            if (!preferences.editor(&self.app.preference_values).rebuild_on_focus) return;
             // Nothing to build if no source changed since the last build.
             if (self.sourcesNow().eql(self.built_sources)) return;
             self.cancelBuild(); // the last one's result
@@ -702,6 +753,7 @@ pub fn Editor(comptime project: type) type {
             }
             const game = &self.game.?;
             self.workspace.setPluginPanels(game.panels);
+            preferences.writeRegistry(self.gpa, self.preference_folders, game.preference_manifests) catch |err| std.log.warn("cannot update .eggy/plugins.zon: {t}", .{err});
             self.app.startWorld() catch game.pause(&self.app);
         }
 
@@ -851,6 +903,8 @@ test {
     _ = @import("hit_test.zig");
     _ = @import("window_placement.zig");
     _ = @import("hot_reload/hot_reload.zig");
+    _ = @import("preferences/preferences.zig");
+    _ = @import("preferences/window.zig");
     _ = @import("projects/source_stamp.zig");
     _ = @import("terminal_view.zig");
     _ = @import("console_log.zig");
