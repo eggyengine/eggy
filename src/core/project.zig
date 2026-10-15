@@ -1,8 +1,19 @@
-//! A project's `eggy.zon`: its settings for Eggy, in the project's root beside `build.zig.zon`.
-//! The editor reads it when it opens the project.
+//! A project as Eggy sees it: its `eggy.zon` (its settings for Eggy, in the project's root beside
+//! `build.zig.zon`), which the editor reads when it opens the project, and the folders every
+//! project has, which the editor makes if they are missing.
 const std = @import("std");
 
 pub const file_name = "eggy.zon";
+
+/// Where a project keeps the files its game uses, relative to the project.
+pub const resources_dir = "resources";
+/// Where new scenes go, inside `resources_dir`.
+pub const scenes_dir = resources_dir ++ "/scene";
+
+/// Make the folders every project has (`resources_dir`, `scenes_dir`) in `dir`, if missing.
+pub fn makeFolders(io: std.Io, dir: std.Io.Dir) !void {
+    try dir.createDirPath(io, scenes_dir);
+}
 
 pub const Config = struct {
     /// The package name, as `build.zig`'s `addGame` uses it: the project's executables are
@@ -22,6 +33,14 @@ pub fn parse(arena: std.mem.Allocator, source: [:0]const u8) !Config {
 pub fn load(arena: std.mem.Allocator, io: std.Io, dir: std.Io.Dir) !Config {
     const source = try dir.readFileAllocOptions(io, file_name, arena, .limited(1 << 20), .of(u8), 0);
     return parse(arena, source);
+}
+
+test "a project gets its resources and scene folders" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try makeFolders(std.testing.io, tmp.dir);
+    try makeFolders(std.testing.io, tmp.dir); // already there: fine
+    try tmp.dir.access(std.testing.io, scenes_dir, .{});
 }
 
 test "eggy.zon gives the project's title and version" {

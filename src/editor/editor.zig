@@ -144,6 +144,16 @@ pub fn Editor(comptime project: type) type {
             errdefer app.deinit();
             const opened_project = try openProject(gpa, app.window.window, args);
             errdefer if (opened_project) |opened| freeProject(gpa, opened);
+            // Every project has its resources and scene folders.
+            if (opened_project) |opened| {
+                var threaded: std.Io.Threaded = .init_single_threaded;
+                const io = threaded.io();
+                if (std.Io.Dir.cwd().openDir(io, opened.dir, .{})) |dir| {
+                    var project_dir = dir;
+                    defer project_dir.close(io);
+                    eggy.project.makeFolders(io, project_dir) catch |err| std.log.warn("cannot make {s}: {t}", .{ eggy.project.scenes_dir, err });
+                } else |_| {}
+            }
             // Where the editor that reloaded into this one was (see `launchRebuilt`), else maximized.
             if (window_placement.fromArgs(args)) |placement| placement.apply(app.window.window) else app.window.window.maximize() catch |err| std.log.warn("cannot maximize the editor: {t}", .{err});
             icon.apply(app.window.window);

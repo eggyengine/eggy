@@ -394,7 +394,7 @@ pub const AssetsPanel = struct {
         for (self.shown) |item| if (self.isSelected(item.entry.path)) {
             return if (item.entry.kind == .folder) item.entry.path else listing.parentOf(item.entry.path);
         };
-        return "scenes";
+        return eggy.project.scenes_dir;
     }
 
     fn onMenu(self: *const AssetsPanel, context: *const ui.Context, at: ui.Vec2) bool {

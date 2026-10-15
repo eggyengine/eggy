@@ -215,7 +215,7 @@ In the editor the game doesn't run on its own: its `update` hooks, the world's s
 
 ### Scenes
 
-A scene is a file (`.scene.zon`, in `scenes/` by default) holding every entity: its name, parent, and each component's values. The editor reopens the scene that was open last; open another by double-clicking it in the **Assets** panel, which also starts new ones. **File > Save** writes the open scene. The editor puts the scene into the world before plugins start, so `init` can find its entities.
+A scene is a file (`.scene.zon`, in `resources/scene/` by default; every project has a `resources` folder for the files its game uses) holding every entity: its name, parent, and each component's values. The editor reopens the scene that was open last; open another by double-clicking it in the **Assets** panel, which also starts new ones. **File > Save** writes the open scene. The editor puts the scene into the world before plugins start, so `init` can find its entities.
 
 Changes to Eggy itself (say, with a project linked to an Eggy checkout) rebuild the whole editor instead. Its **Reload** button, beside the play button, opens the new one.
 

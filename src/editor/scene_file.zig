@@ -8,7 +8,7 @@ const log = std.log.scoped(.scene);
 /// Where the open scene is remembered, relative to the project.
 const memory_path = ".eggy" ++ std.fs.path.sep_str ++ "scene.zon";
 /// Where new scenes go, relative to the project.
-const scenes_dir = "scenes";
+const scenes_dir = eggy.project.scenes_dir;
 pub const extension = ".scene.zon";
 
 /// The scene open in the editor, if any: its path relative to the project. Owned.
@@ -70,7 +70,7 @@ pub const OpenScene = struct {
     }
 
     /// Write `world`, from its top-level entities `roots` in order, to the open scene; with none
-    /// open, to a new one in `scenes/`, which becomes the open one.
+    /// open, to a new one in `resources/scene/`, which becomes the open one.
     pub fn save(self: *OpenScene, world: *eggy.ecs.World, access: eggy.scene.Access, roots: ?[]const eggy.ecs.EntityId) !void {
         if (self.path == null) {
             const fresh = try self.freshPath();
@@ -135,7 +135,8 @@ pub const OpenScene = struct {
         self.saved_hash = null;
     }
 
-    /// `scenes/untitled.scene.zon`, or `untitled-2` and so on when that is taken. Caller-owned.
+    /// `untitled.scene.zon` in the scenes folder, or `untitled-2` and so on when that is taken.
+    /// Caller-owned.
     fn freshPath(self: *const OpenScene) ![]u8 {
         return self.freshPathIn(scenes_dir);
     }
@@ -234,7 +235,7 @@ test "a saved scene is remembered, and a new one gets a free name" {
     try std.testing.expect(!first.unsaved(&world, access));
     access.setName(&world, named, "Sol");
     try std.testing.expect(first.unsaved(&world, access));
-    try first.create("scenes", &world, access);
+    try first.create(eggy.project.scenes_dir, &world, access);
     try std.testing.expectEqualStrings("untitled-2.scene.zon", first.name().?);
 
     // A later editor reopens the last one, and opening the first brings its entity back.
@@ -242,6 +243,6 @@ test "a saved scene is remembered, and a new one gets a free name" {
     defer second.deinit();
     second.reopen(&world, access);
     try std.testing.expectEqualStrings("untitled-2.scene.zon", second.name().?);
-    try second.open("scenes" ++ std.fs.path.sep_str ++ "untitled.scene.zon", &world, access);
+    try second.open(eggy.project.scenes_dir ++ "/untitled.scene.zon", &world, access);
     try std.testing.expectEqual(@as(usize, 1), world.entityCount());
 }
