@@ -6,7 +6,7 @@
 const std = @import("std");
 
 /// Bumped whenever these types change, so an editor refuses a library built for another.
-pub const version: u32 = 4;
+pub const version: u32 = 5;
 
 /// The library's one exported function: `fn () callconv(.c) *const Game`.
 pub const entry_symbol = "eggy_game";
@@ -76,6 +76,9 @@ pub const Game = extern struct {
     /// One frame: the plugins' `update`, then the world's Update stages. False when something
     /// failed this frame (logged, once until it changes); the game carries on regardless.
     update: *const fn (state: *anyopaque, app: *anyopaque) callconv(.c) bool,
+    /// A frame while the game isn't playing: the plugins' `editorUpdate`, not the world's
+    /// systems. False when it failed this frame (logged, once until it changes).
+    editor_update: *const fn (state: *anyopaque, app: *anyopaque) callconv(.c) bool,
     /// An `*const eggy.Event`; false when a hook failed (and logged why).
     event: *const fn (state: *anyopaque, app: *anyopaque, event: *const anyopaque) callconv(.c) bool,
     /// The Inspector's part: an `*eggy.ui.Context`.

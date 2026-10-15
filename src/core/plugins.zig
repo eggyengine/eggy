@@ -4,7 +4,8 @@
 //!     pub fn init(gpa: std.mem.Allocator, app: *eggy.App) !Self
 //!     pub fn deinit(self: *Self) void
 //!     pub fn event(self: *Self, app: *eggy.App, event: eggy.Event) !void
-//!     pub fn update(self: *Self, app: *eggy.App) !void
+//!     pub fn update(self: *Self, app: *eggy.App) !void  // in the editor, only while playing
+//!     pub fn editorUpdate(self: *Self, app: *eggy.App) !void  // in the editor while not playing
 //!     pub fn editorUi(self: *Self, ui: *eggy.ui.Context) void  // in the editor only
 //!
 //! A plugin can also add panels of its own to the editor's dock, each a page of UI it fills
@@ -110,6 +111,11 @@ pub fn Set(comptime types: anytype, comptime keys: []const [:0]const u8) type {
 
         pub fn update(self: *Self, app: *App) !void {
             inline for (list, 0..) |T, i| if (@hasDecl(T, "update")) try self.instances[i].update(app);
+        }
+
+        /// A frame in the editor while the game isn't playing: each plugin's `editorUpdate`.
+        pub fn editorUpdate(self: *Self, app: *App) !void {
+            inline for (list, 0..) |T, i| if (@hasDecl(T, "editorUpdate")) try self.instances[i].editorUpdate(app);
         }
 
         pub fn editorUi(self: *Self, context: *ui.Context) void {

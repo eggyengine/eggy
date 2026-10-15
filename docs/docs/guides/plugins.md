@@ -34,7 +34,8 @@ pub const Plugin = struct {
 | `init` | Once, at start-up. Without it, the plugin starts as `.{}`. |
 | `deinit` | Once, at shutdown. |
 | `event` | For every SDL event: input, window changes and so on. |
-| `update` | Once per frame, before the frame is drawn. |
+| `update` | Once per frame, before the frame is drawn. In the editor, only while playing. |
+| `editorUpdate` | Once per frame in the editor while not playing, for editor tools. |
 | `editorUi` | Each frame in the editor, to add to the Inspector panel. |
 | `editor_panels`, `editorPanelUi` | In the editor, to add dock panels of your own. See [Editor panels](#editor-panels). |
 | `Preferences` | Settings people change in the editor's Preferences window. See [Preferences](#preferences). |
@@ -185,13 +186,23 @@ The files are plain ZON, such as `.{ .volume = 0.5 }`, so they can be edited by 
 
 The editor runs your game and its plugins from a library built beside it. When you change their code and come back to the editor, it rebuilds them in the Build progress window and swaps the new library in, while the editor itself keeps running: your layout, panels and Console stay as they were.
 
-The game starts over on each swap. Every plugin's `deinit` runs, the world is emptied, and then every plugin's `init` runs again with the new code, so:
+The world's entities carry over a swap: the editor keeps them as a scene and puts them back. Everything else starts over. Every plugin's `deinit` runs, and then every plugin's `init` runs again with the new code, among the entities, so:
 
-- state kept in plugin fields or in the world starts fresh;
+- state kept in plugin fields starts fresh, so find the entities you need in `init` rather than keeping them from before;
 - systems are registered again by the new `init`;
 - panels follow `editor_panels`: new ones open beside the Inspector, removed ones close.
 
-When a hook or one of the world's systems returns an error in the editor, the error goes to the Console and the game stops until its code is rebuilt; the editor keeps running. In the runtime, an error still ends the game.
+When a hook or one of the world's systems returns an error in the editor, the error goes to the Console once, and the game carries on; only a failing `init` stops it until its code is rebuilt. In the runtime, an error still ends the game.
+
+Entities can be deleted in the editor at any time, so check `app.world.isAlive(entity)` before using one you kept.
+
+### Playing
+
+In the editor the game doesn't run on its own: its `update` hooks, the world's systems and input events only run while it plays (the play button on the title bar). While it doesn't, plugins' `editorUpdate` hooks run instead, for tools that work on the scene. Pressing play keeps the scene as it is; stopping starts the game over on it, so whatever happened while playing, the scene's values go back.
+
+### Scenes
+
+A scene is a file (`.scene.zon`, in `scenes/` by default) holding every entity: its name, parent, and each component's values. The editor reopens the scene that was open last; open another by double-clicking it in the **Assets** panel, which also starts new ones. **File > Save** writes the open scene. The editor puts the scene into the world before plugins start, so `init` can find its entities.
 
 Changes to Eggy itself (say, with a project linked to an Eggy checkout) rebuild the whole editor instead. Its **Reload** button, beside the play button, opens the new one.
 

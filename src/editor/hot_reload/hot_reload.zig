@@ -69,11 +69,31 @@ pub const HotGame = struct {
         log.info("swapped in the rebuilt game", .{});
     }
 
-    /// Run a frame of the game and its world, if it is running. Failures are logged by the
-    /// library and don't stop it.
+    /// Run a frame of the game and its world (playing), if it is running. Failures are logged
+    /// by the library and don't stop it.
     pub fn update(self: *HotGame, app: *eggy.App) void {
         const state = self.state orelse return;
         _ = self.game.update(state, app);
+    }
+
+    /// Run a frame of the plugins' editor tools (not playing), if the game is running.
+    pub fn editorUpdate(self: *HotGame, app: *eggy.App) void {
+        const state = self.state orelse return;
+        _ = self.game.editor_update(state, app);
+    }
+
+    /// Start the game over on `scene` without reloading it: stop its plugins, empty the world,
+    /// put `scene` in, and start them again (with the world's Init stages). Stopping play does
+    /// this, so nothing that happened while playing stays.
+    pub fn restart(self: *HotGame, app: *eggy.App, scene: *const eggy.scene.Scene) void {
+        if (self.library == null) return;
+        if (self.state) |state| self.game.stop(state);
+        self.state = null;
+        app.resetWorld();
+        if (scene.instantiate(self.gpa, &app.world, self.sceneAccess(), null)) |made| {
+            self.gpa.free(made.entities);
+        } else |err| log.err("cannot put the scene back: {t}", .{err});
+        self.start(app);
     }
 
     pub fn event(self: *HotGame, app: *eggy.App, curr_event: eggy.Event) void {

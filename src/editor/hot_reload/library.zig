@@ -65,6 +65,7 @@ const game = api.Game{
     .start = start,
     .stop = stop,
     .update = update,
+    .editor_update = editorUpdate,
     .event = event,
     .editor_ui = editorUi,
     .editor_panel_ui = editorPanelUi,
@@ -109,7 +110,7 @@ fn start(editor: *const api.Host, gpa_ptr: *const anyopaque, app_ptr: *anyopaque
 
 /// What can fail each frame, and the error each last failed with: one failing every frame is
 /// logged once, and again only when it fails differently or after it recovers.
-const Hook = enum { update, event, world_start, world_update };
+const Hook = enum { update, editor_update, event, world_start, world_update };
 var failures: [std.meta.fields(Hook).len]?anyerror = @splat(null);
 
 fn report(hook: Hook, err: anyerror) void {
@@ -118,6 +119,7 @@ fn report(hook: Hook, err: anyerror) void {
     last.* = err;
     const what = switch (hook) {
         .update => "an update hook",
+        .editor_update => "an editorUpdate hook",
         .event => "an event hook",
         .world_start => "a system in the world's Init stages",
         .world_update => "a system in the world's Update stages",
@@ -148,6 +150,15 @@ fn update(state_ptr: *anyopaque, app_ptr: *anyopaque) callconv(.c) bool {
         ok = false;
     }
     return ok;
+}
+
+fn editorUpdate(state_ptr: *anyopaque, app_ptr: *anyopaque) callconv(.c) bool {
+    stateOf(state_ptr).plugins.editorUpdate(appOf(app_ptr)) catch |err| {
+        report(.editor_update, err);
+        return false;
+    };
+    recovered(.editor_update);
+    return true;
 }
 
 fn event(state_ptr: *anyopaque, app_ptr: *anyopaque, event_ptr: *const anyopaque) callconv(.c) bool {

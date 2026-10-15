@@ -31,6 +31,7 @@ const preferences = @import("preferences/preferences.zig");
 const entities = @import("entities/entities.zig");
 const scene_file = @import("scene_file.zig");
 const layout_file = @import("layout_file.zig");
+const PlayMode = @import("play_mode.zig").PlayMode;
 const assets = @import("assets/assets.zig");
 const AssetIcons = @import("assets/icons.zig").Icons;
 
@@ -46,6 +47,8 @@ pub fn Editor(comptime project: type) type {
         game: ?HotGame,
         /// When the game's library was built, to tell whether a rebuild changed it.
         game_modified: ?std.Io.Timestamp = null,
+        /// Whether the game is playing, and the scene to go back to when it stops.
+        play_mode: PlayMode = .{},
         /// The scene open in the project, if any (with no project, none).
         open_scene: ?scene_file.OpenScene = null,
         /// Where the user's and the project's preferences are (their values are in `app`).
@@ -220,6 +223,7 @@ pub fn Editor(comptime project: type) type {
             layout_file.save(self.gpa, self.preference_folders.global, &self.workspace.dock);
             self.preference_folders.deinit(self.gpa);
             if (self.open_scene) |*scene| scene.deinit();
+            self.play_mode.deinit();
             if (self.rebuild) |job| job.deinit();
             if (self.picked_project.swap(null, .acq_rel)) |path| std.heap.c_allocator.free(std.mem.span(path));
             if (self.project) |opened| freeProject(self.gpa, opened);
@@ -261,7 +265,10 @@ pub fn Editor(comptime project: type) type {
             self.applyPendingMaximize(false);
             const viewport = try self.uiViewport() orelse return .run; // minimized
             // The game stays paused while the Build progress window is up.
-            if (self.build_window == null) if (self.game) |*game| game.update(&self.app);
+            // The game runs only while playing; otherwise only its editor tools do.
+            if (self.build_window == null) if (self.game) |*game| {
+                if (self.play_mode.playing()) game.update(&self.app) else game.editorUpdate(&self.app);
+            };
             try self.syncPopOuts();
 
             // Lay out every window, then tell the OS where the main title bar is.
@@ -381,6 +388,29 @@ pub fn Editor(comptime project: type) type {
             try job.launchEditor(&.{ window_placement.flag, try placement.format(&buffer) });
         }
 
+        /// Play: keep the scene, then run the game.
+        fn startPlaying(self: *Self) void {
+            const game = if (self.game) |*loaded| loaded else {
+                self.workspace.playing = false;
+                return std.log.err("play: the game's library isn't loaded", .{});
+            };
+            self.play_mode.play(self.gpa, &self.app, game) catch |err| {
+                self.workspace.playing = false;
+                return std.log.err("cannot start playing: {t}", .{err});
+            };
+            self.workspace.playing = true;
+        }
+
+        /// Stop: the game starts over on the scene kept by Play. Entities are made anew, so the
+        /// selection goes.
+        fn stopPlaying(self: *Self) void {
+            self.workspace.playing = false;
+            if (!self.play_mode.playing()) return;
+            const game = if (self.game) |*loaded| loaded else return;
+            self.play_mode.stop(&self.app, game);
+            self.entity_editor.selected = null;
+        }
+
         /// The open scene's path, relative to the project; null with none.
         fn openScenePath(self: *const Self) ?[]const u8 {
             return if (self.open_scene) |*scene| scene.path else null;
@@ -391,6 +421,7 @@ pub fn Editor(comptime project: type) type {
             const opened = self.project orelse return;
             switch (action) {
                 .open_scene, .create_scene => {
+                    self.stopPlaying();
                     const scene = if (self.open_scene) |*open| open else return;
                     const game = if (self.game) |*loaded| loaded else return std.log.err("the game's library isn't loaded, so scenes can't be opened", .{});
                     const result = switch (action) {
@@ -411,6 +442,8 @@ pub fn Editor(comptime project: type) type {
 
         /// File > Save (Ctrl+S): write the world to the open scene, or a new one.
         fn saveScene(self: *Self) void {
+            // What happened while playing isn't the scene: stop first.
+            if (self.play_mode.playing()) return std.log.info("save: stop playing first; Stop puts the scene back as it was", .{});
             const scene = if (self.open_scene) |*open| open else return std.log.info("save: open a project first; scenes are kept in it", .{});
             const game = if (self.game) |*loaded| loaded else return std.log.err("save: the game's library isn't loaded, so its components can't be saved", .{});
             scene.save(&self.app.world, game.sceneAccess()) catch |err| std.log.err("cannot save the scene: {t}", .{err});
@@ -566,8 +599,7 @@ pub fn Editor(comptime project: type) type {
             switch (outcome) {
                 .quit => return .success,
                 .window => |button| if (weeoui_sdl3.windowAction(self.app.window.window, button)) return .success,
-                // ponytail: a stub until the editor can run the game in play mode.
-                .play => |playing| std.log.info("{s}: not implemented yet", .{if (playing) "play" else "stop"}),
+                .play => |playing| if (playing) self.startPlaying() else self.stopPlaying(),
                 .new_project => if (self.project_flow == null) {
                     self.project_flow = try ProjectFlow.create(self.gpa, &self.app.graphics, self.ui.font, self.mono);
                 },
@@ -604,7 +636,8 @@ pub fn Editor(comptime project: type) type {
 
             // The pages get the rest, and every pointer move so their hover state stays current.
             if (outcome == .ignored or curr_event == .mouse_motion) self.routeToPages(slot, curr_event);
-            if (self.game) |*game| game.event(&self.app, curr_event);
+            // Input reaches the game only while it plays.
+            if (self.play_mode.playing()) if (self.game) |*game| game.event(&self.app, curr_event);
             return self.app.event(curr_event);
         }
 
@@ -836,8 +869,9 @@ pub fn Editor(comptime project: type) type {
             const modified = modifiedAt(library_path);
             if (std.meta.eql(modified, self.game_modified)) return;
             self.game_modified = modified;
-            // The world as it is, to put back into the rebuilt game's: entities and their values
-            // carry over the swap.
+            // The world as it is (not as a play left it), to put back into the rebuilt game's:
+            // entities and their values carry over the swap.
+            self.stopPlaying();
             var kept: ?eggy.scene.Scene = null;
             defer if (kept) |*scene| scene.deinit();
             if (self.game) |*game| {
@@ -1059,6 +1093,7 @@ test {
     _ = @import("hit_test.zig");
     _ = @import("scene_file.zig");
     _ = @import("layout_file.zig");
+    _ = @import("play_mode.zig");
     _ = @import("assets/assets.zig");
     _ = @import("assets/listing.zig");
     _ = @import("assets/icons.zig");
