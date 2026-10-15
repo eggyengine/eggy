@@ -70,7 +70,7 @@ pub fn dragChip(context: *ui.Context, text: []const u8) void {
     const size: f32 = 11;
     const label = fitText(b.allocator, context.font, text, size, @max(40, context.viewport.w * 0.5));
     const width = context.font.measure(label, size) + 12;
-    const chip = b.node(0, .{ .padding = .{ .left = 6, .right = 6, .top = 2, .bottom = 2 }, .z_index = 250 }, .{ .surface = .tooltip }, &.{
+    const chip = b.node(0, .{ .width = width, .padding = .{ .left = 6, .right = 6, .top = 2, .bottom = 2 }, .z_index = 250 }, .{ .surface = .tooltip }, &.{
         b.node(0, .{}, .{ .text = .{ .value = label, .size = size } }, &.{}) catch return,
     }) catch return;
     const viewport = context.viewport;
