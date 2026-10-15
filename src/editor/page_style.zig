@@ -53,3 +53,18 @@ pub fn fitText(arena: std.mem.Allocator, font: *const ui.Font, text: []const u8,
     }
     return "";
 }
+
+/// A small chip naming what is being dragged, just below and right of the pointer (kept inside
+/// the page), so it doesn't cover what is under the pointer.
+pub fn dragChip(context: *ui.Context, text: []const u8) void {
+    const b = context.builder();
+    const size: f32 = 11;
+    const label = fitText(b.allocator, context.font, text, size, @max(40, context.viewport.w * 0.5));
+    const width = context.font.measure(label, size) + 12;
+    const chip = b.node(0, .{ .padding = .{ .left = 6, .right = 6, .top = 2, .bottom = 2 }, .z_index = 250 }, .{ .surface = .tooltip }, &.{
+        b.node(0, .{}, .{ .text = .{ .value = label, .size = size } }, &.{}) catch return,
+    }) catch return;
+    const viewport = context.viewport;
+    chip.overlay = .{ .point = .init(@max(viewport.x, @min(context.pointer.x + 16, viewport.x + viewport.w - width)), @min(context.pointer.y + 18, viewport.y + viewport.h - 20)) };
+    context.element(chip);
+}

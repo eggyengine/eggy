@@ -111,7 +111,20 @@ A component is a struct. The Inspector edits bools with a switch, enums with a d
 
 The values shown are read from the world every frame, so fields your systems change update as they run.
 
-The Hierarchy's **Add entity** spawns an empty entity (under the selected one, if any), and **Delete** despawns the selected entity and its children. Until scenes can be saved, entities added in the editor go when the game's code is rebuilt, as the world starts over.
+The Hierarchy's **Add** spawns an empty entity, and **Delete** despawns the selected entity and its children. Drag an entity onto another to put it inside, or onto the top or bottom edge of one to put it before or after; entities keep the order you give them, and scenes save it.
+
+### References
+
+A field can point at another entity or at a file of the project:
+
+```zig
+pub const Orbit = struct {
+    around: eggy.EntityRef(Body) = .{}, // an entity that has a Body
+    sound: eggy.AssetRef(.audio) = .{}, // an audio file
+};
+```
+
+In the Inspector these fields are slots: drag an entity from the Hierarchy (or a file from Assets) onto one to set it, and the x clears it. While you drag, the slots that would take what you hold light up; an `EntityRef(T)` takes only entities with component `T` (`EntityRef(void)` takes any), and an `AssetRef` only files of its kind (`.any`, `.scene`, `.image`, `.audio`, `.text` or `.code`). In code, `orbit.around.entity` is the entity (or null), and `orbit.sound.path()` the file's path in the project. A scene saves a reference to one of its own entities by its place, so it points at the right entity when loaded again.
 
 ## Editor panels
 

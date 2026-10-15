@@ -5,7 +5,7 @@
 //! Dragging a row moves the entity: dropped on the top or bottom quarter of another row it goes
 //! before or after that row, as its sibling (a line shows where); on the middle it becomes that
 //! row's child; in the space below the tree it moves to the end of the top level. While dragging,
-//! the target lights up and a label beside the pointer says what letting go will do; anywhere else (or onto its own
+//! the target lights up and a chip with the entity's name follows the pointer; anywhere else (or onto its own
 //! children) letting go does nothing, and Escape cancels. A right-click opens a menu (rename, add
 //! a child, duplicate, move to the top level, delete); a double-click or Ctrl+R renames, Delete
 //! deletes.
@@ -123,15 +123,13 @@ pub const Hierarchy = struct {
         context.end();
         page_style.restyle(context, .{ .gap = 0 });
 
-        // While dragging: the space below the tree is the top level, and a label beside the
-        // pointer says what letting go will do.
+        // While dragging: the space below the tree is the top level.
         if (self.drag) |drag| if (drag.moving) {
             const over_top = drag.target == .place and drag.target.place == .top_level;
             const zone = b.node(top_level_id, .{ .height = 32, .padding = .{ .left = 10, .right = 10 }, .align_items = .center, .direction = .row }, .{ .surface = if (over_top) .card else .track }, &.{
                 b.node(0, .{ .grow = 1 }, .{ .text = .{ .value = "Drop here to move to the top level", .size = 11, .tone = if (over_top) .foreground else .muted, .wrap = true } }, &.{}) catch return action,
             }) catch return action;
             context.element(zone);
-            self.ghostElement(context, drag.target, drag.entity);
         };
 
         if (self.menuElement(context)) |menu_action| action = menu_action;
@@ -276,37 +274,14 @@ pub const Hierarchy = struct {
         return null;
     }
 
-    /// The label that follows the pointer while dragging: what letting go will do.
-    fn ghostElement(self: *const Hierarchy, context: *ui.Context, target: Target, dragged: ecs.EntityId) void {
-        const arena = context.builder().allocator;
-        const name = self.nameOf(dragged);
-        const shown = if (name.len > 0) name else "the entity";
-        const text = switch (target) {
-            .place => |place| switch (place) {
-                inline .into, .before, .after => |entity, how| std.fmt.allocPrint(arena, "Move {s} {s} {s}", .{ shown, switch (how) {
-                    .into => "into",
-                    .before => "before",
-                    .after => "after",
-                    else => unreachable,
-                }, blk: {
-                    const other = self.nameOf(entity);
-                    break :blk if (other.len > 0) other else "that entity";
-                } }) catch return,
-                .top_level => std.fmt.allocPrint(arena, "Move {s} to the end of the top level", .{shown}) catch return,
-            },
-            .blocked => "Can't move it into itself or its children",
-            .none => std.fmt.allocPrint(arena, "Moving {s}: drop it on a row, or below the tree", .{shown}) catch return,
-        };
-        const max_width = @max(80, context.viewport.w * 0.6);
-        const label = page_style.fitText(arena, context.font, text, 12, max_width - 20);
-        const b = context.builder();
-        const ghost = b.node(0, .{ .padding = .{ .left = 10, .right = 10, .top = 5, .bottom = 5 }, .z_index = 250 }, .{ .surface = .tooltip }, &.{
-            b.node(0, .{}, .{ .text = .{ .value = label, .size = 12 } }, &.{}) catch return,
-        }) catch return;
-        // Beside the pointer, kept inside the page.
-        const width = context.font.measure(label, 12) + 20;
-        ghost.overlay = .{ .point = .init(@min(context.pointer.x + 14, context.viewport.x + context.viewport.w - width), context.pointer.y + 14) };
-        context.element(ghost);
+    /// The chip that follows the pointer while dragging: the entity's name, or why letting go
+    /// here won't move it. Null while nothing is dragged. In `arena`.
+    pub fn dragLabel(self: *const Hierarchy, arena: std.mem.Allocator) ?[]const u8 {
+        const drag = self.drag orelse return null;
+        if (!drag.moving) return null;
+        if (drag.target == .blocked) return "Can't go inside itself";
+        const name = self.nameOf(drag.entity);
+        return if (name.len > 0) name else std.fmt.allocPrint(arena, "Entity {d}", .{drag.entity.id}) catch "Entity";
     }
 
     /// The right-click menu, if open, and what was picked from it.

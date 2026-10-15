@@ -332,6 +332,8 @@ fn copyComponentTypes(arena: std.mem.Allocator, types: []const api.ComponentType
                 .kind = std.enums.fromInt(eggy.components.Kind, field_source.kind) orelse return error.GameLibraryVersionMismatch,
                 .options = options,
                 .editable = field_source.editable,
+                .requires = try arena.dupeZ(u8, std.mem.span(field_source.requires)),
+                .accepts = std.enums.fromInt(eggy.refs.AssetKind, field_source.accepts) orelse return error.GameLibraryVersionMismatch,
             };
         }
         info.* = .{ .name = try arena.dupeZ(u8, std.mem.span(source.name)), .owner = try arena.dupeZ(u8, std.mem.span(source.owner)), .fields = fields, .addable = source.addable };

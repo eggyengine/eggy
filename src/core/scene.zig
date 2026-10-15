@@ -1,7 +1,9 @@
 //! Scenes: the entities of a world (each one's name, parent, and every component's fields as
 //! ZON) as a value to save to a file, read back, and put into a world again. The editor saves a
 //! project's scene, loads it at start, and carries the world across code changes with one; the
-//! runtime starts from the project's, baked in.
+//! runtime starts from the project's, baked in. An entity reference (`eggy.EntityRef`) to an
+//! entity of the scene is saved as its place, `.{ .scene = 3 }`, and points at the entity made
+//! from it when the scene is put into a world.
 //!
 //!     .{ .entities = .{
 //!         .{ .name = "Sun", .parent = null, .components = .{
@@ -133,6 +135,8 @@ pub const Scene = struct {
         defer indices.deinit(gpa);
 
         // Depth first from each root, so every parent is listed before its children.
+        var captured: std.ArrayList(ecs.EntityId) = .empty;
+        defer captured.deinit(gpa);
         var pending: std.ArrayList(ecs.EntityId) = .empty;
         defer pending.deinit(gpa);
         if (roots) |chosen| {
@@ -149,6 +153,7 @@ pub const Scene = struct {
         while (pending.pop()) |entity| {
             if (!world.isAlive(entity) or indices.contains(entity.id)) continue;
             try indices.put(gpa, entity.id, entities.items.len);
+            try captured.append(gpa, entity);
             const parent = if (world.getParent(entity)) |up| indices.get(up.id) else null;
             try entities.append(arena, try captureEntity(arena, world, access, entity, parent));
             // Children in reverse, so they come out in order.
@@ -160,6 +165,19 @@ pub const Scene = struct {
             while (i > 0) : (i -= 1) try pending.append(gpa, children.items[i - 1]);
         }
         self.entities = entities.items;
+
+        // References to entities of the scene become their places in it.
+        for (self.entities) |entity| for (entity.components) |component| {
+            const index = findType(access.types(), component.type, component.owner) orelse continue;
+            for (@constCast(component.fields)) |*field| {
+                if (fieldKind(access.types()[index], field.name) != .entity) continue;
+                const target = (parseValue(?ecs.EntityId, field.value) orelse continue) orelse continue;
+                const place = for (captured.items, 0..) |kept, i| {
+                    if (kept.eql(target)) break i;
+                } else continue;
+                field.value = try std.fmt.allocPrint(arena, ".{{ .scene = {d} }}", .{place});
+            }
+        };
         return self;
     }
 
@@ -194,6 +212,10 @@ pub const Scene = struct {
         errdefer gpa.free(made);
         var skipped: usize = 0;
         const types = access.types();
+        // References to the scene's own entities, set once every entity exists.
+        const Deferred = struct { entity: ecs.EntityId, component: usize, field: usize, place: usize };
+        var deferred: std.ArrayList(Deferred) = .empty;
+        defer deferred.deinit(gpa);
         for (self.entities, made) |saved, *entity| {
             entity.* = try world.spawn(.{});
             if (saved.name.len > 0) access.setName(world, entity.*, saved.name);
@@ -215,6 +237,10 @@ pub const Scene = struct {
                         skipped += 1;
                         continue;
                     };
+                    if (types[index].fields[field_index].kind == .entity) if (parseValue(SceneRef, field.value)) |ref| {
+                        try deferred.append(gpa, .{ .entity = entity.*, .component = index, .field = field_index, .place = ref.scene });
+                        continue;
+                    };
                     var buffer: [4097]u8 = undefined;
                     const text = std.fmt.bufPrintZ(&buffer, "{s}", .{field.value}) catch {
                         skipped += 1;
@@ -227,7 +253,16 @@ pub const Scene = struct {
                 }
             }
         }
-        // Parents, now that every entity exists.
+        // References, and parents, now that every entity exists.
+        for (deferred.items) |ref| {
+            if (ref.place >= made.len) {
+                skipped += 1;
+                continue;
+            }
+            var buffer: [64]u8 = undefined;
+            const text = std.fmt.bufPrintZ(&buffer, ".{{ .id = {d}, .generation = {d} }}", .{ made[ref.place].id, made[ref.place].generation }) catch unreachable;
+            if (!access.writeField(world, ref.entity, ref.component, ref.field, text)) skipped += 1;
+        }
         for (self.entities, made) |saved, entity| {
             const up = if (saved.parent) |index| (if (index < made.len) made[index] else null) else parent;
             if (up) |parent_entity| world.setParent(entity, parent_entity) catch {};
@@ -295,6 +330,25 @@ pub const Scene = struct {
         return self;
     }
 };
+
+/// How a scene saves a reference to one of its own entities.
+const SceneRef = struct { scene: usize };
+
+/// `text` (a field's ZON) as a `T`, if it is one; `T` holds no pointers.
+fn parseValue(comptime T: type, text: []const u8) ?T {
+    var buffer: [256]u8 = undefined;
+    const source = std.fmt.bufPrintZ(&buffer, "{s}", .{text}) catch return null;
+    // The parse's own scratch.
+    var scratch: [16 * 1024]u8 = undefined;
+    var fba = std.heap.FixedBufferAllocator.init(&scratch);
+    return std.zon.parse.fromSlice(T, fba.allocator(), source, null, .{}) catch null;
+}
+
+/// The kind of field `name` of `info`; `.other` if it has none so named.
+fn fieldKind(info: components.Info, name: []const u8) components.Kind {
+    for (info.fields) |field| if (std.mem.eql(u8, field.name, name)) return field.kind;
+    return .other;
+}
 
 fn findType(types: []const components.Info, name: []const u8, owner: []const u8) ?usize {
     var by_name: ?usize = null;
@@ -429,4 +483,32 @@ test "capturing roots takes their descendants only, which go under a new parent"
     defer gpa.free(made.entities);
     try std.testing.expect(world.getParent(made.entities[0]).?.eql(holder));
     try std.testing.expect(world.getParent(made.entities[1]).?.eql(made.entities[0]));
+}
+
+test "references to the scene's own entities point at their copies" {
+    const gpa = std.testing.allocator;
+    const refs = @import("refs.zig");
+    const Follow = struct { leader: refs.EntityRef(void) = .{} };
+    const access = registryAccess(components.Registry(&.{Follow}, &.{"game"}));
+    var world = ecs.World.init(gpa);
+    defer world.deinit();
+    const leader = try world.spawn(.{});
+    const follower = try world.spawn(.{Follow{ .leader = .init(leader) }});
+    const outside = try world.spawn(.{});
+    const stray = try world.spawn(.{Follow{ .leader = .init(outside) }});
+
+    // Duplicating the pair: the copy follows the copied leader.
+    var pair = try Scene.capture(gpa, &world, access, &.{ leader, follower });
+    defer pair.deinit();
+    try std.testing.expectEqualStrings(".{ .scene = 0 }", pair.entities[1].components[0].fields[0].value);
+    const made = try pair.instantiate(gpa, &world, access, null);
+    defer gpa.free(made.entities);
+    try std.testing.expect(world.get(made.entities[1], Follow).?.leader.entity.?.eql(made.entities[0]));
+
+    // One pointing outside what is captured keeps pointing there.
+    var alone = try Scene.capture(gpa, &world, access, &.{stray});
+    defer alone.deinit();
+    const again = try alone.instantiate(gpa, &world, access, null);
+    defer gpa.free(again.entities);
+    try std.testing.expect(world.get(again.entities[0], Follow).?.leader.entity.?.eql(outside));
 }

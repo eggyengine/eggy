@@ -9,15 +9,21 @@
 //!     };
 const std = @import("std");
 const ecs = @import("clutch");
+const refs = @import("refs.zig");
 
-/// How the Inspector edits a field.
-pub const Kind = enum(u8) { bool, int, float, @"enum", other };
+/// How the Inspector edits a field: references (`refs.zig`) take what is dragged onto them.
+pub const Kind = enum(u8) { bool, int, float, @"enum", other, entity, asset };
 
 pub const Field = struct {
     name: [:0]const u8,
     kind: Kind,
     /// An enum's values, in order; empty otherwise.
     options: []const [:0]const u8 = &.{},
+    /// An entity reference's: the component (its short name) an entity needs to be set here;
+    /// empty for any entity.
+    requires: [:0]const u8 = "",
+    /// An asset reference's: the kind of file it takes.
+    accepts: refs.AssetKind = .any,
     /// Whether the Inspector can change it: its type is plain data, which ZON can parse without
     /// allocating. The others are shown, if they can be, but not edited.
     editable: bool,
@@ -69,8 +75,14 @@ pub fn Registry(comptime types: []const type, comptime owners: []const [:0]const
             inline for (types, 0..) |T, i| if (i == component) {
                 const value = world.get(entity, T) orelse return error.NoComponent;
                 inline for (@typeInfo(T).@"struct".fields, 0..) |struct_field, j| if (j == field) {
+                    const current = @field(value.*, struct_field.name);
+                    // References as what they point at: `null`, an entity, or a path.
+                    if (comptime refs.refKind(struct_field.type)) |kind| return switch (kind) {
+                        .entity => std.zon.stringify.serialize(current.entity, .{ .whitespace = false }, writer),
+                        .asset => std.zon.stringify.serialize(current.path(), .{ .whitespace = false }, writer),
+                    };
                     if (comptime !showable(struct_field.type)) return writer.writeAll("...");
-                    return std.zon.stringify.serialize(@field(value.*, struct_field.name), .{ .whitespace = false }, writer);
+                    return std.zon.stringify.serialize(current, .{ .whitespace = false }, writer);
                 };
             };
             return error.NoSuchComponent;
@@ -85,7 +97,15 @@ pub fn Registry(comptime types: []const type, comptime owners: []const [:0]const
                     if (comptime !editableType(struct_field.type)) return error.NotEditable;
                     var scratch: [16 * 1024]u8 = undefined;
                     var fba = std.heap.FixedBufferAllocator.init(&scratch);
-                    @field(value.*, struct_field.name) = try std.zon.parse.fromSlice(struct_field.type, fba.allocator(), text, null, .{});
+                    const target = &@field(value.*, struct_field.name);
+                    if (comptime refs.refKind(struct_field.type)) |kind| switch (kind) {
+                        .entity => target.* = .init(try std.zon.parse.fromSlice(?ecs.EntityId, fba.allocator(), text, null, .{})),
+                        .asset => {
+                            const path = try std.zon.parse.fromSliceAlloc([]const u8, fba.allocator(), text, null, .{});
+                            if (path.len > refs.max_path_len) return error.ParseZon;
+                            target.* = .init(path);
+                        },
+                    } else target.* = try std.zon.parse.fromSlice(struct_field.type, fba.allocator(), text, null, .{});
                     world.markChanged(entity, T);
                     return;
                 };
@@ -114,6 +134,10 @@ fn infoOf(comptime T: type, comptime owner: [:0]const u8) Info {
     for (struct_fields, &fields) |struct_field, *field| {
         if (struct_field.defaultValue() == null) addable = false;
         field.* = .{ .name = struct_field.name, .kind = kindOf(struct_field.type), .editable = editableType(struct_field.type) };
+        if (refs.refKind(struct_field.type)) |kind| switch (kind) {
+            .entity => field.requires = if (struct_field.type.Required == void) "" else shortName(struct_field.type.Required),
+            .asset => field.accepts = struct_field.type.accepts,
+        };
         if (@typeInfo(struct_field.type) == .@"enum") {
             const tags = @typeInfo(struct_field.type).@"enum".fields;
             var options: [tags.len][:0]const u8 = undefined;
@@ -127,6 +151,10 @@ fn infoOf(comptime T: type, comptime owner: [:0]const u8) Info {
 }
 
 fn kindOf(comptime T: type) Kind {
+    if (refs.refKind(T)) |kind| return switch (kind) {
+        .entity => .entity,
+        .asset => .asset,
+    };
     return switch (@typeInfo(T)) {
         .bool => .bool,
         .int, .comptime_int => .int,
@@ -207,4 +235,33 @@ test "fields are read and written as ZON, and bad text leaves them be" {
 
     Components.remove(&world, entity, 0);
     try std.testing.expect(!Components.has(&world, entity, 0));
+}
+
+test "references are read and written as what they point at" {
+    const Target = struct { size: f32 = 1 };
+    const Orbit = struct {
+        around: refs.EntityRef(Target) = .{},
+        sound: refs.AssetRef(.audio) = .{},
+    };
+    const Components = Registry(&.{Orbit}, &.{"game"});
+    const info = Components.infos[0];
+    try std.testing.expectEqual(Kind.entity, info.fields[0].kind);
+    try std.testing.expectEqualStrings("Target", info.fields[0].requires);
+    try std.testing.expectEqual(Kind.asset, info.fields[1].kind);
+    try std.testing.expectEqual(refs.AssetKind.audio, info.fields[1].accepts);
+
+    var world = ecs.World.init(std.testing.allocator);
+    defer world.deinit();
+    const entity = try world.spawn(.{Orbit{}});
+    try Components.setField(&world, entity, 0, 0, ".{ .id = 4, .generation = 2 }");
+    try Components.setField(&world, entity, 0, 1, "\"sounds/hum.ogg\"");
+    var text: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer text.deinit();
+    try Components.writeField(&world, entity, 0, 0, &text.writer);
+    try std.testing.expectEqualStrings(".{.id=4,.generation=2}", text.written());
+    text.clearRetainingCapacity();
+    try Components.writeField(&world, entity, 0, 1, &text.writer);
+    try std.testing.expectEqualStrings("\"sounds/hum.ogg\"", text.written());
+    try Components.setField(&world, entity, 0, 0, "null");
+    try std.testing.expect(world.get(entity, Orbit).?.around.entity == null);
 }

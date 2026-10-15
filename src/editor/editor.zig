@@ -35,6 +35,8 @@ const layout_file = @import("layout_file.zig");
 const PlayMode = @import("play_mode.zig").PlayMode;
 const history_zig = @import("history.zig");
 const PluginSwitches = @import("plugin_switches.zig").PluginSwitches;
+const Dragged = @import("dragged.zig").Dragged;
+const page_style = @import("page_style.zig");
 const file_ops = @import("assets/file_ops.zig");
 const hit_test = @import("hit_test.zig");
 const assets = @import("assets/assets.zig");
@@ -359,6 +361,10 @@ pub fn Editor(comptime project: type) type {
                     },
                     else => if (self.game) |*game| game.editorPanelUi(index - panels.first_plugin_page, page_ui),
                 }
+                // What is being dragged, named beside the pointer in the page it is over.
+                if (self.dragging(frame_arena.allocator())) |dragged| if (self.pageAt(self.workspace.pointer_slot, page_ui.pointer.x, page_ui.pointer.y) == index) {
+                    page_style.dragChip(page_ui, self.dragLabel(frame_arena.allocator(), dragged, index));
+                };
                 vertices.* = try page_ui.render();
             }
             self.syncTextInput();
@@ -1122,6 +1128,31 @@ pub fn Editor(comptime project: type) type {
             return .run;
         }
 
+        /// What is being dragged between panels, if anything. In `arena`.
+        fn dragging(self: *Self, arena: std.mem.Allocator) ?Dragged {
+            return self.entity_editor.dragged(arena, &self.app, self.gamePtr());
+        }
+
+        /// The chip beside the pointer while `dragged` is over page `index`: its name, or why
+        /// letting go there won't take it.
+        fn dragLabel(self: *Self, arena: std.mem.Allocator, dragged: Dragged, index: usize) []const u8 {
+            const name = switch (dragged) {
+                .entity => |entity| entity.name,
+                .asset => |path| std.fs.path.basename(path),
+            };
+            switch (index) {
+                panels.hierarchy_page => if (self.entity_editor.hierarchy.dragLabel(arena)) |label| return label,
+                panels.inspector_page => if (self.entity_editor.inspector.fieldAt(&self.ui, self.ui.pointer)) |field| if (!dragged.fits(field)) {
+                    return switch (field.kind) {
+                        .entity => if (field.requires.len > 0) std.fmt.allocPrint(arena, "Needs an entity with {s}", .{field.requires}) catch name else "Takes an entity",
+                        else => if (field.accepts == .any) "Takes a file" else std.fmt.allocPrint(arena, "Takes a {s} file", .{@tagName(field.accepts)}) catch name,
+                    };
+                },
+                else => {},
+            }
+            return name;
+        }
+
         /// A press at `at` in window `slot` takes the keyboard off every page's field but the one
         /// pressed: in every window, and in the pressed page too when it lands on nothing to focus
         /// there. `reaches_pages` is false when the workspace took the press (a tab, a menu, a
@@ -1145,6 +1176,12 @@ pub fn Editor(comptime project: type) type {
                 const inspector = self.workspace.placed.pages[panels.inspector_page] orelse return;
                 if (inspector.slot == slot) weeoui_sdl3.handleEvent(&self.ui, curr_event);
                 return;
+            };
+            // A drag let go over the Inspector sets the reference field there, before the panel
+            // it came from ends the drag.
+            if (input == .pointer_up) if (self.dragging(self.ui.builder().allocator)) |dragged| {
+                const at = input.pointer_up.position;
+                if (self.pageAt(slot, at.x, at.y) == panels.inspector_page) _ = self.entity_editor.dropOnInspector(&self.ui, &self.app, self.gamePtr(), at, dragged);
             };
             for (0..self.pageCount()) |index| {
                 const placed = self.workspace.placed.pages[index] orelse continue;
@@ -1285,7 +1322,7 @@ pub fn Editor(comptime project: type) type {
         /// The Inspector panel: the entity selected in the Hierarchy, else the project's name and
         /// whatever the game and plugins add.
         fn buildInspector(self: *Self) void {
-            if (self.entity_editor.buildInspector(&self.ui, &self.app, self.gamePtr())) return;
+            if (self.entity_editor.buildInspector(&self.ui, &self.app, self.gamePtr(), self.dragging(self.ui.builder().allocator))) return;
             self.ui.heading(3, project.name);
             if (self.game) |*game| game.editorUi(&self.ui) else self.ui.muted("The game's library didn't load: see the Console.");
             self.ui.muted("Select an entity in the Hierarchy to see its components.");
@@ -1334,6 +1371,7 @@ test {
     _ = @import("play_mode.zig");
     _ = @import("history.zig");
     _ = @import("plugin_switches.zig");
+    _ = @import("dragged.zig");
     _ = @import("assets/assets.zig");
     _ = @import("assets/listing.zig");
     _ = @import("assets/icons.zig");

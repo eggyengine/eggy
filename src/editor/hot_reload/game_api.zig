@@ -6,7 +6,7 @@
 const std = @import("std");
 
 /// Bumped whenever these types change, so an editor refuses a library built for another.
-pub const version: u32 = 6;
+pub const version: u32 = 7;
 
 /// The library's one exported function: `fn () callconv(.c) *const Game`.
 pub const entry_symbol = "eggy_game";
@@ -49,6 +49,10 @@ pub const ComponentField = extern struct {
     options: [*]const [*:0]const u8,
     option_count: usize,
     editable: bool,
+    /// An entity reference's required component (its short name; empty for any).
+    requires: [*:0]const u8,
+    /// An asset reference's kind of file (an `eggy.refs.AssetKind`).
+    accepts: u8,
 };
 
 /// A component type the game or a plugin lists (`eggy.components.Info`).

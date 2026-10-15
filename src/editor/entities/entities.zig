@@ -11,6 +11,7 @@ const tree = @import("tree.zig");
 const hierarchy_zig = @import("hierarchy.zig");
 const inspector_zig = @import("inspector.zig");
 const RootOrder = @import("root_order.zig").RootOrder;
+const Dragged = @import("../dragged.zig").Dragged;
 const log = std.log.scoped(.entities);
 
 pub const EntityEditor = struct {
@@ -45,9 +46,40 @@ pub const EntityEditor = struct {
         if (self.hierarchy.build(context, rows, self.selected)) |action| self.apply(app, game, action);
     }
 
-    /// Draw the selected entity into the Inspector page `context`, and carry out what it asks.
-    /// Returns false, drawing nothing, when no entity is selected.
-    pub fn buildInspector(self: *EntityEditor, context: *ui.Context, app: *eggy.App, game: ?*const HotGame) bool {
+    /// The entity being dragged out of the Hierarchy, described for other panels; null while
+    /// none is. In `arena`.
+    pub fn dragged(self: *const EntityEditor, arena: std.mem.Allocator, app: *eggy.App, game: ?*const HotGame) ?Dragged {
+        const drag = self.hierarchy.drag orelse return null;
+        if (!drag.moving or !app.world.isAlive(drag.entity)) return null;
+        var names: std.ArrayList([]const u8) = .empty;
+        if (game) |loaded| for (loaded.component_types, 0..) |info, index| {
+            if (loaded.hasComponent(app, drag.entity, index)) names.append(arena, info.name) catch {};
+        };
+        const name = self.hierarchy.nameOf(drag.entity);
+        return .{ .entity = .{
+            .entity = drag.entity,
+            .name = if (name.len > 0) name else std.fmt.allocPrint(arena, "Entity {d}", .{drag.entity.id}) catch "Entity",
+            .components = names.items,
+        } };
+    }
+
+    /// `dragging` let go over the Inspector page `context` at `at`: set the reference field
+    /// there, if it takes it. Returns whether one did.
+    pub fn dropOnInspector(self: *EntityEditor, context: *const ui.Context, app: *eggy.App, game: ?*const HotGame, at: ui.Vec2, dragging: Dragged) bool {
+        const entity = self.selected orelse return false;
+        const loaded = game orelse return false;
+        var buffer: [1024]u8 = undefined;
+        var fba = std.heap.FixedBufferAllocator.init(&buffer);
+        const action = self.inspector.dropAt(context, at, dragging, fba.allocator()) orelse return false;
+        var text_buffer: [600]u8 = undefined;
+        const text = std.fmt.bufPrintZ(&text_buffer, "{s}", .{action.set_field.text}) catch return false;
+        return loaded.writeField(app, entity, action.set_field.component, action.set_field.field, text);
+    }
+
+    /// Draw the selected entity into the Inspector page `context`, and carry out what it asks;
+    /// its reference fields light up for `dragging`. Returns false, drawing nothing, when no
+    /// entity is selected.
+    pub fn buildInspector(self: *EntityEditor, context: *ui.Context, app: *eggy.App, game: ?*const HotGame, dragging: ?Dragged) bool {
         self.forgetDead(app);
         const entity = self.selected orelse return false;
         const arena = context.builder().allocator;
@@ -56,7 +88,8 @@ pub const EntityEditor = struct {
             context.muted("The game's library didn't load, so this entity's components can't be shown.");
             return true;
         };
-        const details = collectDetails(arena, app, loaded, entity) catch return true;
+        var details = collectDetails(arena, app, loaded, entity) catch return true;
+        details.dragging = dragging;
         if (self.inspector.build(context, details)) |action| switch (action) {
             .rename => |name| loaded.writeName(app, entity, name),
             .set_field => |change| {
@@ -177,13 +210,37 @@ fn collectDetails(arena: std.mem.Allocator, app: *eggy.App, game: *const HotGame
             continue;
         }
         const values = try arena.alloc(?[]const u8, info.fields.len);
-        for (values, 0..) |*value, field| {
-            var buffer: [256]u8 = undefined;
+        const shown = try arena.alloc(?[]const u8, info.fields.len);
+        for (values, shown, info.fields, 0..) |*value, *label, field_info, field| {
+            var buffer: [512]u8 = undefined;
             value.* = if (game.readField(app, entity, index, field, &buffer)) |text| try arena.dupe(u8, text) else null;
+            label.* = try referenceLabel(arena, app, game, field_info.kind, value.* orelse "");
         }
-        try list.append(arena, .{ .index = index, .info = info, .values = values });
+        try list.append(arena, .{ .index = index, .info = info, .values = values, .shown = shown });
     }
     return .{ .entity = entity, .name = name, .components = list.items, .addable = addable.items };
+}
+
+/// A reference field's value (`zon`) as people read it: the entity's name, or the file's;
+/// empty when unset; null for other kinds of field.
+fn referenceLabel(arena: std.mem.Allocator, app: *eggy.App, game: *const HotGame, kind: eggy.components.Kind, zon: []const u8) !?[]const u8 {
+    var scratch: [1024]u8 = undefined;
+    var fba = std.heap.FixedBufferAllocator.init(&scratch);
+    const source = try arena.dupeZ(u8, zon);
+    switch (kind) {
+        .entity => {
+            const target = (std.zon.parse.fromSlice(?ecs.EntityId, fba.allocator(), source, null, .{}) catch return "") orelse return "";
+            if (!app.world.isAlive(target)) return try std.fmt.allocPrint(arena, "Entity {d} (gone)", .{target.id});
+            var name_buffer: [eggy.Name.max_len]u8 = undefined;
+            if (game.readName(app, target, &name_buffer)) |name| if (name.len > 0) return try arena.dupe(u8, name);
+            return try std.fmt.allocPrint(arena, "Entity {d}", .{target.id});
+        },
+        .asset => {
+            const path = std.zon.parse.fromSliceAlloc([]const u8, fba.allocator(), source, null, .{}) catch return "";
+            return try arena.dupe(u8, path);
+        },
+        else => return null,
+    }
 }
 
 test {

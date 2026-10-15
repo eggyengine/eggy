@@ -4,14 +4,19 @@
 //! types it doesn't have. Values are read from the world every frame, so fields a system changes change
 //! here too, except one being typed into.
 //!
-//! Like the Hierarchy, the page doesn't change the world itself: `build` returns the `Action` the
-//! user took.
+//! A reference field (`eggy.EntityRef`, `eggy.AssetRef`) is a slot: drag an entity from the
+//! Hierarchy or a file from Assets onto it (while dragging, the slots that would take it light
+//! up), or clear it with its x.
+//!
+//! Like the Hierarchy, the page doesn't change the world itself: `build` and `dropAt` return the
+//! `Action` the user took.
 const std = @import("std");
 const eggy = @import("eggy");
 const ui = eggy.ui;
 const ecs = eggy.ecs;
 const components = eggy.components;
 const page_style = @import("../page_style.zig");
+const Dragged = @import("../dragged.zig").Dragged;
 const restyle = page_style.restyle;
 
 /// What the Inspector shows: the entity, its name, and its components with their values.
@@ -21,6 +26,8 @@ pub const Details = struct {
     components: []const Component,
     /// The component types it doesn't have and can be given, as `(index, label)`.
     addable: []const Addable,
+    /// What is being dragged from another panel, if anything: the slots that take it light up.
+    dragging: ?Dragged = null,
 
     pub const Component = struct {
         /// Its index among the game's component types.
@@ -28,6 +35,9 @@ pub const Details = struct {
         info: components.Info,
         /// Each field's value as ZON; null where it can't be read.
         values: []const ?[]const u8,
+        /// Each reference field's value as people read it (an entity's name, a file's); null for
+        /// other fields, and empty when unset.
+        shown: []const ?[]const u8 = &.{},
     };
     pub const Addable = struct { index: usize, label: []const u8 };
 };
@@ -67,6 +77,11 @@ pub const EntityInspector = struct {
     shown: ?ecs.EntityId = null,
     /// Add component's search while it is open, and whether it has had the keyboard yet.
     search: ?struct { edit: SearchEdit, focused: bool = false } = null,
+    /// The reference slots last built, to match a drop to.
+    slots: std.ArrayList(Slot) = .empty,
+
+    /// A reference field's slot: its element, and which field it sets.
+    const Slot = struct { id: u32, component: usize, field: usize, info: components.Field };
 
     const name_key = std.math.maxInt(u32);
     const search_key = std.math.maxInt(u32) - 1;
@@ -78,6 +93,30 @@ pub const EntityInspector = struct {
     pub fn deinit(self: *EntityInspector) void {
         self.edits.deinit(self.gpa);
         self.folded.deinit(self.gpa);
+        self.slots.deinit(self.gpa);
+    }
+
+    /// The reference field under `at` in last frame's layout, if any.
+    pub fn fieldAt(self: *const EntityInspector, context: *const ui.Context, at: ui.Vec2) ?components.Field {
+        const slot = self.slotAt(context, at) orelse return null;
+        return slot.info;
+    }
+
+    /// `dragged` let go at `at`: set the reference field there, if it takes it.
+    pub fn dropAt(self: *const EntityInspector, context: *const ui.Context, at: ui.Vec2, dragged: Dragged, arena: std.mem.Allocator) ?Action {
+        const slot = self.slotAt(context, at) orelse return null;
+        if (!dragged.fits(slot.info)) return null;
+        var buffer: [512]u8 = undefined;
+        const text = dragged.zon(&buffer) catch return null;
+        return .{ .set_field = .{ .component = slot.component, .field = slot.field, .text = arena.dupe(u8, text) catch return null } };
+    }
+
+    fn slotAt(self: *const EntityInspector, context: *const ui.Context, at: ui.Vec2) ?Slot {
+        for (self.slots.items) |slot| {
+            const bounds = context.last_bounds.get(slot.id) orelse continue;
+            if (bounds.rect.contains(at.x, at.y)) return slot;
+        }
+        return null;
     }
 
     /// Draw `details` into `context`. Returns what the user did this frame, if anything.
@@ -92,6 +131,7 @@ pub const EntityInspector = struct {
         }
         var action: ?Action = null;
         var focused: ?u32 = null;
+        self.slots.clearRetainingCapacity();
 
         // The name, typed into directly; "Entity N" until it has one.
         if (self.focused != name_key) self.name = NameEdit.init(details.name) catch NameEdit.init("") catch unreachable;
@@ -111,7 +151,7 @@ pub const EntityInspector = struct {
             page_style.smallText(context, 13);
         }
         const field_control = std.math.clamp(width * 0.45, min_control_width, control_width);
-        for (details.components) |component| if (self.componentCard(context, component, field_control, &focused)) |card_action| {
+        for (details.components) |component| if (self.componentCard(context, component, field_control, details.dragging, &focused)) |card_action| {
             action = card_action;
         };
         self.focused = focused;
@@ -119,7 +159,7 @@ pub const EntityInspector = struct {
     }
 
     /// A card for one component: a header (fold, name, owner, Remove), then its fields.
-    fn componentCard(self: *EntityInspector, context: *ui.Context, component: Details.Component, field_control: f32, focused: *?u32) ?Action {
+    fn componentCard(self: *EntityInspector, context: *ui.Context, component: Details.Component, field_control: f32, dragging: ?Dragged, focused: *?u32) ?Action {
         const arena = context.builder().allocator;
         const b = context.builder();
         var action: ?Action = null;
@@ -147,7 +187,8 @@ pub const EntityInspector = struct {
         restyle(context, .{ .direction = .row, .gap = 8, .align_items = .center });
 
         if (!folded) for (component.info.fields, component.values, 0..) |field, value, index| {
-            if (self.fieldRow(context, component.index, field, value orelse "", index, field_control, focused)) |field_action| action = field_action;
+            const shown = if (index < component.shown.len) component.shown[index] else null;
+            if (self.fieldRow(context, component.index, field, value orelse "", shown, index, field_control, dragging, focused)) |field_action| action = field_action;
         };
 
         context.end();
@@ -156,7 +197,7 @@ pub const EntityInspector = struct {
     }
 
     /// One field: its name on the left (wrapping if need be), its control on the right.
-    fn fieldRow(self: *EntityInspector, context: *ui.Context, component: usize, field: components.Field, value: []const u8, index: usize, field_control: f32, focused: *?u32) ?Action {
+    fn fieldRow(self: *EntityInspector, context: *ui.Context, component: usize, field: components.Field, value: []const u8, shown: ?[]const u8, index: usize, field_control: f32, dragging: ?Dragged, focused: *?u32) ?Action {
         const arena = context.builder().allocator;
         const key = fieldKey(component, index);
         // Controls take their ids from their (hidden) label: the component and field.
@@ -168,7 +209,9 @@ pub const EntityInspector = struct {
         page_style.smallText(context, 13);
         restyle(context, .{ .grow = 1 });
         context.begin(.column);
-        if (!field.editable) {
+        if (field.kind == .entity or field.kind == .asset) {
+            action = self.referenceSlot(context, component, field, shown orelse "", index, field_control, dragging);
+        } else if (!field.editable) {
             context.muted(value);
             page_style.noteText(context);
             if (context.last_added) |text| text.paint_kind.text.wrap = true;
@@ -190,6 +233,7 @@ pub const EntityInspector = struct {
                     trigger.style.min_width = 0;
                 };
             },
+            .entity, .asset => unreachable, // slots, above
             .int, .float, .other => {
                 // The world's value, unless this field is being typed into.
                 const entry = self.edits.getOrPut(self.gpa, key) catch return null;
@@ -204,6 +248,45 @@ pub const EntityInspector = struct {
         restyle(context, .{ .width = field_control, .align_items = .end });
         context.end();
         restyle(context, .{ .direction = .row, .gap = 10, .align_items = .center });
+        return action;
+    }
+
+    /// A reference field's slot: what it points at (`shown`, empty for nothing) and an x to
+    /// clear it. Lit while `dragging` would fit it, dimmed while something that wouldn't is.
+    fn referenceSlot(self: *EntityInspector, context: *ui.Context, component: usize, field: components.Field, shown: []const u8, index: usize, width: f32, dragging: ?Dragged) ?Action {
+        const b = context.builder();
+        const arena = b.allocator;
+        const id = context.idFor(std.fmt.allocPrint(arena, "##slot {d}.{d}", .{ component, index }) catch return null);
+        self.slots.append(self.gpa, .{ .id = id, .component = component, .field = index, .info = field }) catch {};
+        var action: ?Action = null;
+
+        const empty = shown.len == 0;
+        const hint: []const u8 = switch (field.kind) {
+            .entity => if (field.requires.len > 0) std.fmt.allocPrint(arena, "Drop an entity with {s}", .{field.requires}) catch "Drop an entity" else "Drop an entity",
+            else => if (field.accepts == .any) "Drop a file" else std.fmt.allocPrint(arena, "Drop a {s} file", .{@tagName(field.accepts)}) catch "Drop a file",
+        };
+        const clear_room: f32 = if (empty) 0 else 28;
+        const label = page_style.fitText(arena, context.font, if (empty) hint else shown, 12, width - 20 - clear_room);
+        const look = arena.create(SlotPaint) catch return null;
+        look.* = .{ .id = id, .fits = if (dragging) |dragged| dragged.fits(field) else null };
+        context.begin(.row);
+        const slot = b.node(id, .{ .height = 26, .grow = 1, .padding = .{ .left = 8, .right = 8 }, .align_items = .center, .direction = .row }, .{ .custom = .{ .context = look, .draw = SlotPaint.draw } }, &.{
+            b.node(0, .{ .grow = 1 }, .{ .text = .{ .value = label, .size = 12, .tone = if (empty) .muted else .foreground } }, &.{}) catch return null,
+        }) catch return null;
+        slot.accessibility = .{ .role = .button, .label = if (empty) hint else shown };
+        context.element(slot);
+        if (!empty) {
+            const clear_id = context.idFor(std.fmt.allocPrint(arena, "##clear {d}.{d}", .{ component, index }) catch return null);
+            if (context.activated(clear_id)) action = .{ .set_field = .{ .component = component, .field = index, .text = if (field.kind == .entity) "null" else "\"\"" } };
+            const clear = b.node(clear_id, .{ .width = 24, .height = 24, .padding = .{ .left = 6, .right = 6, .top = 6, .bottom = 6 } }, .none, &.{
+                b.node(0, .{ .width = 12, .height = 12 }, .{ .icon = .x }, &.{}) catch return null,
+            }) catch return null;
+            clear.cursor = .pointer;
+            clear.accessibility = .{ .role = .button, .label = "Clear" };
+            context.element(clear);
+        }
+        context.end();
+        restyle(context, .{ .direction = .row, .gap = 4, .align_items = .center, .width = width });
         return action;
     }
 
@@ -268,6 +351,28 @@ pub const EntityInspector = struct {
     }
 };
 
+/// How a reference slot is drawn: a field's box, outlined while a drag would fit it.
+const SlotPaint = struct {
+    id: u32,
+    /// Whether what is being dragged would fit; null while nothing is.
+    fits: ?bool,
+
+    fn draw(context: *const anyopaque, c: *ui.Canvas, r: ui.Rect) anyerror!void {
+        const self: *const SlotPaint = @ptrCast(@alignCast(context));
+        const t = c.theme;
+        const hovered = c.hot_id == self.id;
+        if (self.fits) |fits| {
+            if (fits) {
+                try c.roundRectAlpha(r, t.primary, t.radiusSm(), if (hovered) 0.25 else 0.1);
+                try c.roundRectStroke(r, t.primary, t.radiusSm(), 1.5);
+            } else try c.roundRectAlpha(r, t.muted, t.radiusSm(), 0.6);
+            return;
+        }
+        try c.roundRect(r, t.muted, t.radiusSm());
+        try c.roundRectStroke(r, t.border, t.radiusSm(), 1);
+    }
+};
+
 /// A field's key in `EntityInspector.edits`.
 fn fieldKey(component: usize, field: usize) u32 {
     return @intCast(component << 16 | field);
@@ -296,13 +401,16 @@ test "a component with long names and values fits a narrow Inspector" {
         .{ .name = "mode", .kind = .@"enum", .options = &.{ "first_choice_with_a_long_name", "second" }, .editable = true },
         .{ .name = "enabled", .kind = .bool, .editable = true },
         .{ .name = "points", .kind = .other, .editable = false },
+        .{ .name = "orbits_around", .kind = .entity, .editable = true, .requires = "SomeComponentWithALongName" },
+        .{ .name = "sound", .kind = .asset, .editable = true, .accepts = .audio },
     };
     const info = components.Info{ .name = "AComponentWithAnUnreasonablyLongTypeName", .owner = "a_plugin_with_a_long_name", .fields = &fields, .addable = true };
-    const values = [_]?[]const u8{ "1234567.25", ".first_choice_with_a_long_name", "true", ".{ .{ 1, 2, 3 }, .{ 4, 5, 6 }, .{ 7, 8, 9 } }" };
+    const values = [_]?[]const u8{ "1234567.25", ".first_choice_with_a_long_name", "true", ".{ .{ 1, 2, 3 }, .{ 4, 5, 6 }, .{ 7, 8, 9 } }", "null", "\"sounds/a_sound_with_a_long_long_name.ogg\"" };
+    const shown = [_]?[]const u8{ null, null, null, null, "", "sounds/a_sound_with_a_long_long_name.ogg" };
     const details = Details{
         .entity = .init(3, 0),
         .name = "An entity with a name long enough to need the whole field and then some",
-        .components = &.{.{ .index = 0, .info = info, .values = &values }},
+        .components = &.{.{ .index = 0, .info = info, .values = &values, .shown = &shown }},
         .addable = &.{.{ .index = 1, .label = "AnotherComponentWithALongName (some_plugin)" }},
     };
     for ([_]bool{ false, true }) |searching| for ([_]f32{ 220, 320, 600 }) |width| {
