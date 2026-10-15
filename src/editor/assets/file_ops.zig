@@ -1,6 +1,7 @@
-//! What the Assets panel does to the project's files: new folders, renaming, duplicating, and
-//! deleting, which moves things into `.eggy/trash/` (so a deletion can be undone) rather than
-//! erasing them. Paths are relative to the project, with `/` between parts, and never leave it.
+//! What the Assets panel does to the project's files: new folders, renaming, duplicating, moving
+//! and copying into folders, importing files from outside, and deleting, which moves things into
+//! `.eggy/trash/` (so a deletion can be undone) rather than erasing them. Paths are relative to
+//! the project, with `/` between parts, and never leave it.
 const std = @import("std");
 
 pub const trash_dir = ".eggy/trash";
@@ -33,8 +34,42 @@ pub fn duplicate(gpa: std.mem.Allocator, io: std.Io, project: std.Io.Dir, path: 
     defer gpa.free(stem);
     const target = try freeName(gpa, io, project, parentOf(path), stem, name[stem_end..]);
     errdefer gpa.free(target);
-    try copyTree(gpa, io, project, path, target);
+    try copyTree(gpa, io, project, path, project, target);
     return target;
+}
+
+/// Move `path` into `folder` ("" for the project), keeping its name. Returns the new path;
+/// caller-owned. Fails with `error.PathAlreadyExists` when the folder has one so named.
+pub fn moveInto(gpa: std.mem.Allocator, io: std.Io, project: std.Io.Dir, path: []const u8, folder: []const u8) ![]u8 {
+    const target = try join(gpa, folder, std.fs.path.basename(path));
+    errdefer gpa.free(target);
+    try move(io, project, path, target);
+    return target;
+}
+
+/// Copy `path` (a file, or a folder and everything in it) into `folder`, under its own name or,
+/// when that is taken, "<name> 2" and so on. Returns the copy's path; caller-owned.
+pub fn copyInto(gpa: std.mem.Allocator, io: std.Io, project: std.Io.Dir, path: []const u8, folder: []const u8) ![]u8 {
+    const target = try freeTarget(gpa, io, project, folder, std.fs.path.basename(path));
+    errdefer gpa.free(target);
+    try copyTree(gpa, io, project, path, project, target);
+    return target;
+}
+
+/// Copy `outside` (an absolute path: a file, or a folder and everything in it) into `folder` of
+/// the project, as `copyInto` does. Returns the copy's path; caller-owned.
+pub fn import(gpa: std.mem.Allocator, io: std.Io, project: std.Io.Dir, outside: []const u8, folder: []const u8) ![]u8 {
+    const target = try freeTarget(gpa, io, project, folder, std.fs.path.basename(outside));
+    errdefer gpa.free(target);
+    try project.createDirPath(io, folder);
+    try copyTree(gpa, io, std.Io.Dir.cwd(), outside, project, target);
+    return target;
+}
+
+/// `name` in `folder`, or "<stem> 2<extension>" and so on, whichever is free. Caller-owned.
+fn freeTarget(gpa: std.mem.Allocator, io: std.Io, project: std.Io.Dir, folder: []const u8, name: []const u8) ![]u8 {
+    const stem_end = extensionStart(name);
+    return freeName(gpa, io, project, folder, name[0..stem_end], name[stem_end..]);
 }
 
 /// Move `path` into the trash, in a folder of its own, keeping its name. Returns where it went
@@ -77,11 +112,12 @@ fn freeName(gpa: std.mem.Allocator, io: std.Io, project: std.Io.Dir, folder: []c
     return error.NoFreeName;
 }
 
-fn copyTree(gpa: std.mem.Allocator, io: std.Io, project: std.Io.Dir, from: []const u8, to: []const u8) !void {
-    const stat = try project.statFile(io, from, .{});
-    if (stat.kind != .directory) return project.copyFile(from, project, to, io, .{});
-    try project.createDirPath(io, to);
-    var dir = try project.openDir(io, from, .{ .iterate = true });
+/// Copy `from` in `from_dir` (a file, or a folder and everything in it) to `to` in `to_dir`.
+fn copyTree(gpa: std.mem.Allocator, io: std.Io, from_dir: std.Io.Dir, from: []const u8, to_dir: std.Io.Dir, to: []const u8) !void {
+    const stat = try from_dir.statFile(io, from, .{});
+    if (stat.kind != .directory) return from_dir.copyFile(from, to_dir, to, io, .{});
+    try to_dir.createDirPath(io, to);
+    var dir = try from_dir.openDir(io, from, .{ .iterate = true });
     defer dir.close(io);
     var it = dir.iterate();
     while (try it.next(io)) |entry| {
@@ -89,7 +125,7 @@ fn copyTree(gpa: std.mem.Allocator, io: std.Io, project: std.Io.Dir, from: []con
         defer gpa.free(inner_from);
         const inner_to = try join(gpa, to, entry.name);
         defer gpa.free(inner_to);
-        try copyTree(gpa, io, project, inner_from, inner_to);
+        try copyTree(gpa, io, from_dir, inner_from, to_dir, inner_to);
     }
 }
 
@@ -151,4 +187,32 @@ test "folders, renames, copies and the trash" {
     try std.testing.expect(!exists(io, project, "Levels"));
     try restore(io, project, trashed, "Levels");
     try std.testing.expect(exists(io, project, "Levels"));
+}
+
+test "moving and copying into folders, and importing from outside" {
+    const gpa = std.testing.allocator;
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const project = tmp.dir;
+    try project.createDirPath(io, "art");
+    try project.writeFile(io, .{ .sub_path = "ship.png", .data = "x" });
+
+    const moved = try moveInto(gpa, io, project, "ship.png", "art");
+    defer gpa.free(moved);
+    try std.testing.expectEqualStrings("art/ship.png", moved);
+    const copied = try copyInto(gpa, io, project, "art/ship.png", "art");
+    defer gpa.free(copied);
+    try std.testing.expectEqualStrings("art/ship 2.png", copied);
+
+    // From outside the project: a file elsewhere, copied in.
+    var outside = std.testing.tmpDir(.{});
+    defer outside.cleanup();
+    try outside.dir.writeFile(io, .{ .sub_path = "boom.ogg", .data = "y" });
+    const source = try outside.dir.realPathFileAlloc(io, "boom.ogg", gpa);
+    defer gpa.free(source);
+    const imported = try import(gpa, io, project, source, "sounds");
+    defer gpa.free(imported);
+    try std.testing.expectEqualStrings("sounds/boom.ogg", imported);
+    try std.testing.expect(exists(io, project, "sounds/boom.ogg"));
 }

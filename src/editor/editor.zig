@@ -507,7 +507,7 @@ pub fn Editor(comptime project: type) type {
                     @import("terminal_view.zig").copyToClipboard(path);
                     self.workspace.toast("Copied the path");
                 },
-                .create_folder, .rename, .duplicate, .delete => self.changeFiles(opened.dir, action) catch |err| {
+                .create_folder, .rename, .duplicate, .delete, .move_into => self.changeFiles(opened.dir, action) catch |err| {
                     std.log.err("cannot change the files: {t}", .{err});
                     self.workspace.toast("Couldn't do that: see the Console");
                 },
@@ -530,6 +530,14 @@ pub fn Editor(comptime project: type) type {
                     self.history.record(.{ .rename = .{ .from = try self.gpa.dupe(u8, change.path), .to = renamed } });
                 },
                 .duplicate => |path| self.history.record(.{ .create = .{ .path = try file_ops.duplicate(self.gpa, io, files, path) } }),
+                // Dragged onto a folder: moved, or copied with Ctrl held.
+                .move_into => |change| if (sdl3.keyboard.getModState().controlDown()) {
+                    self.history.record(.{ .create = .{ .path = try file_ops.copyInto(self.gpa, io, files, change.path, change.folder) } });
+                } else {
+                    const moved = try file_ops.moveInto(self.gpa, io, files, change.path, change.folder);
+                    if (self.open_scene) |*scene| scene.moved(change.path, moved);
+                    self.history.record(.{ .rename = .{ .from = try self.gpa.dupe(u8, change.path), .to = moved } });
+                },
                 .delete => |path| {
                     const trashed = try file_ops.trash(self.gpa, io, files, path);
                     if (self.open_scene) |*scene| scene.deleted(path);
@@ -838,6 +846,7 @@ pub fn Editor(comptime project: type) type {
                 try self.rebuildOnFocus();
             }
 
+            if (curr_event == .drop_file) self.importDropped(slot, curr_event.drop_file);
             // A press anywhere in the window, even on the dock or title bar, can take the keyboard
             // off a field.
             if (weeoui_sdl3.translate(curr_event)) |input| if (input == .pointer_down) self.unfocusOnPress(slot, input.pointer_down.position, outcome == .ignored);
@@ -1170,7 +1179,28 @@ pub fn Editor(comptime project: type) type {
 
         /// What is being dragged between panels, if anything. In `arena`.
         fn dragging(self: *Self, arena: std.mem.Allocator) ?Dragged {
+            if (self.assets_panel.dragged()) |path| return .{ .asset = path };
             return self.entity_editor.dragged(arena, &self.app, self.gamePtr());
+        }
+
+        /// A file or folder dropped onto the window from outside: copy it into the project, into
+        /// the Assets folder it landed on, else `resources/`.
+        fn importDropped(self: *Self, slot: Slot, dropped: sdl3.events.DropFile) void {
+            const opened = self.project orelse return self.workspace.toast("Open a project to bring files into it");
+            const at = ui.Vec2{ .x = dropped.x, .y = dropped.y };
+            const folder = if (self.pageAt(slot, at.x, at.y) == panels.assets_page) self.assets_panel.importFolder(&self.assets_ui, at) else eggy.project.resources_dir;
+            var threaded: std.Io.Threaded = .init_single_threaded;
+            const io = threaded.io();
+            var files = std.Io.Dir.cwd().openDir(io, opened.dir, .{}) catch return;
+            defer files.close(io);
+            const imported = file_ops.import(self.gpa, io, files, dropped.file_name, folder) catch |err| {
+                std.log.err("cannot bring {s} into the project: {t}", .{ dropped.file_name, err });
+                return self.workspace.toast("Couldn't bring that file in: see the Console");
+            };
+            var message: [128]u8 = undefined;
+            self.workspace.toast(std.fmt.bufPrint(&message, "Added {s}", .{imported}) catch "Added the file");
+            self.history.record(.{ .create = .{ .path = imported } });
+            self.assets_panel.refreshSoon();
         }
 
         /// The chip beside the pointer while `dragged` is over page `index`: its name, or why
