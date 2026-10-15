@@ -12,6 +12,7 @@ const dock = ui.dock;
 const menus = @import("menus.zig");
 const panels = @import("panels.zig");
 const play_button = @import("play_button.zig");
+const hit_test = @import("hit_test.zig");
 const Panel = panels.Panel;
 /// Eggy's version, from its `build.zig.zon`.
 const eggy_version = @import("build_options").version;
@@ -44,6 +45,8 @@ pub const Outcome = union(enum) {
     /// File > Open Project with Developer Eggy (Open Project with Shift held): open a project
     /// linked to the Eggy codebase being developed.
     open_project_linked,
+    /// Help > DevTools (F12): open or close the DevTools window.
+    toggle_devtools,
     /// File > Open Project Folder: show the project in the system's file manager.
     open_project_folder,
     /// File > Upgrade Editor: move the project to the newest Eggy.
@@ -51,7 +54,7 @@ pub const Outcome = union(enum) {
     /// File > Link Developer Eggy (Upgrade Editor with Shift held): link the project to the
     /// Eggy codebase being developed.
     link_developer,
-    /// The status bar's Reload: open the rebuilt editor, rebuilding it first if need be.
+    /// The title bar's Reload: open the rebuilt editor, rebuilding it first if need be.
     reload,
 };
 
@@ -91,6 +94,8 @@ pub const Workspace = struct {
     playing: bool = false,
     /// The project open in this editor, shown in the status bar; its text belongs to the editor.
     project: ?Project = null,
+    /// Help > DevTools' tools while open, for their highlight over the main window.
+    devtools: ?*ui.devtools.Devtools = null,
     /// The rebuild's state, shown in the status bar; its text must last until `draw`.
     build_state: BuildState = .idle,
     /// Which Eggy this editor was built with, for the status bar: a packaged engine's short
@@ -202,7 +207,10 @@ pub const Workspace = struct {
         const docked = try self.dock.build(b, .main, dock_rect, panels.Provider{ .placements = &self.placed, .slot = main_slot, .plugin_panels = self.plugin_panels });
         const play = try play_button.element(b, self.playing, viewport.x, viewport.w, bar_height);
         const status = try self.statusBar(b, viewport.w);
-        const main = try b.node(0, .{ .width = viewport.w, .height = viewport.h, .direction = .column }, .none, &.{ top_bar, docked, status, play });
+        var main_children: std.ArrayList(*L.Element) = .empty;
+        try main_children.appendSlice(b.allocator, &.{ top_bar, docked, status, play });
+        if (self.project != null) try main_children.append(b.allocator, try self.reloadButton(b, viewport, bar_height));
+        const main = try b.node(0, .{ .width = viewport.w, .height = viewport.h, .direction = .column }, .none, main_children.items);
         main.layout(viewport, font);
         self.roots[main_slot] = main;
 
@@ -215,6 +223,18 @@ pub const Workspace = struct {
             tree.layout(area, font);
             self.roots[slot] = tree;
         }
+    }
+
+    /// Reload, floating on the title bar just right of the play button: lit once a rebuild made a
+    /// new editor.
+    fn reloadButton(self: *const Workspace, b: L.Builder, viewport: ui.Rect, bar_height: f32) !*L.Element {
+        const height = widgets.flush_trigger_height;
+        const variant: @FieldType(@FieldType(L.Paint, "button"), "variant") = if (self.build_state == .ready) .default else .outline;
+        const reload = try b.node(reload_id, .{ .height = height, .z_index = 50 }, .{ .button = .{ .label = "Reload", .variant = variant, .size = .sm } }, &.{});
+        reload.overlay = .{ .point = .init(viewport.x + (viewport.w + play_button.width) / 2 + 8, (bar_height - height) / 2) };
+        reload.cursor = .pointer;
+        reload.accessibility = .{ .role = .button, .label = "Reload", .description = "Rebuild the project's editor and open it" };
+        return reload;
     }
 
     /// The bar along the main window's bottom: which project is open (and where), the rebuild,
@@ -236,14 +256,6 @@ pub const Workspace = struct {
             .building => |detail| try children.append(b.allocator, try text(b, try std.fmt.allocPrint(b.allocator, "Building: {s}", .{detail}), .muted)),
             .failed => try children.append(b.allocator, try text(b, "Build failed: see the Console", .foreground)),
             .ready => try children.append(b.allocator, try text(b, "Rebuilt", .foreground)),
-        }
-        // Reload is always there with a project: lit once a rebuild made a new editor.
-        if (self.project != null) {
-            const variant: @FieldType(@FieldType(L.Paint, "button"), "variant") = if (self.build_state == .ready) .default else .outline;
-            const reload = try b.node(reload_id, .{ .height = status_height - 4, .padding = .{ .left = 8, .right = 8 } }, .{ .button = .{ .label = "Reload", .variant = variant } }, &.{});
-            reload.cursor = .pointer;
-            reload.accessibility.description = "Rebuild the project's editor and open it";
-            try children.append(b.allocator, reload);
         }
         if (self.playing) try children.append(b.allocator, try text(b, "Playing", .foreground));
         const version = if (self.engine_label) |label|
@@ -273,10 +285,11 @@ pub const Workspace = struct {
             controls = if (controls) |so_far| .{ .x = so_far.x, .y = so_far.y, .w = r.x + r.w - so_far.x, .h = so_far.h } else r;
         };
         if (controls) |rect| frame.controls = rect;
-        if (root.find(play_button.id)) |play| {
-            frame.extra_controls[0] = play.bounds;
-            frame.extra_count = 1;
-        }
+        // The play and Reload buttons float on the bar, and take presses too.
+        for ([_]u32{ play_button.id, reload_id }) |id| if (root.find(id)) |button| {
+            frame.extra_controls[frame.extra_count] = button.bounds;
+            frame.extra_count += 1;
+        };
         return frame;
     }
 
@@ -313,6 +326,15 @@ pub const Workspace = struct {
             root.drawOverlays(&c) catch |err| switch (err) {
                 error.OutOfVertices => continue,
                 else => return err,
+            };
+            // DevTools' highlight of the element inspected, over everything. It lets go of the
+            // page it was given, so a retry hands it over again.
+            if (slot == main_slot) if (self.devtools) |tools| {
+                tools.page = root;
+                tools.highlight(&c, gpa) catch |err| switch (err) {
+                    error.OutOfVertices => continue,
+                    else => return err,
+                };
             };
             break buffer[0..c.len];
         };
@@ -399,6 +421,7 @@ pub const Workspace = struct {
                     if (self.dock.dismissMenu()) return .handled;
                 }
                 // The menus' shortcuts.
+                if (key.key == .f12 and !key.repeat) return .toggle_devtools;
                 if (key.repeat or !(key.modifiers.control or key.modifiers.super)) return .ignored;
                 const command: menus.Command = switch (key.key) {
                     .n => .new_project,
@@ -436,6 +459,7 @@ pub const Workspace = struct {
                 .open_project_folder => return .open_project_folder,
                 .upgrade_editor => return .upgrade_editor,
                 .link_developer => return .link_developer,
+                .devtools => return .toggle_devtools,
                 .reset_layout => self.resetLayout() catch |err| std.log.warn("cannot reset the layout: {t}", .{err}),
                 // ponytail: stubs until the editor has projects, undo history and settings.
                 else => std.log.info("{t}: not implemented yet", .{command}),
@@ -452,25 +476,7 @@ pub const Workspace = struct {
     /// The topmost interactive element under (x, y) in window `slot`'s last tree, or 0.
     fn controlAt(self: *const Workspace, slot: Slot, x: f32, y: f32) u32 {
         const root = self.roots[slot] orelse return 0;
-        var best = Hit{};
-        best.visit(root, 0, x, y);
-        return best.id;
-    }
-};
-
-/// Hit testing as Weeoui's `Context` does it: the highest overlay layer wins, then the smallest box.
-const Hit = struct {
-    id: u32 = 0,
-    z: i16 = std.math.minInt(i16),
-    area: f32 = std.math.inf(f32),
-
-    fn visit(self: *Hit, element: *const L.Element, layer: i16, x: f32, y: f32) void {
-        const z = if (element.overlay != null) element.style.z_index else layer;
-        const rect = element.bounds.intersection(element.clip);
-        if (element.id != 0 and rect.contains(x, y) and (z > self.z or (z == self.z and rect.w * rect.h < self.area))) {
-            self.* = .{ .id = element.id, .z = z, .area = rect.w * rect.h };
-        }
-        for (element.children) |child| self.visit(child, z, x, y);
+        return hit_test.controlAt(root, x, y);
     }
 };
 

@@ -47,6 +47,7 @@ pub const Command = enum(u32) {
     redo,
     preferences,
     reset_layout,
+    devtools,
     about,
 };
 /// Window menu items: `window_item_first` + panel id.
@@ -126,6 +127,8 @@ pub const Menubar = struct {
             .{ .id = @intFromEnum(Menu.view), .label = Menu.view.label(), .items = &.{} },
             .{ .id = @intFromEnum(Menu.window), .label = Menu.window.label(), .items = window_items },
             .{ .id = @intFromEnum(Menu.help), .label = Menu.help.label(), .items = &.{
+                .{ .id = @intFromEnum(Command.devtools), .label = "DevTools", .shortcut = "F12" },
+                .{ .kind = .separator },
                 .{ .id = @intFromEnum(Command.about), .label = "About Eggy" },
             } },
         };

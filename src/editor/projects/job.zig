@@ -182,14 +182,18 @@ pub const Job = struct {
         };
     }
 
-    /// Open the project's editor with `--project`; call once the job is `done`. The editor
-    /// runs on its own, so this one can quit.
-    pub fn launchEditor(self: *Job) !void {
+    /// Open the project's editor with `--project`, and `extra_args` after it; call once the job
+    /// is `done`. The editor runs on its own, so this one can quit.
+    pub fn launchEditor(self: *Job, extra_args: []const []const u8) !void {
         const exe = try std.fmt.allocPrint(self.gpa, "{s}{c}zig-out{c}bin{c}{s}_editor{s}", .{ self.dir, std.fs.path.sep, std.fs.path.sep, std.fs.path.sep, self.name, builtin.target.exeFileExt() });
         defer self.gpa.free(exe);
         log.info("opening {s}", .{exe});
+        var argv: std.ArrayList([]const u8) = .empty;
+        defer argv.deinit(self.gpa);
+        try argv.appendSlice(self.gpa, &.{ exe, "--project", self.dir });
+        try argv.appendSlice(self.gpa, extra_args);
         _ = try std.process.spawn(self.io(), .{
-            .argv = &.{ exe, "--project", self.dir },
+            .argv = argv.items,
             .cwd = .{ .path = self.dir },
             .stdin = .ignore,
         });

@@ -141,7 +141,7 @@ pub const ProjectFlow = struct {
                 try self.window.present(graphics, style, &page);
                 if (page.action != .none) return .closed;
                 if (status.stage == .done) {
-                    try working.job.launchEditor();
+                    try working.job.launchEditor(&.{});
                     return .launched;
                 }
             },

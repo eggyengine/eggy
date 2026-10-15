@@ -17,6 +17,8 @@ const Job = job_zig.Job;
 const Upgrades = @import("projects/upgrades.zig").Upgrades;
 const file_manager = @import("file_manager.zig");
 const BuildWindow = @import("build_window.zig").BuildWindow;
+const DevtoolsWindow = @import("devtools_window.zig").DevtoolsWindow;
+const window_placement = @import("window_placement.zig");
 const source_stamp = @import("projects/source_stamp.zig");
 const Console = @import("console.zig").Console;
 const panels = @import("panels.zig");
@@ -72,6 +74,10 @@ pub fn Editor(comptime project: type) type {
         /// The project's sources as the last build (or the one that made this editor) saw them;
         /// refocusing rebuilds only once they change.
         built_sources: source_stamp.Stamp = .{},
+        /// Help > DevTools' window, while open.
+        devtools_window: ?*DevtoolsWindow = null,
+        /// When the last frame started, for DevTools' Performance.
+        frame_start_ns: u64 = 0,
         /// Whether to open the project's editor once `rebuild` is done, changed or not (Reload).
         reload_when_built: bool = false,
         /// When the editor's windows last lost focus, until one gains it again; see `cameBack`.
@@ -100,7 +106,8 @@ pub fn Editor(comptime project: type) type {
             errdefer app.deinit();
             const opened_project = try openProject(gpa, app.window.window, args);
             errdefer if (opened_project) |opened| freeProject(gpa, opened);
-            app.window.window.maximize() catch |err| std.log.warn("cannot maximize the editor: {t}", .{err});
+            // Where the editor that reloaded into this one was (see `launchRebuilt`), else maximized.
+            if (window_placement.fromArgs(args)) |placement| placement.apply(app.window.window) else app.window.window.maximize() catch |err| std.log.warn("cannot maximize the editor: {t}", .{err});
             icon.apply(app.window.window);
             var context = try ui.Context.init(gpa);
             errdefer context.deinit();
@@ -148,6 +155,7 @@ pub fn Editor(comptime project: type) type {
             self.plugins.deinit();
             if (self.project_flow) |flow| flow.close(&self.app.graphics);
             if (self.build_window) |window| window.close(&self.app.graphics);
+            if (self.devtools_window) |window| window.close(&self.app.graphics);
             if (self.rebuild) |job| job.deinit();
             if (self.picked_project.swap(null, .acq_rel)) |path| std.heap.c_allocator.free(std.mem.span(path));
             if (self.project) |opened| freeProject(self.gpa, opened);
@@ -207,6 +215,15 @@ pub fn Editor(comptime project: type) type {
             const modifiers = sdl3.keyboard.getModState();
             self.workspace.shift_held = modifiers.left_shift or modifiers.right_shift;
             try self.workspace.build(viewport, window_viewports, self.ui.font);
+            // Help > DevTools, on this frame's main window, before that draws their highlight.
+            self.workspace.devtools = null;
+            if (self.devtools_window) |window| {
+                const now = sdl3.timer.getNanosecondsSinceInit();
+                if (self.frame_start_ns != 0) window.tools.recordFrame(@as(f32, @floatFromInt(now - self.frame_start_ns)) / std.time.ns_per_ms);
+                self.frame_start_ns = now;
+                try window.update(&self.app.graphics, &self.ui, self.workspace.roots[main_slot].?);
+                self.workspace.devtools = &window.tools;
+            }
             self.frame.* = self.workspace.titlebarFrame();
 
             // Build each page's UI into its panel, wherever that is.
@@ -275,6 +292,28 @@ pub fn Editor(comptime project: type) type {
             if (self.?.picked_project.swap(copy.ptr, .acq_rel)) |old| std.heap.c_allocator.free(std.mem.span(old));
         }
 
+        /// Open the editor `job` rebuilt in place of this one, where this one's window is.
+        fn launchRebuilt(self: *Self, job: *Job) !void {
+            var buffer: [64]u8 = undefined;
+            const placement = window_placement.Placement.of(self.app.window.window) orelse return job.launchEditor(&.{});
+            try job.launchEditor(&.{ window_placement.flag, try placement.format(&buffer) });
+        }
+
+        /// Help > DevTools (F12): open the DevTools window, or close it.
+        fn toggleDevtools(self: *Self) void {
+            if (self.devtools_window) |window| {
+                window.close(&self.app.graphics);
+                self.devtools_window = null;
+                self.workspace.devtools = null;
+                self.frame_start_ns = 0;
+                return;
+            }
+            self.devtools_window = DevtoolsWindow.open(self.gpa, &self.app.graphics, self.ui.font) catch |err| {
+                std.log.err("cannot open DevTools: {t}", .{err});
+                return;
+            };
+        }
+
         /// Hide or show the main window and its pop-outs.
         fn setHidden(self: *Self, hidden: bool) void {
             if (hidden == self.hidden) return;
@@ -340,6 +379,20 @@ pub fn Editor(comptime project: type) type {
                 if (window.handle(curr_event)) return .run;
                 if (weeoui_sdl3.translate(curr_event) != null) return .run;
             }
+            // Help > DevTools' window takes its own events; while inspecting, the main window's
+            // pointer moves and presses go to it too.
+            if (self.devtools_window) |window| {
+                if (window.closeRequested(curr_event)) {
+                    self.toggleDevtools();
+                    return .run;
+                }
+                if (window.handle(curr_event)) return .run;
+                if (self.slotOf(curr_event) == main_slot) if (weeoui_sdl3.translate(curr_event)) |input| switch (input) {
+                    .pointer_move => |p| window.pointerMove(p.x, p.y),
+                    .pointer_down => |down| if (window.pointerDown(down.position.x, down.position.y)) return .run,
+                    else => {},
+                };
+            }
             const slot = self.slotOf(curr_event);
 
             // A pop-out window's close button docks its panels back into the main window.
@@ -382,6 +435,7 @@ pub fn Editor(comptime project: type) type {
                     std.log.err("cannot show {s} in the file manager: {t}", .{ opened.dir, err });
                 },
                 .upgrade_editor => if (self.upgrades.can_upgrade) try self.upgradeEditor() else self.upgrades.logUnavailable(.upgrade),
+                .toggle_devtools => self.toggleDevtools(),
                 .link_developer => if (self.upgrades.can_link) try self.linkDeveloper() else self.upgrades.logUnavailable(.link),
                 else => {},
             }
@@ -523,7 +577,7 @@ pub fn Editor(comptime project: type) type {
             const status = try job.status(arena);
             // Reload asked for the editor as soon as it is built.
             if (self.reload_when_built and status.stage == .done) {
-                try job.launchEditor();
+                try self.launchRebuilt(job);
                 return true;
             }
             switch (try window.update(&self.app.graphics, &self.ui, status, self.workspace.build_state == .ready)) {
@@ -534,7 +588,7 @@ pub fn Editor(comptime project: type) type {
                     self.closeBuildWindow();
                 },
                 .reload => {
-                    try job.launchEditor();
+                    try self.launchRebuilt(job);
                     return true;
                 },
             }
@@ -564,12 +618,12 @@ pub fn Editor(comptime project: type) type {
             self.rebuild = null;
         }
 
-        /// The status bar's Reload: open the rebuilt editor if a rebuild made one; otherwise
+        /// The title bar's Reload: open the rebuilt editor if a rebuild made one; otherwise
         /// rebuild (in the Build progress window) and open the result, changed or not. Returns
         /// whether the editor should quit, as the new one is open.
         fn forceReload(self: *Self) !bool {
             if (self.workspace.build_state == .ready) if (self.rebuild) |job| {
-                try job.launchEditor();
+                try self.launchRebuilt(job);
                 return true;
             };
             if (self.buildRunning()) {
@@ -740,6 +794,9 @@ test {
     _ = @import("projects/upgrades.zig");
     _ = @import("file_manager.zig");
     _ = @import("build_window.zig");
+    _ = @import("devtools_window.zig");
+    _ = @import("hit_test.zig");
+    _ = @import("window_placement.zig");
     _ = @import("projects/source_stamp.zig");
     _ = @import("terminal_view.zig");
     _ = @import("console_log.zig");
