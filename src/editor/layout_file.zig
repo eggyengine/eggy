@@ -20,14 +20,17 @@ const Saved = struct {
     floating: @FieldType(dock.DockSpace, "floating"),
     windows: [dock.max_windows]?struct { root: u8, size: [2]f32 },
     z_counter: u32,
+    /// The plugin panels (by title) this user has had: one closed stays closed, rather than
+    /// docking again as new.
+    seen_panels: []const []const u8 = &.{},
 };
 
-/// Write `layout` to the user's `layout.zon` in `folder` (Eggy's data folder). Failures are
-/// logged: a layout not kept isn't worth stopping for.
-pub fn save(gpa: std.mem.Allocator, folder: []const u8, layout: *const dock.DockSpace) void {
+/// Write `layout`, and the plugin panels `seen_panels` (titles), to the user's `layout.zon` in
+/// `folder` (Eggy's data folder). Failures are logged: a layout not kept isn't worth stopping for.
+pub fn save(gpa: std.mem.Allocator, folder: []const u8, layout: *const dock.DockSpace, seen_panels: []const []const u8) void {
     var text: std.Io.Writer.Allocating = .init(gpa);
     defer text.deinit();
-    serialize(layout, &text.writer) catch return;
+    serialize(layout, seen_panels, &text.writer) catch return;
 
     var threaded: std.Io.Threaded = .init_single_threaded;
     const io = threaded.io();
@@ -37,33 +40,36 @@ pub fn save(gpa: std.mem.Allocator, folder: []const u8, layout: *const dock.Dock
     dir.writeFile(io, .{ .sub_path = file_name, .data = text.written() }) catch |err| log.warn("cannot keep the layout: {t}", .{err});
 }
 
-/// A hash of what `save` would write of `layout`, to tell when it changed.
-pub fn fingerprint(layout: *const dock.DockSpace) u64 {
+/// A hash of what `save` would write, to tell when it changed.
+pub fn fingerprint(layout: *const dock.DockSpace, seen_panels: []const []const u8) u64 {
     var hasher = std.hash.Wyhash.init(0);
     var buffer: [256]u8 = undefined;
     var writer = std.Io.Writer.Hashing(std.hash.Wyhash).initHasher(hasher, &buffer);
-    serialize(layout, &writer.writer) catch return 0;
+    serialize(layout, seen_panels, &writer.writer) catch return 0;
     writer.writer.flush() catch return 0;
     hasher = writer.hasher;
     return hasher.final();
 }
 
-fn serialize(layout: *const dock.DockSpace, writer: *std.Io.Writer) !void {
-    var saved = Saved{ .version = version, .nodes = layout.nodes, .homes = layout.homes, .root = layout.root, .floating = layout.floating, .windows = undefined, .z_counter = layout.z_counter };
+fn serialize(layout: *const dock.DockSpace, seen_panels: []const []const u8, writer: *std.Io.Writer) !void {
+    var saved = Saved{ .version = version, .nodes = layout.nodes, .homes = layout.homes, .root = layout.root, .floating = layout.floating, .windows = undefined, .z_counter = layout.z_counter, .seen_panels = seen_panels };
     for (&saved.windows, layout.windows) |*kept, window| kept.* = if (window) |open| .{ .root = open.root, .size = open.size } else null;
     try std.zon.stringify.serialize(saved, .{ .whitespace = false }, writer);
 }
 
-/// Put the user's saved layout into `layout`, keeping its buttons and settings. Returns false,
-/// leaving `layout` as it was, when there is none or it can't be read.
-pub fn load(gpa: std.mem.Allocator, folder: []const u8, layout: *dock.DockSpace) bool {
+/// Put the user's saved layout into `layout`, keeping its buttons and settings, and the plugin
+/// panels it has seen into `seen_panels` (each title owned by `gpa`). Returns false, leaving both
+/// as they were, when there is none or it can't be read.
+pub fn load(gpa: std.mem.Allocator, folder: []const u8, layout: *dock.DockSpace, seen_panels: *std.ArrayList([]u8)) bool {
     var threaded: std.Io.Threaded = .init_single_threaded;
     const io = threaded.io();
     var dir = std.Io.Dir.cwd().openDir(io, folder, .{}) catch return false;
     defer dir.close(io);
     const source = dir.readFileAllocOptions(io, file_name, gpa, .limited(4 << 20), .of(u8), 0) catch return false;
     defer gpa.free(source);
-    const saved = std.zon.parse.fromSlice(Saved, gpa, source, null, .{ .ignore_unknown_fields = true }) catch {
+    var arena = std.heap.ArenaAllocator.init(gpa);
+    defer arena.deinit();
+    const saved = std.zon.parse.fromSliceAlloc(Saved, arena.allocator(), source, null, .{ .ignore_unknown_fields = true }) catch {
         log.info("{s} is from another version of Eggy: the default layout is used", .{file_name});
         return false;
     };
@@ -76,6 +82,13 @@ pub fn load(gpa: std.mem.Allocator, folder: []const u8, layout: *dock.DockSpace)
     layout.z_counter = saved.z_counter;
     layout.drag = .none;
     layout.menu = 0xFF;
+    for (saved.seen_panels) |title| {
+        const copy = gpa.dupe(u8, title) catch break;
+        seen_panels.append(gpa, copy) catch {
+            gpa.free(copy);
+            break;
+        };
+    }
     return true;
 }
 
@@ -90,17 +103,23 @@ test "a layout saved is a layout restored" {
     try original.add(1, null, .center);
     try original.add(2, 1, .right);
     try original.detach(1);
-    save(gpa, folder, &original);
+    save(gpa, folder, &original, &.{"Stats"});
 
     var restored = dock.DockSpace.init();
-    try std.testing.expect(load(gpa, folder, &restored));
+    var seen: std.ArrayList([]u8) = .empty;
+    defer {
+        for (seen.items) |title| gpa.free(title);
+        seen.deinit(gpa);
+    }
+    try std.testing.expect(load(gpa, folder, &restored, &seen));
+    try std.testing.expectEqualStrings("Stats", seen.items[0]);
     try std.testing.expect(restored.nodeOf(2) != null);
     try std.testing.expect(restored.windows[0] != null);
-    try std.testing.expect(!load(gpa, "/nonexistent/eggy", &restored));
+    try std.testing.expect(!load(gpa, "/nonexistent/eggy", &restored, &seen));
 
     // A change shows in the fingerprint; the same layout doesn't.
-    const before = fingerprint(&restored);
-    try std.testing.expectEqual(before, fingerprint(&restored));
+    const before = fingerprint(&restored, &.{});
+    try std.testing.expectEqual(before, fingerprint(&restored, &.{}));
     try restored.add(3, 2, .bottom);
-    try std.testing.expect(fingerprint(&restored) != before);
+    try std.testing.expect(fingerprint(&restored, &.{}) != before);
 }

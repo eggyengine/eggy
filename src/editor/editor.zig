@@ -207,7 +207,7 @@ pub fn Editor(comptime project: type) type {
             const preference_folders = try preferences.Folders.init(gpa, if (opened_project) |opened| opened.dir else null);
             errdefer preference_folders.deinit(gpa);
             // The layout this user left the dock in last, in any project.
-            _ = layout_file.load(gpa, preference_folders.global, &workspace.dock);
+            _ = layout_file.load(gpa, preference_folders.global, &workspace.dock, &workspace.seen_plugin_panels);
             preferences.load(gpa, &app.preference_values, preference_folders);
             console.levels[@intFromEnum(std.log.Level.debug)] = preferences.editor(&app.preference_values).show_debug_logs;
 
@@ -249,7 +249,7 @@ pub fn Editor(comptime project: type) type {
             if (self.devtools_window) |window| window.close(&self.app.graphics);
             if (self.preferences_window) |window| window.close(&self.app.graphics);
             // The dock as this user left it, for the next editor.
-            layout_file.save(self.gpa, self.preference_folders.global, &self.workspace.dock);
+            layout_file.save(self.gpa, self.preference_folders.global, &self.workspace.dock, self.workspace.seen_plugin_panels.items);
             self.preference_folders.deinit(self.gpa);
             if (self.open_scene) |*scene| scene.deinit();
             self.play_mode.deinit();
@@ -400,7 +400,7 @@ pub fn Editor(comptime project: type) type {
                 const action: job_zig.Action = if (self.picking_to_link) .{ .link = self.upgrades.developer_dir orelse "" } else .open;
                 const confirmed = action == .open or self.upgrades.confirmLink(self.app.window.window, std.fs.path.basename(dir));
                 // The layout first, for the editor the project opens in.
-                if (self.project_flow == null and confirmed) layout_file.save(self.gpa, self.preference_folders.global, &self.workspace.dock);
+                if (self.project_flow == null and confirmed) layout_file.save(self.gpa, self.preference_folders.global, &self.workspace.dock, self.workspace.seen_plugin_panels.items);
                 if (self.project_flow == null and confirmed) self.project_flow = try ProjectFlow.open(self.gpa, &self.app.graphics, self.ui.font, self.mono, dir, action);
             }
             // File > New/Open Project's window, if open.
@@ -444,7 +444,7 @@ pub fn Editor(comptime project: type) type {
         fn launchRebuilt(self: *Self, job: *Job) !void {
             var buffer: [64]u8 = undefined;
             // The layout first: the new editor reads it as it starts, before this one has closed.
-            layout_file.save(self.gpa, self.preference_folders.global, &self.workspace.dock);
+            layout_file.save(self.gpa, self.preference_folders.global, &self.workspace.dock, self.workspace.seen_plugin_panels.items);
             const placement = window_placement.Placement.of(self.app.window.window) orelse return job.launchEditor(&.{});
             try job.launchEditor(&.{ window_placement.flag, try placement.format(&buffer) });
         }
@@ -810,7 +810,7 @@ pub fn Editor(comptime project: type) type {
                 .window => |button| if (weeoui_sdl3.windowAction(self.app.window.window, button)) return .success,
                 .play => |playing| if (playing) self.startPlaying() else self.stopPlaying(),
                 .new_project => if (self.project_flow == null) {
-                    layout_file.save(self.gpa, self.preference_folders.global, &self.workspace.dock);
+                    layout_file.save(self.gpa, self.preference_folders.global, &self.workspace.dock, self.workspace.seen_plugin_panels.items);
                     self.project_flow = try ProjectFlow.create(self.gpa, &self.app.graphics, self.ui.font, self.mono);
                 },
                 .reload => if (try self.forceReload()) return .success,
@@ -1164,7 +1164,7 @@ pub fn Editor(comptime project: type) type {
             const now = sdl3.timer.getMillisecondsSinceInit();
             if (now -| self.layout_checked_ms < 500) return;
             self.layout_checked_ms = now;
-            const current = layout_file.fingerprint(&self.workspace.dock);
+            const current = layout_file.fingerprint(&self.workspace.dock, self.workspace.seen_plugin_panels.items);
             if (current == self.layout_saved) {
                 self.layout_changed_ms = null;
                 return;
@@ -1172,7 +1172,7 @@ pub fn Editor(comptime project: type) type {
             const since = self.layout_changed_ms orelse now;
             self.layout_changed_ms = since;
             if (now -| since < 1000) return;
-            layout_file.save(self.gpa, self.preference_folders.global, &self.workspace.dock);
+            layout_file.save(self.gpa, self.preference_folders.global, &self.workspace.dock, self.workspace.seen_plugin_panels.items);
             self.layout_saved = current;
             self.layout_changed_ms = null;
         }

@@ -158,6 +158,9 @@ pub const Workspace = struct {
     /// The panels plugins add (`eggy.plugins.Set.editor_panels`); panel i has dock id
     /// `panels.plugin_first + i`.
     plugin_panels: []const eggy.plugins.EditorPanel,
+    /// The plugin panels (by title, owned) this user has had, kept with the layout: only one not
+    /// among them docks by itself, so a panel closed stays closed.
+    seen_plugin_panels: std.ArrayList([]u8) = .empty,
     /// Where the Scene and pages are, for the editor to draw into.
     placed: panels.Placements = .{},
     arena: std.heap.ArenaAllocator,
@@ -173,6 +176,8 @@ pub const Workspace = struct {
     }
 
     pub fn deinit(self: *Workspace) void {
+        for (self.seen_plugin_panels.items) |title| self.arena.child_allocator.free(title);
+        self.seen_plugin_panels.deinit(self.arena.child_allocator);
         self.shell.deinit(self.arena.child_allocator);
         self.vertices.deinit(self.arena.child_allocator);
         self.arena.deinit();
@@ -188,15 +193,24 @@ pub const Workspace = struct {
         // Panels it no longer has go, wherever they are (a restored layout may hold any).
         for (shown.len..max_plugin_panels) |i| self.dock.remove(panels.plugin_first + @as(u32, @intCast(i)));
         self.plugin_panels = shown;
-        // New ones dock beside the Inspector, unless a restored layout already placed them.
+        // New ones dock beside the Inspector, unless a restored layout already placed them or
+        // this user has had them before (and closed them, if they aren't there).
         var added = false;
         if (shown.len > old_len) for (old_len..shown.len) |i| {
             const id = panels.plugin_first + @as(u32, @intCast(i));
-            if (self.dock.nodeOf(id) != null) continue;
+            if (self.dock.nodeOf(id) != null or self.seenPanel(shown[i].title)) continue;
+            const gpa = self.arena.child_allocator;
+            const title = gpa.dupe(u8, shown[i].title) catch continue;
+            self.seen_plugin_panels.append(gpa, title) catch gpa.free(title);
             self.dock.add(id, @intFromEnum(Panel.inspector), .center) catch |err| std.log.warn("cannot dock the game's panel {s}: {t}", .{ shown[i].title, err });
             added = true;
         };
         if (added) _ = self.dock.activate(dock.first_id + @intFromEnum(Panel.inspector));
+    }
+
+    fn seenPanel(self: *const Workspace, title: []const u8) bool {
+        for (self.seen_plugin_panels.items) |seen| if (std.mem.eql(u8, seen, title)) return true;
+        return false;
     }
 
     /// The default arrangement: hierarchy left, inspector right (plugin panels as tabs beside it),
@@ -746,4 +760,20 @@ test "the save toast shows for a while, inside the window" {
     workspace.time_ms = 1000 + toast_ms;
     try workspace.build(viewport, @splat(null), &font);
     try std.testing.expect(workspace.roots[main_slot].?.children[workspace.roots[main_slot].?.children.len - 1].paint_kind != .surface);
+}
+
+test "a plugin panel closed stays closed across swaps and restarts" {
+    var workspace = try Workspace.init(std.testing.allocator, titlebar.Layout.default(.linux), &.{});
+    defer workspace.deinit();
+    const stats = panels.plugin_first;
+    workspace.setPluginPanels(&test_plugin_panels);
+    try std.testing.expect(workspace.dock.nodeOf(stats) != null);
+    workspace.dock.remove(stats); // closed
+    // The game swapped (its panels gone, then back), as on a rebuild or the next start.
+    workspace.setPluginPanels(&.{});
+    workspace.setPluginPanels(&test_plugin_panels);
+    try std.testing.expect(workspace.dock.nodeOf(stats) == null);
+    // Window > Stats still brings it back.
+    _ = workspace.run(.{ .toggle_panel = stats });
+    try std.testing.expect(workspace.dock.nodeOf(stats) != null);
 }
