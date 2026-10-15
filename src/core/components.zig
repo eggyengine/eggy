@@ -7,6 +7,14 @@
 //!     pub const Plugin = struct {
 //!         pub const components = .{Spin};
 //!     };
+//!
+//! A component can depend on others, listed in its `dependencies`: adding it adds them, and the
+//! editor won't remove one while another needs it.
+//!
+//!     pub const Spin = struct {
+//!         pub const dependencies = .{eggy.Transform};
+//!         speed: f32 = 1,
+//!     };
 const std = @import("std");
 const ecs = @import("clutch");
 const refs = @import("refs.zig");
@@ -106,6 +114,8 @@ pub const Info = struct {
     fields: []const Field,
     /// Whether the editor can add it to an entity: every field has a default.
     addable: bool,
+    /// The components it depends on (its `dependencies`), as indices among the same types.
+    dependencies: []const usize = &.{},
 };
 
 /// The components in `types`, listed by `owners` (one each), for a world's entities. `infos[i]`
@@ -114,7 +124,10 @@ pub fn Registry(comptime types: []const type, comptime owners: []const [:0]const
     return struct {
         pub const infos: []const Info = blk: {
             var list: [types.len]Info = undefined;
-            for (&list, types, owners) |*info, T, owner| info.* = infoOf(T, owner);
+            for (&list, types, owners) |*info, T, owner| {
+                info.* = infoOf(T, owner);
+                info.dependencies = dependencyIndices(T, types);
+            }
             const frozen = list;
             break :blk &frozen;
         };
@@ -127,12 +140,17 @@ pub fn Registry(comptime types: []const type, comptime owners: []const [:0]const
 
         /// Give `entity` component `component`, with its defaults. Fails with
         /// `error.NotAddable` for one whose fields aren't all defaulted.
+        /// What it depends on comes first, each with its defaults, where the entity hasn't it.
         pub fn add(world: *ecs.World, entity: ecs.EntityId, component: usize) anyerror!void {
+            if (component >= types.len) return error.NoSuchComponent;
+            for (infos[component].dependencies) |dependency| {
+                if (!has(world, entity, dependency)) try add(world, entity, dependency);
+            }
             inline for (types, 0..) |T, i| if (i == component) {
                 if (comptime !infoOf(T, "").addable) return error.NotAddable;
                 return world.addComponent(entity, T{});
             };
-            return error.NoSuchComponent;
+            unreachable;
         }
 
         pub fn remove(world: *ecs.World, entity: ecs.EntityId, component: usize) void {
@@ -170,6 +188,21 @@ pub fn Registry(comptime types: []const type, comptime owners: []const [:0]const
             return error.NoSuchComponent;
         }
     };
+}
+
+/// Where each of component `T`'s `dependencies` is among `types`. A dependency nobody lists is
+/// a compile error: the editor couldn't add it.
+fn dependencyIndices(comptime T: type, comptime types: []const type) []const usize {
+    if (!@hasDecl(T, "dependencies")) return &.{};
+    var indices: [T.dependencies.len]usize = undefined;
+    for (&indices, 0..) |*index, d| {
+        const Dependency = T.dependencies[d];
+        index.* = for (types, 0..) |Listed, i| {
+            if (Listed == Dependency) break i;
+        } else @compileError(@typeName(T) ++ " depends on " ++ @typeName(Dependency) ++ ", which no plugin lists in its `components`");
+    }
+    const frozen = indices;
+    return &frozen;
 }
 
 /// The components `T` (a game or plugin type) lists in its `components`, if any.
@@ -619,4 +652,19 @@ test "references inside a union are written as what they point at" {
     text.clearRetainingCapacity();
     try Components.writeField(&world, entity, 0, 0, &text.writer);
     try std.testing.expectEqualStrings(".{.model=\"art/ship.glb\"}", text.written());
+}
+
+test "adding a component adds what it depends on" {
+    const Body = struct { mass: f32 = 1 };
+    const Wheel = struct {
+        pub const dependencies = .{Body};
+        radius: f32 = 0.5,
+    };
+    const Components = Registry(&.{ Wheel, Body }, &.{ "game", "game" });
+    try std.testing.expectEqualSlices(usize, &.{1}, Components.infos[0].dependencies);
+    var world = ecs.World.init(std.testing.allocator);
+    defer world.deinit();
+    const entity = try world.spawn(.{});
+    try Components.add(&world, entity, 0);
+    try std.testing.expect(Components.has(&world, entity, 1));
 }

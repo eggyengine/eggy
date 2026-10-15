@@ -7,7 +7,7 @@ const std = @import("std");
 const eggy = @import("eggy");
 
 /// Bumped whenever these types change, so an editor refuses a library built for another.
-pub const version: u32 = 12;
+pub const version: u32 = 13;
 
 /// The library's one exported function: `fn () callconv(.c) *const Game`.
 pub const entry_symbol = "eggy_game";
@@ -66,6 +66,9 @@ pub const ComponentType = extern struct {
     fields: [*]const ComponentField,
     field_count: usize,
     addable: bool,
+    /// The components it depends on, as indices among these types.
+    dependencies: [*]const usize,
+    dependency_count: usize,
 };
 
 /// An entity of the app's world (`eggy.ecs.EntityId`).

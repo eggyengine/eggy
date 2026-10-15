@@ -31,6 +31,9 @@ pub const Source = union(enum) {
 };
 
 pub const Mesh = struct {
+    /// Drawn where its `Transform` puts it.
+    pub const dependencies = .{Transform};
+
     shape: Source = .cube,
     /// Red, green and blue, 0 to 1.
     color: [3]f32 = .{ 0.8, 0.8, 0.8 },

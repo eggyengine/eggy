@@ -8,6 +8,9 @@ const math = @import("eggenvector");
 const transform_zig = @import("transform.zig");
 
 pub const Camera = struct {
+    /// It looks from where its `Transform` puts it.
+    pub const dependencies = .{transform_zig.Transform};
+
     /// How much it sees, top to bottom, in degrees.
     fov_deg: f32 = 60,
     /// The nearest and furthest it sees, in metres.

@@ -42,6 +42,10 @@ pub const Details = struct {
         shown: []const ?[]const u8 = &.{},
         /// Whether its plugin is turned off: its values show, but can't be changed.
         disabled: bool = false,
+        /// The components it depends on, and those of the entity's that depend on it (which keep
+        /// it from being removed), by name, joined with commas; empty for none.
+        needs: []const u8 = "",
+        needed_by: []const u8 = "",
     };
     pub const Addable = struct { index: usize, label: []const u8 };
 };
@@ -169,13 +173,17 @@ pub const EntityInspector = struct {
             b.node(0, .{ .width = 14, .height = 14 }, .{ .icon = if (folded) .chevron_right else .chevron_down }, &.{}) catch return null,
             b.node(0, .{ .grow = 1, .gap = 1 }, .none, &.{
                 b.node(0, .{}, .{ .text = .{ .value = component.info.name, .size = 14, .wrap = true } }, &.{}) catch return null,
-                b.node(0, .{}, .{ .text = .{ .value = std.fmt.allocPrint(arena, "{s}from {s}", .{ if (component.disabled) "Disabled: its plugin is off · " else "", component.info.owner }) catch "", .size = 11, .tone = .muted, .wrap = true } }, &.{}) catch return null,
+                b.node(0, .{}, .{ .text = .{ .value = std.fmt.allocPrint(arena, "{s}from {s}{s}{s}", .{ if (component.disabled) "Disabled: its plugin is off · " else "", component.info.owner, if (component.needs.len > 0) " · needs " else "", component.needs }) catch "", .size = 11, .tone = .muted, .wrap = true } }, &.{}) catch return null,
             }) catch return null,
         }) catch return null;
         header.cursor = .pointer;
         header.accessibility = .{ .role = .button, .label = component.info.name, .expanded = !folded };
         context.element(header);
-        if (context.buttonVariant(std.fmt.allocPrint(arena, "Remove##remove {d}", .{component.index}) catch return null, .ghost)) action = .{ .remove_component = component.index };
+        // Removable unless another of its components depends on it.
+        if (component.needed_by.len > 0) {
+            context.muted(std.fmt.allocPrint(arena, "Needed by {s}", .{component.needed_by}) catch "Needed");
+            page_style.smallText(context, 11);
+        } else if (context.buttonVariant(std.fmt.allocPrint(arena, "Remove##remove {d}", .{component.index}) catch return null, .ghost)) action = .{ .remove_component = component.index };
         context.end();
         restyle(context, .{ .direction = .row, .gap = 8, .align_items = .center });
 

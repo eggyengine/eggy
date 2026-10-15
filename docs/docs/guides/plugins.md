@@ -120,6 +120,15 @@ Fields holding pointers (or strings) are shown but not edited. **Add component**
 
 The values shown are read from the world every frame, so fields your systems change update as they run.
 
+A component can depend on others. List them in its `dependencies`, and adding it (in the Inspector, or as a scene loads) adds them too; the Inspector won't remove a component while another on the entity needs it. Eggy's `Mesh` and `Camera` depend on `Transform`:
+
+```zig
+pub const Wheel = struct {
+    pub const dependencies = .{eggy.Transform};
+    radius: f32 = 0.5,
+};
+```
+
 ### Drawing shapes
 
 Every project also has Eggy's own components, listed as from `eggy`. Give an entity a `Transform` (position, rotation in degrees, scale) and a `Mesh`, and it is drawn in the scene as the `Mesh`'s shape (cube, sphere, plane, cylinder or cone) in its colour. A `Mesh`'s shape can also be a model file (`.glb`, `.gltf`, `.obj`, `.fbx`, `.dae`, `.3ds`, `.ply` or `.stl`): drag one from Assets onto the shape's dropdown. In code, `eggy.Mesh{ .shape = .of(.sphere) }` picks a built-in shape from an `eggy.mesh.Shape`. An entity inside another is placed relative to its parent's `Transform`.

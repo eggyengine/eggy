@@ -98,7 +98,9 @@ pub const EntityEditor = struct {
                 _ = loaded.writeField(app, entity, change.component, change.field, text);
             },
             .add_component => |component| _ = loaded.addComponent(app, entity, component),
-            .remove_component => |component| loaded.removeComponent(app, entity, component),
+            .remove_component => |component| if (neededBy(arena, app, loaded, entity, component).len > 0) {
+                log.warn("{s} can't be removed while another component needs it", .{loaded.component_types[component].name});
+            } else loaded.removeComponent(app, entity, component),
         };
         return true;
     }
@@ -224,9 +226,30 @@ fn collectDetails(arena: std.mem.Allocator, app: *eggy.App, game: *const HotGame
             value.* = if (game.readField(app, entity, index, field, &buffer)) |text| try arena.dupe(u8, text) else null;
             label.* = try referenceLabel(arena, app, game, field_info.kind, value.* orelse "");
         }
-        try list.append(arena, .{ .index = index, .info = info, .values = values, .shown = shown, .disabled = disabled });
+        var needs: std.ArrayList([]const u8) = .empty;
+        for (info.dependencies) |dependency| if (dependency < game.component_types.len) try needs.append(arena, game.component_types[dependency].name);
+        try list.append(arena, .{
+            .index = index,
+            .info = info,
+            .values = values,
+            .shown = shown,
+            .disabled = disabled,
+            .needs = try std.mem.join(arena, ", ", needs.items),
+            .needed_by = neededBy(arena, app, game, entity, index),
+        });
     }
     return .{ .entity = entity, .name = name, .components = list.items, .addable = addable.items };
+}
+
+/// The names of `entity`'s components that depend on component `component`, joined with commas,
+/// in `arena`; empty when none does.
+fn neededBy(arena: std.mem.Allocator, app: *eggy.App, game: *const HotGame, entity: ecs.EntityId, component: usize) []const u8 {
+    var names: std.ArrayList([]const u8) = .empty;
+    for (game.component_types, 0..) |info, index| {
+        if (std.mem.indexOfScalar(usize, info.dependencies, component) == null) continue;
+        if (game.hasComponent(app, entity, index)) names.append(arena, info.name) catch return "";
+    }
+    return std.mem.join(arena, ", ", names.items) catch "";
 }
 
 /// Whether plugin `owner` is among those keyed in `off`.
