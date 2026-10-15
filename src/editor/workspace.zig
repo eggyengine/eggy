@@ -13,6 +13,8 @@ const menus = @import("menus.zig");
 const panels = @import("panels.zig");
 const play_button = @import("play_button.zig");
 const Panel = panels.Panel;
+/// Eggy's version, from its `build.zig.zon`.
+const eggy_version = @import("build_options").version;
 
 /// Which OS window a tree, event or panel belongs to: 0 is the main window (and the panels
 /// floating inside it), 1 + i is the dock's pop-out window i.
@@ -39,10 +41,35 @@ pub const Outcome = union(enum) {
     new_project,
     /// File > Open Project.
     open_project,
+    /// File > Open Project with Developer Eggy (Open Project with Shift held): open a project
+    /// linked to the Eggy codebase being developed.
+    open_project_linked,
+    /// File > Open Project Folder: show the project in the system's file manager.
+    open_project_folder,
+    /// File > Upgrade Editor: move the project to the newest Eggy.
+    upgrade_editor,
+    /// File > Link Developer Eggy (Upgrade Editor with Shift held): link the project to the
+    /// Eggy codebase being developed.
+    link_developer,
+    /// The status bar's Reload: open the rebuilt editor, rebuilding it first if need be.
+    reload,
 };
 
 /// The project the editor has open, for the status bar.
-pub const Project = struct { title: []const u8, dir: []const u8 };
+pub const Project = struct { name: []const u8, title: []const u8, dir: []const u8 };
+
+/// How the build after refocusing went, for the status bar.
+pub const BuildState = union(enum) {
+    idle,
+    /// Under way; what it is doing.
+    building: []const u8,
+    failed,
+    /// Done, and the editor changed: Reload opens the new one.
+    ready,
+};
+
+/// The status bar's Reload button, below `dock.first_id`.
+const reload_id: u32 = 0x5000_0002;
 
 /// Height of the status bar along the main window's bottom.
 const status_height: f32 = 24;
@@ -64,6 +91,20 @@ pub const Workspace = struct {
     playing: bool = false,
     /// The project open in this editor, shown in the status bar; its text belongs to the editor.
     project: ?Project = null,
+    /// The rebuild's state, shown in the status bar; its text must last until `draw`.
+    build_state: BuildState = .idle,
+    /// Which Eggy this editor was built with, for the status bar: a packaged engine's short
+    /// version or the codebase it is linked to. Its text belongs to the editor.
+    engine_label: ?[]const u8 = null,
+    /// Whether a newer engine than the project's is unpacked, for File > Upgrade Editor.
+    can_upgrade: bool = false,
+    /// Whether the project can be linked to the Eggy codebase being developed.
+    can_link: bool = false,
+    /// Whether an Eggy codebase being developed is known, for Open Project with Developer Eggy.
+    developer_known: bool = false,
+    /// Whether Shift is held, which turns Open Project and Upgrade Editor into their
+    /// developer-Eggy versions.
+    shift_held: bool = false,
     pointer: ui.Vec2 = .{ .x = -1, .y = -1 },
     pointer_slot: Slot = main_slot,
     /// Each window's tree from the last `build`; lives in `arena` until the next one.
@@ -105,7 +146,9 @@ pub const Workspace = struct {
         self.splitRatio(.console, 0.7);
         try self.dock.add(@intFromEnum(Panel.assets), @intFromEnum(Panel.console), .center);
         for (0..self.plugin_panels.len) |i| try self.dock.add(panels.plugin_first + @as(u32, @intCast(i)), @intFromEnum(Panel.inspector), .center);
-        _ = self.dock.activate(dock.first_id + @intFromEnum(Panel.inspector)); // the Inspector's tab stays in front
+        // The Inspector's and the Console's tabs in front.
+        _ = self.dock.activate(dock.first_id + @intFromEnum(Panel.inspector));
+        _ = self.dock.activate(dock.first_id + @intFromEnum(Panel.console));
     }
 
     /// Size the split that `panel`'s stack was just added to: `ratio` of it goes to the first side.
@@ -135,13 +178,24 @@ pub const Workspace = struct {
 
         // The main window: menus on the drawn title bar (untitled; the OS still names the window
         // for the taskbar), or under the system's; panels below.
-        const menu_list = try self.menubar.list(b.allocator, &self.dock, self.plugin_panels);
+        // Menus left of the centred play button; those that don't fit fold into "...".
+        var menu_room = (viewport.w - play_button.width) / 2 - 16;
+        if (self.custom_frame) for (self.buttons.left) |button| {
+            // ponytail: estimates the left-hand window buttons' width; measure them if menus overlap on macOS.
+            if (button != null) menu_room -= 32;
+        };
+        const project_state = menus.ProjectState{ .open = self.project != null, .can_upgrade = self.can_upgrade, .can_link = self.can_link, .developer_known = self.developer_known, .shift_held = self.shift_held };
+        const menu_list = try self.menubar.list(b.allocator, &self.dock, self.plugin_panels, project_state, menus.shownMenus(font, menu_room));
+        const menubar = if (self.custom_frame)
+            try widgets.titlebarMenubar(b, menu_list, self.menubar.open, hot, self.menubar.open_submenu)
+        else
+            try widgets.windowMenubar(b, menu_list, self.menubar.open, hot, self.menubar.open_submenu);
+        try menus.drawMoreAsDots(b, menubar);
         const top_bar = if (self.custom_frame)
-            try titlebar.barWithMenus(b, titlebar_first, 0, "", self.buttons, self.window_state, try widgets.titlebarMenubar(b, menu_list, self.menubar.open, hot, 0))
+            try titlebar.barWithMenus(b, titlebar_first, 0, "", self.buttons, self.window_state, menubar)
         else blk: {
-            const bar = try widgets.windowMenubar(b, menu_list, self.menubar.open, hot, 0);
-            bar.style.width = viewport.w;
-            break :blk bar;
+            menubar.style.width = viewport.w;
+            break :blk menubar;
         };
         const bar_height = if (self.custom_frame) titlebar.height else widgets.window_menubar_height;
         const dock_rect = ui.Rect{ .x = viewport.x, .y = viewport.y + bar_height, .w = viewport.w, .h = @max(0, viewport.h - bar_height - status_height) };
@@ -163,8 +217,8 @@ pub const Workspace = struct {
         }
     }
 
-    /// The bar along the main window's bottom: which project is open (and where), and whether
-    /// the game is playing.
+    /// The bar along the main window's bottom: which project is open (and where), the rebuild,
+    /// whether the game is playing, and Eggy's version.
     fn statusBar(self: *const Workspace, b: L.Builder, width: f32) !*L.Element {
         var children: std.ArrayList(*L.Element) = .empty;
         const text = struct {
@@ -177,7 +231,27 @@ pub const Workspace = struct {
             try children.append(b.allocator, try text(b, project.dir, .muted));
         } else try children.append(b.allocator, try text(b, "No project open: File > New Project or Open Project", .muted));
         try children.append(b.allocator, try b.node(0, .{ .grow = 1 }, .none, &.{}));
+        switch (self.build_state) {
+            .idle => {},
+            .building => |detail| try children.append(b.allocator, try text(b, try std.fmt.allocPrint(b.allocator, "Building: {s}", .{detail}), .muted)),
+            .failed => try children.append(b.allocator, try text(b, "Build failed: see the Console", .foreground)),
+            .ready => try children.append(b.allocator, try text(b, "Rebuilt", .foreground)),
+        }
+        // Reload is always there with a project: lit once a rebuild made a new editor.
+        if (self.project != null) {
+            const variant: @FieldType(@FieldType(L.Paint, "button"), "variant") = if (self.build_state == .ready) .default else .outline;
+            const reload = try b.node(reload_id, .{ .height = status_height - 4, .padding = .{ .left = 8, .right = 8 } }, .{ .button = .{ .label = "Reload", .variant = variant } }, &.{});
+            reload.cursor = .pointer;
+            reload.accessibility.description = "Rebuild the project's editor and open it";
+            try children.append(b.allocator, reload);
+        }
         if (self.playing) try children.append(b.allocator, try text(b, "Playing", .foreground));
+        const version = if (self.engine_label) |label|
+            try std.fmt.allocPrint(b.allocator, "Eggy {s} ({s})", .{ eggy_version, label })
+        else
+            "Eggy " ++ eggy_version;
+        try children.append(b.allocator, try text(b, version, .muted));
+        if (self.can_upgrade) try children.append(b.allocator, try text(b, "Upgrade available: File > Upgrade Editor", .foreground));
         const bar = try b.node(0, .{ .width = width, .height = status_height, .direction = .row, .align_items = .center, .gap = 10, .padding = .{ .left = 10, .right = 10 } }, .{ .surface = .sidebar }, children.items);
         bar.accessibility = .{ .role = .group, .label = "Status" };
         return bar;
@@ -193,9 +267,12 @@ pub const Workspace = struct {
             frame.button_count += 1;
         };
         // The menus sharing the bar take presses instead of dragging the window.
-        if (root.find(@intFromEnum(menus.Menu.file))) |first| if (root.find(@intFromEnum(menus.Menu.help))) |last| {
-            frame.controls = .{ .x = first.bounds.x, .y = first.bounds.y, .w = last.bounds.x + last.bounds.w - first.bounds.x, .h = first.bounds.h };
+        var controls: ?ui.Rect = null;
+        for (std.enums.values(menus.Menu)) |menu| if (root.find(@intFromEnum(menu))) |trigger| {
+            const r = trigger.bounds;
+            controls = if (controls) |so_far| .{ .x = so_far.x, .y = so_far.y, .w = r.x + r.w - so_far.x, .h = so_far.h } else r;
         };
+        if (controls) |rect| frame.controls = rect;
         if (root.find(play_button.id)) |play| {
             frame.extra_controls[0] = play.bounds;
             frame.extra_count = 1;
@@ -281,6 +358,7 @@ pub const Workspace = struct {
             .pointer_move => |p| {
                 self.pointer = p;
                 self.pointer_slot = slot;
+                if (slot == main_slot and self.menubar.hover(self.controlAt(slot, p.x, p.y))) return .handled;
                 // Tabs only drag within the main window; pop-outs' coordinates are their own.
                 if (slot != main_slot or !self.dock.dragging()) return .ignored;
                 self.dock.dragTo(p.x, p.y);
@@ -297,6 +375,7 @@ pub const Workspace = struct {
                 }
                 if (slot == main_slot) {
                     if (titlebarButton(id)) |button| return .{ .window = button };
+                    if (id == reload_id) return .reload;
                     if (id == play_button.id) {
                         self.playing = !self.playing;
                         return .{ .play = self.playing };
@@ -311,12 +390,26 @@ pub const Workspace = struct {
                 self.dock.release(up.position.x, up.position.y);
                 return .handled;
             },
-            .key_down => |key| if (key.key == .escape) {
-                if (self.menubar.open != 0) {
-                    self.menubar.open = 0;
-                    return .handled;
+            .key_down => |key| {
+                if (key.key == .escape) {
+                    if (self.menubar.open != 0) {
+                        self.menubar.open = 0;
+                        return .handled;
+                    }
+                    if (self.dock.dismissMenu()) return .handled;
                 }
-                if (self.dock.dismissMenu()) return .handled;
+                // The menus' shortcuts.
+                if (key.repeat or !(key.modifiers.control or key.modifiers.super)) return .ignored;
+                const command: menus.Command = switch (key.key) {
+                    .n => .new_project,
+                    .o => .open_project,
+                    .s => .save,
+                    .q => .quit,
+                    .z => if (key.modifiers.shift) .redo else .undo,
+                    .y => .redo,
+                    else => return .ignored,
+                };
+                return self.run(.{ .command = command });
             },
             else => {},
         }
@@ -339,6 +432,10 @@ pub const Workspace = struct {
                 .quit => return .quit,
                 .new_project => return .new_project,
                 .open_project => return .open_project,
+                .open_project_linked => return .open_project_linked,
+                .open_project_folder => return .open_project_folder,
+                .upgrade_editor => return .upgrade_editor,
+                .link_developer => return .link_developer,
                 .reset_layout => self.resetLayout() catch |err| std.log.warn("cannot reset the layout: {t}", .{err}),
                 // ponytail: stubs until the editor has projects, undo history and settings.
                 else => std.log.info("{t}: not implemented yet", .{command}),
@@ -438,4 +535,48 @@ test "the play button turns into a stop button and back" {
     const press = ui.input.Event{ .pointer_down = .{ .position = play.bounds.center(), .button = .left, .clicks = 1 } };
     try std.testing.expectEqual(Outcome{ .play = true }, workspace.handle(main_slot, press));
     try std.testing.expectEqual(Outcome{ .play = false }, workspace.handle(main_slot, press));
+}
+
+test "the menus' shortcuts run their commands" {
+    var workspace = try testWorkspace();
+    defer workspace.deinit();
+    const press = struct {
+        fn key(k: ui.input.Key, shift: bool) ui.input.Event {
+            return .{ .key_down = .{ .key = k, .modifiers = .{ .control = true, .shift = shift }, .repeat = false } };
+        }
+    }.key;
+    try std.testing.expectEqual(Outcome.quit, workspace.handle(main_slot, press(.q, false)));
+    try std.testing.expectEqual(Outcome.new_project, workspace.handle(main_slot, press(.n, false)));
+    try std.testing.expectEqual(Outcome.open_project, workspace.handle(main_slot, press(.o, false)));
+    try std.testing.expectEqual(Outcome.handled, workspace.handle(main_slot, press(.z, true)));
+    try std.testing.expectEqual(Outcome.ignored, workspace.handle(main_slot, press(.c, false)));
+}
+
+test "every menu trigger and row is hit where it is drawn" {
+    var workspace = try testWorkspace();
+    defer workspace.deinit();
+    var font = try ui.Font.init(std.testing.allocator, ui.default_font);
+    defer font.deinit();
+    const viewport = ui.Rect{ .x = 0, .y = 0, .w = 1400, .h = 800 };
+    for (std.enums.values(menus.Menu)) |menu| {
+        if (menu == .more) continue;
+        workspace.menubar.open = @intFromEnum(menu);
+        try workspace.build(viewport, @splat(null), &font);
+        const root = workspace.roots[main_slot].?;
+        const trigger = root.find(@intFromEnum(menu)).?;
+        try std.testing.expectEqual(@intFromEnum(menu), workspace.controlAt(main_slot, trigger.bounds.center().x, trigger.bounds.center().y));
+        // Pressable across the bar's height, not just over its label.
+        try std.testing.expectEqual(@intFromEnum(menu), workspace.controlAt(main_slot, trigger.bounds.center().x, 2));
+        if (menu != .view) try std.testing.expect(try expectRowsHit(&workspace, root) > 0);
+    }
+}
+
+/// Check that each menu row under `element` is hit at its centre; returns how many there were.
+fn expectRowsHit(workspace: *const Workspace, element: *const L.Element) !usize {
+    var rows: usize = 0;
+    for (element.children) |child| rows += try expectRowsHit(workspace, child);
+    if (element.paint_kind != .menu_item or element.id == 0) return rows;
+    const at = element.bounds.center();
+    try std.testing.expectEqual(element.id, workspace.controlAt(main_slot, at.x, at.y));
+    return rows + 1;
 }

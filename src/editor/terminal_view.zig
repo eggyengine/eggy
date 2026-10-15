@@ -1,59 +1,430 @@
-//! A terminal-looking box of text output: light text on near-black, showing the last lines that
-//! fit, with command lines (`$ ...`) in the theme's primary colour.
+//! A terminal-looking view of text output, in JetBrains Mono: light text on near-black (commands,
+//! log levels and source locations coloured), wrapped to its width, following the end unless scrolled back. Like a terminal it can scroll (wheel, Page
+//! Up/Down, Home/End), select (drag, double-click a word, triple-click a line, Ctrl+A) and copy
+//! (Ctrl+C or Ctrl+Shift+C, or a right-click).
 const std = @import("std");
-const ui = @import("eggy").ui;
+const eggy = @import("eggy");
+const sdl3 = eggy.sdl_adapter.sdl;
+const ui = eggy.ui;
 
 const background = ui.Color{ 0.07, 0.07, 0.08 };
 const foreground = ui.Color{ 0.82, 0.82, 0.8 };
 const text_size: f32 = 12;
-const line_height = text_size * 1.45;
+const line_height = text_size * 1.5;
 const padding: f32 = 10;
 
-/// Add a `height` tall terminal showing `output` to `context`'s page. `output` must stay valid
-/// until the page renders.
-// ponytail: draws in the UI's proportional font; load a monospace one once Weeoui can draw two fonts from one atlas.
-pub fn add(context: *ui.Context, output: []const u8, height: f32) void {
-    const b = context.builder();
-    const text = b.allocator.create([]const u8) catch return;
-    text.* = output;
-    // The page's own padding is 16 on each side.
-    const width = @max(0, context.viewport.w - 32);
-    const element = b.node(0, .{ .width = width, .height = height }, .{ .custom = .{ .context = @ptrCast(text), .draw = draw } }, &.{}) catch return;
-    element.accessibility.label = "Output";
-    context.element(element);
-}
+pub const TerminalView = struct {
+    gpa: std.mem.Allocator,
+    /// The monospace face, sharing the UI font's atlas (see `ui.Font.initCompanion`).
+    mono: *const ui.Font,
+    /// A copy of the output, so selections and input between frames have it.
+    text: std.ArrayList(u8) = .empty,
+    /// `text` cut into the rows it is drawn as, each a byte range.
+    rows: std.ArrayList(Row) = .empty,
+    columns: usize = 0,
+    /// Rows scrolled back from the end; 0 follows new output.
+    scroll_rows: usize = 0,
+    /// Byte offsets into `text`; the selection runs between them.
+    selection: ?struct { anchor: usize, focus: usize } = null,
+    selecting: bool = false,
+    /// Whether it takes keys: it was pressed last.
+    focused: bool = false,
+    /// Where it was drawn last, in its window's coordinates.
+    area: ?ui.Rect = null,
 
-fn draw(context: *const anyopaque, c: *ui.Canvas, r: ui.Rect) anyerror!void {
-    const output: *const []const u8 = @ptrCast(@alignCast(context));
-    try c.roundRect(r, background, c.theme.radiusMd());
+    const Row = struct { start: usize, end: usize };
 
-    // Clip to the inside, so long lines end at the edge as in a terminal.
-    const inner = r.inset(padding);
-    const previous = c.clip;
-    c.clip = if (previous) |clip| clip.intersection(inner) else inner;
-    defer c.clip = previous;
-
-    var lines: [64][]const u8 = undefined;
-    const shown = lastLines(output.*, lines[0..@min(lines.len, @as(usize, @intFromFloat(@max(1, inner.h / line_height))))]);
-    for (shown, 0..) |line, i| {
-        const row = ui.Rect{ .x = inner.x, .y = inner.y + @as(f32, @floatFromInt(i)) * line_height, .w = inner.w, .h = line_height };
-        try c.textIn(row, line, text_size, if (std.mem.startsWith(u8, line, "$ ")) c.theme.primary else foreground, .start);
+    pub fn init(gpa: std.mem.Allocator, mono: *const ui.Font) TerminalView {
+        return .{ .gpa = gpa, .mono = mono };
     }
+
+    pub fn deinit(self: *TerminalView) void {
+        self.text.deinit(self.gpa);
+        self.rows.deinit(self.gpa);
+    }
+
+    /// Show `output` in a `height` tall view on `context`'s page.
+    pub fn add(self: *TerminalView, context: *ui.Context, output: []const u8, height: f32) void {
+        self.setText(output) catch return;
+        // The page's own padding is 16 on each side.
+        const width = @max(0, context.viewport.w - 32);
+        const element = context.builder().node(0, .{ .width = width, .height = height }, .{ .custom = .{ .context = self, .draw = draw } }, &.{}) catch return;
+        element.accessibility.label = "Output";
+        element.cursor = .text;
+        context.element(element);
+    }
+
+    /// The output so far, all of it.
+    pub fn content(self: *const TerminalView) []const u8 {
+        return self.text.items;
+    }
+
+    /// The selected text, or null without a selection.
+    pub fn selectedText(self: *const TerminalView) ?[]const u8 {
+        const selection = self.selection orelse return null;
+        const start = @min(selection.anchor, selection.focus);
+        const end = @max(selection.anchor, selection.focus);
+        if (start == end) return null;
+        return self.text.items[start..end];
+    }
+
+    /// Handle an input event; returns whether the view used it.
+    pub fn handle(self: *TerminalView, event: ui.input.Event) bool {
+        const area = self.area orelse return false;
+        switch (event) {
+            .pointer_down => |down| {
+                const inside = area.contains(down.position.x, down.position.y);
+                self.focused = inside;
+                if (!inside) return false;
+                switch (down.button) {
+                    // A right-click copies, as Windows Terminal does.
+                    .right => copyToClipboard(self.selectedText() orelse return true),
+                    .middle => {},
+                    .left => {
+                        const at = self.offsetAt(down.position.x, down.position.y);
+                        self.selection = switch (down.clicks) {
+                            0, 1 => .{ .anchor = at, .focus = at },
+                            2 => self.wordAround(at),
+                            else => self.lineAround(at),
+                        };
+                        self.selecting = down.clicks <= 1;
+                    },
+                }
+                return true;
+            },
+            .pointer_move => |p| {
+                if (!self.selecting) return false;
+                if (self.selection) |*selection| selection.focus = self.offsetAt(p.x, p.y);
+                return true;
+            },
+            .pointer_up => {
+                if (!self.selecting) return false;
+                self.selecting = false;
+                return true;
+            },
+            .wheel => |wheel| {
+                if (!area.contains(wheel.position.x, wheel.position.y)) return false;
+                self.scrollBy(@intFromFloat(@round(wheel.delta.y * 3)));
+                return true;
+            },
+            .key_down => |key| {
+                if (!self.focused) return false;
+                const command = key.modifiers.control or key.modifiers.super;
+                switch (key.key) {
+                    .c => if (command) copyToClipboard(self.selectedText() orelse return true) else return false,
+                    .a => if (command) {
+                        self.selection = .{ .anchor = 0, .focus = self.text.items.len };
+                    } else return false,
+                    .escape => self.selection = null,
+                    .page_up => self.scrollBy(@intCast(self.visibleRows())),
+                    .page_down => self.scrollBy(-@as(isize, @intCast(self.visibleRows()))),
+                    .home => self.scroll_rows = self.rows.items.len,
+                    .end => self.scroll_rows = 0,
+                    else => return false,
+                }
+                return true;
+            },
+            else => return false,
+        }
+    }
+
+    /// Take `output` as the view's text: appended to if it grew, else replaced.
+    fn setText(self: *TerminalView, output: []const u8) !void {
+        if (std.mem.startsWith(u8, output, self.text.items)) {
+            if (output.len == self.text.items.len) return;
+            try self.text.appendSlice(self.gpa, output[self.text.items.len..]);
+        } else {
+            self.text.clearRetainingCapacity();
+            try self.text.appendSlice(self.gpa, output);
+            self.selection = null;
+        }
+        self.columns = 0; // rows are stale
+    }
+
+    /// Cut `text` into rows of at most `columns` characters, breaking at newlines.
+    fn wrap(self: *TerminalView, columns: usize) !void {
+        if (columns == self.columns) return;
+        self.columns = columns;
+        self.rows.clearRetainingCapacity();
+        const text = std.mem.trimEnd(u8, self.text.items, "\n");
+        var start: usize = 0;
+        while (start <= text.len) {
+            const line_end = std.mem.indexOfScalarPos(u8, text, start, '\n') orelse text.len;
+            // At least one row per line, even an empty one.
+            var row_start = start;
+            while (true) {
+                const row_end = advanceColumns(text, row_start, line_end, columns);
+                try self.rows.append(self.gpa, .{ .start = row_start, .end = row_end });
+                if (row_end >= line_end) break;
+                row_start = row_end;
+            }
+            start = line_end + 1;
+        }
+    }
+
+    fn visibleRows(self: *const TerminalView) usize {
+        const area = self.area orelse return 1;
+        return @max(1, @as(usize, @intFromFloat(@max(0, area.h - 2 * padding) / line_height)));
+    }
+
+    /// The first row on screen, given the scroll.
+    fn firstRow(self: *const TerminalView) usize {
+        const visible = self.visibleRows();
+        if (self.rows.items.len <= visible) return 0;
+        return self.rows.items.len - visible - @min(self.scroll_rows, self.rows.items.len - visible);
+    }
+
+    fn scrollBy(self: *TerminalView, rows: isize) void {
+        const most = self.rows.items.len -| self.visibleRows();
+        const scrolled = @as(isize, @intCast(self.scroll_rows)) + rows;
+        self.scroll_rows = @intCast(std.math.clamp(scrolled, 0, @as(isize, @intCast(most))));
+    }
+
+    fn charWidth(self: *const TerminalView) f32 {
+        return self.mono.measure("M", text_size);
+    }
+
+    /// The byte offset in `text` nearest (x, y), for selecting.
+    fn offsetAt(self: *const TerminalView, x: f32, y: f32) usize {
+        const area = self.area orelse return 0;
+        if (self.rows.items.len == 0) return 0;
+        const row_on_screen: isize = @intFromFloat(@floor((y - area.y - padding) / line_height));
+        const row_index: usize = @intCast(std.math.clamp(@as(isize, @intCast(self.firstRow())) + row_on_screen, 0, @as(isize, @intCast(self.rows.items.len - 1))));
+        const row = self.rows.items[row_index];
+        const column: usize = @intFromFloat(@max(0, @round((x - area.x - padding) / self.charWidth())));
+        return advanceColumns(self.text.items, row.start, row.end, column);
+    }
+
+    fn wordAround(self: *const TerminalView, at: usize) @FieldType(TerminalView, "selection") {
+        const text = self.text.items;
+        var start = at;
+        while (start > 0 and !std.ascii.isWhitespace(text[start - 1])) start -= 1;
+        var end = at;
+        while (end < text.len and !std.ascii.isWhitespace(text[end])) end += 1;
+        return .{ .anchor = start, .focus = end };
+    }
+
+    fn lineAround(self: *const TerminalView, at: usize) @FieldType(TerminalView, "selection") {
+        const text = self.text.items;
+        const start = if (std.mem.lastIndexOfScalar(u8, text[0..at], '\n')) |newline| newline + 1 else 0;
+        const end = std.mem.indexOfScalarPos(u8, text, at, '\n') orelse text.len;
+        return .{ .anchor = start, .focus = end };
+    }
+
+    fn draw(context: *const anyopaque, c: *ui.Canvas, r: ui.Rect) anyerror!void {
+        const self: *TerminalView = @ptrCast(@alignCast(@constCast(context)));
+        self.area = r;
+        try c.roundRect(r, background, c.theme.radiusMd());
+
+        // Clip to the inside, and draw in the monospace face.
+        const inner = r.inset(padding);
+        const previous_clip = c.clip;
+        const previous_font = c.font;
+        c.clip = if (previous_clip) |clip| clip.intersection(inner) else inner;
+        c.font = self.mono;
+        defer {
+            c.clip = previous_clip;
+            c.font = previous_font;
+        }
+
+        const char_width = self.charWidth();
+        try self.wrap(@max(1, @as(usize, @intFromFloat(inner.w / char_width))));
+        const first = self.firstRow();
+        const last = @min(self.rows.items.len, first + self.visibleRows());
+        const selected = if (self.selection) |s| [2]usize{ @min(s.anchor, s.focus), @max(s.anchor, s.focus) } else [2]usize{ 0, 0 };
+        for (self.rows.items[first..last], 0..) |row, i| {
+            const y = inner.y + @as(f32, @floatFromInt(i)) * line_height;
+
+            // The selected part of the row, behind its text.
+            const from = std.math.clamp(selected[0], row.start, row.end);
+            const to = std.math.clamp(selected[1], row.start, row.end);
+            if (to > from or (selected[0] < row.start and selected[1] > row.end)) {
+                const x0 = inner.x + @as(f32, @floatFromInt(columnsIn(self.text.items[row.start..from]))) * char_width;
+                const x1 = inner.x + @as(f32, @floatFromInt(columnsIn(self.text.items[row.start..to]))) * char_width + if (selected[1] > row.end) char_width else 0;
+                try c.rectAlpha(.{ .x = x0, .y = y, .w = x1 - x0, .h = line_height }, c.theme.primary, 0.35);
+            }
+            // The row's text, a coloured span at a time (see `lineSpans`).
+            const line_start = lineStart(self.text.items, row.start);
+            const line_end = std.mem.indexOfScalarPos(u8, self.text.items, line_start, '\n') orelse self.text.items.len;
+            var spans_buffer: [max_spans]Span = undefined;
+            for (lineSpans(self.text.items[line_start..line_end], c.theme, &spans_buffer)) |span| {
+                const from_byte = @max(row.start, line_start + span.start);
+                const to_byte = @min(row.end, line_start + span.end);
+                if (to_byte <= from_byte) continue;
+                const x = inner.x + @as(f32, @floatFromInt(columnsIn(self.text.items[row.start..from_byte]))) * char_width;
+                try c.textIn(.{ .x = x, .y = y, .w = inner.x + inner.w - x, .h = line_height }, self.text.items[from_byte..to_byte], text_size, span.color, .start);
+            }
+        }
+
+        // A thin scrollbar when there's more than fits.
+        const total = self.rows.items.len;
+        const visible = self.visibleRows();
+        if (total > visible) {
+            const track = ui.Rect{ .x = r.x + r.w - 5, .y = inner.y, .w = 3, .h = inner.h };
+            const thumb_h = @max(12, track.h * @as(f32, @floatFromInt(visible)) / @as(f32, @floatFromInt(total)));
+            const thumb_y = track.y + (track.h - thumb_h) * @as(f32, @floatFromInt(first)) / @as(f32, @floatFromInt(total - visible));
+            c.clip = previous_clip;
+            try c.roundRect(.{ .x = track.x, .y = thumb_y, .w = track.w, .h = thumb_h }, c.theme.muted_foreground, 1.5);
+        }
+    }
+};
+
+/// A run of a line drawn in one colour: bytes `start..end` of the line.
+const Span = struct { start: usize, end: usize, color: ui.Color };
+const max_spans = 24;
+
+const red = ui.Color{ 0.94, 0.42, 0.42 };
+const soft_red = ui.Color{ 0.96, 0.7, 0.68 };
+const amber = ui.Color{ 0.95, 0.75, 0.3 };
+const soft_amber = ui.Color{ 0.95, 0.86, 0.66 };
+const blue = ui.Color{ 0.45, 0.68, 0.98 };
+const cyan = ui.Color{ 0.45, 0.82, 0.85 };
+const violet = ui.Color{ 0.68, 0.6, 0.9 };
+const grey = ui.Color{ 0.5, 0.5, 0.5 };
+
+/// `line` cut into coloured spans, as a terminal would show it: a command (`$ ...`) in the
+/// theme's primary colour; a log line's level by severity, its `(scope)` in violet and its
+/// message tinted by severity; and in messages, `file.zig:12:5` locations in cyan and `error:`,
+/// `warning:` and `note:` in their colours. Uses `buffer` for the result.
+fn lineSpans(line: []const u8, theme: ui.Theme, buffer: *[max_spans]Span) []const Span {
+    var spans: std.ArrayList(Span) = .initBuffer(buffer);
+    if (std.mem.startsWith(u8, line, "$ ")) {
+        spans.appendAssumeCapacity(.{ .start = 0, .end = line.len, .color = theme.primary });
+        return spans.items;
+    }
+
+    // The level and scope (`warning(projects): `), when the line is a log message.
+    const Level = struct { word: []const u8, color: ui.Color, message: ui.Color };
+    const levels = [_]Level{
+        .{ .word = "error", .color = red, .message = soft_red },
+        .{ .word = "warning", .color = amber, .message = soft_amber },
+        .{ .word = "info", .color = blue, .message = foreground },
+        .{ .word = "debug", .color = grey, .message = grey },
+    };
+    var message_start: usize = 0;
+    var message_color = foreground;
+    for (levels) |level| {
+        if (!std.mem.startsWith(u8, line, level.word)) continue;
+        const colon = std.mem.indexOfPos(u8, line, level.word.len, ": ") orelse break;
+        const scope = line[level.word.len..colon];
+        if (scope.len > 0 and !(scope[0] == '(' and scope[scope.len - 1] == ')')) break;
+        spans.appendAssumeCapacity(.{ .start = 0, .end = level.word.len, .color = level.color });
+        if (scope.len > 0) spans.appendAssumeCapacity(.{ .start = level.word.len, .end = colon, .color = violet });
+        message_start = colon;
+        message_color = level.message;
+        break;
+    }
+
+    // The message, with locations and diagnostics picked out.
+    var at = message_start;
+    var plain_from = message_start;
+    while (at < line.len and spans.items.len + 2 < max_spans) {
+        const highlight: ?struct { len: usize, color: ui.Color } = if (locationLength(line[at..])) |len|
+            .{ .len = len, .color = cyan }
+        else if (std.mem.startsWith(u8, line[at..], "error:"))
+            .{ .len = "error:".len, .color = red }
+        else if (std.mem.startsWith(u8, line[at..], "warning:"))
+            .{ .len = "warning:".len, .color = amber }
+        else if (std.mem.startsWith(u8, line[at..], "note:"))
+            .{ .len = "note:".len, .color = cyan }
+        else
+            null;
+        // Only at the start of a word.
+        const word_start = at == 0 or line[at - 1] == ' ' or line[at - 1] == '(';
+        if (highlight == null or !word_start) {
+            at += 1;
+            continue;
+        }
+        if (at > plain_from) spans.appendAssumeCapacity(.{ .start = plain_from, .end = at, .color = message_color });
+        spans.appendAssumeCapacity(.{ .start = at, .end = at + highlight.?.len, .color = highlight.?.color });
+        at += highlight.?.len;
+        plain_from = at;
+    }
+    if (line.len > plain_from) spans.appendAssumeCapacity(.{ .start = plain_from, .end = line.len, .color = message_color });
+    return spans.items;
 }
 
-/// The last `buffer.len` lines of `text` (fewer if it has fewer), oldest first.
-fn lastLines(text: []const u8, buffer: [][]const u8) [][]const u8 {
-    var count: usize = 0;
-    var lines = std.mem.splitBackwardsScalar(u8, std.mem.trimEnd(u8, text, "\n"), '\n');
-    while (count < buffer.len) : (count += 1) buffer[buffer.len - 1 - count] = lines.next() orelse break;
-    return buffer[buffer.len - count ..];
+/// How long the source location (`path.zig:12` or `path.zig:12:5`) starting `text` is, if one does.
+fn locationLength(text: []const u8) ?usize {
+    const extension = ".zig:";
+    const name_end = std.mem.indexOfAny(u8, text, " \t\"'()") orelse text.len;
+    const found = std.mem.indexOf(u8, text[0..name_end], extension) orelse return null;
+    var end = found + extension.len;
+    var numbers: usize = 0;
+    while (numbers < 2) : (numbers += 1) {
+        const digits_end = std.mem.indexOfNonePos(u8, text, end, "0123456789") orelse text.len;
+        if (digits_end == end) break;
+        end = digits_end;
+        if (end < text.len and text[end] == ':' and numbers == 0 and end + 1 < text.len and std.ascii.isDigit(text[end + 1])) end += 1 else break;
+    }
+    return if (end > found + extension.len) end else null;
 }
 
-test "the terminal shows the last lines that fit, oldest first" {
-    var buffer: [2][]const u8 = undefined;
-    const shown = lastLines("one\ntwo\nthree\n", &buffer);
-    try std.testing.expectEqual(@as(usize, 2), shown.len);
-    try std.testing.expectEqualStrings("two", shown[0]);
-    try std.testing.expectEqualStrings("three", shown[1]);
-    try std.testing.expectEqual(@as(usize, 1), lastLines("only", &buffer).len);
+/// Put `text` on the clipboard.
+pub fn copyToClipboard(text: []const u8) void {
+    var buffer = std.heap.c_allocator.dupeZ(u8, text) catch return;
+    defer std.heap.c_allocator.free(buffer);
+    sdl3.clipboard.setText(buffer[0..text.len :0]) catch |err| std.log.warn("cannot copy: {t}", .{err});
+}
+
+/// The offset `columns` characters on from `start`, stopping at `end`.
+fn advanceColumns(text: []const u8, start: usize, end: usize, columns: usize) usize {
+    var at = start;
+    var counted: usize = 0;
+    while (at < end and counted < columns) : (counted += 1) {
+        at += std.unicode.utf8ByteSequenceLength(text[at]) catch 1;
+    }
+    return @min(at, end);
+}
+
+/// How many characters `text` holds.
+fn columnsIn(text: []const u8) usize {
+    return std.unicode.utf8CountCodepoints(text) catch text.len;
+}
+
+/// Where the line holding `at` starts.
+fn lineStart(text: []const u8, at: usize) usize {
+    return if (std.mem.lastIndexOfScalar(u8, text[0..at], '\n')) |newline| newline + 1 else 0;
+}
+
+test "output wraps into rows of whole characters, a row per empty line too" {
+    var view = TerminalView.init(std.testing.allocator, undefined);
+    defer view.deinit();
+    try view.setText("abcdef\n\nxy\u{e9}z\n");
+    try view.wrap(3);
+    try std.testing.expectEqual(@as(usize, 5), view.rows.items.len);
+    const text = view.text.items;
+    try std.testing.expectEqualStrings("abc", text[view.rows.items[0].start..view.rows.items[0].end]);
+    try std.testing.expectEqualStrings("def", text[view.rows.items[1].start..view.rows.items[1].end]);
+    try std.testing.expectEqualStrings("", text[view.rows.items[2].start..view.rows.items[2].end]);
+    try std.testing.expectEqualStrings("xy\u{e9}", text[view.rows.items[3].start..view.rows.items[3].end]);
+}
+
+test "a growing output keeps the selection; a different one drops it" {
+    var view = TerminalView.init(std.testing.allocator, undefined);
+    defer view.deinit();
+    try view.setText("one two\n");
+    view.selection = view.wordAround(5);
+    try std.testing.expectEqualStrings("two", view.selectedText().?);
+    try view.setText("one two\nthree\n");
+    try std.testing.expectEqualStrings("two", view.selectedText().?);
+    view.selection = view.lineAround(10);
+    try std.testing.expectEqualStrings("three", view.selectedText().?);
+    try view.setText("other");
+    try std.testing.expect(view.selectedText() == null);
+}
+
+test "a log line is coloured by level, scope and the locations in it" {
+    var buffer: [max_spans]Span = undefined;
+    const line = "error(zig_build): src/main.zig:12:5: error: expected ';'";
+    const spans = lineSpans(line, .{}, &buffer);
+    try std.testing.expectEqualStrings("error", line[spans[0].start..spans[0].end]);
+    try std.testing.expectEqualStrings("(zig_build)", line[spans[1].start..spans[1].end]);
+    try std.testing.expectEqual(cyan, spans[3].color);
+    try std.testing.expectEqualStrings("src/main.zig:12:5", line[spans[3].start..spans[3].end]);
+    try std.testing.expectEqualStrings("error:", line[spans[5].start..spans[5].end]);
+    // Every byte is drawn, once.
+    var covered: usize = 0;
+    for (spans) |span| covered += span.end - span.start;
+    try std.testing.expectEqual(line.len, covered);
 }

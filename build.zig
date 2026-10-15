@@ -313,6 +313,15 @@ fn addEngine(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.buil
         });
         // The window icon, rendered from resources/icon.svg: `rsvg-convert -w 256 -h 256`.
         editor.addAnonymousImport("editor_icon", .{ .root_source_file = b.path("resources/icon.png") });
+        // The editor's monospace face, for terminal output (OFL; see resources/fonts/OFL.txt).
+        // Eggy's version, for the editor's status bar, and where this Eggy is, so an editor built
+        // from a checkout can offer it to projects (File > Link Developer Eggy).
+        const build_options = b.addOptions();
+        build_options.addOption([]const u8, "version", @import("build.zig.zon").version);
+        const source_dir = b.build_root.handle.realPathFileAlloc(b.graph.io, ".", b.allocator) catch |err| std.debug.panic("cannot resolve Eggy's directory: {t}", .{err});
+        build_options.addOption([]const u8, "source_dir", source_dir);
+        editor.addOptions("build_options", build_options);
+        editor.addAnonymousImport("mono_font", .{ .root_source_file = b.path("resources/fonts/JetBrainsMono-Regular.ttf") });
     }
 
     return .{
@@ -350,7 +359,10 @@ fn packTarball(b: *std.Build, engine: *std.Build, tool: *std.Build.Step.Compile,
     const pack = b.addRunArtifact(tool);
     const tarball = pack.addOutputFileArg(name);
 
-    // List the files now, each as a file argument, so editing one repacks the tarball.
+    // List the files now, each as a file argument, so editing one repacks the tarball. They go in
+    // sorted, so the same files always make the same tarball, whatever order the disk lists them.
+    const File = struct { archive_path: []const u8, path: []const u8 };
+    var files: std.ArrayList(File) = .empty;
     var dir = engine.build_root.handle.openDir(io, root, .{ .iterate = true }) catch |err| std.debug.panic("cannot open {s}: {t}", .{ root, err });
     defer dir.close(io);
     var walker = dir.walkSelectively(b.allocator) catch @panic("OOM");
@@ -371,12 +383,18 @@ fn packTarball(b: *std.Build, engine: *std.Build, tool: *std.Build.Step.Compile,
                     walker.enter(io, entry) catch |err| std.debug.panic("cannot open {s}/{s}: {t}", .{ root, archive_path, err });
                 }
             },
-            .file => {
-                pack.addArg(archive_path);
-                pack.addFileArg(engine.path(b.pathJoin(&.{ root, entry.path })));
-            },
+            .file => files.append(b.allocator, .{ .archive_path = archive_path, .path = b.pathJoin(&.{ root, entry.path }) }) catch @panic("OOM"),
             else => {},
         }
+    }
+    std.mem.sort(File, files.items, {}, struct {
+        fn before(_: void, x: File, y: File) bool {
+            return std.mem.lessThan(u8, x.archive_path, y.archive_path);
+        }
+    }.before);
+    for (files.items) |file| {
+        pack.addArg(file.archive_path);
+        pack.addFileArg(engine.path(file.path));
     }
 
     const install = &b.addInstallFileWithDir(tarball, .{ .custom = "resources" }, name).step;

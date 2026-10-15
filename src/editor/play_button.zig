@@ -6,7 +6,7 @@ const L = ui.Layout;
 
 /// Its element id, below `dock.first_id`.
 pub const id: u32 = 0x5000_0001;
-const width: f32 = 34;
+pub const width: f32 = 34;
 const height: f32 = 26;
 
 /// The button for a bar `bar_height` tall spanning `bar_width` from `bar_x`, centred on it. It
@@ -27,10 +27,11 @@ fn draw(context: *const anyopaque, c: *ui.Canvas, r: ui.Rect) anyerror!void {
     const glyph: *const Glyph = @ptrCast(@alignCast(context));
     const hot = c.hot_id == id;
 
-    // Playing, the button stays lit; otherwise it lights up under the pointer.
-    if (glyph.playing) {
-        try c.roundRect(r, c.theme.primary, c.theme.radiusMd());
-    } else if (hot) try c.roundRect(r, c.theme.accent, c.theme.radiusMd());
+    // A bordered box; playing, it stays lit, otherwise it lights up under the pointer.
+    const radius = c.theme.radiusMd();
+    try c.roundRect(r, c.theme.input, radius);
+    const fill = if (glyph.playing) c.theme.primary else if (hot) c.theme.accent else c.theme.secondary;
+    try c.roundRect(r.inset(1), fill, @max(0, radius - 1));
 
     const center = r.center();
     if (glyph.playing) {

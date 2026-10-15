@@ -13,6 +13,8 @@ pub const _start = void;
 pub const WinMainCRTStartup = void;
 
 pub const panic = std.debug.FullPanic(eggy.entry.panic);
+/// Log through the editor, which keeps messages for its Console panel.
+pub const std_options: std.Options = .{ .logFn = @import("eggy_editor").logFn };
 
 const callbacks = eggy.entry.Callbacks(Editor);
 pub const init = callbacks.init;

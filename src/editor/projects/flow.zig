@@ -24,12 +24,14 @@ pub const Outcome = enum {
 pub const ProjectFlow = struct {
     gpa: std.mem.Allocator,
     font: *ui.Font,
+    /// The monospace face for the loading screen's output.
+    mono: *const ui.Font,
     window: ToolWindow,
     phase: union(enum) { wizard: Wizard, working: struct { job: *Job, splash: Splash } },
 
     /// File > New Project: open the wizard. The result is on the heap, since the wizard's folder
     /// picker keeps a pointer to it.
-    pub fn create(gpa: std.mem.Allocator, graphics: *const eggy.Graphics, font: *ui.Font) !*ProjectFlow {
+    pub fn create(gpa: std.mem.Allocator, graphics: *const eggy.Graphics, font: *ui.Font, mono: *const ui.Font) !*ProjectFlow {
         const self = try gpa.create(ProjectFlow);
         errdefer gpa.destroy(self);
         var default_location: std.ArrayList(u8) = .empty;
@@ -39,23 +41,26 @@ pub const ProjectFlow = struct {
         self.* = .{
             .gpa = gpa,
             .font = font,
+            .mono = mono,
             .window = try ToolWindow.open(gpa, graphics, font, "New Project", .{ 560, 440 }, .{ .resizable = true }),
             .phase = .{ .wizard = .init(default_location.items) },
         };
         return self;
     }
 
-    /// File > Open Project: build and open the project in `dir` (absolute).
-    pub fn open(gpa: std.mem.Allocator, graphics: *const eggy.Graphics, font: *ui.Font, dir: []const u8) !*ProjectFlow {
+    /// File > Open Project: build and open the project in `dir` (absolute). `action` is `.open`,
+    /// or `.link` to link it to an Eggy codebase first (Open Project with Developer Eggy).
+    pub fn open(gpa: std.mem.Allocator, graphics: *const eggy.Graphics, font: *ui.Font, mono: *const ui.Font, dir: []const u8, action: job_zig.Action) !*ProjectFlow {
         const self = try gpa.create(ProjectFlow);
         errdefer gpa.destroy(self);
         log.info("opening {s}", .{dir});
         var heading: [96]u8 = undefined;
-        const working = try startJob(gpa, font, dir, null, std.fmt.bufPrint(&heading, "Opening {s}", .{std.fs.path.basename(dir)}) catch "Opening project");
+        const working = try startJob(gpa, font, mono, dir, action, std.fmt.bufPrint(&heading, "Opening {s}", .{std.fs.path.basename(dir)}) catch "Opening project");
         errdefer working.job.deinit();
         self.* = .{
             .gpa = gpa,
             .font = font,
+            .mono = mono,
             .window = try loadingWindow(gpa, graphics, font),
             .phase = .{ .working = working },
         };
@@ -68,6 +73,7 @@ pub const ProjectFlow = struct {
             .wizard => |*wizard| wizard.deinit(),
             .working => |*working| {
                 working.job.deinit();
+                working.splash.terminal.deinit();
                 if (working.splash.egg) |*egg| egg.deinit(self.gpa);
             },
         }
@@ -80,16 +86,23 @@ pub const ProjectFlow = struct {
         return self.phase == .working;
     }
 
-    /// Handle `curr_event` if it is for this flow's window; returns whether it was.
+    /// Handle `curr_event` if it is for this flow's window; returns whether it was. The loading
+    /// screen's output view sees input first, so it can select and copy.
     pub fn handle(self: *ProjectFlow, curr_event: sdl3.events.Event) bool {
         if (!self.window.owns(curr_event)) return false;
+        if (self.phase == .working) if (@import("weeoui_sdl3").translate(curr_event)) |input| {
+            if (self.phase.working.splash.terminal.handle(input)) return true;
+        };
         self.window.handle(curr_event);
         return true;
     }
 
-    /// Whether `curr_event` asks to close this flow's window.
+    /// Whether `curr_event` asks to close this flow's window: its close button, or Escape in it.
     pub fn closeRequested(self: *const ProjectFlow, curr_event: sdl3.events.Event) bool {
-        return curr_event == .window_close_requested and self.window.owns(curr_event);
+        if (!self.window.owns(curr_event)) return false;
+        if (curr_event == .window_close_requested) return true;
+        const input = @import("weeoui_sdl3").translate(curr_event) orelse return false;
+        return input == .key_down and input.key_down.key == .escape;
     }
 
     /// Draw a frame and move the flow on.
@@ -141,7 +154,7 @@ pub const ProjectFlow = struct {
         const gpa = self.gpa;
         log.info("creating {s} ({s}) in {s}", .{ title, name, dir });
         var heading: [96]u8 = undefined;
-        const working = try startJob(gpa, self.font, dir, .{ .title = title, .name = name }, std.fmt.bufPrint(&heading, "Creating {s}", .{title}) catch "Creating project");
+        const working = try startJob(gpa, self.font, self.mono, dir, .{ .create = .{ .title = title, .name = name } }, std.fmt.bufPrint(&heading, "Creating {s}", .{title}) catch "Creating project");
         errdefer working.job.deinit();
         const window = try loadingWindow(gpa, graphics, self.font);
 
@@ -152,20 +165,14 @@ pub const ProjectFlow = struct {
         self.phase = .{ .working = working };
     }
 
-    /// Start the job for the project in `dir` (made first, with `new_project`), and its loading screen.
-    fn startJob(gpa: std.mem.Allocator, font: *ui.Font, dir: []const u8, new_project: ?job_zig.Create, heading: []const u8) !@FieldType(@FieldType(ProjectFlow, "phase"), "working") {
-        // The editor's resources sit beside its bin folder; engines go in the user's data folder.
-        const base = try sdl3.filesystem.getBasePath();
-        const resources_dir = try std.fs.path.resolve(gpa, &.{ base, "..", "resources" });
-        defer gpa.free(resources_dir);
-        const pref = try sdl3.filesystem.getPrefPath("eggy", "eggy");
-        defer sdl3.free(pref);
-        const engines_dir = try std.fs.path.join(gpa, &.{ pref, "engines" });
-        defer gpa.free(engines_dir);
-
-        const job = try Job.start(gpa, .{ .dir = dir, .resources_dir = resources_dir, .engines_dir = engines_dir, .create = new_project });
+    /// Start `action`'s job for the project in `dir`, and its loading screen.
+    fn startJob(gpa: std.mem.Allocator, font: *ui.Font, mono: *const ui.Font, dir: []const u8, action: job_zig.Action, heading: []const u8) !@FieldType(@FieldType(ProjectFlow, "phase"), "working") {
+        const folders = try job_zig.editorFolders(gpa);
+        defer gpa.free(folders.resources_dir);
+        defer gpa.free(folders.engines_dir);
+        const job = try Job.start(gpa, .{ .dir = dir, .resources_dir = folders.resources_dir, .engines_dir = folders.engines_dir, .action = action });
         const egg = ui.Image.load(gpa, font, @embedFile("editor_icon")) catch null;
-        return .{ .job = job, .splash = .init(heading, egg) };
+        return .{ .job = job, .splash = .init(gpa, mono, heading, egg) };
     }
 
     fn loadingWindow(gpa: std.mem.Allocator, graphics: *const eggy.Graphics, font: *ui.Font) !ToolWindow {

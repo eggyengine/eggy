@@ -1,12 +1,17 @@
 //! Getting a project's editor ready in the background, so the editor keeps drawing while it
 //! happens. Creating a project unpacks Eggy's bundled package (once per version, shared by every
-//! project) and writes the template as the new project; opening one reads its `eggy.zon`. Either
-//! way the project's editor is then built, for `launchEditor`. `status` reports how far it is.
+//! project) and writes the template as the new project; opening one reads its `eggy.zon`;
+//! upgrading one points it at the newest Eggy unpacked. Every way, the project's editor is then
+//! built, for `launchEditor`. `status` reports how far it is.
 const builtin = @import("builtin");
 const std = @import("std");
 const eggy = @import("eggy");
 const template = @import("template.zig");
+const engine = @import("engine.zig");
 const log = std.log.scoped(.projects);
+const build_log = std.log.scoped(.zig_build);
+/// The most of the build's output kept; past it, the rest is dropped.
+const max_output = 1 << 20;
 
 pub const Options = struct {
     /// The project's directory, absolute.
@@ -15,10 +20,35 @@ pub const Options = struct {
     resources_dir: []const u8,
     /// Where unpacked engines live, one directory per version, absolute.
     engines_dir: []const u8,
-    /// Make the project first, in `dir` (which must not exist yet, or be empty). Without it, the
-    /// job opens the project already in `dir`.
-    create: ?Create = null,
+    action: Action,
 };
+
+/// What the job does to the project before building it.
+pub const Action = union(enum) {
+    /// Open the project already in `dir`, also unpacking this editor's Eggy so it is known to be
+    /// the newest (see `engine.latest`) if it is new.
+    open,
+    /// Build the project in `dir` again, as it is.
+    rebuild,
+    /// Make the project first, in `dir` (which must not exist yet, or be empty).
+    create: Create,
+    /// Point the project in `dir` at the newest Eggy unpacked.
+    upgrade,
+    /// Point the project in `dir` at this Eggy codebase (absolute) for good: see
+    /// `engine.ProjectEngine.linked`.
+    link: []const u8,
+};
+
+/// The editor's resources (beside its `bin` folder) and the user's engines folder, for `Options`.
+/// Caller-owned.
+pub fn editorFolders(gpa: std.mem.Allocator) !struct { resources_dir: []u8, engines_dir: []u8 } {
+    const sdl3 = eggy.sdl_adapter.sdl;
+    const resources_dir = try std.fs.path.resolve(gpa, &.{ try sdl3.filesystem.getBasePath(), "..", "resources" });
+    errdefer gpa.free(resources_dir);
+    const pref = try sdl3.filesystem.getPrefPath("eggy", "eggy");
+    defer sdl3.free(pref);
+    return .{ .resources_dir = resources_dir, .engines_dir = try std.fs.path.join(gpa, &.{ pref, "engines" }) };
+}
 
 pub const Create = struct {
     /// What people see: any text.
@@ -30,6 +60,8 @@ pub const Create = struct {
 pub const Stage = enum {
     reading_project,
     unpacking_engine,
+    upgrading,
+    linking,
     writing_files,
     building,
     done,
@@ -39,6 +71,8 @@ pub const Stage = enum {
         return switch (stage) {
             .reading_project => "Reading the project",
             .unpacking_engine => "Unpacking Eggy",
+            .upgrading => "Upgrading Eggy",
+            .linking => "Linking Eggy",
             .writing_files => "Writing the project",
             .building => "Building the editor",
             .done => "Done",
@@ -54,7 +88,7 @@ pub const Status = struct {
     fraction: f32,
     /// What it is doing now: for the build, its step under way and how many steps are done.
     detail: []const u8,
-    /// The end of the job's output so far: what it did, then the build's own output.
+    /// The job's output so far: what it did, then the build's own output.
     log: []const u8,
 };
 
@@ -67,9 +101,9 @@ pub const Job = struct {
     dir: []u8,
     resources_dir: []u8 = &.{},
     engines_dir: []u8 = &.{},
-    /// `Options.create`, its text owned.
-    create: ?Create,
-    /// The project's package name: from `create`, or read from its `eggy.zon` before the build.
+    /// `Options.action`, its text owned.
+    action: Action,
+    /// The project's package name: from `.create`, or read from its `eggy.zon` before the build.
     name: []u8 = &.{},
     worker: std.Io.Future(void),
 
@@ -85,15 +119,19 @@ pub const Job = struct {
     pub fn start(gpa: std.mem.Allocator, options: Options) !*Job {
         const self = try gpa.create(Job);
         errdefer gpa.destroy(self);
-        self.* = .{ .gpa = gpa, .threaded = .init(gpa, .{ .environ = processEnviron() }), .dir = try gpa.dupe(u8, options.dir), .create = null, .worker = undefined };
+        self.* = .{ .gpa = gpa, .threaded = .init(gpa, .{ .environ = processEnviron() }), .dir = try gpa.dupe(u8, options.dir), .action = .open, .worker = undefined };
         errdefer self.freeText();
         errdefer self.threaded.deinit();
         self.resources_dir = try gpa.dupe(u8, options.resources_dir);
         self.engines_dir = try gpa.dupe(u8, options.engines_dir);
-        if (options.create) |create| {
-            self.create = .{ .title = "", .name = "" };
-            inline for (.{ "title", "name" }) |field| @field(self.create.?, field) = try gpa.dupe(u8, @field(create, field));
-            self.name = try gpa.dupe(u8, create.name);
+        switch (options.action) {
+            .create => |create| {
+                self.action = .{ .create = .{ .title = "", .name = "" } };
+                inline for (.{ "title", "name" }) |field| @field(self.action.create, field) = try gpa.dupe(u8, @field(create, field));
+                self.name = try gpa.dupe(u8, create.name);
+            },
+            .link => |dir| self.action = .{ .link = try gpa.dupe(u8, dir) },
+            else => self.action = options.action,
         }
         self.worker = try self.io().concurrent(run, .{self});
         return self;
@@ -116,7 +154,8 @@ pub const Job = struct {
         gpa.free(self.resources_dir);
         gpa.free(self.engines_dir);
         gpa.free(self.name);
-        if (self.create) |create| inline for (.{ "title", "name" }) |field| gpa.free(@field(create, field));
+        if (self.action == .link) gpa.free(self.action.link);
+        if (self.action == .create) inline for (.{ "title", "name" }) |field| gpa.free(@field(self.action.create, field));
     }
 
     pub fn io(self: *Job) std.Io {
@@ -129,7 +168,7 @@ pub const Job = struct {
         defer self.mutex.unlock(self.io());
         const fraction: f32 = switch (self.stage) {
             .reading_project => 0.01,
-            .unpacking_engine => 0.02,
+            .unpacking_engine, .upgrading, .linking => 0.02,
             .writing_files => 0.08,
             .building => 0.1 + 0.88 * self.build_fraction,
             .done => 1,
@@ -139,7 +178,7 @@ pub const Job = struct {
             .stage = self.stage,
             .fraction = fraction,
             .detail = try arena.dupe(u8, self.detail.items),
-            .log = try arena.dupe(u8, self.output.items[self.output.items.len -| 4096..]),
+            .log = try arena.dupe(u8, self.output.items),
         };
     }
 
@@ -185,21 +224,25 @@ pub const Job = struct {
     }
 
     fn prepare(self: *Job) !void {
-        if (self.create) |create| {
-            const io_ = self.io();
-            const gpa = self.gpa;
+        switch (self.action) {
+            .create => |create| {
+                // Eggy's package, unpacked once per version where every project can share it.
+                self.setStage(.unpacking_engine, "");
+                const engine_dir = try self.unpackEngine();
+                defer self.gpa.free(engine_dir);
 
-            // Eggy's package, unpacked once per version where every project can share it.
-            self.setStage(.unpacking_engine, "");
-            var resources = try std.Io.Dir.cwd().openDir(io_, self.resources_dir, .{});
-            defer resources.close(io_);
-            const engine_dir = try self.unpackEngine(resources);
-            defer gpa.free(engine_dir);
-
-            // The template, as the new project.
-            self.setStage(.writing_files, self.dir);
-            try self.writeProject(resources, create, engine_dir);
-        } else try self.readProject();
+                // The template, as the new project.
+                self.setStage(.writing_files, self.dir);
+                try self.writeProject(create, engine_dir);
+            },
+            .open => {
+                // This editor's Eggy, so a newer editor makes its Eggy the one to upgrade to.
+                self.setStage(.unpacking_engine, "");
+                self.gpa.free(try self.unpackEngine());
+                try self.readProject();
+            },
+            .rebuild, .upgrade, .link => try self.readProject(),
+        }
 
         // Its editor, which `launchEditor` opens.
         self.setStage(.building, "Starting zig build");
@@ -223,7 +266,31 @@ pub const Job = struct {
         template.validateName(config.name) catch return error.UnreadableConfig;
         self.name = try self.gpa.dupe(u8, config.name);
         self.say("Opening {s} ({s})", .{ config.title, self.dir });
-        try self.checkEngine(project, arena.allocator());
+        switch (self.action) {
+            .upgrade => try self.upgrade(project, arena.allocator()),
+            .link => |codebase| try self.link(project, arena.allocator(), codebase),
+            else => try self.checkEngine(project, arena.allocator()),
+        }
+    }
+
+    /// Point the project at the newest Eggy unpacked, which its next build uses.
+    fn upgrade(self: *Job, project: std.Io.Dir, arena: std.mem.Allocator) !void {
+        self.setStage(.upgrading, "");
+        const io_ = self.io();
+        // A linked project stays on its codebase.
+        const path = try engine.dependencyPath(arena, io_, project) orelse return error.EngineNotAPath;
+        if (!engine.isPackagedPath(path)) return error.ProjectIsLinked;
+        const version = try engine.latest(arena, io_, self.engines_dir) orelse return error.NoEngineToUpgradeTo;
+        const engine_dir = try std.fs.path.join(arena, &.{ self.engines_dir, version });
+        try engine.repoint(arena, io_, project, self.dir, engine_dir);
+        self.say("Upgraded to Eggy {s}: {s}", .{ version, engine_dir });
+    }
+
+    /// Point the project at the Eggy codebase `codebase`, which its builds use from now on.
+    fn link(self: *Job, project: std.Io.Dir, arena: std.mem.Allocator, codebase: []const u8) !void {
+        self.setStage(.linking, codebase);
+        try engine.repoint(arena, self.io(), project, self.dir, codebase);
+        self.say("Linked to the Eggy codebase at {s}", .{codebase});
     }
 
     /// If the project's Eggy (a path dependency) is missing, say an engine folder that was
@@ -231,28 +298,32 @@ pub const Job = struct {
     /// Eggy instead, unpacking that first.
     fn checkEngine(self: *Job, project: std.Io.Dir, arena: std.mem.Allocator) !void {
         const io_ = self.io();
-        const manifest = project.readFileAllocOptions(io_, "build.zig.zon", arena, .limited(1 << 20), .of(u8), 0) catch return error.NotAProject;
-        const Manifest = struct { dependencies: struct { eggy: struct { path: ?[]const u8 = null } = .{} } = .{} };
-        const parsed = std.zon.parse.fromSliceAlloc(Manifest, arena, manifest, null, .{ .ignore_unknown_fields = true }) catch return error.UnreadableManifest;
-        const old_path = parsed.dependencies.eggy.path orelse return; // fetched by URL: Zig's business
+        const dependency_path = engine.dependencyPath(arena, io_, project) catch |err| return switch (err) {
+            error.FileNotFound => error.NotAProject,
+            else => err,
+        };
+        const old_path = dependency_path orelse return; // fetched by URL: Zig's business
         if (project.access(io_, old_path, .{})) |_| return else |_| {}
+        // A linked codebase that went missing is not swapped for a packaged Eggy: that would
+        // undo the link.
+        if (!engine.isPackagedPath(old_path)) {
+            self.say("The Eggy codebase this project is linked to ({s}) wasn't found", .{old_path});
+            return error.LinkedEngineMissing;
+        }
 
-        var resources = try std.Io.Dir.cwd().openDir(io_, self.resources_dir, .{});
-        defer resources.close(io_);
-        const engine_dir = try self.unpackEngine(resources);
+        const engine_dir = try self.unpackEngine();
         defer self.gpa.free(engine_dir);
-        const new_path = try std.fs.path.relative(arena, "/", null, self.dir, engine_dir);
-        const old_literal = try std.fmt.allocPrint(arena, "\"{f}\"", .{std.zig.fmtString(old_path)});
-        const new_literal = try std.fmt.allocPrint(arena, "\"{f}\"", .{std.zig.fmtString(new_path)});
-        const updated = try std.mem.replaceOwned(u8, arena, manifest, old_literal, new_literal);
-        try project.writeFile(io_, .{ .sub_path = "build.zig.zon", .data = updated });
+        try engine.repoint(arena, io_, project, self.dir, engine_dir);
         self.say("Its Eggy ({s}) wasn't found, so it now uses this editor's: {s}", .{ old_path, engine_dir });
     }
 
-    /// The directory holding `eggy.tar`'s package, unpacking it first if this version is new.
-    fn unpackEngine(self: *Job, resources: std.Io.Dir) ![]u8 {
+    /// The directory holding `eggy.tar`'s package, unpacking it first if this version is new, and
+    /// then recording it as the newest. Caller-owned.
+    fn unpackEngine(self: *Job) ![]u8 {
         const io_ = self.io();
         const gpa = self.gpa;
+        var resources = try std.Io.Dir.cwd().openDir(io_, self.resources_dir, .{});
+        defer resources.close(io_);
         const tarball = try resources.readFileAlloc(io_, "eggy.tar", gpa, .limited(256 << 20));
         defer gpa.free(tarball);
 
@@ -267,6 +338,10 @@ pub const Job = struct {
         defer gpa.free(manifest);
         if (cwd.access(io_, manifest, .{})) |_| {
             self.say("Using Eggy from {s}", .{dir});
+            // Engines unpacked before `latest` was kept still need one to be the newest.
+            var arena = std.heap.ArenaAllocator.init(gpa);
+            defer arena.deinit();
+            if (try engine.latest(arena.allocator(), io_, self.engines_dir) == null) try engine.markLatest(io_, self.engines_dir, &version);
             return dir;
         } else |_| {}
 
@@ -280,13 +355,15 @@ pub const Job = struct {
         var reader: std.Io.Reader = .fixed(tarball);
         try std.tar.extract(io_, target, &reader, .{});
         try cwd.rename(partial, cwd, dir, io_);
+        // ponytail: "newest" means most recently unpacked, so an older editor unpacking its Eggy after a cleanup takes over; compare versions if that bites.
+        try engine.markLatest(io_, self.engines_dir, &version);
         self.say("Unpacked Eggy into {s}", .{dir});
         return dir;
     }
 
     /// Write `template.tar` into the project's (new, or empty) directory with its placeholders
     /// filled, pointing it at `engine_dir`.
-    fn writeProject(self: *Job, resources: std.Io.Dir, create: Create, engine_dir: []const u8) !void {
+    fn writeProject(self: *Job, create: Create, engine_dir: []const u8) !void {
         const io_ = self.io();
         const gpa = self.gpa;
         const cwd = std.Io.Dir.cwd();
@@ -307,6 +384,8 @@ pub const Job = struct {
             .engine_path = engine_path,
         };
 
+        var resources = try cwd.openDir(io_, self.resources_dir, .{});
+        defer resources.close(io_);
         const tarball = try resources.readFileAlloc(io_, "template.tar", gpa, .limited(16 << 20));
         defer gpa.free(tarball);
         var reader: std.Io.Reader = .fixed(tarball);
@@ -330,28 +409,28 @@ pub const Job = struct {
     /// `ZIG_PROGRESS` pipe Zig reports to) and keeping its output for `status`.
     fn build(self: *Job) !void {
         const io_ = self.io();
-        const gpa = self.gpa;
 
         // Zig writes its progress tree to the file descriptor named in ZIG_PROGRESS. Spawning
         // removes that variable unless the progress goes into this process's own std.Progress
         // tree, which can't be read back, so a shell sets it and execs zig with the pipe.
         var progress_fds: ?[2]std.c.fd_t = null;
         var fd_text: [16]u8 = undefined;
-        const plain_argv: []const []const u8 = &.{ "zig", "build", "editor", "--color", "off" };
+        // `--summary all` lists every step, so the output says what was built even when all is well.
+        const plain_argv: []const []const u8 = &.{ "zig", "build", "editor", "--color", "off", "--summary", "all" };
         var argv = plain_argv;
         if (builtin.os.tag != .windows) {
             var fds: [2]std.c.fd_t = undefined;
             if (std.c.pipe(&fds) == 0) {
                 progress_fds = fds;
-                argv = &.{ "/bin/sh", "-c", "ZIG_PROGRESS=\"$1\" exec zig build editor --color off", "sh", try std.fmt.bufPrint(&fd_text, "{d}", .{fds[1]}) };
+                argv = &.{ "/bin/sh", "-c", "ZIG_PROGRESS=\"$1\" exec zig build editor --color off --summary all", "sh", try std.fmt.bufPrint(&fd_text, "{d}", .{fds[1]}) };
             }
         }
-        self.say("$ zig build editor   (in {s})", .{self.dir});
+        self.say("$ zig build editor --summary all   (in {s})", .{self.dir});
         var child = std.process.spawn(io_, .{
             .argv = argv,
             .cwd = .{ .path = self.dir },
             .stdin = .ignore,
-            .stdout = .ignore,
+            .stdout = .pipe,
             .stderr = .pipe,
         }) catch |err| {
             if (progress_fds) |fds| {
@@ -369,22 +448,37 @@ pub const Job = struct {
         } else null;
         defer if (progress) |*task| task.cancel(io_);
 
-        // Keep the build's error output, for when it fails.
-        var buffer: [4096]u8 = undefined;
-        var stderr = child.stderr.?.readerStreaming(io_, &buffer);
-        while (true) {
-            const chunk = stderr.interface.peekGreedy(1) catch |err| switch (err) {
-                error.EndOfStream => break,
-                else => return stderr.err orelse err,
-            };
-            self.mutex.lockUncancelable(io_);
-            self.output.appendSlice(gpa, chunk) catch {};
-            self.mutex.unlock(io_);
-            stderr.interface.toss(chunk.len);
-        }
+        // Keep the build's output, stdout and stderr alike, for the loading screen and Build
+        // progress window, and log it for the Console.
+        var stdout = try io_.concurrent(followOutput, .{ self, child.stdout.? });
+        defer stdout.cancel(io_) catch {};
+        try self.followOutput(child.stderr.?);
+        try stdout.await(io_);
 
         const term = try child.wait(io_);
         if (term != .exited or term.exited != 0) return error.BuildFailed;
+    }
+
+    /// Read the build's output from `file` line by line until it ends: keep it for `status`, and
+    /// log it for the Console, its errors as errors.
+    fn followOutput(self: *Job, file: std.Io.File) !void {
+        const io_ = self.io();
+        var buffer: [4096]u8 = undefined;
+        var reader = file.readerStreaming(io_, &buffer);
+        while (true) {
+            const line = reader.interface.takeDelimiterInclusive('\n') catch |err| switch (err) {
+                // A last line without a newline, else the end.
+                error.EndOfStream => if (reader.interface.bufferedLen() > 0) reader.interface.take(reader.interface.bufferedLen()) catch return else return,
+                error.StreamTooLong => reader.interface.take(reader.interface.bufferedLen()) catch return,
+                else => return reader.err orelse err,
+            };
+            self.mutex.lockUncancelable(io_);
+            if (self.output.items.len < max_output) self.output.appendSlice(self.gpa, line) catch {};
+            self.mutex.unlock(io_);
+            const text = std.mem.trimEnd(u8, line, "\r\n");
+            if (text.len == 0) continue;
+            if (std.mem.indexOf(u8, text, "error:") != null) build_log.err("{s}", .{text}) else build_log.info("{s}", .{text});
+        }
     }
 
     /// Read Zig's progress snapshots from `file` until the build closes it, keeping the overall
@@ -474,11 +568,15 @@ fn processEnviron() std.process.Environ {
 fn describe(err: anyerror) []const u8 {
     return switch (err) {
         error.ZigNotFound => "Zig 0.16 isn't on your PATH. Install it, then try again.",
-        error.BuildFailed => "The project was created, but its first build failed. The build's output is below.",
+        error.BuildFailed => "The project's build failed. Its output is below.",
         error.ProjectDirNotEmpty => "The project's folder isn't empty.",
         error.NotAProject => "That folder isn't an Eggy project: it has no eggy.zon.",
         error.UnreadableConfig => "The project's eggy.zon couldn't be read. It needs a .name (the package name) and a .title.",
         error.UnreadableManifest => "The project's build.zig.zon couldn't be read.",
+        error.NoEngineToUpgradeTo => "There is no newer Eggy to upgrade to. Open the project from a newer editor first.",
+        error.ProjectIsLinked => "The project is linked to an Eggy codebase, so it builds against that and doesn't upgrade.",
+        error.LinkedEngineMissing => "The Eggy codebase the project is linked to is missing. Put it back, or change the eggy path in its build.zig.zon.",
+        error.EngineNotAPath => "The project gets Eggy by URL, so its build.zig.zon picks the version.",
         error.AccessDenied, error.PermissionDenied => "Eggy isn't allowed to write there.",
         else => @errorName(err),
     };
