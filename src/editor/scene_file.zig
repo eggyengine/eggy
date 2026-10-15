@@ -89,10 +89,12 @@ pub const OpenScene = struct {
         log.info("saved {d} entities to {s}", .{ scene.entities.len, path });
     }
 
-    /// Start a new, empty scene in `scenes/`, written at once, and open it: `world` empties.
-    pub fn create(self: *OpenScene, world: *eggy.ecs.World, access: eggy.scene.Access) !void {
+    /// Start a new, empty scene in `folder` (relative to the project; "" for the project
+    /// itself), written at once, and open it: `world` empties.
+    pub fn create(self: *OpenScene, folder: []const u8, world: *eggy.ecs.World, access: eggy.scene.Access) !void {
+        if (folder.len > 0 and !isProjectPath(folder)) return error.BadPathName;
         world.clear();
-        const fresh = try self.freshPath();
+        const fresh = try self.freshPathIn(folder);
         defer self.gpa.free(fresh);
         try self.setPath(fresh);
         try self.save(world, access);
@@ -105,18 +107,47 @@ pub const OpenScene = struct {
         self.writeMemory() catch |err| log.warn("cannot remember the open scene: {t}", .{err});
     }
 
+    /// The open scene's file moved from `from` to `to` (or a folder holding it did): follow it.
+    pub fn moved(self: *OpenScene, from: []const u8, to: []const u8) void {
+        const path = self.path orelse return;
+        if (!std.mem.startsWith(u8, path, from)) return;
+        const rest = path[from.len..];
+        if (rest.len > 0 and rest[0] != '/' and rest[0] != std.fs.path.sep) return;
+        const updated = std.fmt.allocPrint(self.gpa, "{s}{s}", .{ to, rest }) catch return;
+        defer self.gpa.free(updated);
+        self.setPath(updated) catch {};
+    }
+
+    /// The open scene's file (or a folder holding it) was deleted: it stays in the world, unsaved,
+    /// with no scene open.
+    pub fn deleted(self: *OpenScene, path: []const u8) void {
+        const current_path = self.path orelse return;
+        if (!std.mem.startsWith(u8, current_path, path)) return;
+        const rest = current_path[path.len..];
+        if (rest.len > 0 and rest[0] != '/' and rest[0] != std.fs.path.sep) return;
+        self.gpa.free(current_path);
+        self.path = null;
+        self.saved_hash = null;
+    }
+
     /// `scenes/untitled.scene.zon`, or `untitled-2` and so on when that is taken. Caller-owned.
     fn freshPath(self: *const OpenScene) ![]u8 {
+        return self.freshPathIn(scenes_dir);
+    }
+
+    /// `untitled.scene.zon` in `folder`, or `untitled-2` and so on. Caller-owned.
+    fn freshPathIn(self: *const OpenScene, folder: []const u8) ![]u8 {
         var threaded: std.Io.Threaded = .init_single_threaded;
         const io = threaded.io();
         var project = try std.Io.Dir.cwd().openDir(io, self.project_dir, .{});
         defer project.close(io);
         var n: usize = 1;
         while (true) : (n += 1) {
+            const separator: []const u8 = if (folder.len > 0) "/" else "";
             const path = if (n == 1)
-                try std.fmt.allocPrint(self.gpa, "{s}{c}untitled{s}", .{ scenes_dir, std.fs.path.sep, extension })
+                try std.fmt.allocPrint(self.gpa, "{s}{s}untitled{s}", .{ folder, separator, extension })
             else
-                try std.fmt.allocPrint(self.gpa, "{s}{c}untitled-{d}{s}", .{ scenes_dir, std.fs.path.sep, n, extension });
+                try std.fmt.allocPrint(self.gpa, "{s}{s}untitled-{d}{s}", .{ folder, separator, n, extension });
             project.access(io, path, .{}) catch return path;
             self.gpa.free(path);
         }
@@ -197,7 +228,7 @@ test "a saved scene is remembered, and a new one gets a free name" {
     try std.testing.expect(!first.unsaved(&world, access));
     access.setName(&world, named, "Sol");
     try std.testing.expect(first.unsaved(&world, access));
-    try first.create(&world, access);
+    try first.create("scenes", &world, access);
     try std.testing.expectEqualStrings("untitled-2.scene.zon", first.name().?);
 
     // A later editor reopens the last one, and opening the first brings its entity back.

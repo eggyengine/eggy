@@ -434,10 +434,12 @@ pub fn Editor(comptime project: type) type {
                     const game = if (self.game) |*loaded| loaded else return std.log.err("the game's library isn't loaded, so scenes can't be opened", .{});
                     const result = switch (action) {
                         .open_scene => |path| scene.open(path, &self.app.world, game.sceneAccess()),
-                        else => scene.create(&self.app.world, game.sceneAccess()),
+                        .create_scene => |folder| scene.create(folder, &self.app.world, game.sceneAccess()),
+                        else => unreachable,
                     };
                     result catch |err| return std.log.err("cannot open the scene: {t}", .{err});
                     self.entity_editor.selected = null;
+                    self.assets_panel.refreshSoon();
                 },
                 .reveal => |path| {
                     // A file shows as its folder.
@@ -445,6 +447,42 @@ pub fn Editor(comptime project: type) type {
                     defer self.gpa.free(folder);
                     file_manager.showFolder(self.gpa, folder) catch |err| std.log.err("cannot show {s}: {t}", .{ path, err });
                 },
+                .copy_path => |path| {
+                    @import("terminal_view.zig").copyToClipboard(path);
+                    self.workspace.toast("Copied the path");
+                },
+                .create_folder, .rename, .duplicate, .delete => self.changeFiles(opened.dir, action) catch |err| {
+                    std.log.err("cannot change the files: {t}", .{err});
+                    self.workspace.toast("Couldn't do that: see the Console");
+                },
+            }
+        }
+
+        /// The Assets panel's file changes: new folders, renaming, duplicating, deleting (into
+        /// the project's trash). The open scene follows its file.
+        fn changeFiles(self: *Self, project_dir: []const u8, action: assets.Action) !void {
+            const file_ops = @import("assets/file_ops.zig");
+            var threaded: std.Io.Threaded = .init_single_threaded;
+            const io = threaded.io();
+            var files = try std.Io.Dir.cwd().openDir(io, project_dir, .{});
+            defer files.close(io);
+            defer self.assets_panel.refreshSoon();
+            switch (action) {
+                .create_folder => |parent| self.gpa.free(try file_ops.createFolder(self.gpa, io, files, parent)),
+                .rename => |change| {
+                    const renamed = try file_ops.rename(self.gpa, io, files, change.path, change.name);
+                    defer self.gpa.free(renamed);
+                    if (self.open_scene) |*scene| scene.moved(change.path, renamed);
+                },
+                .duplicate => |path| self.gpa.free(try file_ops.duplicate(self.gpa, io, files, path)),
+                .delete => |path| {
+                    const trashed = try file_ops.trash(self.gpa, io, files, path);
+                    defer self.gpa.free(trashed);
+                    if (self.open_scene) |*scene| scene.deleted(path);
+                    var message: [96]u8 = undefined;
+                    self.workspace.toast(std.fmt.bufPrint(&message, "Moved {s} to the trash", .{std.fs.path.basename(path)}) catch "Moved to the trash");
+                },
+                else => unreachable,
             }
         }
 
@@ -585,9 +623,10 @@ pub fn Editor(comptime project: type) type {
             }
             const slot = self.slotOf(curr_event);
 
-            // F2 renames the entity selected in the Hierarchy (Weeoui's keys don't include it).
-            if (curr_event == .key_down and self.focused_page == panels.hierarchy_page) if (curr_event.key_down.key) |key| if (key == .func2) {
-                self.entity_editor.renameSelected();
+            // F2 renames what is selected in the Hierarchy or Assets (Weeoui's keys don't include it).
+            if (curr_event == .key_down) if (curr_event.key_down.key) |key| if (key == .func2) {
+                if (self.focused_page == panels.hierarchy_page) self.entity_editor.renameSelected();
+                if (self.focused_page == panels.assets_page) self.assets_panel.renameSelected();
                 return .run;
             };
 
@@ -948,9 +987,12 @@ pub fn Editor(comptime project: type) type {
                 if (!wanted) continue;
                 // ponytail: only the Inspector is exposed to screen readers; give plugin pages AccessKit too once one adapter can serve several contexts.
                 if (index == panels.console_page and self.console.terminal.handle(input)) continue;
-                // Assets' double-clicks, before its UI.
+                // Assets' right-clicks, double-clicks and keys, before its UI.
                 if (index == panels.assets_page) {
-                    const result = self.assets_panel.pointer(&self.assets_ui, input);
+                    const result = switch (input) {
+                        .key_down => |key| self.assets_panel.key(key),
+                        else => self.assets_panel.pointer(&self.assets_ui, input),
+                    };
                     if (result.action) |action| self.applyAssetAction(action);
                     if (result.used) continue;
                 }
@@ -1122,6 +1164,7 @@ test {
     _ = @import("assets/assets.zig");
     _ = @import("assets/listing.zig");
     _ = @import("assets/icons.zig");
+    _ = @import("assets/file_ops.zig");
     _ = @import("window_placement.zig");
     _ = @import("hot_reload/hot_reload.zig");
     _ = @import("preferences/preferences.zig");

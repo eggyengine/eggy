@@ -1,8 +1,9 @@
-//! The Assets panel: the project's files, to find and open them. As a list it is a tree of the
-//! whole project, folders opening in place; as a grid it is one folder's tiles, with a path to
-//! climb back up. A filter searches every folder by name. A scene (`.scene.zon`) opens with a
-//! double-click, New scene starts an empty one, and any other file shows in the system's file
-//! manager.
+//! The Assets panel: the project's files, to find, open and manage them. As a list it is a tree
+//! of the whole project, folders opening in place; as a grid it is one folder's tiles, with a
+//! path to climb back up. A filter searches every folder by name. A scene (`.scene.zon`) opens
+//! with a double-click, and any other file shows in the system's file manager. A right-click
+//! opens a menu (open, rename, duplicate, delete, copy path, show in the file manager, and new
+//! folders and scenes); F2 renames and Delete deletes the selected entry.
 //!
 //! Like the Hierarchy, the panel doesn't act itself: `build` and `pointer` return the `Action`.
 const std = @import("std");
@@ -15,14 +16,30 @@ const Icons = icons_zig.Icons;
 const Icon = icons_zig.Icon;
 const page_style = @import("../page_style.zig");
 
+/// What the user asked for. Paths are relative to the project, with `/` between parts.
 pub const Action = union(enum) {
-    /// Open this scene (relative to the project), replacing the world.
+    /// Open this scene, replacing the world.
     open_scene: []const u8,
-    /// Start a new, empty scene and open it.
-    create_scene,
-    /// Show this file or folder (relative to the project) in the system's file manager.
+    /// Start a new, empty scene in this folder ("" for the project) and open it.
+    create_scene: []const u8,
+    /// Make a new folder in this folder.
+    create_folder: []const u8,
+    rename: struct { path: []const u8, name: []const u8 },
+    duplicate: []const u8,
+    /// Move this into the project's trash.
+    delete: []const u8,
+    /// Put this path on the clipboard.
+    copy_path: []const u8,
+    /// Show this file or folder in the system's file manager.
     reveal: []const u8,
 };
+
+/// What an event routed to the panel did: whether the panel used it, and the action it led to.
+pub const Handled = struct { used: bool, action: ?Action = null };
+
+const MenuItem = enum(u32) { open, rename, duplicate, delete, copy_path, reveal, new_folder, new_scene };
+const menu_id_base: u32 = item_id_base - 32;
+const NameEdit = ui.TextEdit(128);
 
 pub const View = enum { list, grid };
 
@@ -57,22 +74,83 @@ pub const AssetsPanel = struct {
     shown: []const Shown = &.{},
     shown_arena: std.heap.ArenaAllocator,
     read_at_ms: ?u64 = null,
+    /// The right-click menu: where, and for which entry (none: the folder shown).
+    menu: ?struct { at: ui.Vec2, entry: ?listing.Entry } = null,
+    /// Owns the menu's entry's text.
+    menu_arena: std.heap.ArenaAllocator,
+    /// The entry being renamed, and its new name as typed.
+    renaming: ?struct { path: []u8, edit: NameEdit, started: bool = false } = null,
     /// What the listing was read for, to tell when to read it again.
     read_for: struct { view: View = .list, filter: std.ArrayList(u8) = .empty, folder: std.ArrayList(u8) = .empty, expanded: usize = 0 } = .{},
 
     pub fn init(gpa: std.mem.Allocator) AssetsPanel {
-        return .{ .gpa = gpa, .shown_arena = .init(gpa) };
+        return .{ .gpa = gpa, .shown_arena = .init(gpa), .menu_arena = .init(gpa) };
     }
 
     pub fn deinit(self: *AssetsPanel) void {
         self.folder.deinit(self.gpa);
         self.selected.deinit(self.gpa);
         var keys = self.expanded.keyIterator();
-        while (keys.next()) |key| self.gpa.free(key.*);
+        while (keys.next()) |path| self.gpa.free(path.*);
         self.expanded.deinit(self.gpa);
         self.read_for.filter.deinit(self.gpa);
         self.read_for.folder.deinit(self.gpa);
         self.shown_arena.deinit();
+        self.menu_arena.deinit();
+        if (self.renaming) |renaming| self.gpa.free(renaming.path);
+    }
+
+    /// Read the listing again on the next build, as the files just changed.
+    pub fn refreshSoon(self: *AssetsPanel) void {
+        self.read_at_ms = null;
+    }
+
+    /// Rename the selected entry (F2): its row becomes a text field.
+    pub fn renameSelected(self: *AssetsPanel) void {
+        if (self.selected.items.len == 0) return;
+        self.startRename(self.selected.items);
+    }
+
+    /// A key while the panel has the keyboard: Enter keeps a rename, Escape drops it (or closes
+    /// the menu), Delete deletes the selected entry. Returns whether it was used, and the action.
+    pub fn key(self: *AssetsPanel, key_down: @FieldType(ui.input.Event, "key_down")) Handled {
+        switch (key_down.key) {
+            .enter => if (self.renaming != null) return .{ .used = true, .action = self.finishRename() },
+            .escape => {
+                const any = self.menu != null or self.renaming != null;
+                self.menu = null;
+                self.cancelRename();
+                return .{ .used = any };
+            },
+            .delete => if (self.renaming == null and self.selected.items.len > 0) return .{ .used = true, .action = .{ .delete = self.selected.items } },
+            else => {},
+        }
+        return .{ .used = false };
+    }
+
+    fn startRename(self: *AssetsPanel, path: []const u8) void {
+        self.cancelRename();
+        const owned = self.gpa.dupe(u8, path) catch return;
+        self.renaming = .{ .path = owned, .edit = NameEdit.init(std.fs.path.basename(path)) catch NameEdit.init("") catch unreachable };
+        self.menu = null;
+    }
+
+    fn cancelRename(self: *AssetsPanel) void {
+        if (self.renaming) |renaming| self.gpa.free(renaming.path);
+        self.renaming = null;
+    }
+
+    /// End the rename, asking for it if the name changed. The action's text lives until the
+    /// next build.
+    fn finishRename(self: *AssetsPanel) ?Action {
+        const renaming = self.renaming orelse return null;
+        self.renaming = null;
+        defer self.gpa.free(renaming.path);
+        const name = std.mem.trim(u8, renaming.edit.text(), " ");
+        if (name.len == 0 or std.mem.eql(u8, name, std.fs.path.basename(renaming.path))) return null;
+        _ = self.menu_arena.reset(.retain_capacity);
+        const arena = self.menu_arena.allocator();
+        return .{ .rename = .{ .path = arena.dupe(u8, renaming.path) catch return null, .name = arena.dupe(u8, name) catch return null } };
     }
 
     /// Draw the panel for the project in `project_dir` (none: nothing to show) into `context`,
@@ -90,7 +168,7 @@ pub const AssetsPanel = struct {
         context.begin(.row);
         var view_index: usize = @intFromEnum(self.view);
         if (context.tabs(&.{ "List", "Grid" }, &view_index)) self.view = @enumFromInt(view_index);
-        if (context.buttonVariant("New scene", .outline)) action = .create_scene;
+        if (context.buttonVariant("New scene", .outline)) action = .{ .create_scene = self.newFilesFolder() };
         context.end();
         page_style.restyle(context, .{ .direction = .row, .gap = 8, .align_items = .center });
         if (context.last_added) |tools| tools.style.wrap = true;
@@ -123,17 +201,36 @@ pub const AssetsPanel = struct {
             self.select(item.entry.path);
             if (self.view == .list and !searching and item.entry.kind == .folder) self.toggle(item.entry.path);
         };
+        if (self.menuElement(context)) |menu_action| action = menu_action;
         return action;
     }
 
     /// Route a pointer event over the panel before its UI sees it: a double-click opens the
     /// entry under it (a scene opens, a folder opens in the grid, anything else shows in the
     /// file manager). `context` has last frame's layout.
-    pub fn pointer(self: *AssetsPanel, context: *const ui.Context, event: ui.input.Event) struct { used: bool, action: ?Action = null } {
+    pub fn pointer(self: *AssetsPanel, context: *const ui.Context, event: ui.input.Event) Handled {
         const down = switch (event) {
             .pointer_down => |down| down,
             else => return .{ .used = false },
         };
+        // A press outside the menu closes it, and one outside the rename keeps the name.
+        if (self.menu != null and !self.onMenu(context, down.position)) self.menu = null;
+        if (self.renaming) |renaming| {
+            const on_field = if (self.itemAt(context, down.position)) |item| std.mem.eql(u8, item.entry.path, renaming.path) else false;
+            if (!on_field) return .{ .used = false, .action = self.finishRename() };
+        }
+        if (down.button == .right) {
+            _ = self.menu_arena.reset(.retain_capacity);
+            const item = self.itemAt(context, down.position);
+            var entry: ?listing.Entry = null;
+            if (item) |found| {
+                self.select(found.entry.path);
+                const arena = self.menu_arena.allocator();
+                entry = .{ .path = arena.dupe(u8, found.entry.path) catch return .{ .used = true }, .name = "", .kind = found.entry.kind };
+            }
+            self.menu = .{ .at = down.position, .entry = entry };
+            return .{ .used = true };
+        }
         if (down.button != .left or down.clicks < 2) return .{ .used = false };
         const item = self.itemAt(context, down.position) orelse return .{ .used = false };
         const entry = item.entry;
@@ -151,7 +248,7 @@ pub const AssetsPanel = struct {
     }
 
     /// One row of the list: indented by depth, a folder's chevron, its icon and name.
-    fn row(self: *const AssetsPanel, context: *ui.Context, icons: *const Icons, item: Shown, index: usize, open_scene: ?[]const u8, searching: bool) void {
+    fn row(self: *AssetsPanel, context: *ui.Context, icons: *const Icons, item: Shown, index: usize, open_scene: ?[]const u8, searching: bool) void {
         const b = context.builder();
         const arena = b.allocator;
         const id = item_id_base + @as(u32, @intCast(index));
@@ -169,6 +266,7 @@ pub const AssetsPanel = struct {
         else
             b.node(0, .{ .width = 12, .height = 12 }, .none, &.{}) catch return;
         const icon = if (item.entry.kind == .folder and item.open) Icon.folder_open else Icon.of(item.entry.kind);
+        if (self.renamingThis(item.entry.path)) return self.renameField(context, icons.paint(icon, context.theme), left + 4 + 12 + 6);
         const children = [_]*L.Element{
             chevron,
             b.node(0, .{ .width = 16, .height = 16 }, icons.paint(icon, context.theme), &.{}) catch return,
@@ -182,11 +280,13 @@ pub const AssetsPanel = struct {
     }
 
     /// One tile of the grid: the icon above the name.
-    fn tile(self: *const AssetsPanel, context: *ui.Context, icons: *const Icons, item: Shown, index: usize, open_scene: ?[]const u8) void {
+    fn tile(self: *AssetsPanel, context: *ui.Context, icons: *const Icons, item: Shown, index: usize, open_scene: ?[]const u8) void {
         const b = context.builder();
         const arena = b.allocator;
         const id = item_id_base + @as(u32, @intCast(index));
         const is_open = if (open_scene) |path| std.mem.eql(u8, path, item.entry.path) else false;
+        // Renamed in a field of its own: a tile is too narrow to type in.
+        if (self.renamingThis(item.entry.path)) return self.renameField(context, icons.paint(Icon.of(item.entry.kind), context.theme), 0);
         const name = page_style.fitText(arena, context.font, item.entry.name, 11, tile_width - 12);
         const element = b.node(id, .{ .width = tile_width, .height = tile_height, .align_items = .center, .gap = 6, .padding = .{ .top = 10, .left = 6, .right = 6 } }, highlight(arena, id, self.isSelected(item.entry.path) or is_open), &.{
             b.node(0, .{ .width = 40, .height = 40 }, icons.paint(Icon.of(item.entry.kind), context.theme), &.{}) catch return,
@@ -195,6 +295,99 @@ pub const AssetsPanel = struct {
         element.cursor = .pointer;
         element.accessibility = .{ .role = .button, .label = item.entry.name };
         context.element(element);
+    }
+
+    fn renamingThis(self: *const AssetsPanel, path: []const u8) bool {
+        const renaming = self.renaming orelse return false;
+        return std.mem.eql(u8, renaming.path, path);
+    }
+
+    /// The field an entry is renamed in: its icon, then the name being typed, `left` in.
+    fn renameField(self: *AssetsPanel, context: *ui.Context, icon: L.Paint, left: f32) void {
+        const renaming = &(self.renaming orelse return);
+        context.begin(.row);
+        context.element(context.builder().node(0, .{ .width = 16, .height = 16 }, icon, &.{}) catch return);
+        _ = context.textInput("##rename asset", &renaming.edit, "Name");
+        const field = context.last_added;
+        page_style.restyle(context, .{ .grow = 1 });
+        context.end();
+        page_style.restyle(context, .{ .direction = .row, .gap = 6, .align_items = .center, .padding = .{ .left = left } });
+        // Focus the field the first frame, so typing goes straight in.
+        if (field) |input| if (!renaming.started) {
+            context.focus = input.id;
+            renaming.started = true;
+        };
+    }
+
+    /// The right-click menu, if open, and what was picked from it.
+    fn menuElement(self: *AssetsPanel, context: *ui.Context) ?Action {
+        const menu = self.menu orelse return null;
+        const arena = context.builder().allocator;
+        var choices: std.ArrayList(ui.widgets.Choice) = .empty;
+        const add = struct {
+            fn f(list: *std.ArrayList(ui.widgets.Choice), allocator: std.mem.Allocator, item: MenuItem, label: []const u8) void {
+                list.append(allocator, .{ .id = menu_id_base + @intFromEnum(item), .label = label }) catch {};
+            }
+        }.f;
+        if (menu.entry) |entry| {
+            if (entry.kind == .scene) add(&choices, arena, .open, "Open scene");
+            add(&choices, arena, .rename, "Rename");
+            add(&choices, arena, .duplicate, "Duplicate");
+            add(&choices, arena, .delete, "Delete");
+            add(&choices, arena, .copy_path, "Copy path");
+            add(&choices, arena, .reveal, "Show in file manager");
+        } else add(&choices, arena, .reveal, "Show in file manager");
+        add(&choices, arena, .new_folder, "New folder");
+        add(&choices, arena, .new_scene, "New scene");
+
+        // Kept inside the page: it opens left of or above the pointer near an edge.
+        const width: f32 = @min(200, context.viewport.w);
+        const height = 8 + 32 * @as(f32, @floatFromInt(choices.items.len));
+        const at = ui.Vec2{
+            .x = @max(context.viewport.x, @min(menu.at.x, context.viewport.x + context.viewport.w - width)),
+            .y = @max(context.viewport.y, @min(menu.at.y, context.viewport.y + context.viewport.h - height)),
+        };
+        const popup = (ui.widgets.contextMenu(context.builder(), at, choices.items, 0) catch return null) orelse return null;
+        popup.style.width = width;
+        context.element(popup);
+
+        for (choices.items) |choice| if (context.activated(choice.id)) {
+            self.menu = null;
+            // New things go into the entry if it is a folder, else beside it.
+            const folder = if (menu.entry) |entry| (if (entry.kind == .folder) entry.path else listing.parentOf(entry.path)) else self.newFilesFolder();
+            return switch (@as(MenuItem, @enumFromInt(choice.id - menu_id_base))) {
+                .open => .{ .open_scene = menu.entry.?.path },
+                .rename => blk: {
+                    self.startRename(menu.entry.?.path);
+                    break :blk null;
+                },
+                .duplicate => .{ .duplicate = menu.entry.?.path },
+                .delete => .{ .delete = menu.entry.?.path },
+                .copy_path => .{ .copy_path = menu.entry.?.path },
+                .reveal => .{ .reveal = if (menu.entry) |entry| entry.path else self.folder.items },
+                .new_folder => .{ .create_folder = folder },
+                .new_scene => .{ .create_scene = folder },
+            };
+        };
+        return null;
+    }
+
+    /// The folder new files go into: the grid's, or in the list the selected folder (or the
+    /// selected file's), else `scenes`.
+    fn newFilesFolder(self: *const AssetsPanel) []const u8 {
+        if (self.view == .grid) return self.folder.items;
+        for (self.shown) |item| if (self.isSelected(item.entry.path)) {
+            return if (item.entry.kind == .folder) item.entry.path else listing.parentOf(item.entry.path);
+        };
+        return "scenes";
+    }
+
+    fn onMenu(self: *const AssetsPanel, context: *const ui.Context, at: ui.Vec2) bool {
+        _ = self;
+        inline for (std.meta.fields(MenuItem)) |item| {
+            if (context.last_bounds.get(menu_id_base + item.value)) |target| if (target.rect.contains(at.x, at.y)) return true;
+        }
+        return false;
     }
 
     /// The grid's folder as a path of links back up to the project.
@@ -287,8 +480,8 @@ pub const AssetsPanel = struct {
     /// Open or close folder `path` in the list.
     fn toggle(self: *AssetsPanel, path: []const u8) void {
         if (self.expanded.fetchRemove(path)) |removed| return self.gpa.free(removed.key);
-        const key = self.gpa.dupe(u8, path) catch return;
-        self.expanded.put(self.gpa, key, {}) catch self.gpa.free(key);
+        const owned = self.gpa.dupe(u8, path) catch return;
+        self.expanded.put(self.gpa, owned, {}) catch self.gpa.free(owned);
     }
 
     /// Show folder `path` in the grid.
@@ -357,6 +550,21 @@ test "the panel fits a narrow dock, as a list and as a grid" {
         _ = try context.render();
         try ui_checks.expectFits(context.last_root.?, context.font, viewport);
     };
+    // The menu and a rename stay inside a narrow panel too.
+    panel.view = .list;
+    panel.menu = .{ .at = .{ .x = 190, .y = 590 }, .entry = .{ .path = "scenes/main.scene.zon", .name = "", .kind = .scene } };
+    panel.startRename("scenes/main.scene.zon");
+    panel.menu = .{ .at = .{ .x = 190, .y = 590 }, .entry = null };
+    for ([_]f32{ 200, 340 }) |width| {
+        panel.read_at_ms = null;
+        const viewport = ui.Rect{ .x = 0, .y = 0, .w = width, .h = 600 };
+        context.newFrame(viewport);
+        _ = panel.build(&context, dir, &icons, null);
+        _ = try context.render();
+        try ui_checks.expectFits(context.last_root.?, context.font, viewport);
+    }
+    panel.cancelRename();
+
     // The list showed the open folder's contents under it.
     panel.view = .list;
     panel.read_at_ms = null;
