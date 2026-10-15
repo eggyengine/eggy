@@ -154,12 +154,21 @@ pub const Workspace = struct {
     /// until the next call): panels it no longer has close, and new ones dock as tabs beside the
     /// Inspector, which stays in front.
     pub fn setPluginPanels(self: *Workspace, plugin_panels: []const eggy.plugins.EditorPanel) void {
-        const shown = plugin_panels[0..@min(plugin_panels.len, panels.max_pages - panels.first_plugin_page)];
+        const max_plugin_panels = panels.max_pages - panels.first_plugin_page;
+        const shown = plugin_panels[0..@min(plugin_panels.len, max_plugin_panels)];
         const old_len = self.plugin_panels.len;
-        if (shown.len < old_len) for (shown.len..old_len) |i| self.dock.remove(panels.plugin_first + @as(u32, @intCast(i)));
+        // Panels it no longer has go, wherever they are (a restored layout may hold any).
+        for (shown.len..max_plugin_panels) |i| self.dock.remove(panels.plugin_first + @as(u32, @intCast(i)));
         self.plugin_panels = shown;
-        if (shown.len > old_len) for (old_len..shown.len) |i| self.dock.add(panels.plugin_first + @as(u32, @intCast(i)), @intFromEnum(Panel.inspector), .center) catch |err| std.log.warn("cannot dock the game's panel {s}: {t}", .{ shown[i].title, err });
-        if (shown.len > old_len) _ = self.dock.activate(dock.first_id + @intFromEnum(Panel.inspector));
+        // New ones dock beside the Inspector, unless a restored layout already placed them.
+        var added = false;
+        if (shown.len > old_len) for (old_len..shown.len) |i| {
+            const id = panels.plugin_first + @as(u32, @intCast(i));
+            if (self.dock.nodeOf(id) != null) continue;
+            self.dock.add(id, @intFromEnum(Panel.inspector), .center) catch |err| std.log.warn("cannot dock the game's panel {s}: {t}", .{ shown[i].title, err });
+            added = true;
+        };
+        if (added) _ = self.dock.activate(dock.first_id + @intFromEnum(Panel.inspector));
     }
 
     /// The default arrangement: hierarchy left, inspector right (plugin panels as tabs beside it),

@@ -30,6 +30,7 @@ const HotGame = @import("hot_reload/hot_reload.zig").HotGame;
 const preferences = @import("preferences/preferences.zig");
 const entities = @import("entities/entities.zig");
 const scene_file = @import("scene_file.zig");
+const layout_file = @import("layout_file.zig");
 const assets = @import("assets/assets.zig");
 const AssetIcons = @import("assets/icons.zig").Icons;
 
@@ -176,6 +177,8 @@ pub fn Editor(comptime project: type) type {
             // Preferences, before the game starts so its plugins see them.
             const preference_folders = try preferences.Folders.init(gpa, if (opened_project) |opened| opened.dir else null);
             errdefer preference_folders.deinit(gpa);
+            // The layout this user left the dock in last, in any project.
+            _ = layout_file.load(gpa, preference_folders.global, &workspace.dock);
             preferences.load(gpa, &app.preference_values, preference_folders);
             console.levels[@intFromEnum(std.log.Level.debug)] = preferences.editor(&app.preference_values).show_debug_logs;
 
@@ -213,6 +216,8 @@ pub fn Editor(comptime project: type) type {
             if (self.build_window) |window| window.close(&self.app.graphics);
             if (self.devtools_window) |window| window.close(&self.app.graphics);
             if (self.preferences_window) |window| window.close(&self.app.graphics);
+            // The dock as this user left it, for the next editor.
+            layout_file.save(self.gpa, self.preference_folders.global, &self.workspace.dock);
             self.preference_folders.deinit(self.gpa);
             if (self.open_scene) |*scene| scene.deinit();
             if (self.rebuild) |job| job.deinit();
@@ -1053,6 +1058,7 @@ test {
     _ = @import("devtools_window.zig");
     _ = @import("hit_test.zig");
     _ = @import("scene_file.zig");
+    _ = @import("layout_file.zig");
     _ = @import("assets/assets.zig");
     _ = @import("assets/listing.zig");
     _ = @import("assets/icons.zig");
