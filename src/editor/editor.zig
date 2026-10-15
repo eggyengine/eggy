@@ -56,6 +56,11 @@ pub fn Editor(comptime project: type) type {
         game_modified: ?std.Io.Timestamp = null,
         /// When the world was last compared with the saved scene, for the status bar's `*`.
         unsaved_checked_ms: u64 = 0,
+        /// The dock's layout as last saved (`layout_file.fingerprint`), when it was last looked
+        /// at, and since when it has differed from that.
+        layout_saved: u64 = 0,
+        layout_checked_ms: u64 = 0,
+        layout_changed_ms: ?u64 = null,
         /// Undo and redo.
         history: history_zig.History,
         /// The project's plugins turned off, which the game starts without.
@@ -296,6 +301,7 @@ pub fn Editor(comptime project: type) type {
                 if (self.play_mode.playing()) game.update(&self.app) else game.editorUpdate(&self.app);
             };
             try self.syncPopOuts();
+            self.keepLayout();
 
             // Lay out every window, then tell the OS where the main title bar is.
             const flags = self.app.window.window.getFlags();
@@ -393,6 +399,8 @@ pub fn Editor(comptime project: type) type {
                 const dir = std.mem.span(path);
                 const action: job_zig.Action = if (self.picking_to_link) .{ .link = self.upgrades.developer_dir orelse "" } else .open;
                 const confirmed = action == .open or self.upgrades.confirmLink(self.app.window.window, std.fs.path.basename(dir));
+                // The layout first, for the editor the project opens in.
+                if (self.project_flow == null and confirmed) layout_file.save(self.gpa, self.preference_folders.global, &self.workspace.dock);
                 if (self.project_flow == null and confirmed) self.project_flow = try ProjectFlow.open(self.gpa, &self.app.graphics, self.ui.font, self.mono, dir, action);
             }
             // File > New/Open Project's window, if open.
@@ -435,6 +443,8 @@ pub fn Editor(comptime project: type) type {
         /// Open the editor `job` rebuilt in place of this one, where this one's window is.
         fn launchRebuilt(self: *Self, job: *Job) !void {
             var buffer: [64]u8 = undefined;
+            // The layout first: the new editor reads it as it starts, before this one has closed.
+            layout_file.save(self.gpa, self.preference_folders.global, &self.workspace.dock);
             const placement = window_placement.Placement.of(self.app.window.window) orelse return job.launchEditor(&.{});
             try job.launchEditor(&.{ window_placement.flag, try placement.format(&buffer) });
         }
@@ -792,6 +802,7 @@ pub fn Editor(comptime project: type) type {
                 .window => |button| if (weeoui_sdl3.windowAction(self.app.window.window, button)) return .success,
                 .play => |playing| if (playing) self.startPlaying() else self.stopPlaying(),
                 .new_project => if (self.project_flow == null) {
+                    layout_file.save(self.gpa, self.preference_folders.global, &self.workspace.dock);
                     self.project_flow = try ProjectFlow.create(self.gpa, &self.app.graphics, self.ui.font, self.mono);
                 },
                 .reload => if (try self.forceReload()) return .success,
@@ -1136,6 +1147,25 @@ pub fn Editor(comptime project: type) type {
                 self.page(index).focus = 0;
             };
             return .run;
+        }
+
+        /// Save the dock's layout once it has changed and then held still for a second, so it
+        /// survives a crash or a reload, not only a clean close.
+        fn keepLayout(self: *Self) void {
+            const now = sdl3.timer.getMillisecondsSinceInit();
+            if (now -| self.layout_checked_ms < 500) return;
+            self.layout_checked_ms = now;
+            const current = layout_file.fingerprint(&self.workspace.dock);
+            if (current == self.layout_saved) {
+                self.layout_changed_ms = null;
+                return;
+            }
+            const since = self.layout_changed_ms orelse now;
+            self.layout_changed_ms = since;
+            if (now -| since < 1000) return;
+            layout_file.save(self.gpa, self.preference_folders.global, &self.workspace.dock);
+            self.layout_saved = current;
+            self.layout_changed_ms = null;
         }
 
         /// What is being dragged between panels, if anything. In `arena`.

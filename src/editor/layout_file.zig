@@ -1,6 +1,6 @@
 //! The dock's layout (which panels go where, split how, floating or popped out) kept per user in
-//! Eggy's data folder as `layout.zon`: saved when the editor closes, and restored when the next
-//! one opens, in any project.
+//! Eggy's data folder as `layout.zon`: saved soon after it changes (and when the editor closes),
+//! so a crash or a reload keeps it, and restored when the next editor opens, in any project.
 const std = @import("std");
 const eggy = @import("eggy");
 const dock = eggy.ui.dock;
@@ -25,11 +25,9 @@ const Saved = struct {
 /// Write `layout` to the user's `layout.zon` in `folder` (Eggy's data folder). Failures are
 /// logged: a layout not kept isn't worth stopping for.
 pub fn save(gpa: std.mem.Allocator, folder: []const u8, layout: *const dock.DockSpace) void {
-    var saved = Saved{ .version = version, .nodes = layout.nodes, .homes = layout.homes, .root = layout.root, .floating = layout.floating, .windows = undefined, .z_counter = layout.z_counter };
-    for (&saved.windows, layout.windows) |*kept, window| kept.* = if (window) |open| .{ .root = open.root, .size = open.size } else null;
     var text: std.Io.Writer.Allocating = .init(gpa);
     defer text.deinit();
-    std.zon.stringify.serialize(saved, .{ .whitespace = false }, &text.writer) catch return;
+    serialize(layout, &text.writer) catch return;
 
     var threaded: std.Io.Threaded = .init_single_threaded;
     const io = threaded.io();
@@ -37,6 +35,23 @@ pub fn save(gpa: std.mem.Allocator, folder: []const u8, layout: *const dock.Dock
     var dir = std.Io.Dir.cwd().openDir(io, folder, .{}) catch |err| return log.warn("cannot keep the layout: {t}", .{err});
     defer dir.close(io);
     dir.writeFile(io, .{ .sub_path = file_name, .data = text.written() }) catch |err| log.warn("cannot keep the layout: {t}", .{err});
+}
+
+/// A hash of what `save` would write of `layout`, to tell when it changed.
+pub fn fingerprint(layout: *const dock.DockSpace) u64 {
+    var hasher = std.hash.Wyhash.init(0);
+    var buffer: [256]u8 = undefined;
+    var writer = std.Io.Writer.Hashing(std.hash.Wyhash).initHasher(hasher, &buffer);
+    serialize(layout, &writer.writer) catch return 0;
+    writer.writer.flush() catch return 0;
+    hasher = writer.hasher;
+    return hasher.final();
+}
+
+fn serialize(layout: *const dock.DockSpace, writer: *std.Io.Writer) !void {
+    var saved = Saved{ .version = version, .nodes = layout.nodes, .homes = layout.homes, .root = layout.root, .floating = layout.floating, .windows = undefined, .z_counter = layout.z_counter };
+    for (&saved.windows, layout.windows) |*kept, window| kept.* = if (window) |open| .{ .root = open.root, .size = open.size } else null;
+    try std.zon.stringify.serialize(saved, .{ .whitespace = false }, writer);
 }
 
 /// Put the user's saved layout into `layout`, keeping its buttons and settings. Returns false,
@@ -82,4 +97,10 @@ test "a layout saved is a layout restored" {
     try std.testing.expect(restored.nodeOf(2) != null);
     try std.testing.expect(restored.windows[0] != null);
     try std.testing.expect(!load(gpa, "/nonexistent/eggy", &restored));
+
+    // A change shows in the fingerprint; the same layout doesn't.
+    const before = fingerprint(&restored);
+    try std.testing.expectEqual(before, fingerprint(&restored));
+    try restored.add(3, 2, .bottom);
+    try std.testing.expect(fingerprint(&restored) != before);
 }
