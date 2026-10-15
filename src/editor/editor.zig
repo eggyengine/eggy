@@ -334,11 +334,13 @@ pub fn Editor(comptime project: type) type {
             try job.launchEditor(&.{ window_placement.flag, try placement.format(&buffer) });
         }
 
-        /// The Preferences window's tabs: the editor's, then each plugin's that has any, the game's
-        /// titled after the project. In `arena`.
+        /// The Preferences window's sections: the editor's, then (with a project) each plugin's that
+        /// has any, the game's titled after the project. In `arena`.
         fn preferenceSections(self: *const Self, arena: std.mem.Allocator) ![]const preferences.Section {
             var sections: std.ArrayList(preferences.Section) = .empty;
             try sections.append(arena, .{ .title = "Editor", .subtitle = "How the editor looks and behaves.", .manifest = preferences.editor_manifest });
+            // Plugins' preferences are the project's: without one, there is nowhere to keep them.
+            if (self.project == null) return sections.items;
             if (self.game) |game| for (game.preference_manifests) |manifest| {
                 if (std.mem.eql(u8, manifest.key, "game")) {
                     try sections.append(arena, .{ .title = if (self.project) |opened| opened.title else "Game", .subtitle = "Your game's own preferences.", .manifest = manifest });

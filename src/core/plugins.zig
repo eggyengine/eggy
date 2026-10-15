@@ -14,7 +14,7 @@
 //!     pub fn editorPanelUi(self: *Self, panel: usize, ui: *eggy.ui.Context) void  // in the editor only
 //!
 //! A plugin can declare preferences, which people set in the editor's Preferences window, kept in
-//! the user's and the project's `.eggy/` folder and baked into the runtime (see `preferences.zig`):
+//! the project's `.eggy/` folder and baked into the runtime (see `preferences.zig`):
 //!
 //!     pub const Preferences = struct { volume: f32 = 0.8, show_gizmos: bool = true };
 //!     // in any hook: app.preferences(Preferences).volume

@@ -1,7 +1,8 @@
 //! Preferences: settings a plugin (or the editor) declares as a struct of defaults, which people
 //! change in the editor's Preferences window and which are kept as ZON. Values come in layers,
-//! each overriding the one below: the struct's defaults, then the user's global preferences, then
-//! the project's (`.eggy/`). The runtime gets the project's, baked in when the game is built.
+//! each overriding the one below: the struct's defaults, the user's global preferences (the
+//! editor's own only), then the project's (`.eggy/`). A plugin's are the project's, which the
+//! runtime gets baked in when the game is built.
 //!
 //!     pub const Preferences = struct {
 //!         volume: f32 = 0.8,

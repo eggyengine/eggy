@@ -141,19 +141,13 @@ pub const Plugin = struct {
 
 Fields are bools, integers, floats or enums, and each needs a default. Reading them is cheap, so reading them in `update` follows changes as they are made in the window. Values read in `init` apply the next time the game starts.
 
-Each preference has three layers, each overriding the one below:
-
-1. the default in `Preferences`;
-2. the value set for **All projects**, kept in Eggy's data folder;
-3. the value set for **This project**, kept in the project's `.eggy` folder.
-
-The project's values are also baked into the game when its runtime is built, so the game you ship uses them. Values set for all projects apply in the editor only.
+A plugin's preferences belong to the project: a value set in the window is kept in the project's `.eggy` folder and overrides the default in `Preferences`. The values are also baked into the game when its runtime is built, so the game you ship uses them. (The editor's own preferences, such as its theme, can also be set for **All projects**, which a project can override.)
 
 A project's `.eggy` folder holds:
 
 | File | What it is |
 | --- | --- |
-| `preferences.zon` | The editor's own preferences for this project. |
+| `preferences.zon` | The editor's own preferences for this project, overriding those set for all projects. |
 | `plugins/<plugin>.zon` | Each plugin's preferences, by the plugin's module name (`game.zon` for the game's). |
 | `plugins.zon` | Written by the editor: the plugins the project has, and the preferences each declares. Don't edit it. |
 

@@ -1,7 +1,8 @@
-//! Edit > Preferences: a tab for the editor's preferences and one for each plugin's, each field
-//! with the control its kind calls for. They apply to every project (the global layer) or, with a
-//! project open, to this one (its `.eggy/`), which overrides the global value; Reset drops a
-//! scope's value. Every change is saved as it is made.
+//! Edit > Preferences: a section for the editor's preferences and, with a project open, one for
+//! each plugin's, each field with the control its kind calls for. The editor's apply to every
+//! project (the global layer) or to this one (its `.eggy/`), which overrides the global value; a
+//! plugin's apply to the project only. Reset drops a scope's value. Every change is saved as it
+//! is made.
 const std = @import("std");
 const eggy = @import("eggy");
 const sdl3 = eggy.sdl_adapter.sdl;
@@ -131,26 +132,28 @@ pub const PreferencesWindow = struct {
         smallText(context, 13);
         context.end();
         restyle(context, .{ .grow = 1, .gap = 2 });
-        if (folders.project != null) {
+        // Only the editor's preferences also apply to every project; a plugin's are the project's.
+        const is_editor = std.mem.eql(u8, section.manifest.key, files.editor_key);
+        if (is_editor and folders.project != null) {
             if (context.tabs(&scopes, &self.scope)) self.synced = null;
         }
         context.end();
         restyle(context, .{ .direction = .row, .gap = 16, .align_items = .center });
-        const is_editor = std.mem.eql(u8, section.manifest.key, files.editor_key);
-        context.muted(if (self.scope == 0)
+        const scope: usize = if (is_editor) self.scope else 1;
+        context.muted(if (!is_editor)
+            "Saved in this project's .eggy folder and built into the game."
+        else if (scope == 0)
             "Your defaults for every project, kept in Eggy's data folder. A project can override them."
-        else if (is_editor)
-            "Saved in this project's .eggy folder, overriding All projects."
         else
-            "Saved in this project's .eggy folder, overriding All projects, and built into the game.");
+            "Saved in this project's .eggy folder, overriding All projects.");
         smallText(context, 12);
 
-        const layer: Store.Layer = if (self.scope == 1) .project else .global;
+        const layer: Store.Layer = if (scope == 1) .project else .global;
         const manifest = section.manifest;
         if (manifest.fields.len == 0) return context.muted("Nothing to set here.");
 
         // The number fields start from the values shown, for each section and scope.
-        const showing = Showing{ .section = self.section, .scope = self.scope };
+        const showing = Showing{ .section = self.section, .scope = scope };
         if (self.synced == null or !std.meta.eql(self.synced.?, showing)) {
             for (manifest.fields[0..@min(manifest.fields.len, max_fields)], 0..) |field, i| {
                 self.edits[i] = NumberEdit.init(current(store, layer, manifest.key, field)) catch NumberEdit.init("") catch unreachable;

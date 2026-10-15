@@ -1,8 +1,8 @@
-//! Preferences on disk: the editor's own (`Editor`) and each plugin's, in the user's global folder
-//! (Eggy's data folder) and a project's `.eggy/` folder, which overrides it. Both hold
-//! `preferences.zon` (the editor's) and `plugins/<key>.zon` (each plugin's); the project's also
-//! holds `plugins.zon`, which the editor keeps up to date: the plugins the project has, and
-//! the preferences each declares. `window.zig` is the Preferences window that edits them.
+//! Preferences on disk. The editor's own (`Editor`) are in the user's global folder (Eggy's data
+//! folder) and a project's `.eggy/` folder, which overrides it, as `preferences.zon`. Each
+//! plugin's are the project's only, in `.eggy/plugins/<key>.zon`; `.eggy/plugins.zon`, which the
+//! editor keeps up to date, lists the plugins the project has and the preferences each declares.
+//! `window.zig` is the Preferences window that edits them.
 const std = @import("std");
 const eggy = @import("eggy");
 const prefs = eggy.preferences;
@@ -74,8 +74,8 @@ pub const Folders = struct {
     }
 };
 
-/// Read every preferences file of both layers into `store`. A file that can't be read is logged
-/// and skipped.
+/// Read every preferences file into `store`: the editor's from both layers, the plugins' from
+/// the project's. A file that can't be read is logged and skipped.
 pub fn load(gpa: std.mem.Allocator, store: *Store, folders: Folders) void {
     var threaded: std.Io.Threaded = .init_single_threaded;
     const io = threaded.io();
@@ -84,6 +84,7 @@ pub fn load(gpa: std.mem.Allocator, store: *Store, folders: Folders) void {
         var dir = std.Io.Dir.cwd().openDir(io, folder, .{}) catch continue;
         defer dir.close(io);
         readFile(gpa, io, store, layer, dir, "preferences.zon", editor_manifest.key);
+        if (layer == .global) continue;
         var plugins = dir.openDir(io, "plugins", .{ .iterate = true }) catch continue;
         defer plugins.close(io);
         var it = plugins.iterate();
