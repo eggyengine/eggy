@@ -33,6 +33,7 @@ const entities = @import("entities/entities.zig");
 const scene_file = @import("scene_file.zig");
 const layout_file = @import("layout_file.zig");
 const PlayMode = @import("play_mode.zig").PlayMode;
+const hit_test = @import("hit_test.zig");
 const assets = @import("assets/assets.zig");
 const AssetIcons = @import("assets/icons.zig").Icons;
 
@@ -911,7 +912,15 @@ pub fn Editor(comptime project: type) type {
             };
             if (input == .pointer_down) {
                 const at = input.pointer_down.position;
-                if (self.pageAt(slot, at.x, at.y)) |index| self.focused_page = index;
+                const pressed = self.pageAt(slot, at.x, at.y);
+                if (pressed) |index| self.focused_page = index;
+                // A press anywhere but a field takes the focus off it: fields in other pages, and
+                // in the pressed page when the press lands on nothing to focus.
+                for (0..self.pageCount()) |index| {
+                    const page_ui = self.page(index);
+                    const keeps = if (pressed) |chosen| chosen == index and page_ui.last_root != null and hit_test.controlAt(page_ui.last_root.?, at.x, at.y) != 0 else false;
+                    if (!keeps) page_ui.focus = 0;
+                }
             }
             for (0..self.pageCount()) |index| {
                 const placed = self.workspace.placed.pages[index] orelse continue;
