@@ -25,6 +25,10 @@
 //!
 //!     pub const components = .{ Spin, Health };
 //!
+//! A project can turn plugins off (not the game): one that is off doesn't start, and none of its
+//! hooks run, but its preferences and components stay known, so scenes keep their values. The
+//! project lists them in `off_file`, which the editor writes and the runtime has baked in.
+//!
 //! Plugins are stored by value and may move after `init`: keep no pointers to `self`, and use the
 //! `app` each hook is given rather than storing it.
 //!
@@ -37,6 +41,18 @@ const Event = @import("vitellus_sdl3").sdl.events.Event;
 const ui = @import("weeoui");
 const preferences = @import("preferences.zig");
 const components = @import("components.zig");
+
+/// Where a project lists the plugins it has turned off (by key), relative to the project.
+pub const off_file = ".eggy/plugins_off.zon";
+
+/// `off_file`'s contents.
+pub const OffList = struct { off: []const []const u8 = &.{} };
+
+/// The keys `source` (an `off_file`) turns off, in `arena`.
+pub fn parseOff(arena: std.mem.Allocator, source: [:0]const u8) ![]const []const u8 {
+    const list = try std.zon.parse.fromSliceAlloc(OffList, arena, source, null, .{ .ignore_unknown_fields = true });
+    return list.off;
+}
 
 /// A panel a plugin adds to the editor's dock (see `editor_panels` above).
 pub const EditorPanel = struct {
@@ -51,7 +67,10 @@ pub fn Set(comptime types: anytype, comptime keys: []const [:0]const u8) type {
     const list: [types.len]type = types;
     if (keys.len != list.len) @compileError("one preference key per plugin");
     return struct {
+        /// Each plugin, undefined while it is off.
         instances: std.meta.Tuple(&list),
+        /// Which plugins are on, in list order.
+        enabled: [list.len]bool,
 
         const Self = @This();
 
@@ -87,17 +106,32 @@ pub fn Set(comptime types: anytype, comptime keys: []const [:0]const u8) type {
             break :blk components.Registry(listed, owners);
         };
 
-        /// Start every plugin. If one fails, those already started are stopped again.
-        pub fn init(gpa: std.mem.Allocator, app: *App) !Self {
-            // Their preferences first, so each `init` can read them.
+        /// Which plugins are on when those keyed in `off` aren't. The game (listed first) is
+        /// always on.
+        pub fn enabledExcept(off: []const []const u8) [list.len]bool {
+            var enabled: [list.len]bool = @splat(true);
+            for (keys[1..], enabled[1..]) |key, *on| {
+                for (off) |off_key| if (std.mem.eql(u8, key, off_key)) {
+                    on.* = false;
+                };
+            }
+            return enabled;
+        }
+
+        /// Start every plugin that `enabled` has on. If one fails, those already started are
+        /// stopped again.
+        pub fn init(gpa: std.mem.Allocator, app: *App, enabled: [list.len]bool) !Self {
+            // Their preferences first (even those off, which keep their values), so each `init`
+            // can read them.
             inline for (list, keys) |T, key| if (@hasDecl(T, "Preferences")) try app.preference_values.register(T.Preferences, key);
             var self: Self = undefined;
-            inline for (list, 0..) |T, i| {
+            self.enabled = enabled;
+            inline for (list, 0..) |T, i| if (enabled[i]) {
                 self.instances[i] = start(T, gpa, app) catch |err| {
                     self.deinitFirst(i);
                     return err;
                 };
-            }
+            };
             return self;
         }
 
@@ -106,20 +140,20 @@ pub fn Set(comptime types: anytype, comptime keys: []const [:0]const u8) type {
         }
 
         pub fn event(self: *Self, app: *App, curr_event: Event) !void {
-            inline for (list, 0..) |T, i| if (@hasDecl(T, "event")) try self.instances[i].event(app, curr_event);
+            inline for (list, 0..) |T, i| if (@hasDecl(T, "event") and self.enabled[i]) try self.instances[i].event(app, curr_event);
         }
 
         pub fn update(self: *Self, app: *App) !void {
-            inline for (list, 0..) |T, i| if (@hasDecl(T, "update")) try self.instances[i].update(app);
+            inline for (list, 0..) |T, i| if (@hasDecl(T, "update") and self.enabled[i]) try self.instances[i].update(app);
         }
 
         /// A frame in the editor while the game isn't playing: each plugin's `editorUpdate`.
         pub fn editorUpdate(self: *Self, app: *App) !void {
-            inline for (list, 0..) |T, i| if (@hasDecl(T, "editorUpdate")) try self.instances[i].editorUpdate(app);
+            inline for (list, 0..) |T, i| if (@hasDecl(T, "editorUpdate") and self.enabled[i]) try self.instances[i].editorUpdate(app);
         }
 
         pub fn editorUi(self: *Self, context: *ui.Context) void {
-            inline for (list, 0..) |T, i| if (@hasDecl(T, "editorUi")) self.instances[i].editorUi(context);
+            inline for (list, 0..) |T, i| if (@hasDecl(T, "editorUi") and self.enabled[i]) self.instances[i].editorUi(context);
         }
 
         /// Fill panel `panel` of `editor_panels` through the plugin that declared it.
@@ -128,6 +162,7 @@ pub fn Set(comptime types: anytype, comptime keys: []const [:0]const u8) type {
             inline for (list, 0..) |T, i| if (@hasDecl(T, "editor_panels")) {
                 const count = T.editor_panels.len;
                 if (panel >= first and panel < first + count) {
+                    if (!self.enabled[i]) return context.muted("This plugin is turned off, in Preferences > Plugins.");
                     if (@hasDecl(T, "editorPanelUi")) self.instances[i].editorPanelUi(panel - first, context);
                     return;
                 }
@@ -144,7 +179,7 @@ pub fn Set(comptime types: anytype, comptime keys: []const [:0]const u8) type {
             comptime var i = count;
             inline while (i > 0) {
                 i -= 1;
-                if (@hasDecl(list[i], "deinit")) self.instances[i].deinit();
+                if (@hasDecl(list[i], "deinit") and self.enabled[i]) self.instances[i].deinit();
             }
         }
     };
@@ -182,7 +217,7 @@ test "plugins start in order, stop in reverse, and skip hooks they don't declare
         }
     };
 
-    var set = try Set(.{ Game, Quiet, Stats }, &.{ "game", "quiet", "stats" }).init(std.testing.allocator, undefined);
+    var set = try Set(.{ Game, Quiet, Stats }, &.{ "game", "quiet", "stats" }).init(std.testing.allocator, undefined, @splat(true));
     try set.update(undefined);
     set.deinit();
     try std.testing.expectEqualStrings("gsuSG", Log.entries[0..Log.len]);
@@ -210,7 +245,7 @@ test "editor panels from every plugin are listed in order and reach the plugin t
     const Plugins = Set(.{ Game, struct {}, Stats }, &.{ "game", "empty", "stats" });
     try std.testing.expectEqual(@as(usize, 3), Plugins.editor_panels.len);
     try std.testing.expectEqualStrings("Memory", Plugins.editor_panels[2].title);
-    var set = try Plugins.init(std.testing.allocator, undefined);
+    var set = try Plugins.init(std.testing.allocator, undefined, @splat(true));
     for (0..3) |panel| set.editorPanelUi(panel, undefined);
     try std.testing.expectEqualSlices(usize, &.{ 10, 20, 21 }, Log.drawn[0..Log.len]);
 }
@@ -230,8 +265,42 @@ test "a plugin that fails to start stops the ones started before it" {
         }
     };
 
-    try std.testing.expectError(error.NoAudioDevice, Set(.{ Started, Failing, Started }, &.{ "a", "b", "c" }).init(std.testing.allocator, undefined));
+    try std.testing.expectError(error.NoAudioDevice, Set(.{ Started, Failing, Started }, &.{ "a", "b", "c" }).init(std.testing.allocator, undefined, @splat(true)));
     try std.testing.expectEqual(@as(u32, 1), Log.stopped);
+}
+
+test "a plugin that is off doesn't start or run, and the game can't be turned off" {
+    const Log = struct {
+        var started: u32 = 0;
+    };
+    const Game = struct {
+        pub fn init(_: std.mem.Allocator, _: *App) !@This() {
+            Log.started += 1;
+            return .{};
+        }
+    };
+    const Broken = struct {
+        pub fn init(_: std.mem.Allocator, _: *App) !@This() {
+            return error.ShouldNotStart;
+        }
+        pub fn update(_: *@This(), _: *App) !void {
+            return error.ShouldNotRun;
+        }
+    };
+    const Plugins = Set(.{ Game, Broken }, &.{ "game", "broken" });
+    const enabled = Plugins.enabledExcept(&.{ "game", "broken" });
+    try std.testing.expectEqualSlices(bool, &.{ true, false }, &enabled);
+    var set = try Plugins.init(std.testing.allocator, undefined, enabled);
+    defer set.deinit();
+    try set.update(undefined);
+    try std.testing.expectEqual(@as(u32, 1), Log.started);
+}
+
+test "an off file lists keys" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const off = try parseOff(arena.allocator(), ".{ .off = .{ \"stats\" } }");
+    try std.testing.expectEqualStrings("stats", off[0]);
 }
 
 test "plugins' preferences are listed under their keys" {

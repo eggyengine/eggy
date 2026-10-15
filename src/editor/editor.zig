@@ -34,6 +34,7 @@ const scene_file = @import("scene_file.zig");
 const layout_file = @import("layout_file.zig");
 const PlayMode = @import("play_mode.zig").PlayMode;
 const history_zig = @import("history.zig");
+const PluginSwitches = @import("plugin_switches.zig").PluginSwitches;
 const file_ops = @import("assets/file_ops.zig");
 const hit_test = @import("hit_test.zig");
 const assets = @import("assets/assets.zig");
@@ -55,6 +56,8 @@ pub fn Editor(comptime project: type) type {
         unsaved_checked_ms: u64 = 0,
         /// Undo and redo.
         history: history_zig.History,
+        /// The project's plugins turned off, which the game starts without.
+        plugin_switches: PluginSwitches,
         /// Whether the game is playing, and the scene to go back to when it stops.
         play_mode: PlayMode = .{},
         /// The scene open in the project, if any (with no project, none).
@@ -191,7 +194,10 @@ pub fn Editor(comptime project: type) type {
             preferences.load(gpa, &app.preference_values, preference_folders);
             console.levels[@intFromEnum(std.log.Level.debug)] = preferences.editor(&app.preference_values).show_debug_logs;
 
-            // The game, from its library beside the editor, and the scene open last.
+            // The game, from its library beside the editor, without the plugins the project turned
+            // off, and the scene open last.
+            var plugin_switches = PluginSwitches.load(gpa, if (opened_project) |opened| opened.dir else null);
+            errdefer plugin_switches.deinit();
             var open_scene: ?scene_file.OpenScene = null;
             errdefer if (open_scene) |*remembered| remembered.deinit();
             const library_path = try libraryPath(gpa);
@@ -211,10 +217,10 @@ pub fn Editor(comptime project: type) type {
                     open_scene = .{ .gpa = gpa, .project_dir = opened.dir };
                     open_scene.?.reopen(&app.world, loaded.sceneAccess());
                 }
-                loaded.start(&app);
+                loaded.start(&app, plugin_switches.off());
             }
             const upgrades = Upgrades.init(gpa, if (opened_project) |opened| opened.dir else null, @import("build_options").source_dir);
-            var self = Self{ .gpa = gpa, .game = game, .game_modified = modifiedAt(library_path), .app = app, .ui = context, .mono = mono, .console_ui = console_ui, .hierarchy_ui = hierarchy_ui, .assets_ui = assets_ui, .assets_panel = .init(gpa), .asset_icons = asset_icons, .entity_editor = .init(gpa), .console = console, .plugin_pages = plugin_pages, .workspace = workspace, .frame = frame, .scene = scene, .overlay = overlay, .project = opened_project, .editor_modified = if (opened_project) |opened| editorModified(gpa, opened) else null, .upgrades = upgrades, .preference_folders = preference_folders, .open_scene = open_scene, .history = .{ .gpa = gpa } };
+            var self = Self{ .gpa = gpa, .game = game, .game_modified = modifiedAt(library_path), .app = app, .ui = context, .mono = mono, .console_ui = console_ui, .hierarchy_ui = hierarchy_ui, .assets_ui = assets_ui, .assets_panel = .init(gpa), .asset_icons = asset_icons, .entity_editor = .init(gpa), .console = console, .plugin_pages = plugin_pages, .workspace = workspace, .frame = frame, .scene = scene, .overlay = overlay, .project = opened_project, .editor_modified = if (opened_project) |opened| editorModified(gpa, opened) else null, .upgrades = upgrades, .preference_folders = preference_folders, .open_scene = open_scene, .history = .{ .gpa = gpa }, .plugin_switches = plugin_switches };
             self.built_sources = self.sourcesNow();
             return self;
         }
@@ -231,6 +237,7 @@ pub fn Editor(comptime project: type) type {
             if (self.open_scene) |*scene| scene.deinit();
             self.play_mode.deinit();
             self.history.deinit();
+            self.plugin_switches.deinit();
             if (self.rebuild) |job| job.deinit();
             if (self.picked_project.swap(null, .acq_rel)) |path| std.heap.c_allocator.free(std.mem.span(path));
             if (self.project) |opened| freeProject(self.gpa, opened);
@@ -369,7 +376,10 @@ pub fn Editor(comptime project: type) type {
             // File > New/Open Project's window, if open.
             if (self.project_flow) |flow| if (try self.updateProjectFlow(flow) == .success) return .success;
             // Edit > Preferences, if open.
-            if (self.preferences_window) |window| try window.update(&self.app.graphics, &self.ui, try self.preferenceSections(frame_arena.allocator()), &self.app.preference_values, self.preference_folders, &self.history);
+            if (self.preferences_window) |window| {
+                const flipped = try window.update(&self.app.graphics, &self.ui, try self.preferenceSections(frame_arena.allocator()), &self.app.preference_values, self.preference_folders, &self.history);
+                if (flipped) |plugin| self.flipPlugin(plugin);
+            }
             // The Build progress window, if open.
             if (self.build_window) |window| if (try self.updateBuildWindow(window, frame_arena.allocator())) return .success;
 
@@ -426,7 +436,7 @@ pub fn Editor(comptime project: type) type {
             self.workspace.playing = false;
             if (!self.play_mode.playing()) return;
             const game = if (self.game) |*loaded| loaded else return;
-            self.play_mode.stop(&self.app, game);
+            self.play_mode.stop(&self.app, game, self.plugin_switches.off());
             self.entity_editor.selected = null;
         }
 
@@ -551,7 +561,7 @@ pub fn Editor(comptime project: type) type {
                     defer self.gpa.free(source);
                     var scene = try eggy.scene.Scene.parse(self.gpa, source);
                     defer scene.deinit();
-                    game.restart(&self.app, &scene);
+                    game.restart(&self.app, &scene, self.plugin_switches.off());
                     self.entity_editor.selected = null;
                     self.history.setBaseline(try self.gpa.dupe(u8, text));
                 },
@@ -578,6 +588,7 @@ pub fn Editor(comptime project: type) type {
                     self.gpa.free(trashed);
                     change.trashed = null;
                 },
+                .plugin => |change| try self.switchPlugin(change.key, if (back) !change.on else change.on),
                 .preference => |change| {
                     try self.app.preference_values.set(change.layer, change.key, change.field, if (back) change.before else change.after);
                     try preferences.save(self.gpa, &self.app.preference_values, self.preference_folders, change.layer, change.key);
@@ -604,16 +615,22 @@ pub fn Editor(comptime project: type) type {
         /// has any, the game's titled after the project. In `arena`.
         fn preferenceSections(self: *const Self, arena: std.mem.Allocator) ![]const preferences.Section {
             var sections: std.ArrayList(preferences.Section) = .empty;
-            try sections.append(arena, .{ .title = "Editor", .subtitle = "How the editor looks and behaves.", .manifest = preferences.editor_manifest });
-            // Plugins' preferences are the project's: without one, there is nowhere to keep them.
+            try sections.append(arena, .{ .title = "Editor", .subtitle = "How the editor looks and behaves.", .content = .{ .preferences = preferences.editor_manifest } });
+            // Plugins' switches and preferences are the project's: without one, there is nowhere to
+            // keep them.
             if (self.project == null) return sections.items;
-            if (self.game) |game| for (game.preference_manifests) |manifest| {
+            const game = if (self.game) |*loaded| loaded else return sections.items;
+            // Every plugin but the game, which can't be turned off.
+            const plugins = try arena.alloc(preferences.Plugin, game.plugin_keys.len -| 1);
+            for (plugins, game.plugin_keys[@min(1, game.plugin_keys.len)..]) |*plugin, key| plugin.* = .{ .key = key, .title = try preferences.displayName(arena, key), .on = self.plugin_switches.isOn(key) };
+            try sections.append(arena, .{ .title = "Plugins", .subtitle = "Turn this project's plugins on or off.", .content = .{ .plugins = plugins } });
+            for (game.preference_manifests) |manifest| {
                 if (std.mem.eql(u8, manifest.key, "game")) {
-                    try sections.append(arena, .{ .title = if (self.project) |opened| opened.title else "Game", .subtitle = "Your game's own preferences.", .manifest = manifest });
+                    try sections.append(arena, .{ .title = if (self.project) |opened| opened.title else "Game", .subtitle = "Your game's own preferences.", .content = .{ .preferences = manifest } });
                 } else {
-                    try sections.append(arena, .{ .title = try preferences.displayName(arena, manifest.key), .subtitle = try std.fmt.allocPrint(arena, "From the {s} plugin.", .{manifest.key}), .manifest = manifest });
+                    try sections.append(arena, .{ .title = try preferences.displayName(arena, manifest.key), .subtitle = try std.fmt.allocPrint(arena, "From the {s} plugin.", .{manifest.key}), .content = .{ .preferences = manifest } });
                 }
-            };
+            }
             return sections.items;
         }
 
@@ -1051,7 +1068,32 @@ pub fn Editor(comptime project: type) type {
             } else |err| std.log.err("cannot put the scene back: {t}", .{err});
             self.workspace.setPluginPanels(game.panels);
             preferences.writeRegistry(self.gpa, self.preference_folders, game.preference_manifests) catch |err| std.log.warn("cannot update .eggy/plugins.zon: {t}", .{err});
-            game.start(&self.app);
+            game.start(&self.app, self.plugin_switches.off());
+        }
+
+        /// A plugin's switch in Preferences was flipped: carry it out, as a step to undo.
+        fn flipPlugin(self: *Self, plugin: preferences.Switch) void {
+            self.switchPlugin(plugin.key, plugin.on) catch |err| {
+                self.workspace.toast("Couldn't switch the plugin: see the Console");
+                return std.log.err("cannot turn {s} {s}: {t}", .{ plugin.key, if (plugin.on) "on" else "off", err });
+            };
+            const key = self.gpa.dupe(u8, plugin.key) catch return;
+            self.history.record(.{ .plugin = .{ .key = key, .on = plugin.on } });
+        }
+
+        /// Turn plugin `key` on or off: save it to the project, and start the game over on the
+        /// scene as it is, so the plugin starts or stops.
+        fn switchPlugin(self: *Self, key: []const u8, on: bool) !void {
+            self.stopPlaying();
+            try self.plugin_switches.set(key, on);
+            const game = if (self.game) |*loaded| loaded else return;
+            var scene = try eggy.scene.Scene.capture(self.gpa, &self.app.world, game.sceneAccess(), null);
+            defer scene.deinit();
+            game.restart(&self.app, &scene, self.plugin_switches.off());
+            self.entity_editor.selected = null;
+            // What a plugin's `init` does to the world comes with the switch, not as a step of its own.
+            if (self.sceneText()) |text| self.history.setBaseline(text);
+            std.log.info("turned {s} {s}", .{ key, if (on) "on" else "off" });
         }
 
         /// Hand `curr_event` from window `slot` to the pages in that window that want it: pointer
@@ -1263,6 +1305,7 @@ test {
     _ = @import("layout_file.zig");
     _ = @import("play_mode.zig");
     _ = @import("history.zig");
+    _ = @import("plugin_switches.zig");
     _ = @import("assets/assets.zig");
     _ = @import("assets/listing.zig");
     _ = @import("assets/icons.zig");

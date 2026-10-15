@@ -205,15 +205,22 @@ fn addProject(b: *std.Build, engine: *std.Build, emscripten: Emscripten, target:
     return game_library;
 }
 
-/// The name `plugin`'s package published it under (`addPlugin`), else `plugin_<index>`.
+/// The name `plugin`'s package published it under (`addPlugin`). A plugin in the project's own
+/// source (a module made with `createModule`) is named after its file (`src/stats.zig`: `stats`),
+/// unless that is just `root` or `main`; failing all that, `plugin_<index>`.
 fn pluginKey(b: *std.Build, plugin: *std.Build.Module, index: usize) []const u8 {
     var it = plugin.owner.modules.iterator();
     while (it.next()) |entry| if (entry.value_ptr.* == plugin) return entry.key_ptr.*;
+    if (plugin.root_source_file) |root| if (root == .src_path) {
+        const stem = std.fs.path.stem(root.src_path.sub_path);
+        if (!std.mem.eql(u8, stem, "root") and !std.mem.eql(u8, stem, "main")) return stem;
+    };
     return b.fmt("plugin_{d}", .{index});
 }
 
 /// `project_source` (the project module's) with `preference_files` added: each of the project's
-/// `.eggy/plugins/<key>.zon`, embedded, for the runtime to read at start.
+/// `.eggy/plugins/<key>.zon`, embedded, for the runtime to read at start; and, when the project
+/// turned plugins off, `plugins_off`: its `.eggy/plugins_off.zon` (see `eggy.plugins.off_file`).
 fn addPreferenceFiles(b: *std.Build, project_source: []const u8) std.Build.LazyPath {
     const io = b.graph.io;
     const files = b.addWriteFiles();
@@ -232,6 +239,10 @@ fn addPreferenceFiles(b: *std.Build, project_source: []const u8) std.Build.LazyP
         }
     } else |_| {}
     source.appendSlice(b.allocator, "};\n") catch @panic("OOM");
+    if (b.build_root.handle.access(io, ".eggy/plugins_off.zon", .{})) {
+        _ = files.addCopyFile(b.path(".eggy/plugins_off.zon"), "plugins_off.zon");
+        source.appendSlice(b.allocator, "pub const plugins_off = @embedFile(\"plugins_off.zon\");\n") catch @panic("OOM");
+    } else |_| {}
     return files.add("eggy_project.zig", source.items);
 }
 

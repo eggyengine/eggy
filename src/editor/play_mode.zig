@@ -24,11 +24,12 @@ pub const PlayMode = struct {
         self.before = try eggy.scene.Scene.capture(gpa, &app.world, game.sceneAccess(), null);
     }
 
-    /// Stop playing: the game starts over on the scene kept by `play`.
-    pub fn stop(self: *PlayMode, app: *eggy.App, game: *HotGame) void {
+    /// Stop playing: the game starts over on the scene kept by `play`, with the plugins keyed in
+    /// `off` turned off.
+    pub fn stop(self: *PlayMode, app: *eggy.App, game: *HotGame, off: []const []const u8) void {
         var scene = self.before orelse return;
         self.before = null;
         defer scene.deinit();
-        game.restart(app, &scene);
+        game.restart(app, &scene, off);
     }
 };

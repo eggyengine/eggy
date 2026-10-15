@@ -27,6 +27,8 @@ pub const HotGame = struct {
     panels: []eggy.plugins.EditorPanel,
     /// Each plugin's preferences, copied out of the library into `manifest_arena`.
     preference_manifests: []const eggy.preferences.Manifest = &.{},
+    /// The game's and each plugin's key, the game first, copied into `manifest_arena` too.
+    plugin_keys: []const [:0]const u8 = &.{},
     /// The component types the game and plugins list, copied into `manifest_arena` too.
     component_types: []const eggy.components.Info = &.{},
     manifest_arena: std.heap.ArenaAllocator,
@@ -43,12 +45,21 @@ pub const HotGame = struct {
         return self;
     }
 
-    /// Start the game and its plugins on `app`, whose world may already hold a scene, and run the
-    /// world's Init stages. If a plugin fails to start (logged), the game stays stopped until
-    /// the next swap.
-    pub fn start(self: *HotGame, app: *eggy.App) void {
+    /// Start the game and its plugins, but those keyed in `off`, on `app`, whose world may
+    /// already hold a scene, and run the world's Init stages. If a plugin fails to start
+    /// (logged), the game stays stopped until the next swap.
+    pub fn start(self: *HotGame, app: *eggy.App, off: []const []const u8) void {
         if (self.library == null or self.state != null) return;
-        self.state = self.game.start(&host, &self.gpa, app);
+        const enabled = self.gpa.alloc(bool, self.plugin_keys.len) catch return log.err("the game didn't start: out of memory", .{});
+        defer self.gpa.free(enabled);
+        // The game is always on; a plugin unless `off` names it.
+        for (enabled, self.plugin_keys, 0..) |*on, key, i| {
+            on.* = true;
+            if (i > 0) for (off) |off_key| if (std.mem.eql(u8, key, off_key)) {
+                on.* = false;
+            };
+        }
+        self.state = self.game.start(&host, &self.gpa, app, enabled.ptr);
         if (self.state == null) log.err("the game didn't start: see the errors above. It starts again when its code is rebuilt.", .{});
     }
 
@@ -83,9 +94,9 @@ pub const HotGame = struct {
     }
 
     /// Start the game over on `scene` without reloading it: stop its plugins, empty the world,
-    /// put `scene` in, and start them again (with the world's Init stages). Stopping play does
-    /// this, so nothing that happened while playing stays.
-    pub fn restart(self: *HotGame, app: *eggy.App, scene: *const eggy.scene.Scene) void {
+    /// put `scene` in, and start them again (with the world's Init stages), but those keyed in
+    /// `off`. Stopping play does this, so nothing that happened while playing stays.
+    pub fn restart(self: *HotGame, app: *eggy.App, scene: *const eggy.scene.Scene, off: []const []const u8) void {
         if (self.library == null) return;
         if (self.state) |state| self.game.stop(state);
         self.state = null;
@@ -93,7 +104,7 @@ pub const HotGame = struct {
         if (scene.instantiate(self.gpa, &app.world, self.sceneAccess(), null)) |made| {
             self.gpa.free(made.entities);
         } else |err| log.err("cannot put the scene back: {t}", .{err});
-        self.start(app);
+        self.start(app, off);
     }
 
     pub fn event(self: *HotGame, app: *eggy.App, curr_event: eggy.Event) void {
@@ -146,7 +157,9 @@ pub const HotGame = struct {
 
         const manifests = try copyManifests(self.manifest_arena.allocator(), game.preferences[0..game.preference_count]);
         const component_types = try copyComponentTypes(self.manifest_arena.allocator(), game.components[0..game.component_count]);
-        self.* = .{ .gpa = gpa, .path = self.path, .copy_path = copy_path, .library = library, .game = game, .state = null, .panels = panels, .loads = self.loads, .preference_manifests = manifests, .component_types = component_types, .manifest_arena = self.manifest_arena };
+        const plugin_keys = try self.manifest_arena.allocator().alloc([:0]const u8, game.plugin_count);
+        for (plugin_keys, game.plugin_keys[0..game.plugin_count]) |*key, source| key.* = try self.manifest_arena.allocator().dupeZ(u8, std.mem.span(source));
+        self.* = .{ .gpa = gpa, .path = self.path, .copy_path = copy_path, .library = library, .game = game, .state = null, .panels = panels, .loads = self.loads, .preference_manifests = manifests, .component_types = component_types, .plugin_keys = plugin_keys, .manifest_arena = self.manifest_arena };
     }
 
     /// Stop the game, empty the world while its code is still loaded, and unload and delete the copy.
@@ -162,6 +175,7 @@ pub const HotGame = struct {
         self.panels = &.{};
         self.preference_manifests = &.{};
         self.component_types = &.{};
+        self.plugin_keys = &.{};
         _ = self.manifest_arena.reset(.free_all);
         library.close();
         self.library = null;

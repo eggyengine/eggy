@@ -11,6 +11,8 @@ const log = std.log.scoped(.preferences);
 
 pub const PreferencesWindow = @import("window.zig").PreferencesWindow;
 pub const Section = @import("window.zig").Section;
+pub const Plugin = @import("window.zig").Plugin;
+pub const Switch = @import("window.zig").Switch;
 
 /// The editor's own preferences.
 pub const Editor = struct {

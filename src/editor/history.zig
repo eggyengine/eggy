@@ -23,6 +23,8 @@ pub const Step = union(enum) {
     delete: struct { path: []u8, trashed: []u8 },
     /// A file or folder was made (a new folder, a duplicate); undone, it waits in `trashed`.
     create: struct { path: []u8, trashed: ?[]u8 = null },
+    /// Plugin `key` was turned on (`on`) or off.
+    plugin: struct { key: []u8, on: bool },
     /// A preference changed from `before` to `after` (ZON literals; null: not set).
     preference: struct { layer: eggy.preferences.Store.Layer, key: []u8, field: []u8, before: ?[]u8, after: ?[]u8 },
 
@@ -44,6 +46,7 @@ pub const Step = union(enum) {
                 gpa.free(step.path);
                 if (step.trashed) |trashed| gpa.free(trashed);
             },
+            .plugin => |step| gpa.free(step.key),
             .preference => |step| {
                 gpa.free(step.key);
                 gpa.free(step.field);
@@ -61,6 +64,7 @@ pub const Step = union(enum) {
             .delete => "a deletion",
             .create => "a new file",
             .preference => "a preference",
+            .plugin => |step| if (step.on) "turning a plugin on" else "turning a plugin off",
         };
     }
 };

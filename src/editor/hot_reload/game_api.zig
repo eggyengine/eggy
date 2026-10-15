@@ -6,7 +6,7 @@
 const std = @import("std");
 
 /// Bumped whenever these types change, so an editor refuses a library built for another.
-pub const version: u32 = 5;
+pub const version: u32 = 6;
 
 /// The library's one exported function: `fn () callconv(.c) *const Game`.
 pub const entry_symbol = "eggy_game";
@@ -67,10 +67,13 @@ pub const Entity = extern struct { id: u32, generation: u32 };
 /// `state` is what `start` returned.
 pub const Game = extern struct {
     version: u32 = version,
-    /// Start the game and its plugins on `app` (an `*eggy.App`), allocating with `gpa` (an
-    /// `*const std.mem.Allocator`) and logging through `host`, then run the world's Init
-    /// stages; null when a plugin failed to start.
-    start: *const fn (host: *const Host, gpa: *const anyopaque, app: *anyopaque) callconv(.c) ?*anyopaque,
+    /// Start the game and the plugins `enabled` has on (one per `plugin_keys`) on `app` (an
+    /// `*eggy.App`), allocating with `gpa` (an `*const std.mem.Allocator`) and logging through
+    /// `host`, then run the world's Init stages; null when a plugin failed to start.
+    start: *const fn (host: *const Host, gpa: *const anyopaque, app: *anyopaque, enabled: [*]const bool) callconv(.c) ?*anyopaque,
+    /// The game's and each plugin's key, the game first (see `eggy.plugins.Set`).
+    plugin_keys: [*]const [*:0]const u8,
+    plugin_count: usize,
     /// Stop them all and free `state`.
     stop: *const fn (state: *anyopaque) callconv(.c) void,
     /// One frame: the plugins' `update`, then the world's Update stages. False when something

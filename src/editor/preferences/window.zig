@@ -1,5 +1,6 @@
-//! Edit > Preferences: a section for the editor's preferences and, with a project open, one for
-//! each plugin's, each field with the control its kind calls for. The editor's apply to every
+//! Edit > Preferences: a section for the editor's preferences and, with a project open, one with
+//! a switch for each of its plugins and one for each plugin's preferences, each field with the
+//! control its kind calls for. The editor's apply to every
 //! project (the global layer) or to this one (its `.eggy/`), which overrides the global value; a
 //! plugin's apply to the project only. Reset drops a scope's value. Every change is saved as it
 //! is made.
@@ -19,9 +20,23 @@ const smallText = page_style.smallText;
 const noteText = page_style.noteText;
 const log = std.log.scoped(.preferences);
 
-/// A section of the window: whose preferences, as the window titles them, and a line on what
-/// they are.
-pub const Section = struct { title: []const u8, subtitle: []const u8, manifest: prefs.Manifest };
+/// A section of the window: what it holds, as the window titles it, and a line on what that is.
+pub const Section = struct {
+    title: []const u8,
+    subtitle: []const u8,
+    content: union(enum) {
+        /// Whose preferences.
+        preferences: prefs.Manifest,
+        /// The project's plugins, each with its switch.
+        plugins: []const Plugin,
+    },
+};
+
+/// A plugin the project has, and whether it is on.
+pub const Plugin = struct { key: []const u8, title: []const u8, on: bool };
+
+/// A plugin's switch flipped: turn `key` on or off.
+pub const Switch = struct { key: []const u8, on: bool };
 
 /// The most number fields a section shows.
 const max_fields = 64;
@@ -44,6 +59,8 @@ pub const PreferencesWindow = struct {
     synced: ?Showing = null,
     /// Where changes are recorded for undo, given each frame.
     history: ?*History = null,
+    /// A switch flipped this frame, for `update` to return.
+    flipped: ?Switch = null,
     /// Whether the scope was picked yet: with a project, the window starts on This project,
     /// where changes usually belong.
     scope_picked: bool = false,
@@ -77,9 +94,11 @@ pub const PreferencesWindow = struct {
     }
 
     /// Draw a frame of `sections` (the editor's first), whose values are in `store`; changes set
-    /// them there and save them to `folders`.
-    pub fn update(self: *PreferencesWindow, graphics: *eggy.Graphics, style: *const ui.Context, sections: []const Section, store: *Store, folders: files.Folders, history: *History) !void {
+    /// them there and save them to `folders`, recording each in `history`. Returns a plugin's
+    /// switch flipped this frame (its key lives as long as `sections`), for the caller to carry out.
+    pub fn update(self: *PreferencesWindow, graphics: *eggy.Graphics, style: *const ui.Context, sections: []const Section, store: *Store, folders: files.Folders, history: *History) !?Switch {
         self.history = history;
+        self.flipped = null;
         const Page = struct {
             window: *PreferencesWindow,
             sections: []const Section,
@@ -91,6 +110,7 @@ pub const PreferencesWindow = struct {
         };
         var page = Page{ .window = self, .sections = sections, .store = store, .folders = folders };
         try self.window.present(graphics, style, &page);
+        return self.flipped;
     }
 
     /// The page: the sections down the left, the one shown on the right.
@@ -141,7 +161,15 @@ pub const PreferencesWindow = struct {
         context.end();
         restyle(context, .{ .grow = 1, .gap = 2 });
         // Only the editor's preferences also apply to every project; a plugin's are the project's.
-        const is_editor = std.mem.eql(u8, section.manifest.key, files.editor_key);
+        const manifest = switch (section.content) {
+            .preferences => |manifest| manifest,
+            .plugins => |plugins| {
+                context.end();
+                restyle(context, .{ .direction = .row, .gap = 16, .align_items = .center });
+                return self.pluginCards(context, plugins);
+            },
+        };
+        const is_editor = std.mem.eql(u8, manifest.key, files.editor_key);
         if (is_editor and folders.project != null) {
             if (context.tabs(&scopes, &self.scope)) self.synced = null;
         }
@@ -157,7 +185,6 @@ pub const PreferencesWindow = struct {
         smallText(context, 12);
 
         const layer: Store.Layer = if (scope == 1) .project else .global;
-        const manifest = section.manifest;
         if (manifest.fields.len == 0) return context.muted("Nothing to set here.");
 
         // The number fields start from the values shown, for each section and scope.
@@ -169,6 +196,31 @@ pub const PreferencesWindow = struct {
             self.synced = showing;
         }
         for (manifest.fields[0..@min(manifest.fields.len, max_fields)], 0..) |field, i| self.fieldCard(context, store, folders, layer, manifest.key, field, &self.edits[i]);
+    }
+
+    /// The Plugins section: a card per plugin with its switch.
+    fn pluginCards(self: *PreferencesWindow, context: *ui.Context, plugins: []const Plugin) void {
+        context.muted("A plugin that is off doesn't start and none of its code runs, in the editor or the game. Its components and preferences keep their values. Saved in this project's .eggy folder.");
+        smallText(context, 12);
+        if (plugins.len == 0) return context.muted("This project has no plugins: list them in addGame's .plugins in build.zig.");
+        const arena = context.builder().allocator;
+        for (plugins) |plugin| {
+            context.begin(.card);
+            context.begin(.row);
+            context.begin(.column);
+            context.text(plugin.title);
+            context.muted(std.fmt.allocPrint(arena, "{s} · {s}", .{ plugin.key, if (plugin.on) "on" else "off" }) catch plugin.key);
+            smallText(context, 13);
+            context.end();
+            restyle(context, .{ .grow = 1, .gap = 4 });
+            var on = plugin.on;
+            const hidden = std.fmt.allocPrint(arena, "##plugin {s}", .{plugin.key}) catch return;
+            if (context.toggle(hidden, &on)) self.flipped = .{ .key = plugin.key, .on = on };
+            context.end();
+            restyle(context, .{ .direction = .row, .gap = 20, .align_items = .center });
+            context.end();
+            restyle(context, .{ .padding = .{ .left = 16, .right = 16, .top = 12, .bottom = 12 } });
+        }
     }
 
     /// One preference: its name and description on the left, its control on the right, and

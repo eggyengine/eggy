@@ -61,8 +61,16 @@ const component_types = blk: {
     break :blk types;
 };
 
+const plugin_keys = blk: {
+    var list: [project.plugin_keys.len][*:0]const u8 = undefined;
+    for (&list, project.plugin_keys) |*pointer, key| pointer.* = key.ptr;
+    break :blk list;
+};
+
 const game = api.Game{
     .start = start,
+    .plugin_keys = &plugin_keys,
+    .plugin_count = plugin_keys.len,
     .stop = stop,
     .update = update,
     .editor_update = editorUpdate,
@@ -91,12 +99,12 @@ export fn eggy_game() callconv(.c) *const api.Game {
     return &game;
 }
 
-fn start(editor: *const api.Host, gpa_ptr: *const anyopaque, app_ptr: *anyopaque) callconv(.c) ?*anyopaque {
+fn start(editor: *const api.Host, gpa_ptr: *const anyopaque, app_ptr: *anyopaque, enabled: [*]const bool) callconv(.c) ?*anyopaque {
     host = editor;
     const gpa: *const std.mem.Allocator = @ptrCast(@alignCast(gpa_ptr));
     const state = gpa.create(State) catch return null;
     const app = appOf(app_ptr);
-    const plugins = Plugins.init(gpa.*, app) catch |err| {
+    const plugins = Plugins.init(gpa.*, app, enabled[0..plugin_keys.len].*) catch |err| {
         std.log.err("the game failed to start: {t}", .{err});
         gpa.destroy(state);
         return null;
