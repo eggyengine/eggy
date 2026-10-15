@@ -12,6 +12,7 @@ const Store = prefs.Store;
 const weeoui_sdl3 = @import("weeoui_sdl3");
 const ToolWindow = @import("../tool_window.zig").ToolWindow;
 const files = @import("preferences.zig");
+const History = @import("../history.zig").History;
 const page_style = @import("../page_style.zig");
 const restyle = page_style.restyle;
 const smallText = page_style.smallText;
@@ -41,6 +42,8 @@ pub const PreferencesWindow = struct {
     /// The number fields' text for the section and scope shown, which `synced` names.
     edits: [max_fields]NumberEdit = undefined,
     synced: ?Showing = null,
+    /// Where changes are recorded for undo, given each frame.
+    history: ?*History = null,
     /// Whether the scope was picked yet: with a project, the window starts on This project,
     /// where changes usually belong.
     scope_picked: bool = false,
@@ -75,7 +78,8 @@ pub const PreferencesWindow = struct {
 
     /// Draw a frame of `sections` (the editor's first), whose values are in `store`; changes set
     /// them there and save them to `folders`.
-    pub fn update(self: *PreferencesWindow, graphics: *eggy.Graphics, style: *const ui.Context, sections: []const Section, store: *Store, folders: files.Folders) !void {
+    pub fn update(self: *PreferencesWindow, graphics: *eggy.Graphics, style: *const ui.Context, sections: []const Section, store: *Store, folders: files.Folders, history: *History) !void {
+        self.history = history;
         const Page = struct {
             window: *PreferencesWindow,
             sections: []const Section,
@@ -238,6 +242,8 @@ pub const PreferencesWindow = struct {
 
     /// Set `field` of `key` in `layer` to `literal` (null clears it), and save its file.
     fn apply(self: *PreferencesWindow, store: *Store, folders: files.Folders, layer: Store.Layer, key: []const u8, field: []const u8, literal: ?[]const u8) void {
+        // Undoable: what it was goes with the change.
+        if (self.history) |history| history.recordPreference(layer, key, field, store.literal(layer, key, field), literal, self.window.ui.time_ms);
         store.set(layer, key, field, literal) catch |err| return log.err("cannot set {s}.{s}: {t}", .{ key, field, err });
         files.save(self.gpa, store, folders, layer, key) catch |err| log.err("cannot save {s}'s preferences: {t}", .{ key, err });
     }

@@ -52,6 +52,9 @@ pub const Outcome = union(enum) {
     preferences,
     /// File > Save (Ctrl+S): save the scene.
     save,
+    /// Edit > Undo (Ctrl+Z) and Redo (Ctrl+Shift+Z, Ctrl+Y).
+    undo,
+    redo,
     /// File > Open Project Folder: show the project in the system's file manager.
     open_project_folder,
     /// File > Upgrade Editor: move the project to the newest Eggy.
@@ -537,9 +540,11 @@ pub const Workspace = struct {
                 .devtools => return .toggle_devtools,
                 .preferences => return .preferences,
                 .save => return .save,
+                .undo => return .undo,
+                .redo => return .redo,
                 .reset_layout => self.resetLayout() catch |err| std.log.warn("cannot reset the layout: {t}", .{err}),
-                // ponytail: stubs until the editor has projects, undo history and settings.
-                else => std.log.info("{t}: not implemented yet", .{command}),
+                // ponytail: a stub until there is an About window.
+                .about => std.log.info("about: not implemented yet", .{}),
             },
         }
         return .handled;
@@ -631,7 +636,8 @@ test "the menus' shortcuts run their commands" {
     try std.testing.expectEqual(Outcome.quit, workspace.handle(main_slot, press(.q, false)));
     try std.testing.expectEqual(Outcome.new_project, workspace.handle(main_slot, press(.n, false)));
     try std.testing.expectEqual(Outcome.open_project, workspace.handle(main_slot, press(.o, false)));
-    try std.testing.expectEqual(Outcome.handled, workspace.handle(main_slot, press(.z, true)));
+    try std.testing.expectEqual(Outcome.redo, workspace.handle(main_slot, press(.z, true)));
+    try std.testing.expectEqual(Outcome.undo, workspace.handle(main_slot, press(.z, false)));
     try std.testing.expectEqual(Outcome.ignored, workspace.handle(main_slot, press(.c, false)));
 }
 

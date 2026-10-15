@@ -51,6 +51,12 @@ pub fn trash(gpa: std.mem.Allocator, io: std.Io, project: std.Io.Dir, path: []co
     return target;
 }
 
+/// Move `from` to `to` (both relative to the project), as undoing a rename does.
+pub fn move(io: std.Io, project: std.Io.Dir, from: []const u8, to: []const u8) !void {
+    if (exists(io, project, to)) return error.PathAlreadyExists;
+    try project.rename(from, project, to, io);
+}
+
 /// Move `from` (in the trash) back to `to`.
 pub fn restore(io: std.Io, project: std.Io.Dir, from: []const u8, to: []const u8) !void {
     if (exists(io, project, to)) return error.PathAlreadyExists;

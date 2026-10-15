@@ -59,9 +59,14 @@ pub const OpenScene = struct {
     /// Whether `world` has changes not saved to the open scene: it differs from what was last
     /// saved or opened, or (with no scene open) it has entities at all.
     pub fn unsaved(self: *const OpenScene, world: *eggy.ecs.World, access: eggy.scene.Access) bool {
-        const saved = self.saved_hash orelse return world.entityCount() > 0;
         const now = hashOf(self.gpa, world, access) catch return false;
-        return now != saved;
+        return self.unsavedHash(now, world);
+    }
+
+    /// `unsaved`, for the world whose scene text hashes (Wyhash, seed 0) to `hash`.
+    pub fn unsavedHash(self: *const OpenScene, hash: u64, world: *eggy.ecs.World) bool {
+        const saved = self.saved_hash orelse return world.entityCount() > 0;
+        return hash != saved;
     }
 
     /// Write `world` to the open scene; with none open, to a new one in `scenes/`, which

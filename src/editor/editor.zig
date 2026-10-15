@@ -33,6 +33,8 @@ const entities = @import("entities/entities.zig");
 const scene_file = @import("scene_file.zig");
 const layout_file = @import("layout_file.zig");
 const PlayMode = @import("play_mode.zig").PlayMode;
+const history_zig = @import("history.zig");
+const file_ops = @import("assets/file_ops.zig");
 const hit_test = @import("hit_test.zig");
 const assets = @import("assets/assets.zig");
 const AssetIcons = @import("assets/icons.zig").Icons;
@@ -51,6 +53,8 @@ pub fn Editor(comptime project: type) type {
         game_modified: ?std.Io.Timestamp = null,
         /// When the world was last compared with the saved scene, for the status bar's `*`.
         unsaved_checked_ms: u64 = 0,
+        /// Undo and redo.
+        history: history_zig.History,
         /// Whether the game is playing, and the scene to go back to when it stops.
         play_mode: PlayMode = .{},
         /// The scene open in the project, if any (with no project, none).
@@ -210,7 +214,7 @@ pub fn Editor(comptime project: type) type {
                 loaded.start(&app);
             }
             const upgrades = Upgrades.init(gpa, if (opened_project) |opened| opened.dir else null, @import("build_options").source_dir);
-            var self = Self{ .gpa = gpa, .game = game, .game_modified = modifiedAt(library_path), .app = app, .ui = context, .mono = mono, .console_ui = console_ui, .hierarchy_ui = hierarchy_ui, .assets_ui = assets_ui, .assets_panel = .init(gpa), .asset_icons = asset_icons, .entity_editor = .init(gpa), .console = console, .plugin_pages = plugin_pages, .workspace = workspace, .frame = frame, .scene = scene, .overlay = overlay, .project = opened_project, .editor_modified = if (opened_project) |opened| editorModified(gpa, opened) else null, .upgrades = upgrades, .preference_folders = preference_folders, .open_scene = open_scene };
+            var self = Self{ .gpa = gpa, .game = game, .game_modified = modifiedAt(library_path), .app = app, .ui = context, .mono = mono, .console_ui = console_ui, .hierarchy_ui = hierarchy_ui, .assets_ui = assets_ui, .assets_panel = .init(gpa), .asset_icons = asset_icons, .entity_editor = .init(gpa), .console = console, .plugin_pages = plugin_pages, .workspace = workspace, .frame = frame, .scene = scene, .overlay = overlay, .project = opened_project, .editor_modified = if (opened_project) |opened| editorModified(gpa, opened) else null, .upgrades = upgrades, .preference_folders = preference_folders, .open_scene = open_scene, .history = .{ .gpa = gpa } };
             self.built_sources = self.sourcesNow();
             return self;
         }
@@ -226,6 +230,7 @@ pub fn Editor(comptime project: type) type {
             self.preference_folders.deinit(self.gpa);
             if (self.open_scene) |*scene| scene.deinit();
             self.play_mode.deinit();
+            self.history.deinit();
             if (self.rebuild) |job| job.deinit();
             if (self.picked_project.swap(null, .acq_rel)) |path| std.heap.c_allocator.free(std.mem.span(path));
             if (self.project) |opened| freeProject(self.gpa, opened);
@@ -295,9 +300,15 @@ pub fn Editor(comptime project: type) type {
             self.workspace.scene_name = if (self.open_scene) |*scene| scene.name() else null;
             // Whether there are changes to save, looked at a few times a second (not while
             // playing: Stop puts the scene back).
-            if (self.workspace.time_ms -| self.unsaved_checked_ms >= 400 and !self.play_mode.playing()) {
+            // A few times a second (not while playing: Stop puts the scene back), compare the world
+            // with the saved scene, for the status bar's `*`, and with the last undo step.
+            if (self.workspace.time_ms -| self.unsaved_checked_ms >= 300 and !self.play_mode.playing()) {
                 self.unsaved_checked_ms = self.workspace.time_ms;
-                self.workspace.scene_unsaved = if (self.open_scene) |*scene| (if (self.game) |*game| scene.unsaved(&self.app.world, game.sceneAccess()) else false) else false;
+                if (self.sceneText()) |text| {
+                    const hash = std.hash.Wyhash.hash(0, text);
+                    self.workspace.scene_unsaved = if (self.open_scene) |*scene| scene.unsavedHash(hash, &self.app.world) else false;
+                    self.history.watch(text, self.workspace.time_ms, self.typing());
+                }
             }
             self.workspace.can_upgrade = self.upgrades.can_upgrade;
             self.workspace.can_link = self.upgrades.can_link;
@@ -358,7 +369,7 @@ pub fn Editor(comptime project: type) type {
             // File > New/Open Project's window, if open.
             if (self.project_flow) |flow| if (try self.updateProjectFlow(flow) == .success) return .success;
             // Edit > Preferences, if open.
-            if (self.preferences_window) |window| try window.update(&self.app.graphics, &self.ui, try self.preferenceSections(frame_arena.allocator()), &self.app.preference_values, self.preference_folders);
+            if (self.preferences_window) |window| try window.update(&self.app.graphics, &self.ui, try self.preferenceSections(frame_arena.allocator()), &self.app.preference_values, self.preference_folders, &self.history);
             // The Build progress window, if open.
             if (self.build_window) |window| if (try self.updateBuildWindow(window, frame_arena.allocator())) return .success;
 
@@ -440,6 +451,9 @@ pub fn Editor(comptime project: type) type {
                     result catch |err| return std.log.err("cannot open the scene: {t}", .{err});
                     self.entity_editor.selected = null;
                     self.assets_panel.refreshSoon();
+                    // A different scene: its history starts here.
+                    self.history.clear();
+                    if (self.sceneText()) |text| self.history.setBaseline(text);
                 },
                 .reveal => |path| {
                     // A file shows as its folder.
@@ -461,28 +475,113 @@ pub fn Editor(comptime project: type) type {
         /// The Assets panel's file changes: new folders, renaming, duplicating, deleting (into
         /// the project's trash). The open scene follows its file.
         fn changeFiles(self: *Self, project_dir: []const u8, action: assets.Action) !void {
-            const file_ops = @import("assets/file_ops.zig");
             var threaded: std.Io.Threaded = .init_single_threaded;
             const io = threaded.io();
             var files = try std.Io.Dir.cwd().openDir(io, project_dir, .{});
             defer files.close(io);
             defer self.assets_panel.refreshSoon();
             switch (action) {
-                .create_folder => |parent| self.gpa.free(try file_ops.createFolder(self.gpa, io, files, parent)),
+                .create_folder => |parent| self.history.record(.{ .create = .{ .path = try file_ops.createFolder(self.gpa, io, files, parent) } }),
                 .rename => |change| {
                     const renamed = try file_ops.rename(self.gpa, io, files, change.path, change.name);
-                    defer self.gpa.free(renamed);
                     if (self.open_scene) |*scene| scene.moved(change.path, renamed);
+                    self.history.record(.{ .rename = .{ .from = try self.gpa.dupe(u8, change.path), .to = renamed } });
                 },
-                .duplicate => |path| self.gpa.free(try file_ops.duplicate(self.gpa, io, files, path)),
+                .duplicate => |path| self.history.record(.{ .create = .{ .path = try file_ops.duplicate(self.gpa, io, files, path) } }),
                 .delete => |path| {
                     const trashed = try file_ops.trash(self.gpa, io, files, path);
-                    defer self.gpa.free(trashed);
                     if (self.open_scene) |*scene| scene.deleted(path);
+                    self.history.record(.{ .delete = .{ .path = try self.gpa.dupe(u8, path), .trashed = trashed } });
                     var message: [96]u8 = undefined;
                     self.workspace.toast(std.fmt.bufPrint(&message, "Moved {s} to the trash", .{std.fs.path.basename(path)}) catch "Moved to the trash");
                 },
                 else => unreachable,
+            }
+        }
+
+        /// The world as a scene file's text (caller-owned); null without a game library.
+        fn sceneText(self: *Self) ?[]u8 {
+            const game = if (self.game) |*loaded| loaded else return null;
+            var scene = eggy.scene.Scene.capture(self.gpa, &self.app.world, game.sceneAccess(), null) catch return null;
+            defer scene.deinit();
+            var text: std.Io.Writer.Allocating = .init(self.gpa);
+            scene.write(&text.writer) catch {
+                text.deinit();
+                return null;
+            };
+            return text.toOwnedSlice() catch null;
+        }
+
+        /// Whether a text field has the keyboard somewhere: changes made by typing wait for it.
+        fn typing(self: *Self) bool {
+            for (0..self.pageCount()) |index| if (self.page(index).wants_text) return true;
+            return false;
+        }
+
+        /// Edit > Undo or Redo: carry the step back (`.undo`) or out again (`.redo`).
+        fn undoOrRedo(self: *Self, direction: enum { undo, redo }) void {
+            // Steps are the scene's, not a play's: stop first.
+            self.stopPlaying();
+            // A change not recorded yet (typing just now) becomes a step first.
+            if (direction == .undo) if (self.sceneText()) |text| self.history.watch(text, std.math.maxInt(u64), false);
+            const step = (if (direction == .undo) self.history.undo() else self.history.redo()) orelse {
+                return self.workspace.toast(if (direction == .undo) "Nothing to undo" else "Nothing to redo");
+            };
+            self.carry(step, direction == .undo) catch |err| {
+                std.log.err("cannot {s} {s}: {t}", .{ @tagName(direction), step.describe(), err });
+                return self.workspace.toast("Couldn't do that: see the Console");
+            };
+            var message: [64]u8 = undefined;
+            self.workspace.toast(std.fmt.bufPrint(&message, "{s} {s}", .{ if (direction == .undo) "Undid" else "Redid", step.describe() }) catch "Done");
+        }
+
+        /// Carry `step` back (`back`) or out again, filling in where files went.
+        fn carry(self: *Self, step: *history_zig.Step, back: bool) !void {
+            const opened = self.project orelse return error.NoProject;
+            var threaded: std.Io.Threaded = .init_single_threaded;
+            const io = threaded.io();
+            var files = try std.Io.Dir.cwd().openDir(io, opened.dir, .{});
+            defer files.close(io);
+            defer self.assets_panel.refreshSoon();
+            switch (step.*) {
+                .scene => |change| {
+                    const game = if (self.game) |*loaded| loaded else return error.NoGame;
+                    const text = if (back) change.before else change.after;
+                    const source = try self.gpa.dupeZ(u8, text);
+                    defer self.gpa.free(source);
+                    var scene = try eggy.scene.Scene.parse(self.gpa, source);
+                    defer scene.deinit();
+                    game.restart(&self.app, &scene);
+                    self.entity_editor.selected = null;
+                    self.history.setBaseline(try self.gpa.dupe(u8, text));
+                },
+                .rename => |change| {
+                    const from = if (back) change.to else change.from;
+                    const to = if (back) change.from else change.to;
+                    try file_ops.move(io, files, from, to);
+                    if (self.open_scene) |*scene| scene.moved(from, to);
+                },
+                .delete => |*change| if (back) {
+                    try file_ops.restore(io, files, change.trashed, change.path);
+                } else {
+                    const trashed = try file_ops.trash(self.gpa, io, files, change.path);
+                    self.gpa.free(change.trashed);
+                    change.trashed = trashed;
+                    if (self.open_scene) |*scene| scene.deleted(change.path);
+                },
+                .create => |*change| if (back) {
+                    const trashed = try file_ops.trash(self.gpa, io, files, change.path);
+                    if (change.trashed) |old| self.gpa.free(old);
+                    change.trashed = trashed;
+                } else if (change.trashed) |trashed| {
+                    try file_ops.restore(io, files, trashed, change.path);
+                    self.gpa.free(trashed);
+                    change.trashed = null;
+                },
+                .preference => |change| {
+                    try self.app.preference_values.set(change.layer, change.key, change.field, if (back) change.before else change.after);
+                    try preferences.save(self.gpa, &self.app.preference_values, self.preference_folders, change.layer, change.key);
+                },
             }
         }
 
@@ -671,6 +770,8 @@ pub fn Editor(comptime project: type) type {
                 .upgrade_editor => if (self.upgrades.can_upgrade) try self.upgradeEditor() else self.upgrades.logUnavailable(.upgrade),
                 .toggle_devtools => self.toggleDevtools(),
                 .save => self.saveScene(),
+                .undo => self.undoOrRedo(.undo),
+                .redo => self.undoOrRedo(.redo),
                 .preferences => if (self.preferences_window == null) {
                     self.preferences_window = preferences.PreferencesWindow.open(self.gpa, &self.app.graphics, self.ui.font) catch |err| blk: {
                         std.log.err("cannot open Preferences: {t}", .{err});
@@ -1161,6 +1262,7 @@ test {
     _ = @import("scene_file.zig");
     _ = @import("layout_file.zig");
     _ = @import("play_mode.zig");
+    _ = @import("history.zig");
     _ = @import("assets/assets.zig");
     _ = @import("assets/listing.zig");
     _ = @import("assets/icons.zig");
