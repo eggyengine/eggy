@@ -5,6 +5,7 @@ const ui = @import("weeoui");
 const shaders = @import("scene_shaders");
 const frames_in_flight = @import("weeoui_vitellus").frames_in_flight;
 const mesh = @import("mesh.zig");
+const camera = @import("camera.zig");
 const MeshRenderer = @import("mesh_renderer.zig").MeshRenderer;
 
 const Vertex = extern struct {
@@ -134,9 +135,9 @@ pub const Preview = struct {
         self.geometry.deinit();
     }
 
-    /// Draw the backdrop and `drawables` (sorted in place) into `scene` of `target`, a window
-    /// `window` big at `extent` pixels, cut to `clip`. Call outside a render pass.
-    pub fn draw(self: *Preview, cmd: vit.CommandBuffer, target: vit.TextureView, scene: ui.Rect, clip: ui.Rect, window: ui.Rect, extent: vit.Extent2D, srgb: bool, drawables: []mesh.Drawable) !void {
+    /// Draw the backdrop and `drawables` (sorted in place), seen from `view`, into `scene` of
+    /// `target`, a window `window` big at `extent` pixels, cut to `clip`. Call outside a render pass.
+    pub fn draw(self: *Preview, cmd: vit.CommandBuffer, target: vit.TextureView, scene: ui.Rect, clip: ui.Rect, window: ui.Rect, extent: vit.Extent2D, srgb: bool, drawables: []mesh.Drawable, view: camera.View) !void {
         const scissor = previewScissor(scene, clip, window, extent) orelse return;
         const transform = SceneUniforms{
             .screen = .{
@@ -176,7 +177,7 @@ pub const Preview = struct {
         const px = @as(f32, @floatFromInt(extent.width)) / window.w;
         const py = @as(f32, @floatFromInt(extent.height)) / window.h;
         cmd.setViewport(.{ .x = (scene.x - window.x) * px, .y = (scene.y - window.y) * py, .width = scene.w * px, .height = scene.h * py });
-        try self.meshes.draw(cmd, drawables, scene.w / scene.h, srgb);
+        try self.meshes.draw(cmd, drawables, view.viewProjection(scene.w / scene.h), srgb);
         cmd.endRenderPass();
     }
 };
@@ -241,5 +242,5 @@ test "preview scissor respects UI clipping, window and fractional pixel scale" {
 test "preview skips an empty viewport without recording commands" {
     var preview: Preview = undefined;
     const empty = ui.Rect{ .x = 0, .y = 0, .w = 0, .h = 0 };
-    try preview.draw(undefined, undefined, empty, empty, empty, .{ .width = 200, .height = 120 }, false, &.{});
+    try preview.draw(undefined, undefined, empty, empty, empty, .{ .width = 200, .height = 120 }, false, &.{}, .default);
 }

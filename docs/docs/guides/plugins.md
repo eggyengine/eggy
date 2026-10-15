@@ -113,7 +113,9 @@ The values shown are read from the world every frame, so fields your systems cha
 
 ### Drawing shapes
 
-Every project also has Eggy's own components, listed as from `eggy`. Give an entity a `Transform` (position, rotation in degrees, scale) and a `Mesh`, and it is drawn in the scene as the `Mesh`'s shape (cube, sphere, plane, cylinder or cone) in its colour. An entity inside another is placed relative to its parent's `Transform`. To move something, change its `Transform` from a system:
+Every project also has Eggy's own components, listed as from `eggy`. Give an entity a `Transform` (position, rotation in degrees, scale) and a `Mesh`, and it is drawn in the scene as the `Mesh`'s shape (cube, sphere, plane, cylinder or cone) in its colour. An entity inside another is placed relative to its parent's `Transform`.
+
+Give an entity a `Camera` (field of view, near and far) and a `Transform`, and the game is seen through it: it looks down its -z, with its +y up. Without one, the game looks at the middle of the world from above. The editor's Scene panel has a camera of its own: right-drag to look around and, while held, W, A, S, D, Q and E to fly (Shift to go faster); Alt+left-drag to orbit; middle-drag to pan; the wheel to zoom; and F to frame the entity selected in the Hierarchy. To move something, change its `Transform` from a system:
 
 ```zig
 fn rise(bodies: eggy.ecs.Query(.{*eggy.Transform})) !void {

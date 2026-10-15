@@ -91,6 +91,7 @@ const game = api.Game{
     .read_name = readName,
     .write_name = writeName,
     .gather_meshes = gatherMeshes,
+    .world_matrix = worldMatrix,
 };
 
 /// Names go through the same code the runtime uses (`eggy.scene.registryAccess`).
@@ -229,6 +230,13 @@ fn writeName(world: *anyopaque, entity: api.Entity, text: [*]const u8, len: usiz
 
 fn gatherMeshes(world: *anyopaque, out: [*]eggy.mesh.Drawable, capacity: usize) callconv(.c) usize {
     return eggy.mesh.gather(worldOf(world), out[0..capacity]);
+}
+
+fn worldMatrix(world: *anyopaque, entity: api.Entity, out: *[4][4]f32) callconv(.c) bool {
+    const id = entityOf(entity);
+    if (!worldOf(world).isAlive(id)) return false;
+    for (out, eggy.transform.worldMatrix(worldOf(world), id).data) |*column, data| column.* = data;
+    return true;
 }
 
 fn worldOf(ptr: *anyopaque) *eggy.ecs.World {

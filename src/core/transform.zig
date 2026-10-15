@@ -1,6 +1,7 @@
 //! `Transform`: where an entity is, how it is turned and how big it is, relative to its parent.
 //! A built-in component: every project's Inspector can add it.
 const std = @import("std");
+const ecs = @import("clutch");
 const math = @import("eggenvector");
 
 pub const Transform = struct {
@@ -18,6 +19,13 @@ pub const Transform = struct {
         return math.mul(f32, 4, 4, 4, math.mat.translation4x4(f32, self.position[0], self.position[1], self.position[2]), scaled);
     }
 };
+
+/// `entity`'s transform within the world: its own (or none), inside each parent's.
+pub fn worldMatrix(world: *ecs.World, entity: ecs.EntityId) math.Mat4 {
+    const local = if (world.get(entity, Transform)) |transform| transform.matrix() else math.identity(f32, 4);
+    const parent = world.getParent(entity) orelse return local;
+    return math.mul(f32, 4, 4, 4, worldMatrix(world, parent), local);
+}
 
 test "a transform scales, then turns, then moves" {
     const transform = Transform{ .position = .{ 10, 0, 0 }, .rotation_deg = .{ 0, 0, 90 }, .scale = .{ 2, 2, 2 } };

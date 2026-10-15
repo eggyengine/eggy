@@ -1,8 +1,7 @@
 //! Draws `mesh.Drawable`s: every shape's geometry sits in one vertex and index buffer, and each
-//! shape is drawn once, instanced, for every entity shown as it, from a fixed camera.
+//! shape is drawn once, instanced, for every entity shown as it.
 const std = @import("std");
 const vit = @import("vitellus");
-const math = @import("eggenvector");
 const shaders = @import("scene_shaders");
 const mesh = @import("mesh.zig");
 const frames_in_flight = @import("weeoui_vitellus").frames_in_flight;
@@ -124,9 +123,9 @@ pub const MeshRenderer = struct {
     }
 
     /// Draw `drawables` (at most `max_drawables`; they are sorted by shape in place) in the render
-    /// pass in progress, whose viewport is `aspect` wide for each unit tall. `srgb`: whether the
+    /// pass in progress, through `view_projection` (a `camera.View`'s). `srgb`: whether the
     /// target encodes sRGB itself.
-    pub fn draw(self: *MeshRenderer, cmd: vit.CommandBuffer, drawables: []mesh.Drawable, aspect: f32, srgb: bool) !void {
+    pub fn draw(self: *MeshRenderer, cmd: vit.CommandBuffer, drawables: []mesh.Drawable, view_projection: [4][4]f32, srgb: bool) !void {
         const sorted = drawables[0..@min(drawables.len, max_drawables)];
         if (sorted.len == 0) return;
         self.slot = (self.slot + 1) % frames_in_flight;
@@ -138,7 +137,7 @@ pub const MeshRenderer = struct {
             }
         }.less);
         try upload(self.instances[self.slot], std.mem.sliceAsBytes(sorted));
-        const camera = CameraUniforms{ .view_projection = viewProjection(aspect), .light = .{ 0.4, 1, 0.6, 0 }, .options = .{ if (srgb) 1 else 0, 0, 0, 0 } };
+        const camera = CameraUniforms{ .view_projection = view_projection, .light = .{ 0.4, 1, 0.6, 0 }, .options = .{ if (srgb) 1 else 0, 0, 0, 0 } };
         try upload(self.uniforms[self.slot], std.mem.asBytes(&camera));
 
         // One instanced draw per run of the same shape.
@@ -163,23 +162,4 @@ fn upload(buffer: vit.Buffer, bytes: []const u8) !void {
     const mapped = try buffer.map(.write, .{ .size = bytes.len });
     @memcpy(mapped[0..bytes.len], bytes);
     buffer.unmap(.{ .size = bytes.len });
-}
-
-// ponytail: one fixed camera looking at the origin; add a Camera component when games need to move it.
-fn viewProjection(aspect: f32) [4][4]f32 {
-    const view = math.mat.lookAt4x4(f32, .{ .x = 0, .y = 8, .z = 18 }, .{ .x = 0, .y = 1, .z = 0 }, .{ .x = 0, .y = 1, .z = 0 });
-    const projection = math.mat.perspective4x4(f32, 50 * std.math.rad_per_deg, aspect, 0.1, 500);
-    const matrix = math.mul(f32, 4, 4, 4, projection, view);
-    var columns: [4][4]f32 = undefined;
-    for (&columns, matrix.data) |*column, data| column.* = data;
-    return columns;
-}
-
-test "the camera sees the origin in the middle of the view" {
-    const columns = viewProjection(16.0 / 9.0);
-    var clip: @Vector(4, f32) = @splat(0);
-    for (columns, [4]f32{ 0, 1, 0, 1 }) |column, weight| clip += @as(@Vector(4, f32), column) * @as(@Vector(4, f32), @splat(weight));
-    try std.testing.expectApproxEqAbs(@as(f32, 0), clip[0] / clip[3], 0.001);
-    try std.testing.expectApproxEqAbs(@as(f32, 0), clip[1] / clip[3], 0.001);
-    try std.testing.expect(clip[2] / clip[3] > 0 and clip[2] / clip[3] < 1);
 }

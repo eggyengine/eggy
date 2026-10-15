@@ -4,7 +4,8 @@
 const std = @import("std");
 const ecs = @import("clutch");
 const math = @import("eggenvector");
-const Transform = @import("transform.zig").Transform;
+const transform_zig = @import("transform.zig");
+const Transform = transform_zig.Transform;
 
 /// The shapes there are, each about a metre across, centred on the entity.
 pub const Shape = enum(u32) { cube, sphere, plane, cylinder, cone };
@@ -31,19 +32,12 @@ pub fn gather(world: *ecs.World, out: []Drawable) usize {
     while (meshes.next()) |view| {
         if (count == out.len) break;
         const mesh = view.get(*const Mesh);
-        const model = worldMatrix(world, view.entity);
+        const model = transform_zig.worldMatrix(world, view.entity);
         out[count] = .{ .model = undefined, .color = .{ mesh.color[0], mesh.color[1], mesh.color[2], 1 }, .shape = mesh.shape };
         for (&out[count].model, model.data) |*column, data| column.* = data;
         count += 1;
     }
     return count;
-}
-
-/// `entity`'s transform within the world: its own, inside each parent's that has one.
-fn worldMatrix(world: *ecs.World, entity: ecs.EntityId) math.Mat4 {
-    const local = if (world.get(entity, Transform)) |transform| transform.matrix() else math.identity(f32, 4);
-    const parent = world.getParent(entity) orelse return local;
-    return math.mul(f32, 4, 4, 4, worldMatrix(world, parent), local);
 }
 
 /// A vertex of a shape: where it is, and which way its surface faces.

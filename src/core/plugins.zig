@@ -25,8 +25,8 @@
 //!
 //!     pub const components = .{ Spin, Health };
 //!
-//! Eggy's own components (`builtin_components`: `Transform`, and `Mesh`, which the scene draws)
-//! are listed first in every project, owned by `eggy`.
+//! Eggy's own components (`builtin_components`: `Transform`, `Mesh`, which the scene draws, and
+//! `Camera`, which the runtime looks through) are listed first in every project, owned by `eggy`.
 //!
 //! A project can turn plugins off (not the game): one that is off doesn't start, and none of its
 //! hooks run, but its preferences and components stay known, so scenes keep their values. The
@@ -47,7 +47,7 @@ const preferences = @import("preferences.zig");
 const components = @import("components.zig");
 
 /// The components every project has, before its plugins' own.
-pub const builtin_components = .{ @import("transform.zig").Transform, @import("mesh.zig").Mesh };
+pub const builtin_components = .{ @import("transform.zig").Transform, @import("mesh.zig").Mesh, @import("camera.zig").Camera };
 
 /// Where a project lists its plugins, relative to the project: each one's key, whether it is on,
 /// and the preferences it declares.

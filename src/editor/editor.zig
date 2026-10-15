@@ -40,6 +40,7 @@ const save_prompt_zig = @import("save_prompt.zig");
 const page_style = @import("page_style.zig");
 const file_ops = @import("assets/file_ops.zig");
 const hit_test = @import("hit_test.zig");
+const SceneCamera = @import("scene_camera.zig").SceneCamera;
 const assets = @import("assets/assets.zig");
 const AssetIcons = @import("assets/icons.zig").Icons;
 
@@ -110,6 +111,10 @@ pub fn Editor(comptime project: type) type {
         scene: eggy.SceneTexture,
         /// The meshes the scene draws, gathered from the world through the game's library.
         drawables: []eggy.mesh.Drawable,
+        /// What the Scene panel is seen from, steered with the mouse over it.
+        scene_camera: SceneCamera = .{},
+        /// When the scene camera last flew, to fly by the time since.
+        camera_tick_ns: u64 = 0,
         /// Draws the main window's UI into the frame `Graphics` already started.
         overlay: weeoui_vitellus.Renderer,
         /// The OS window for each of the dock's pop-out windows that is open.
@@ -321,6 +326,10 @@ pub fn Editor(comptime project: type) type {
             };
             try self.syncPopOuts();
             self.keepLayout();
+            // The scene camera flies by the keys held, over the time since the last frame.
+            const now_ns = sdl3.timer.getNanosecondsSinceInit();
+            if (self.camera_tick_ns != 0) self.scene_camera.fly(@as(f32, @floatFromInt(now_ns - self.camera_tick_ns)) / std.time.ns_per_s);
+            self.camera_tick_ns = now_ns;
 
             // Lay out every window, then tell the OS where the main title bar is.
             const flags = self.app.window.window.getFlags();
@@ -849,7 +858,7 @@ pub fn Editor(comptime project: type) type {
             const scene_px = if (self.workspace.placed.scene) |placed| if (placed.slot == slot) self.toPixels(placed.rect) else null else null;
             if (scene_px) |rect| {
                 const meshes = if (self.game) |*game| game.gatherMeshes(&self.app, self.drawables) else self.drawables[0..0];
-                try self.scene.render(&self.app.graphics, frame.cmd, .{ .width = @intFromFloat(@round(rect.w)), .height = @intFromFloat(@round(rect.h)) }, meshes);
+                try self.scene.render(&self.app.graphics, frame.cmd, .{ .width = @intFromFloat(@round(rect.w)), .height = @intFromFloat(@round(rect.h)) }, meshes, self.scene_camera.view());
             }
 
             // The UI under the Scene panel, the scene texture, then the UI over it.
@@ -931,6 +940,16 @@ pub fn Editor(comptime project: type) type {
             if (curr_event == .key_down) if (curr_event.key_down.key) |key| if (key == .func2) {
                 if (self.focused_page == panels.hierarchy_page) self.entity_editor.renameSelected();
                 if (self.focused_page == panels.assets_page) self.assets_panel.renameSelected();
+                return .run;
+            };
+
+            // The Scene panel's camera takes presses, drags and wheels over it; F frames the selection.
+            if (self.scene_camera.handle(curr_event, self.sceneRect(slot))) {
+                if (curr_event == .mouse_button_down) self.unfocusOnPress(slot, .{ .x = curr_event.mouse_button_down.x, .y = curr_event.mouse_button_down.y }, false);
+                return .run;
+            }
+            if (curr_event == .key_down) if (curr_event.key_down.key) |key| if (key == .f and self.scene_camera.hovered and self.scene_camera.drag == null) {
+                self.frameSelected();
                 return .run;
             };
 
@@ -1546,6 +1565,23 @@ pub fn Editor(comptime project: type) type {
             self.ui.muted("Select an entity in the Hierarchy to see its components.");
         }
 
+        /// The Scene panel's rect in window `slot`; null when it is in another window or hidden.
+        fn sceneRect(self: *const Self, slot: Slot) ?ui.Rect {
+            const placed = self.workspace.placed.scene orelse return null;
+            return if (placed.slot == slot) placed.rect else null;
+        }
+
+        /// Point the scene camera at the entity selected in the Hierarchy, close enough to see it.
+        fn frameSelected(self: *Self) void {
+            const entity = self.entity_editor.selected orelse return;
+            const game = if (self.game) |*loaded| loaded else return;
+            const placed = game.worldMatrix(&self.app, entity) orelse return;
+            // Its size: the longest of its axes, as scaled.
+            var radius: f32 = 0.5;
+            for (placed[0..3]) |axis| radius = @max(radius, @sqrt(axis[0] * axis[0] + axis[1] * axis[1] + axis[2] * axis[2]));
+            self.scene_camera.frame(.{ placed[3][0], placed[3][1], placed[3][2] }, radius);
+        }
+
         /// `rect` (in UI points) in window pixels.
         // ponytail: uses the main window's pixel density for pop-outs too; read each window's if they sit on screens with different scales.
         fn toPixels(self: *const Self, rect: ui.Rect) ui.Rect {
@@ -1590,6 +1626,7 @@ test {
     _ = @import("history.zig");
     _ = @import("plugin_switches.zig");
     _ = @import("dragged.zig");
+    _ = @import("scene_camera.zig");
     _ = @import("save_prompt.zig");
     _ = @import("assets/assets.zig");
     _ = @import("assets/listing.zig");

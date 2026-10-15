@@ -240,6 +240,15 @@ pub const HotGame = struct {
         return out[0..self.game.gather_meshes(&app.world, out.ptr, out.len)];
     }
 
+    /// `entity`'s transform within `app`'s world, as columns; null if it isn't alive (or there
+    /// is no library).
+    pub fn worldMatrix(self: *const HotGame, app: *eggy.App, entity: eggy.ecs.EntityId) ?[4][4]f32 {
+        if (self.library == null) return null;
+        var matrix: [4][4]f32 = undefined;
+        if (!self.game.world_matrix(&app.world, entityOf(entity), &matrix)) return null;
+        return matrix;
+    }
+
     /// The typed steps scenes need, through the library (see `eggy.scene.Access`).
     pub fn sceneAccess(self: *const HotGame) eggy.scene.Access {
         return .{ .context = self, .vtable = &scene_vtable };

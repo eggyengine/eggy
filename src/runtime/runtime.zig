@@ -63,7 +63,9 @@ pub fn Runtime(comptime project: type) type {
             try self.app.updateWorld();
             const frame = try self.app.graphics.beginFrame();
             const drawn = eggy.mesh.gather(&self.app.world, self.drawables);
-            try self.app.graphics.drawScene(frame, self.drawables[0..drawn]);
+            // Through the game's camera, or the default view without one.
+            const view = eggy.camera.find(&self.app.world) orelse eggy.camera.View.default;
+            try self.app.graphics.drawScene(frame, self.drawables[0..drawn], view);
             try self.app.graphics.endFrame(frame);
             return .run;
         }

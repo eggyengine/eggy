@@ -19,9 +19,12 @@ pub const preferences = @import("preferences.zig");
 pub const components = @import("components.zig");
 pub const scene = @import("scene.zig");
 pub const Name = @import("name.zig").Name;
-pub const Transform = @import("transform.zig").Transform;
+pub const transform = @import("transform.zig");
+pub const Transform = transform.Transform;
 pub const mesh = @import("mesh.zig");
 pub const Mesh = mesh.Mesh;
+pub const camera = @import("camera.zig");
+pub const Camera = camera.Camera;
 pub const max_drawables = @import("mesh_renderer.zig").max_drawables;
 pub const refs = @import("refs.zig");
 pub const EntityRef = refs.EntityRef;
@@ -41,6 +44,7 @@ test {
     _ = @import("transform.zig");
     _ = @import("mesh.zig");
     _ = @import("mesh_renderer.zig");
+    _ = @import("camera.zig");
     _ = @import("refs.zig");
     _ = @import("weeoui");
 }
