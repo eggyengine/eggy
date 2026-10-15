@@ -12,9 +12,12 @@ const fps = 340000;
 pub fn Runtime(comptime project: type) type {
     const Plugins = eggy.plugins.Set(project.plugins, &project.plugin_keys);
     return struct {
+        gpa: std.mem.Allocator,
         app: eggy.App,
         plugins: Plugins,
         fps_capper: sdl3.extras.FramerateCapper(f32),
+        /// The meshes drawn each frame, gathered from the world.
+        drawables: []eggy.mesh.Drawable,
 
         const Self = @This();
 
@@ -36,7 +39,10 @@ pub fn Runtime(comptime project: type) type {
             var plugins = try Plugins.init(gpa, &app, Plugins.enabledExcept(off));
             errdefer plugins.deinit();
             try app.startWorld();
+            const drawables = try gpa.alloc(eggy.mesh.Drawable, eggy.max_drawables);
             return .{
+                .gpa = gpa,
+                .drawables = drawables,
                 .plugins = plugins,
                 .app = app,
                 .fps_capper = .{ .mode = .{ .limited = fps } },
@@ -46,6 +52,7 @@ pub fn Runtime(comptime project: type) type {
         pub fn deinit(self: *Self) void {
             self.plugins.deinit();
             self.app.deinit();
+            self.gpa.free(self.drawables);
         }
 
         pub fn iterate(self: *Self) !sdl3.AppResult {
@@ -55,7 +62,8 @@ pub fn Runtime(comptime project: type) type {
             try self.plugins.update(&self.app);
             try self.app.updateWorld();
             const frame = try self.app.graphics.beginFrame();
-            try self.app.graphics.drawScene(frame);
+            const drawn = eggy.mesh.gather(&self.app.world, self.drawables);
+            try self.app.graphics.drawScene(frame, self.drawables[0..drawn]);
             try self.app.graphics.endFrame(frame);
             return .run;
         }

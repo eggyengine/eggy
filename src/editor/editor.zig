@@ -108,6 +108,8 @@ pub fn Editor(comptime project: type) type {
         frame: *weeoui_sdl3.Frame,
         /// The game's scene, rendered offscreen and drawn into the Scene panel.
         scene: eggy.SceneTexture,
+        /// The meshes the scene draws, gathered from the world through the game's library.
+        drawables: []eggy.mesh.Drawable,
         /// Draws the main window's UI into the frame `Graphics` already started.
         overlay: weeoui_vitellus.Renderer,
         /// The OS window for each of the dock's pop-out windows that is open.
@@ -202,6 +204,8 @@ pub fn Editor(comptime project: type) type {
             errdefer overlay.deinit();
             var scene = try eggy.SceneTexture.init(&app.graphics);
             errdefer scene.deinit();
+            const drawables = try gpa.alloc(eggy.mesh.Drawable, eggy.max_drawables);
+            errdefer gpa.free(drawables);
 
             // Draw the title bar ourselves, with the menus on it, laid out like the desktop's.
             var threaded: std.Io.Threaded = .init_single_threaded;
@@ -250,7 +254,7 @@ pub fn Editor(comptime project: type) type {
                 loaded.start(&app, plugin_switches.off());
             }
             const upgrades = Upgrades.init(gpa, if (opened_project) |opened| opened.dir else null, @import("build_options").source_dir);
-            var self = Self{ .gpa = gpa, .game = game, .game_modified = modifiedAt(library_path), .app = app, .ui = context, .mono = mono, .console_ui = console_ui, .hierarchy_ui = hierarchy_ui, .assets_ui = assets_ui, .assets_panel = .init(gpa), .asset_icons = asset_icons, .entity_editor = .init(gpa), .console = console, .plugin_pages = plugin_pages, .workspace = workspace, .frame = frame, .scene = scene, .overlay = overlay, .project = opened_project, .editor_modified = if (opened_project) |opened| editorModified(gpa, opened) else null, .upgrades = upgrades, .preference_folders = preference_folders, .open_scene = open_scene, .history = .{ .gpa = gpa }, .plugin_switches = plugin_switches };
+            var self = Self{ .gpa = gpa, .game = game, .game_modified = modifiedAt(library_path), .app = app, .ui = context, .mono = mono, .console_ui = console_ui, .hierarchy_ui = hierarchy_ui, .assets_ui = assets_ui, .assets_panel = .init(gpa), .asset_icons = asset_icons, .entity_editor = .init(gpa), .console = console, .plugin_pages = plugin_pages, .workspace = workspace, .frame = frame, .scene = scene, .drawables = drawables, .overlay = overlay, .project = opened_project, .editor_modified = if (opened_project) |opened| editorModified(gpa, opened) else null, .upgrades = upgrades, .preference_folders = preference_folders, .open_scene = open_scene, .history = .{ .gpa = gpa }, .plugin_switches = plugin_switches };
             self.built_sources = self.sourcesNow();
             return self;
         }
@@ -280,6 +284,7 @@ pub fn Editor(comptime project: type) type {
             // The overlay's and scene's GPU resources must outlive any frame still in flight.
             self.app.graphics.queue.waitIdle() catch {};
             self.scene.deinit();
+            self.gpa.free(self.drawables);
             self.overlay.deinit();
             self.workspace.deinit();
             for (&self.plugin_pages) |*page_ui| page_ui.deinit();
@@ -842,7 +847,10 @@ pub fn Editor(comptime project: type) type {
             // Render the scene offscreen at the Scene panel's pixel size.
             const frame = try surface.beginFrame();
             const scene_px = if (self.workspace.placed.scene) |placed| if (placed.slot == slot) self.toPixels(placed.rect) else null else null;
-            if (scene_px) |rect| try self.scene.render(&self.app.graphics, frame.cmd, .{ .width = @intFromFloat(@round(rect.w)), .height = @intFromFloat(@round(rect.h)) });
+            if (scene_px) |rect| {
+                const meshes = if (self.game) |*game| game.gatherMeshes(&self.app, self.drawables) else self.drawables[0..0];
+                try self.scene.render(&self.app.graphics, frame.cmd, .{ .width = @intFromFloat(@round(rect.w)), .height = @intFromFloat(@round(rect.h)) }, meshes);
+            }
 
             // The UI under the Scene panel, the scene texture, then the UI over it.
             try overlay.upload(frame.cmd, self.ui.font, drawn.vertices, viewport);

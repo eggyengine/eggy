@@ -111,6 +111,17 @@ A component is a struct. The Inspector edits bools with a switch, enums with a d
 
 The values shown are read from the world every frame, so fields your systems change update as they run.
 
+### Drawing shapes
+
+Every project also has Eggy's own components, listed as from `eggy`. Give an entity a `Transform` (position, rotation in degrees, scale) and a `Mesh`, and it is drawn in the scene as the `Mesh`'s shape (cube, sphere, plane, cylinder or cone) in its colour. An entity inside another is placed relative to its parent's `Transform`. To move something, change its `Transform` from a system:
+
+```zig
+fn rise(bodies: eggy.ecs.Query(.{*eggy.Transform})) !void {
+    var iter = bodies;
+    while (iter.next()) |view| view.get(*eggy.Transform).position[1] += 0.01;
+}
+```
+
 The Hierarchy's **Add** spawns an empty entity, and **Delete** despawns the selected entity and its children. Drag an entity onto another to put it inside, or onto the top or bottom edge of one to put it before or after; entities keep the order you give them, and scenes save it.
 
 ### References

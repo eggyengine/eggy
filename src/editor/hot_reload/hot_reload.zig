@@ -234,6 +234,12 @@ pub const HotGame = struct {
         self.game.write_name(&app.world, entityOf(entity), text.ptr, text.len);
     }
 
+    /// The meshes of `app`'s world to draw, into `out`; none without a library.
+    pub fn gatherMeshes(self: *const HotGame, app: *eggy.App, out: []eggy.mesh.Drawable) []eggy.mesh.Drawable {
+        if (self.library == null) return out[0..0];
+        return out[0..self.game.gather_meshes(&app.world, out.ptr, out.len)];
+    }
+
     /// The typed steps scenes need, through the library (see `eggy.scene.Access`).
     pub fn sceneAccess(self: *const HotGame) eggy.scene.Access {
         return .{ .context = self, .vtable = &scene_vtable };

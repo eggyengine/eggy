@@ -4,9 +4,10 @@
 //! on their layout. Errors don't cross (Zig numbers them per compilation): the library logs its
 //! own and reports failure.
 const std = @import("std");
+const eggy = @import("eggy");
 
 /// Bumped whenever these types change, so an editor refuses a library built for another.
-pub const version: u32 = 7;
+pub const version: u32 = 8;
 
 /// The library's one exported function: `fn () callconv(.c) *const Game`.
 pub const entry_symbol = "eggy_game";
@@ -114,4 +115,7 @@ pub const Game = extern struct {
     read_name: *const fn (world: *anyopaque, entity: Entity, buffer: [*]u8, capacity: usize) callconv(.c) isize,
     /// Give the entity `eggy.Name` `text` (`len` bytes), or take its name away when empty.
     write_name: *const fn (world: *anyopaque, entity: Entity, text: [*]const u8, len: usize) callconv(.c) void,
+    /// The meshes to draw (`eggy.mesh.gather`) into `out` (`eggy.mesh.Drawable`s); returns how
+    /// many, at most `capacity`.
+    gather_meshes: *const fn (world: *anyopaque, out: [*]eggy.mesh.Drawable, capacity: usize) callconv(.c) usize,
 };

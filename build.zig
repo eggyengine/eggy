@@ -293,18 +293,25 @@ fn addEngine(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.buil
     const viewport_shader = b.path("src/core/shaders/viewport3d.slang");
     const viewport_vertex = vitellus_build.compileSlang(b, vitellus, target, viewport_shader, "vertexMain", .vertex) orelse return null;
     const viewport_fragment = vitellus_build.compileSlang(b, vitellus, target, viewport_shader, "fragmentMain", .fragment) orelse return null;
+    const mesh_shader = b.path("src/core/shaders/mesh.slang");
+    const mesh_vertex = vitellus_build.compileSlang(b, vitellus, target, mesh_shader, "vertexMain", .vertex) orelse return null;
+    const mesh_fragment = vitellus_build.compileSlang(b, vitellus, target, mesh_shader, "fragmentMain", .fragment) orelse return null;
     const blit_shader = b.path("src/core/shaders/scene_blit.slang");
     const blit_vertex = vitellus_build.compileSlang(b, vitellus, target, blit_shader, "vertexMain", .vertex) orelse return null;
     const blit_fragment = vitellus_build.compileSlang(b, vitellus, target, blit_shader, "fragmentMain", .fragment) orelse return null;
     const shader_files = b.addWriteFiles();
     _ = shader_files.addCopyFile(viewport_vertex, "viewport3d.vert");
     _ = shader_files.addCopyFile(viewport_fragment, "viewport3d.frag");
+    _ = shader_files.addCopyFile(mesh_vertex, "mesh.vert");
+    _ = shader_files.addCopyFile(mesh_fragment, "mesh.frag");
     _ = shader_files.addCopyFile(blit_vertex, "scene_blit.vert");
     _ = shader_files.addCopyFile(blit_fragment, "scene_blit.frag");
     const shader_module = b.createModule(.{
         .root_source_file = shader_files.add("root.zig",
             \\pub const viewport_vertex = @embedFile("viewport3d.vert");
             \\pub const viewport_fragment = @embedFile("viewport3d.frag");
+            \\pub const mesh_vertex = @embedFile("mesh.vert");
+            \\pub const mesh_fragment = @embedFile("mesh.frag");
             \\pub const blit_vertex = @embedFile("scene_blit.vert");
             \\pub const blit_fragment = @embedFile("scene_blit.frag");
         ),
@@ -555,6 +562,8 @@ fn addCoreTests(b: *std.Build, engine: Engine) *std.Build.Step {
             .{ .name = "sdl3", .module = engine.sdl3.module("sdl3") },
             .{ .name = "scene_shaders", .module = engine.shader_module },
             .{ .name = "weeoui_vitellus", .module = engine.weeoui_vitellus },
+            .{ .name = "eggenvector", .module = engine.eggy.import_table.get("eggenvector").? },
+            .{ .name = "clutch", .module = engine.eggy.import_table.get("clutch").? },
         },
     });
     step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = viewport, .use_llvm = true })).step);

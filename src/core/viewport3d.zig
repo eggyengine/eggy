@@ -1,25 +1,28 @@
+//! The 3D scene: a backdrop, and the world's meshes over it (`mesh_renderer.zig`).
 const std = @import("std");
 const vit = @import("vitellus");
 const ui = @import("weeoui");
-const sdl3 = @import("sdl3");
 const shaders = @import("scene_shaders");
 const frames_in_flight = @import("weeoui_vitellus").frames_in_flight;
+const mesh = @import("mesh.zig");
+const MeshRenderer = @import("mesh_renderer.zig").MeshRenderer;
 
 const Vertex = extern struct {
-    position: [3]f32,
+    position: [2]f32,
     color: [3]f32,
-    kind: f32 = 0,
 };
 
 const SceneUniforms = extern struct {
-    rotation: [4]f32,
+    /// The scene's centre and half-size, in window NDC.
     screen: [4]f32,
-    projection: [4]f32,
+    /// x: 1 when the target is sRGB.
+    options: [4]f32,
 };
 
-const vertex_data = sceneVertices();
+const vertex_data = backdropVertices();
 
 pub const Preview = struct {
+    /// The backdrop's two triangles.
     geometry: vit.Buffer,
     /// One per frame in flight, so `draw` never rewrites a transform the GPU is still reading.
     uniforms: [frames_in_flight]vit.Buffer,
@@ -31,10 +34,11 @@ pub const Preview = struct {
     depth: vit.Texture,
     depth_view: vit.TextureView,
     depth_initialized: bool = false,
+    meshes: MeshRenderer,
 
     pub fn init(device: vit.Device, format: vit.Format, extent: vit.Extent2D) !Preview {
         const geometry = try vit.Buffer.init(device, .{
-            .label = "preview cube",
+            .label = "scene backdrop",
             .size = @sizeOf(@TypeOf(vertex_data)),
             .usage = .{ .vertex = true },
             .initial_data = std.mem.asBytes(&vertex_data),
@@ -77,9 +81,8 @@ pub const Preview = struct {
             .vertex = vs,
             .fragment = fs,
             .vertex_buffers = &.{.{ .stride = @sizeOf(Vertex), .attributes = &.{
-                .{ .location = 0, .format = .float32x3, .offset = @offsetOf(Vertex, "position") },
+                .{ .location = 0, .format = .float32x2, .offset = @offsetOf(Vertex, "position") },
                 .{ .location = 1, .format = .float32x3, .offset = @offsetOf(Vertex, "color") },
-                .{ .location = 2, .format = .float32, .offset = @offsetOf(Vertex, "kind") },
             } }},
             .color_targets = &.{.{ .format = format }},
             .depth_stencil = .{ .format = .d32_float, .depth_write = true, .depth_compare = .less },
@@ -90,6 +93,9 @@ pub const Preview = struct {
         const depth = try makeDepth(device, extent);
         errdefer depth.deinit();
         const depth_view = try vit.TextureView.init(device, .{ .texture = depth, .aspect = .depth });
+        errdefer depth_view.deinit();
+        var meshes = try MeshRenderer.init(device, format, shaderSource);
+        errdefer meshes.deinit();
         return .{
             .geometry = geometry,
             .uniforms = uniforms,
@@ -99,6 +105,7 @@ pub const Preview = struct {
             .pipeline = pipeline,
             .depth = depth,
             .depth_view = depth_view,
+            .meshes = meshes,
         };
     }
 
@@ -114,6 +121,7 @@ pub const Preview = struct {
     }
 
     pub fn deinit(self: *Preview) void {
+        self.meshes.deinit();
         self.depth_view.deinit();
         self.depth.deinit();
         self.pipeline.deinit();
@@ -126,22 +134,18 @@ pub const Preview = struct {
         self.geometry.deinit();
     }
 
-    pub fn draw(self: *Preview, cmd: vit.CommandBuffer, target: vit.TextureView, scene: ui.Rect, clip: ui.Rect, window: ui.Rect, extent: vit.Extent2D, srgb: bool) !void {
+    /// Draw the backdrop and `drawables` (sorted in place) into `scene` of `target`, a window
+    /// `window` big at `extent` pixels, cut to `clip`. Call outside a render pass.
+    pub fn draw(self: *Preview, cmd: vit.CommandBuffer, target: vit.TextureView, scene: ui.Rect, clip: ui.Rect, window: ui.Rect, extent: vit.Extent2D, srgb: bool, drawables: []mesh.Drawable) !void {
         const scissor = previewScissor(scene, clip, window, extent) orelse return;
-        const millis = sdl3.timer.getMillisecondsSinceInit() % 100_000;
-        const t: f32 = @as(f32, @floatFromInt(millis)) * 0.001;
-        const yaw = t * 0.7 + 0.45;
-        const pitch = t * 0.43 + 0.3;
-        const aspect = scene.w / scene.h;
         const transform = SceneUniforms{
-            .rotation = .{ @sin(yaw), @cos(yaw), @sin(pitch), @cos(pitch) },
             .screen = .{
                 2 * (scene.x + scene.w / 2) / window.w - 1,
                 1 - 2 * (scene.y + scene.h / 2) / window.h,
                 scene.w / window.w,
                 scene.h / window.h,
             },
-            .projection = .{ aspect, 1.55 * @min(1, aspect), if (srgb) 1 else 0, 0 },
+            .options = .{ if (srgb) 1 else 0, 0, 0, 0 },
         };
         const bytes = std.mem.asBytes(&transform);
         self.slot = (self.slot + 1) % frames_in_flight;
@@ -167,6 +171,12 @@ pub const Preview = struct {
         cmd.setBindGroup(0, self.groups[self.slot], &.{});
         cmd.setVertexBuffer(0, self.geometry, 0);
         cmd.draw(@intCast(vertex_data.len), 1, 0, 0);
+
+        // The meshes, in a viewport covering just the scene.
+        const px = @as(f32, @floatFromInt(extent.width)) / window.w;
+        const py = @as(f32, @floatFromInt(extent.height)) / window.h;
+        cmd.setViewport(.{ .x = (scene.x - window.x) * px, .y = (scene.y - window.y) * py, .width = scene.w * px, .height = scene.h * py });
+        try self.meshes.draw(cmd, drawables, scene.w / scene.h, srgb);
         cmd.endRenderPass();
     }
 };
@@ -205,32 +215,15 @@ fn previewScissor(scene: ui.Rect, clip: ui.Rect, window: ui.Rect, extent: vit.Ex
     return .{ .x = left, .y = top, .width = right - left, .height = bottom - top };
 }
 
-fn sceneVertices() [42]Vertex {
-    var vertices: [42]Vertex = undefined;
-    const corners = [_][3]f32{
-        .{ -1, -1, 0 }, .{ 1, -1, 0 }, .{ 1, 1, 0 }, .{ -1, 1, 0 },
-    };
-    const backdrop_colors = [_][3]f32{
+/// A gradient across the scene, darker at the bottom, behind everything (at the far plane).
+fn backdropVertices() [6]Vertex {
+    const corners = [_][2]f32{ .{ -1, -1 }, .{ 1, -1 }, .{ 1, 1 }, .{ -1, 1 } };
+    const colors = [_][3]f32{
         .{ 0.016, 0.035, 0.085 }, .{ 0.016, 0.035, 0.085 },
         .{ 0.085, 0.13, 0.21 },   .{ 0.085, 0.13, 0.21 },
     };
-    const triangles = [_]usize{ 0, 1, 2, 0, 2, 3 };
-    for (triangles, 0..) |corner, i| {
-        vertices[i] = .{ .position = corners[corner], .color = backdrop_colors[corner], .kind = 1 };
-    }
-    const faces = .{
-        .{ .corners = [4][3]f32{ .{ -1, -1, -1 }, .{ 1, -1, -1 }, .{ 1, 1, -1 }, .{ -1, 1, -1 } }, .color = [3]f32{ 0.07, 0.78, 0.96 } },
-        .{ .corners = [4][3]f32{ .{ 1, -1, 1 }, .{ -1, -1, 1 }, .{ -1, 1, 1 }, .{ 1, 1, 1 } }, .color = [3]f32{ 0.31, 0.5, 0.96 } },
-        .{ .corners = [4][3]f32{ .{ -1, 1, -1 }, .{ 1, 1, -1 }, .{ 1, 1, 1 }, .{ -1, 1, 1 } }, .color = [3]f32{ 0.94, 0.68, 0.26 } },
-        .{ .corners = [4][3]f32{ .{ -1, -1, 1 }, .{ 1, -1, 1 }, .{ 1, -1, -1 }, .{ -1, -1, -1 } }, .color = [3]f32{ 0.24, 0.55, 0.67 } },
-        .{ .corners = [4][3]f32{ .{ 1, -1, -1 }, .{ 1, -1, 1 }, .{ 1, 1, 1 }, .{ 1, 1, -1 } }, .color = [3]f32{ 0.85, 0.36, 0.64 } },
-        .{ .corners = [4][3]f32{ .{ -1, -1, 1 }, .{ -1, -1, -1 }, .{ -1, 1, -1 }, .{ -1, 1, 1 } }, .color = [3]f32{ 0.44, 0.79, 0.55 } },
-    };
-    inline for (faces, 0..) |face, index| {
-        for (triangles, 0..) |corner, i| {
-            vertices[6 + index * 6 + i] = .{ .position = face.corners[corner], .color = face.color };
-        }
-    }
+    var vertices: [6]Vertex = undefined;
+    for ([_]usize{ 0, 1, 2, 0, 2, 3 }, &vertices) |corner, *vertex| vertex.* = .{ .position = corners[corner], .color = colors[corner] };
     return vertices;
 }
 
@@ -248,5 +241,5 @@ test "preview scissor respects UI clipping, window and fractional pixel scale" {
 test "preview skips an empty viewport without recording commands" {
     var preview: Preview = undefined;
     const empty = ui.Rect{ .x = 0, .y = 0, .w = 0, .h = 0 };
-    try preview.draw(undefined, undefined, empty, empty, empty, .{ .width = 200, .height = 120 }, false);
+    try preview.draw(undefined, undefined, empty, empty, empty, .{ .width = 200, .height = 120 }, false, &.{});
 }

@@ -25,6 +25,9 @@
 //!
 //!     pub const components = .{ Spin, Health };
 //!
+//! Eggy's own components (`builtin_components`: `Transform`, and `Mesh`, which the scene draws)
+//! are listed first in every project, owned by `eggy`.
+//!
 //! A project can turn plugins off (not the game): one that is off doesn't start, and none of its
 //! hooks run, but its preferences and components stay known, so scenes keep their values. The
 //! project's `registry_file` says which are on; the editor writes it and the runtime has it baked
@@ -42,6 +45,9 @@ const Event = @import("vitellus_sdl3").sdl.events.Event;
 const ui = @import("weeoui");
 const preferences = @import("preferences.zig");
 const components = @import("components.zig");
+
+/// The components every project has, before its plugins' own.
+pub const builtin_components = .{ @import("transform.zig").Transform, @import("mesh.zig").Mesh };
 
 /// Where a project lists its plugins, relative to the project: each one's key, whether it is on,
 /// and the preferences it declares.
@@ -104,11 +110,15 @@ pub fn Set(comptime types: anytype, comptime keys: []const [:0]const u8) type {
             break :blk all;
         };
 
-        /// Every component the plugins list (their `components`), in plugin order, each once, and
-        /// what the editor does with them.
+        /// Eggy's built-in components, then every component the plugins list (their
+        /// `components`), in plugin order, each once, and what the editor does with them.
         pub const Components = blk: {
             var listed: []const type = &.{};
             var owners: []const [:0]const u8 = &.{};
+            for (0..builtin_components.len) |i| {
+                listed = listed ++ .{builtin_components[i]};
+                owners = owners ++ .{"eggy"};
+            }
             for (list, keys) |T, key| for (components.listedBy(T)) |C| {
                 if (std.mem.indexOfScalar(type, listed, C) == null) {
                     listed = listed ++ .{C};
@@ -331,6 +341,13 @@ test "plugins' preferences are listed under their keys" {
     try std.testing.expectEqualStrings("volume", manifests[0].fields[0].name);
 }
 
+test "every project has Eggy's own components first" {
+    const infos = Set(.{struct {}}, &.{"game"}).Components.infos;
+    try std.testing.expectEqualStrings("Transform", infos[0].name);
+    try std.testing.expectEqualStrings("Mesh", infos[1].name);
+    try std.testing.expectEqualStrings("eggy", infos[1].owner);
+}
+
 test "plugins' components are listed once each, under the plugin that lists them first" {
     const Spin = struct { speed: f32 = 1 };
     const Health = struct { points: u32 = 100 };
@@ -340,7 +357,7 @@ test "plugins' components are listed once each, under the plugin that lists them
     const Combat = struct {
         pub const components = .{ Health, Spin };
     };
-    const infos = Set(.{ Game, Combat }, &.{ "game", "combat" }).Components.infos;
+    const infos = Set(.{ Game, Combat }, &.{ "game", "combat" }).Components.infos[builtin_components.len..];
     try std.testing.expectEqual(@as(usize, 2), infos.len);
     try std.testing.expectEqualStrings("game", infos[0].owner);
     try std.testing.expectEqualStrings("combat", infos[1].owner);
