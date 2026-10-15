@@ -1443,6 +1443,9 @@ pub fn Editor(comptime project: type) type {
                 const page_ui = self.page(index);
                 const keeps = if (pressed) |chosen| chosen == index and page_ui.last_root != null and hit_test.controlAt(page_ui.last_root.?, at.x, at.y) != 0 else false;
                 if (!keeps) page_ui.focus = 0;
+                // A dropdown open in another page closes too: that page never sees this press,
+                // so it would stay open, taking that page's clicks, until pressed again.
+                if (pressed != index) page_ui.open_popup = 0;
             }
         }
 
