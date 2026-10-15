@@ -7,13 +7,7 @@ const ui = eggy.ui;
 /// The entity whose mesh (of `drawn`) is nearest the camera under `pointer`, seen through `view`
 /// in `scene` (the Scene panel's rect); null over nothing.
 pub fn pick(drawn: []const eggy.mesh.Drawable, view: eggy.camera.View, scene: ui.Rect, pointer: ui.Vec2) ?eggy.ecs.EntityId {
-    // The ray, through the pointer's place on the view.
-    const x = (pointer.x - scene.x) / scene.w * 2 - 1;
-    const y = 1 - (pointer.y - scene.y) / scene.h * 2;
-    const half_height = @tan(view.fov_deg * std.math.rad_per_deg / 2);
-    const right = eggy.camera.normalize(eggy.camera.cross(view.forward, view.up));
-    var direction: [3]f32 = undefined;
-    for (&direction, view.forward, right, view.up) |*part, ahead, across, up| part.* = ahead + across * x * half_height * (scene.w / scene.h) + up * y * half_height;
+    const direction = rayThrough(view, scene, pointer);
 
     var nearest: ?eggy.ecs.EntityId = null;
     var nearest_t = std.math.inf(f32);
@@ -34,6 +28,17 @@ pub fn pick(drawn: []const eggy.mesh.Drawable, view: eggy.camera.View, scene: ui
         }
     }
     return nearest;
+}
+
+/// The direction from the camera through `pointer` on the view in `scene` (not unit length).
+pub fn rayThrough(view: eggy.camera.View, scene: ui.Rect, pointer: ui.Vec2) [3]f32 {
+    const x = (pointer.x - scene.x) / scene.w * 2 - 1;
+    const y = 1 - (pointer.y - scene.y) / scene.h * 2;
+    const half_height = @tan(view.fov_deg * std.math.rad_per_deg / 2);
+    const right = eggy.camera.normalize(eggy.camera.cross(view.forward, view.up));
+    var direction: [3]f32 = undefined;
+    for (&direction, view.forward, right, view.up) |*part, ahead, across, up| part.* = ahead + across * x * half_height * (scene.w / scene.h) + up * y * half_height;
+    return direction;
 }
 
 /// Where the ray first enters the box `half` across each way round the origin, if it does.

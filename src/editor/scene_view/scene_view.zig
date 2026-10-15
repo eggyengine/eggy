@@ -1,8 +1,9 @@
 //! The Scene panel: what it is seen from (its own camera, `scene_camera.zig`, or the game's), the
-//! buttons floating over it (`toolbar.zig`), clicking an entity to select it (`picking.zig`), and
-//! the gizmo that moves, turns and resizes the selected one (`gizmo.zig`), which edits its
-//! `Transform` through the game's library. W, E and R pick Move, Rotate and Scale while the
-//! pointer is over the panel.
+//! toolbar floating over it (`toolbar.zig`), the view's orientation in its corner
+//! (`orientation.zig`), clicking an entity to select it (`picking.zig`), and the gizmo that moves,
+//! turns and resizes the selected one (`gizmo.zig`), which edits its `Transform` through the
+//! game's library. W, E, R and T pick Move, Rotate, Scale and Universal while the pointer is over
+//! the panel; Ctrl turns snapping round while dragging.
 const std = @import("std");
 const eggy = @import("eggy");
 const ui = eggy.ui;
@@ -11,27 +12,38 @@ const sdl3 = eggy.sdl_adapter.sdl;
 const HotGame = @import("../hot_reload/hot_reload.zig").HotGame;
 const gizmo = @import("gizmo.zig");
 const picking = @import("picking.zig");
+const orientation = @import("orientation.zig");
 pub const toolbar = @import("toolbar.zig");
 pub const SceneCamera = @import("scene_camera.zig").SceneCamera;
 
 /// What the dock draws over the Scene panel this frame.
 pub const Overlay = struct {
     tools: toolbar.State = .{},
+    view: eggy.camera.View = .default,
     gizmo: ?gizmo.Layout = null,
     hot: ?gizmo.Handle = null,
-    active: ?gizmo.Handle = null,
+    drag: ?gizmo.Drag = null,
+    hot_end: ?orientation.End = null,
+    pointer: ui.Vec2 = .{ .x = 0, .y = 0 },
+    /// The drag's feedback beside the pointer.
+    feedback: []const u8 = "",
 
     pub const none: Overlay = .{};
 };
 
-/// The Scene panel's floating parts for its node at `scene`: the gizmo, then the buttons.
+/// The Scene panel's floating parts for its node at `scene`: the orientation, the gizmo, then
+/// the toolbar.
 pub fn overlayElements(b: L.Builder, overlay: Overlay, scene: ui.Rect) ![]*L.Element {
     var parts: std.ArrayList(*L.Element) = .empty;
+    const drawn = try b.node(0, .{ .width = scene.w, .height = scene.h, .z_index = 10 }, orientation.paint(b.allocator, overlay.view, scene, overlay.hot_end), &.{});
+    drawn.overlay = .{ .point = .init(scene.x, scene.y) };
+    drawn.accessibility.role = .ignored;
+    try parts.append(b.allocator, drawn);
     if (overlay.gizmo) |layout| {
-        const drawn = try b.node(0, .{ .width = scene.w, .height = scene.h, .z_index = 10 }, gizmo.paint(b.allocator, layout, overlay.hot, overlay.active), &.{});
-        drawn.overlay = .{ .point = .init(scene.x, scene.y) };
-        drawn.accessibility.role = .ignored;
-        try parts.append(b.allocator, drawn);
+        const handles = try b.node(0, .{ .width = scene.w, .height = scene.h, .z_index = 11 }, gizmo.paint(b.allocator, layout, overlay.hot, overlay.drag, overlay.pointer, overlay.feedback), &.{});
+        handles.overlay = .{ .point = .init(scene.x, scene.y) };
+        handles.accessibility.role = .ignored;
+        try parts.append(b.allocator, handles);
     }
     try parts.append(b.allocator, try toolbar.element(b, overlay.tools, scene));
     return parts.items;
@@ -45,53 +57,65 @@ pub const Target = struct {
     selected: *?eggy.ecs.EntityId,
 };
 
-/// `Transform`'s fields, in order.
-const Field = enum(usize) { position, rotation_deg, scale };
-
 pub const SceneView = struct {
     camera: SceneCamera = .{},
     tools: toolbar.State = .{},
     /// The gizmo handle under the pointer, and the one being dragged.
     hot: ?gizmo.Handle = null,
     drag: ?gizmo.Drag = null,
-    /// This frame's view, the meshes drawn (for picking), and the gizmo.
+    hot_end: ?orientation.End = null,
+    /// The toolbar's drag by its grip: where the pointer and the toolbar were when it began.
+    toolbar_drag: ?struct { from: ui.Vec2, offset: ui.Vec2 } = null,
+    /// The pointer's last place over the editor's windows.
+    pointer: ui.Vec2 = .{ .x = 0, .y = 0 },
+    /// This frame's view, the meshes drawn (for picking), the panel's rect, and the gizmo.
     view: eggy.camera.View = .default,
     drawn: []const eggy.mesh.Drawable = &.{},
+    scene: ?ui.Rect = null,
     gizmo: ?gizmo.Layout = null,
+    feedback_buffer: [32]u8 = undefined,
 
     /// What the dock draws over the panel.
-    pub fn overlay(self: *const SceneView) Overlay {
-        return .{ .tools = self.tools, .gizmo = self.gizmo, .hot = self.hot, .active = if (self.drag) |drag| drag.handle else null };
+    pub fn overlay(self: *SceneView) Overlay {
+        const feedback = if (self.drag) |drag| drag.feedback(self.pointer, self.snapping(), &self.feedback_buffer) else "";
+        return .{ .tools = self.tools, .view = self.view, .gizmo = self.gizmo, .hot = self.hot, .drag = self.drag, .hot_end = self.hot_end, .pointer = self.pointer, .feedback = feedback };
     }
 
     /// Before each frame: what the panel at `scene` is seen from, and where the gizmo goes.
     pub fn update(self: *SceneView, target: ?Target, scene: ?ui.Rect) void {
         self.view = self.camera.view();
         self.gizmo = null;
+        self.scene = scene;
         const working = target orelse return;
         if (self.tools.through_game_camera) if (working.game.findCamera(working.app)) |view| {
             self.view = view;
         };
         const area = scene orelse return;
+        self.tools.offset = toolbar.keepInside(self.tools, self.tools.offset, area);
         const entity = working.selected.* orelse return;
         const component = transformIndex(working.game) orelse return;
         if (!working.game.hasComponent(working.app, entity, component)) return;
         const placed = working.game.worldMatrix(working.app, entity) orelse return;
-        self.gizmo = gizmo.layout(self.tools.tool, .{ placed[3][0], placed[3][1], placed[3][2] }, self.view, area);
+        self.gizmo = gizmo.layout(self.tools.tool, self.tools.space, placed, self.view, area);
     }
 
-    /// A button over the panel was pressed.
+    /// A toolbar button was pressed.
     pub fn press(self: *SceneView, button: toolbar.Button) void {
         switch (button) {
+            .grip => self.toolbar_drag = .{ .from = self.pointer, .offset = self.tools.offset },
             .move => self.tools.tool = .move,
             .rotate => self.tools.tool = .rotate,
             .scale => self.tools.tool = .scale,
+            .universal => self.tools.tool = .universal,
+            .space => self.tools.space = if (self.tools.space == .world) .local else .world,
+            .snap => self.tools.snapping = !self.tools.snapping,
             .game_camera => self.tools.through_game_camera = !self.tools.through_game_camera,
+            .fold => self.tools.folded = !self.tools.folded,
         }
     }
 
     /// Before the workspace sees `event`: the camera's drags and wheel over the panel at
-    /// `scene`, and W, E and R over it. Returns whether it was used.
+    /// `scene`, and W, E, R and T over it. Returns whether it was used.
     pub fn handleFirst(self: *SceneView, event: sdl3.events.Event, scene: ?ui.Rect) bool {
         if (self.camera.handle(event, scene)) return true;
         const key_down = switch (event) {
@@ -105,14 +129,15 @@ pub const SceneView = struct {
             .w => .move,
             .e => .rotate,
             .r => .scale,
+            .t => .universal,
             else => return false,
         };
         return true;
     }
 
     /// After the workspace let `event` through: a left press on the panel at `scene` takes a
-    /// gizmo handle or selects what is under it (nothing: no selection); moves drag the handle.
-    /// Returns whether it was used.
+    /// gizmo handle, looks from an orientation bubble's side, or selects what is under it
+    /// (nothing: no selection); moves drag the handle or the toolbar. Returns whether it was used.
     pub fn handlePointer(self: *SceneView, event: sdl3.events.Event, scene: ?ui.Rect, target: Target) bool {
         switch (event) {
             .mouse_button_down => |down| {
@@ -120,8 +145,14 @@ pub const SceneView = struct {
                 const area = scene orelse return false;
                 const at = ui.Vec2{ .x = down.x, .y = down.y };
                 if (!area.contains(at.x, at.y)) return false;
+                if (orientation.hit(self.view, area, at)) |end| {
+                    const turn = orientation.lookFrom(end);
+                    self.camera.yaw_deg = turn.yaw_deg;
+                    self.camera.pitch_deg = turn.pitch_deg;
+                    return true;
+                }
                 if (self.gizmo) |layout| if (gizmo.hit(layout, at)) |handle| {
-                    self.drag = self.startDrag(target, layout, handle, at);
+                    self.drag = startDrag(target, layout, handle, at);
                     return true;
                 };
                 target.selected.* = picking.pick(self.drawn, self.view, area, at);
@@ -129,46 +160,61 @@ pub const SceneView = struct {
             },
             .mouse_motion => |motion| {
                 const at = ui.Vec2{ .x = motion.x, .y = motion.y };
+                self.pointer = at;
+                if (self.toolbar_drag) |moving| {
+                    self.tools.offset = .{ .x = moving.offset.x + at.x - moving.from.x, .y = moving.offset.y + at.y - moving.from.y };
+                    if (self.scene) |area| self.tools.offset = toolbar.keepInside(self.tools, self.tools.offset, area);
+                    return true;
+                }
                 const drag = self.drag orelse {
                     self.hot = if (self.gizmo) |layout| gizmo.hit(layout, at) else null;
+                    self.hot_end = if (scene) |area| orientation.hit(self.view, area, at) else null;
                     return false;
                 };
                 const entity = target.selected.* orelse return true;
                 const component = transformIndex(target.game) orelse return true;
-                const value = drag.valueAt(at);
+                const change = drag.changeAt(at, self.snapping());
                 var text: [160]u8 = undefined;
-                const zon = std.fmt.bufPrintZ(&text, ".{{ {d}, {d}, {d} }}", .{ value[0], value[1], value[2] }) catch return true;
-                _ = target.game.writeField(target.app, entity, component, @intFromEnum(fieldFor(drag.tool)), zon);
+                const zon = std.fmt.bufPrintZ(&text, ".{{ {d}, {d}, {d} }}", .{ change.value[0], change.value[1], change.value[2] }) catch return true;
+                _ = target.game.writeField(target.app, entity, component, @intFromEnum(change.field), zon);
                 return true;
             },
             .mouse_button_up => |up| {
-                if (up.button != .left or self.drag == null) return false;
+                if (up.button != .left or (self.drag == null and self.toolbar_drag == null)) return false;
                 self.drag = null;
+                self.toolbar_drag = null;
                 return true;
             },
             else => return false,
         }
     }
 
-    /// A drag of `handle`, from the selected entity's field as it is now.
-    fn startDrag(self: *const SceneView, target: Target, layout: gizmo.Layout, handle: gizmo.Handle, at: ui.Vec2) ?gizmo.Drag {
-        const entity = target.selected.* orelse return null;
-        const component = transformIndex(target.game) orelse return null;
-        const tool = self.tools.tool;
-        var buffer: [160]u8 = undefined;
-        const text = target.game.readField(target.app, entity, component, @intFromEnum(fieldFor(tool)), &buffer) orelse return null;
-        const start = parseVector(text) orelse {
-            std.log.err("the gizmo can't read the Transform's {t}: {s}", .{ fieldFor(tool), text });
-            return null;
-        };
-        // A move is made in the parent's space: the world's at the top level.
-        var to_local = [4][4]f32{ .{ 1, 0, 0, 0 }, .{ 0, 1, 0, 0 }, .{ 0, 0, 1, 0 }, .{ 0, 0, 0, 1 } };
-        if (target.app.world.getParent(entity)) |parent| if (target.game.worldMatrix(target.app, parent)) |placed| {
-            to_local = eggy.transform.invert(placed) orelse return null;
-        };
-        return .{ .tool = tool, .handle = handle, .from = at, .start = start, .gizmo = layout, .to_local = to_local };
+    /// Whether a drag snaps now: the toolbar's setting, turned round while Ctrl is held.
+    fn snapping(self: *const SceneView) bool {
+        return self.tools.snapping != sdl3.keyboard.getModState().controlDown();
     }
 };
+
+/// A drag of `handle`, from the selected entity's `Transform` as it is now.
+fn startDrag(target: Target, layout: gizmo.Layout, handle: gizmo.Handle, at: ui.Vec2) ?gizmo.Drag {
+    const entity = target.selected.* orelse return null;
+    const component = transformIndex(target.game) orelse return null;
+    var fields: [3][3]f32 = undefined;
+    for (&fields, 0..) |*field, index| {
+        var buffer: [160]u8 = undefined;
+        const text = target.game.readField(target.app, entity, component, index, &buffer) orelse return null;
+        field.* = parseVector(text) orelse {
+            std.log.err("the gizmo can't read the Transform's field {d}: {s}", .{ index, text });
+            return null;
+        };
+    }
+    // Moves and turns about world axes are made in the parent's space: the world's at the top.
+    var to_local = [4][4]f32{ .{ 1, 0, 0, 0 }, .{ 0, 1, 0, 0 }, .{ 0, 0, 1, 0 }, .{ 0, 0, 0, 1 } };
+    if (target.app.world.getParent(entity)) |parent| if (target.game.worldMatrix(target.app, parent)) |placed| {
+        to_local = eggy.transform.invert(placed) orelse return null;
+    };
+    return gizmo.Drag.init(handle, at, layout, .{ .position = fields[0], .rotation_deg = fields[1], .scale = fields[2] }, to_local);
+}
 
 /// Three numbers, `.{ x, y, z }` in ZON; null when `text` isn't that.
 fn parseVector(text: []const u8) ?[3]f32 {
@@ -178,14 +224,6 @@ fn parseVector(text: []const u8) ?[3]f32 {
     var scratch: [16 * 1024]u8 = undefined;
     var fba = std.heap.FixedBufferAllocator.init(&scratch);
     return std.zon.parse.fromSlice([3]f32, fba.allocator(), terminated, null, .{}) catch null;
-}
-
-fn fieldFor(tool: gizmo.Tool) Field {
-    return switch (tool) {
-        .move => .position,
-        .rotate => .rotation_deg,
-        .scale => .scale,
-    };
 }
 
 /// Eggy's `Transform` among the game's component types.
@@ -200,16 +238,22 @@ test {
     _ = gizmo;
     _ = picking;
     _ = toolbar;
+    _ = orientation;
+    _ = @import("rotation.zig");
     _ = @import("scene_camera.zig");
 }
 
-test "the buttons pick the gizmo, and the game camera button turns it on and off" {
+test "the toolbar picks the gizmo and its axes, and folds away" {
     var view = SceneView{};
     view.press(.rotate);
     try std.testing.expectEqual(gizmo.Tool.rotate, view.tools.tool);
+    view.press(.space);
+    try std.testing.expectEqual(gizmo.Space.local, view.tools.space);
     view.press(.game_camera);
     view.press(.game_camera);
     try std.testing.expect(!view.tools.through_game_camera);
+    view.press(.fold);
+    try std.testing.expect(view.tools.folded);
 }
 
 test "a Transform field's ZON, as the game's library writes it, reads back for a drag" {

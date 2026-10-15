@@ -318,7 +318,7 @@ pub const Workspace = struct {
             self.hover_since_ms = self.time_ms;
         }
         if (self.time_ms -| self.hover_since_ms >= tooltip_delay_ms) if (self.tooltipText(hot)) |text| {
-            const button = if (hot == play_button.id) play else if (hot == pause_button.id) pause.? else reload orelse unreachable;
+            const button = if (hot == play_button.id) play else if (hot == pause_button.id) pause.? else if (hot == reload_button.id) reload.? else docked.find(hot) orelse unreachable;
             // Sized to its text: an overlay in this column would otherwise stretch across it.
             const tooltip = try widgets.tooltipAt(b, button, text);
             tooltip.style.width = font.measure(text, 13) + 20;
@@ -359,8 +359,10 @@ pub const Workspace = struct {
         return note;
     }
 
-    /// What the title bar button `id` (play or Reload) does, for its tooltip; null for others.
+    /// What the button `id` (on the title bar, or the Scene panel's toolbar in the main window)
+    /// does, for its tooltip; null for others.
     fn tooltipText(self: *const Workspace, id: u32) ?[]const u8 {
+        if (scene_view.toolbar.buttonOf(id)) |button| return scene_view.toolbar.describe(button, self.scene_overlay.tools);
         if (id == play_button.id) return if (self.playing) "Stop (Esc three times)" else "Play";
         if (id == pause_button.id and self.playing) return if (self.paused) "Resume" else "Pause";
         if (id == reload_button.id) return if (self.build_state == .ready) "Reload (ready)" else "Reload";
