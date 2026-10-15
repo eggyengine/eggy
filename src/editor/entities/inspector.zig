@@ -136,6 +136,11 @@ pub const EntityInspector = struct {
             self.search = null;
             self.shown = details.entity;
         }
+        // Room for every field's text up front: the fields drawn point into `edits`, so it
+        // mustn't grow (and move them) while they are built.
+        var field_count: u32 = 0;
+        for (details.components) |component| field_count += @intCast(component.info.fields.len);
+        self.edits.ensureTotalCapacity(self.gpa, field_count) catch return null;
         var action: ?Action = null;
         var focused: ?u32 = null;
         self.slots.clearRetainingCapacity();
@@ -448,6 +453,28 @@ test "a component with long names and values fits a narrow Inspector" {
         _ = try context.render();
         try ui_checks.expectFits(context.last_root.?, context.font, viewport);
     };
+}
+
+test "an entity with many typed fields keeps every field's text in place while drawn" {
+    var context = try ui.Context.init(std.testing.allocator);
+    defer context.deinit();
+    var inspector = EntityInspector.init(std.testing.allocator);
+    defer inspector.deinit();
+
+    // More typed fields than the edits map starts with room for.
+    var fields: [40]components.Field = undefined;
+    var values: [40]?[]const u8 = undefined;
+    var shown: [40]?[]const u8 = undefined;
+    for (&fields, &values, &shown) |*field, *value, *note| {
+        field.* = .{ .name = "position", .kind = .other, .editable = true };
+        value.* = ".{ 1, 2, 3 }";
+        note.* = null;
+    }
+    const info = components.Info{ .name = "Transform", .owner = "eggy", .fields = &fields, .addable = true };
+    context.newFrame(.{ .x = 0, .y = 0, .w = 400, .h = 4000 });
+    _ = inspector.build(&context, .{ .entity = .init(1, 0), .name = "Box", .components = &.{.{ .index = 0, .info = info, .values = &values, .shown = &shown }}, .addable = &.{} });
+    // Rendering reads every field's text: none may point at memory the map has moved away from.
+    _ = try context.render();
 }
 
 test "the component search lists only the types that match, ignoring case" {
