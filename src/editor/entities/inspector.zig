@@ -38,6 +38,8 @@ pub const Details = struct {
         /// Each reference field's value as people read it (an entity's name, a file's); null for
         /// other fields, and empty when unset.
         shown: []const ?[]const u8 = &.{},
+        /// Whether its plugin is turned off: its values show, but can't be changed.
+        disabled: bool = false,
     };
     pub const Addable = struct { index: usize, label: []const u8 };
 };
@@ -80,8 +82,9 @@ pub const EntityInspector = struct {
     /// The reference slots last built, to match a drop to.
     slots: std.ArrayList(Slot) = .empty,
 
-    /// A reference field's slot: its element, and which field it sets.
-    const Slot = struct { id: u32, component: usize, field: usize, info: components.Field };
+    /// A reference field's slot: its element, and which field it sets. Only indices: the
+    /// fields' descriptions belong to the game's library, which a swap replaces.
+    const Slot = struct { id: u32, component: usize, field: usize };
 
     const name_key = std.math.maxInt(u32);
     const search_key = std.math.maxInt(u32) - 1;
@@ -96,16 +99,20 @@ pub const EntityInspector = struct {
         self.slots.deinit(self.gpa);
     }
 
-    /// The reference field under `at` in last frame's layout, if any.
-    pub fn fieldAt(self: *const EntityInspector, context: *const ui.Context, at: ui.Vec2) ?components.Field {
+    /// The reference field under `at` in last frame's layout, if any, from the game's component
+    /// `types` as they are now.
+    pub fn fieldAt(self: *const EntityInspector, context: *const ui.Context, at: ui.Vec2, types: []const components.Info) ?components.Field {
         const slot = self.slotAt(context, at) orelse return null;
-        return slot.info;
+        if (slot.component >= types.len or slot.field >= types[slot.component].fields.len) return null;
+        return types[slot.component].fields[slot.field];
     }
 
-    /// `dragged` let go at `at`: set the reference field there, if it takes it.
-    pub fn dropAt(self: *const EntityInspector, context: *const ui.Context, at: ui.Vec2, dragged: Dragged, arena: std.mem.Allocator) ?Action {
-        const slot = self.slotAt(context, at) orelse return null;
-        if (!dragged.fits(slot.info)) return null;
+    /// `dragged` let go at `at`: set the reference field there (of the game's component `types`),
+    /// if it takes it.
+    pub fn dropAt(self: *const EntityInspector, context: *const ui.Context, at: ui.Vec2, types: []const components.Info, dragged: Dragged, arena: std.mem.Allocator) ?Action {
+        const field = self.fieldAt(context, at, types) orelse return null;
+        const slot = self.slotAt(context, at).?;
+        if (!dragged.fits(field)) return null;
         var buffer: [512]u8 = undefined;
         const text = dragged.zon(&buffer) catch return null;
         return .{ .set_field = .{ .component = slot.component, .field = slot.field, .text = arena.dupe(u8, text) catch return null } };
@@ -176,7 +183,7 @@ pub const EntityInspector = struct {
             b.node(0, .{ .width = 14, .height = 14 }, .{ .icon = if (folded) .chevron_right else .chevron_down }, &.{}) catch return null,
             b.node(0, .{ .grow = 1, .gap = 1 }, .none, &.{
                 b.node(0, .{}, .{ .text = .{ .value = component.info.name, .size = 14, .wrap = true } }, &.{}) catch return null,
-                b.node(0, .{}, .{ .text = .{ .value = std.fmt.allocPrint(arena, "from {s}", .{component.info.owner}) catch "", .size = 11, .tone = .muted, .wrap = true } }, &.{}) catch return null,
+                b.node(0, .{}, .{ .text = .{ .value = std.fmt.allocPrint(arena, "{s}from {s}", .{ if (component.disabled) "Disabled: its plugin is off · " else "", component.info.owner }) catch "", .size = 11, .tone = .muted, .wrap = true } }, &.{}) catch return null,
             }) catch return null,
         }) catch return null;
         header.cursor = .pointer;
@@ -188,12 +195,31 @@ pub const EntityInspector = struct {
 
         if (!folded) for (component.info.fields, component.values, 0..) |field, value, index| {
             const shown = if (index < component.shown.len) component.shown[index] else null;
-            if (self.fieldRow(context, component.index, field, value orelse "", shown, index, field_control, dragging, focused)) |field_action| action = field_action;
+            if (component.disabled) {
+                readOnlyRow(context, field, shown orelse value orelse "", field_control);
+            } else if (self.fieldRow(context, component.index, field, value orelse "", shown, index, field_control, dragging, focused)) |field_action| action = field_action;
         };
 
         context.end();
         restyle(context, .{ .gap = 8, .padding = .{ .left = 12, .right = 12, .top = 10, .bottom = 10 } });
         return action;
+    }
+
+    /// A field of a disabled component: its name, and its value as text, not to be changed.
+    fn readOnlyRow(context: *ui.Context, field: components.Field, value: []const u8, field_control: f32) void {
+        const arena = context.builder().allocator;
+        context.begin(.row);
+        context.text(displayName(arena, field.name));
+        page_style.smallText(context, 13);
+        restyle(context, .{ .grow = 1 });
+        context.begin(.column);
+        context.muted(if (value.len > 0) value else "None");
+        page_style.noteText(context);
+        if (context.last_added) |text| text.paint_kind.text.wrap = true;
+        context.end();
+        restyle(context, .{ .width = field_control, .align_items = .end });
+        context.end();
+        restyle(context, .{ .direction = .row, .gap = 10, .align_items = .center });
     }
 
     /// One field: its name on the left (wrapping if need be), its control on the right.
@@ -257,7 +283,7 @@ pub const EntityInspector = struct {
         const b = context.builder();
         const arena = b.allocator;
         const id = context.idFor(std.fmt.allocPrint(arena, "##slot {d}.{d}", .{ component, index }) catch return null);
-        self.slots.append(self.gpa, .{ .id = id, .component = component, .field = index, .info = field }) catch {};
+        self.slots.append(self.gpa, .{ .id = id, .component = component, .field = index }) catch {};
         var action: ?Action = null;
 
         const empty = shown.len == 0;

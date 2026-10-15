@@ -111,3 +111,5 @@ zig build run
 ```
 
 despite being potentially controversial, agents are welcome to contribute however you cannot make **slop** commits. They must be reviewed as though I can ask you in person what the PR does without looking at the code. 
+
+I personally use agents to help me work on this, and personally review through everything. 

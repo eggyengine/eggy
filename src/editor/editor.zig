@@ -65,6 +65,8 @@ pub fn Editor(comptime project: type) type {
         save_prompt: ?*save_prompt_zig.SavePrompt = null,
         leaving: Leaving = .quit,
         leave_approved: bool = false,
+        /// The Play mode warning's text (see `playWarning`).
+        play_warning_buffer: [192]u8 = undefined,
         /// When the open scene last saved itself (see `autosave`).
         autosaved_ms: u64 = 0,
         layout_checked_ms: u64 = 0,
@@ -335,8 +337,6 @@ pub fn Editor(comptime project: type) type {
             self.ui.theme.small_text_size = 11;
             self.workspace.engine_label = self.upgrades.label;
             self.workspace.scene_name = if (self.open_scene) |*scene| scene.name() else null;
-            // Whether there are changes to save, looked at a few times a second (not while
-            // playing: Stop puts the scene back).
             // A few times a second (not while playing: Stop puts the scene back), compare the world
             // with the saved scene, for the status bar's `*`, and with the last undo step.
             if (self.workspace.time_ms -| self.unsaved_checked_ms >= 300 and !self.play_mode.playing()) {
@@ -346,6 +346,7 @@ pub fn Editor(comptime project: type) type {
                     self.workspace.scene_unsaved = if (self.open_scene) |*scene| scene.unsavedHash(hash, &self.app.world) else false;
                     self.history.watch(text, self.workspace.time_ms, self.typing());
                 }
+                self.workspace.play_warning = self.playWarning();
             }
             self.workspace.can_upgrade = self.upgrades.can_upgrade;
             self.workspace.can_link = self.upgrades.can_link;
@@ -554,8 +555,36 @@ pub fn Editor(comptime project: type) type {
             try job.launchEditor(&.{ window_placement.flag, try placement.format(&buffer) });
         }
 
+        /// Why the game can't be played, if it can't: the scene holds components of plugins that
+        /// are turned off, whose code isn't there to run them. Text in `play_warning_buffer`.
+        fn playWarning(self: *Self) ?[]const u8 {
+            const game = if (self.game) |*loaded| loaded else return null;
+            const off = self.plugin_switches.off();
+            if (off.len == 0) return null;
+            var count: usize = 0;
+            var plugin: []const u8 = "";
+            for (self.app.world.slots.items, 0..) |slot, index| {
+                if (!slot.alive) continue;
+                const entity = eggy.ecs.EntityId.init(@intCast(index), slot.generation);
+                for (game.component_types, 0..) |info, component| {
+                    if (!entities.isOff(off, info.owner) or !game.hasComponent(&self.app, entity, component)) continue;
+                    count += 1;
+                    plugin = info.owner;
+                    break;
+                }
+            }
+            if (count == 0) return null;
+            return std.fmt.bufPrint(&self.play_warning_buffer, "Play mode warning: {d} entit{s} use{s} components of {s}, which is turned off. Turn it on, or remove them, to play.", .{ count, if (count == 1) "y" else "ies", if (count == 1) "s" else "", plugin }) catch "Play mode warning: the scene uses a turned-off plugin";
+        }
+
         /// Play: keep the scene, then run the game.
         fn startPlaying(self: *Self) void {
+            // Not with components whose plugin is off: their code isn't there to run them.
+            if (self.playWarning()) |warning| {
+                self.workspace.playing = false;
+                self.workspace.toast("Can't play: see the status bar");
+                return std.log.warn("{s}", .{warning});
+            }
             const game = if (self.game) |*loaded| loaded else {
                 self.workspace.playing = false;
                 return std.log.err("play: the game's library isn't loaded", .{});
@@ -1319,7 +1348,7 @@ pub fn Editor(comptime project: type) type {
             };
             switch (index) {
                 panels.hierarchy_page => if (self.entity_editor.hierarchy.dragLabel(arena)) |label| return label,
-                panels.inspector_page => if (self.entity_editor.inspector.fieldAt(&self.ui, self.ui.pointer)) |field| if (!dragged.fits(field)) {
+                panels.inspector_page => if (self.entity_editor.inspector.fieldAt(&self.ui, self.ui.pointer, if (self.game) |*game| game.component_types else &.{})) |field| if (!dragged.fits(field)) {
                     return switch (field.kind) {
                         .entity => if (field.requires.len > 0) std.fmt.allocPrint(arena, "Needs an entity with {s}", .{field.requires}) catch name else "Takes an entity",
                         else => if (field.accepts == .any) "Takes a file" else std.fmt.allocPrint(arena, "Takes a {s} file", .{@tagName(field.accepts)}) catch name,
@@ -1499,7 +1528,7 @@ pub fn Editor(comptime project: type) type {
         /// The Inspector panel: the entity selected in the Hierarchy, else the project's name and
         /// whatever the game and plugins add.
         fn buildInspector(self: *Self) void {
-            if (self.entity_editor.buildInspector(&self.ui, &self.app, self.gamePtr(), self.dragging(self.ui.builder().allocator))) return;
+            if (self.entity_editor.buildInspector(&self.ui, &self.app, self.gamePtr(), self.dragging(self.ui.builder().allocator), self.plugin_switches.off())) return;
             self.ui.heading(3, project.name);
             if (self.game) |*game| game.editorUi(&self.ui) else self.ui.muted("The game's library didn't load: see the Console.");
             self.ui.muted("Select an entity in the Hierarchy to see its components.");

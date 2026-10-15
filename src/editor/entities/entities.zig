@@ -70,7 +70,7 @@ pub const EntityEditor = struct {
         const loaded = game orelse return false;
         var buffer: [1024]u8 = undefined;
         var fba = std.heap.FixedBufferAllocator.init(&buffer);
-        const action = self.inspector.dropAt(context, at, dragging, fba.allocator()) orelse return false;
+        const action = self.inspector.dropAt(context, at, loaded.component_types, dragging, fba.allocator()) orelse return false;
         var text_buffer: [600]u8 = undefined;
         const text = std.fmt.bufPrintZ(&text_buffer, "{s}", .{action.set_field.text}) catch return false;
         return loaded.writeField(app, entity, action.set_field.component, action.set_field.field, text);
@@ -79,7 +79,8 @@ pub const EntityEditor = struct {
     /// Draw the selected entity into the Inspector page `context`, and carry out what it asks;
     /// its reference fields light up for `dragging`. Returns false, drawing nothing, when no
     /// entity is selected.
-    pub fn buildInspector(self: *EntityEditor, context: *ui.Context, app: *eggy.App, game: ?*const HotGame, dragging: ?Dragged) bool {
+    /// Components of the plugins keyed in `off` show as disabled, and can't be added.
+    pub fn buildInspector(self: *EntityEditor, context: *ui.Context, app: *eggy.App, game: ?*const HotGame, dragging: ?Dragged, off: []const []const u8) bool {
         self.forgetDead(app);
         const entity = self.selected orelse return false;
         const arena = context.builder().allocator;
@@ -88,7 +89,7 @@ pub const EntityEditor = struct {
             context.muted("The game's library didn't load, so this entity's components can't be shown.");
             return true;
         };
-        var details = collectDetails(arena, app, loaded, entity) catch return true;
+        var details = collectDetails(arena, app, loaded, entity, off) catch return true;
         details.dragging = dragging;
         if (self.inspector.build(context, details)) |action| switch (action) {
             .rename => |name| loaded.writeName(app, entity, name),
@@ -198,15 +199,17 @@ pub const EntityEditor = struct {
     }
 };
 
-/// What the Inspector shows of `entity`, read through `game`, in `arena`.
-fn collectDetails(arena: std.mem.Allocator, app: *eggy.App, game: *const HotGame, entity: ecs.EntityId) !inspector_zig.Details {
+/// What the Inspector shows of `entity`, read through `game`, in `arena`. Components of the
+/// plugins keyed in `off` are disabled, and not offered to add.
+fn collectDetails(arena: std.mem.Allocator, app: *eggy.App, game: *const HotGame, entity: ecs.EntityId, off: []const []const u8) !inspector_zig.Details {
     var name_buffer: [eggy.Name.max_len]u8 = undefined;
     const name = if (game.readName(app, entity, &name_buffer)) |text| try arena.dupe(u8, text) else "";
     var list: std.ArrayList(inspector_zig.Details.Component) = .empty;
     var addable: std.ArrayList(inspector_zig.Details.Addable) = .empty;
     for (game.component_types, 0..) |info, index| {
+        const disabled = isOff(off, info.owner);
         if (!game.hasComponent(app, entity, index)) {
-            if (info.addable) try addable.append(arena, .{ .index = index, .label = try std.fmt.allocPrint(arena, "{s} ({s})", .{ info.name, info.owner }) });
+            if (info.addable and !disabled) try addable.append(arena, .{ .index = index, .label = try std.fmt.allocPrint(arena, "{s} ({s})", .{ info.name, info.owner }) });
             continue;
         }
         const values = try arena.alloc(?[]const u8, info.fields.len);
@@ -216,9 +219,15 @@ fn collectDetails(arena: std.mem.Allocator, app: *eggy.App, game: *const HotGame
             value.* = if (game.readField(app, entity, index, field, &buffer)) |text| try arena.dupe(u8, text) else null;
             label.* = try referenceLabel(arena, app, game, field_info.kind, value.* orelse "");
         }
-        try list.append(arena, .{ .index = index, .info = info, .values = values, .shown = shown });
+        try list.append(arena, .{ .index = index, .info = info, .values = values, .shown = shown, .disabled = disabled });
     }
     return .{ .entity = entity, .name = name, .components = list.items, .addable = addable.items };
+}
+
+/// Whether plugin `owner` is among those keyed in `off`.
+pub fn isOff(off: []const []const u8, owner: []const u8) bool {
+    for (off) |key| if (std.mem.eql(u8, key, owner)) return true;
+    return false;
 }
 
 /// A reference field's value (`zon`) as people read it: the entity's name, or the file's;

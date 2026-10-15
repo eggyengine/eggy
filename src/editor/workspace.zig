@@ -79,6 +79,16 @@ pub const BuildState = union(enum) {
     ready,
 };
 
+/// A warning in the status bar: red text, cut short where it doesn't fit.
+const WarningText = struct {
+    text: []const u8,
+
+    fn draw(context: *const anyopaque, c: *ui.Canvas, r: ui.Rect) anyerror!void {
+        const self: *const WarningText = @ptrCast(@alignCast(context));
+        try c.textIn(r, self.text, 12, c.theme.destructive, .start);
+    }
+};
+
 /// How long the Playing light stays on, then off.
 const playing_blink_ms = 600;
 
@@ -119,6 +129,8 @@ pub const Workspace = struct {
     window_state: titlebar.State = .{},
     /// Whether the game is playing, which turns the play button into a stop button.
     playing: bool = false,
+    /// Why Play won't start, shown in the status bar while it won't (borrowed for the frame).
+    play_warning: ?[]const u8 = null,
     /// The project open in this editor, shown in the status bar; its text belongs to the editor.
     project: ?Project = null,
     /// Help > DevTools' tools while open, for their highlight over the main window.
@@ -364,6 +376,15 @@ pub const Workspace = struct {
             .building => |detail| try children.append(b.allocator, try text(b, try std.fmt.allocPrint(b.allocator, "Building: {s}", .{detail}), .muted)),
             .failed => try children.append(b.allocator, try text(b, "Build failed: see the Console", .foreground)),
             .ready => try children.append(b.allocator, try text(b, "Rebuilt", .foreground)),
+        }
+        // Why Play won't start, in red, while it won't.
+        if (self.play_warning) |warning| {
+            const look = try b.allocator.create(WarningText);
+            look.* = .{ .text = warning };
+            const room = @min(font.measure(warning, 12), width * 0.45);
+            const shown = try b.node(0, .{ .width = room, .height = status_height }, .{ .custom = .{ .context = look, .draw = WarningText.draw } }, &.{});
+            shown.accessibility = .{ .role = .status, .label = warning };
+            try children.append(b.allocator, shown);
         }
         if (self.playing) {
             // Red, with a dot that blinks like a camera's recording light.
