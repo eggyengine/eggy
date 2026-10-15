@@ -94,18 +94,18 @@ pub const EntityInspector = struct {
         context.muted(std.fmt.allocPrint(arena, "Entity {d} · {d} component{s}", .{ details.entity.id, details.components.len, if (details.components.len == 1) "" else "s" }) catch "");
         page_style.smallText(context, 12);
 
+        // Adding a component comes first, above the ones it has.
+        const width = context.contentWidth();
+        if (addComponentPicker(context, details.addable, width)) |index| action = .{ .add_component = index };
         if (details.components.len == 0) {
             context.muted("No components yet.");
             page_style.smallText(context, 13);
         }
-        const width = @max(0, context.viewport.w - 32);
         const field_control = std.math.clamp(width * 0.45, min_control_width, control_width);
         for (details.components) |component| if (self.componentCard(context, component, field_control, &focused)) |card_action| {
             action = card_action;
         };
         self.focused = focused;
-
-        if (addComponentPicker(context, details.addable, width)) |index| action = .{ .add_component = index };
         return action;
     }
 

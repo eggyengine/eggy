@@ -46,8 +46,7 @@ pub const TerminalView = struct {
     /// Show `output` in a `height` tall view on `context`'s page.
     pub fn add(self: *TerminalView, context: *ui.Context, output: []const u8, height: f32) void {
         self.setText(output) catch return;
-        // The page's own padding is 16 on each side.
-        const width = @max(0, context.viewport.w - 32);
+        const width = context.contentWidth();
         const element = context.builder().node(0, .{ .width = width, .height = height }, .{ .custom = .{ .context = self, .draw = draw } }, &.{}) catch return;
         element.accessibility.label = "Output";
         element.cursor = .text;

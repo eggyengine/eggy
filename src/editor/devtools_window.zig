@@ -102,8 +102,8 @@ pub const DevtoolsWindow = struct {
             pub fn build(p: *@This(), context: *ui.Context) void {
                 const tools_window = p.window;
                 _ = context.tabs(&tool_labels, &tools_window.tab);
-                // The page's padding is 16 each side; the tabs take the top.
-                const area = ui.Rect{ .x = 0, .y = 0, .w = @max(0, context.viewport.w - 32), .h = @max(0, context.viewport.h - 76) };
+                // The tabs take the top.
+                const area = ui.Rect{ .x = 0, .y = 0, .w = context.contentWidth(), .h = @max(0, context.viewport.h - 2 * context.pagePadding() - 40) };
                 const view = tools_window.tools.view(context.builder(), tools_window.gpa, tools_shown[tools_window.tab], area) catch return;
                 context.element(view);
             }

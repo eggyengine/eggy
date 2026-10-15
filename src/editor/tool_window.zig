@@ -18,7 +18,9 @@ pub const ToolWindow = struct {
     pub fn open(gpa: std.mem.Allocator, graphics: *const eggy.Graphics, font: *ui.Font, title: [:0]const u8, size: [2]f32, flags: sdl3.video.Window.Flags) !ToolWindow {
         const popout = try PopOut.open(graphics, font, title, size, flags);
         icon.apply(popout.window.window);
-        return .{ .popout = popout, .ui = ui.Context.initWithFont(gpa, font) };
+        var context = ui.Context.initWithFont(gpa, font);
+        context.density = .compact;
+        return .{ .popout = popout, .ui = context };
     }
 
     pub fn close(self: *ToolWindow, graphics: *eggy.Graphics) void {

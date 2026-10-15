@@ -214,7 +214,7 @@ pub const Hierarchy = struct {
         var deepest: usize = 0;
         for (rows) |row| deepest = @max(deepest, row.depth);
         if (deepest == 0) return indent;
-        const room = @max(0, context.viewport.w - 32) / 3;
+        const room = context.contentWidth() / 3;
         return @min(indent, room / @as(f32, @floatFromInt(deepest)));
     }
 
@@ -242,7 +242,7 @@ pub const Hierarchy = struct {
         };
 
         // The name comes first; the components fill what room is left.
-        const width = @max(0, context.viewport.w - 32);
+        const width = context.contentWidth();
         const text_left = left + 8;
         const name = page_style.fitText(arena, context.font, if (row.name.len > 0) row.name else (std.fmt.allocPrint(arena, "Entity {d}", .{row.entity.id}) catch "Entity"), name_size, width - text_left - 8);
         const room = width - text_left - context.font.measure(name, name_size) - 20;
@@ -367,7 +367,8 @@ pub const Hierarchy = struct {
         return false;
     }
 
-    fn nameOf(self: *const Hierarchy, entity: ecs.EntityId) []const u8 {
+    /// `entity`'s name as last shown; empty when it has none.
+    pub fn nameOf(self: *const Hierarchy, entity: ecs.EntityId) []const u8 {
         for (self.rows.items) |row| if (row.entity.eql(entity)) return row.name;
         return "";
     }

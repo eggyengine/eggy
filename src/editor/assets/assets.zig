@@ -156,7 +156,7 @@ pub const AssetsPanel = struct {
         const arena = b.allocator;
         const id = item_id_base + @as(u32, @intCast(index));
         const left = indent * @as(f32, @floatFromInt(item.depth));
-        const width = @max(0, context.viewport.w - 32);
+        const width = context.contentWidth();
         const is_open = if (open_scene) |path| std.mem.eql(u8, path, item.entry.path) else false;
         const note: []const u8 = if (is_open) "open" else if (searching) listing.parentOf(item.entry.path) else "";
         // What the row leaves the name: its padding, the chevron, the icon, three gaps, the note.

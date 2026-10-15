@@ -70,6 +70,12 @@ pub const EntityEditor = struct {
         return result.used;
     }
 
+    /// Rename the selected entity in the Hierarchy (F2).
+    pub fn renameSelected(self: *EntityEditor) void {
+        const entity = self.selected orelse return;
+        self.hierarchy.startRename(entity, self.hierarchy.nameOf(entity));
+    }
+
     /// A key while the Hierarchy page has the keyboard. Returns whether it was used.
     pub fn hierarchyKey(self: *EntityEditor, app: *eggy.App, game: ?*const HotGame, key: @FieldType(ui.input.Event, "key_down")) bool {
         const result = self.hierarchy.key(key, self.selected);

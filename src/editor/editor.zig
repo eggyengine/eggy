@@ -114,6 +114,8 @@ pub fn Editor(comptime project: type) type {
         upgrades: Upgrades,
         /// When the main title bar was last pressed, to spot a double-click; see `titlebarPressed`.
         titlebar_press_ns: u64 = 0,
+        /// The window SDL is sending typed text to (see `syncTextInput`), by slot; null when none.
+        text_input_slot: ?Slot = null,
         /// When a double-click on the title bar asked to maximize or restore, until that is done.
         maximize_pending_ns: ?u64 = null,
 
@@ -131,6 +133,8 @@ pub fn Editor(comptime project: type) type {
             if (window_placement.fromArgs(args)) |placement| placement.apply(app.window.window) else app.window.window.maximize() catch |err| std.log.warn("cannot maximize the editor: {t}", .{err});
             icon.apply(app.window.window);
             var context = try ui.Context.init(gpa);
+            // The editor's pages and windows are a tool's: compact, with small text.
+            context.density = .compact;
             errdefer context.deinit();
             context.srgb_target = weeoui_vitellus.isSrgb(app.graphics.color_format);
             context.theme = weeoui_sdl3.systemTheme();
@@ -271,6 +275,8 @@ pub fn Editor(comptime project: type) type {
                 .light => .{},
                 .dark => ui.Theme.dark,
             };
+            self.ui.theme.text_size = 12;
+            self.ui.theme.small_text_size = 11;
             self.workspace.engine_label = self.upgrades.label;
             self.workspace.scene_name = if (self.open_scene) |*scene| scene.name() else null;
             self.workspace.can_upgrade = self.upgrades.can_upgrade;
@@ -297,6 +303,7 @@ pub fn Editor(comptime project: type) type {
                 const placed = self.workspace.placed.pages[index] orelse continue;
                 const page_ui = self.page(index);
                 page_ui.theme = self.ui.theme;
+                page_ui.density = .compact;
                 page_ui.pixel_scale = self.ui.pixel_scale;
                 page_ui.srgb_target = self.ui.srgb_target;
                 page_ui.newFrame(placed.rect);
@@ -310,6 +317,7 @@ pub fn Editor(comptime project: type) type {
                 }
                 vertices.* = try page_ui.render();
             }
+            self.syncTextInput();
 
             // Draw each window.
             try self.present(main_slot, &self.app.graphics.surface, &self.overlay, viewport, pages);
@@ -524,6 +532,12 @@ pub fn Editor(comptime project: type) type {
                 };
             }
             const slot = self.slotOf(curr_event);
+
+            // F2 renames the entity selected in the Hierarchy (Weeoui's keys don't include it).
+            if (curr_event == .key_down and self.focused_page == panels.hierarchy_page) if (curr_event.key_down.key) |key| if (key == .func2) {
+                self.entity_editor.renameSelected();
+                return .run;
+            };
 
             // A pop-out window's close button docks its panels back into the main window.
             if (slot != main_slot and curr_event == .window_close_requested) {
@@ -890,6 +904,27 @@ pub fn Editor(comptime project: type) type {
                 }
                 if (index == panels.inspector_page) weeoui_sdl3.handleEvent(&self.ui, curr_event) else self.page(index).handle(input);
             }
+        }
+
+        /// Have SDL send typed text to the window whose page has a text field focused, and only
+        /// then: it is what a text field types with, and the on-screen keyboard follows it.
+        fn syncTextInput(self: *Self) void {
+            var wanted: ?Slot = null;
+            for (0..self.pageCount()) |index| {
+                const placed = self.workspace.placed.pages[index] orelse continue;
+                if (self.page(index).wants_text) wanted = placed.slot;
+            }
+            if (std.meta.eql(wanted, self.text_input_slot)) return;
+            if (self.text_input_slot) |slot| if (self.windowOf(slot)) |window| sdl3.keyboard.stopTextInput(window) catch {};
+            if (wanted) |slot| if (self.windowOf(slot)) |window| sdl3.keyboard.startTextInput(window) catch {};
+            self.text_input_slot = wanted;
+        }
+
+        /// The OS window for `slot`, if it is open.
+        fn windowOf(self: *Self, slot: Slot) ?sdl3.video.Window {
+            if (slot == main_slot) return self.app.window.window;
+            const popout = self.popouts[slot - 1] orelse return null;
+            return popout.window.window;
         }
 
         /// The game's library, if loaded.
