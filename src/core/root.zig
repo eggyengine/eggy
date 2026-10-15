@@ -17,6 +17,8 @@ pub const plugins = @import("plugins.zig");
 pub const project = @import("project.zig");
 pub const preferences = @import("preferences.zig");
 pub const components = @import("components.zig");
+pub const scene = @import("scene.zig");
+pub const Name = @import("name.zig").Name;
 pub const ui = @import("weeoui");
 pub const Event = sdl_adapter.sdl.events.Event;
 
@@ -27,5 +29,7 @@ test {
     _ = @import("project.zig");
     _ = @import("preferences.zig");
     _ = @import("components.zig");
+    _ = @import("scene.zig");
+    _ = @import("name.zig");
     _ = @import("weeoui");
 }

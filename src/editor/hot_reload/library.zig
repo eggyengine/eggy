@@ -79,7 +79,12 @@ const game = api.Game{
     .remove_component = removeComponent,
     .read_field = readField,
     .write_field = writeField,
+    .read_name = readName,
+    .write_name = writeName,
 };
+
+/// Names go through the same code the runtime uses (`eggy.scene.registryAccess`).
+const access = eggy.scene.registryAccess(Plugins.Components);
 
 export fn eggy_game() callconv(.c) *const api.Game {
     return &game;
@@ -89,13 +94,39 @@ fn start(editor: *const api.Host, gpa_ptr: *const anyopaque, app_ptr: *anyopaque
     host = editor;
     const gpa: *const std.mem.Allocator = @ptrCast(@alignCast(gpa_ptr));
     const state = gpa.create(State) catch return null;
-    const plugins = Plugins.init(gpa.*, appOf(app_ptr)) catch |err| {
+    const app = appOf(app_ptr);
+    const plugins = Plugins.init(gpa.*, app) catch |err| {
         std.log.err("the game failed to start: {t}", .{err});
         gpa.destroy(state);
         return null;
     };
     state.* = .{ .gpa = gpa.*, .plugins = plugins };
+    failures = @splat(null);
+    // The world's Init stages, for the schedules the plugins just registered.
+    app.startWorld() catch |err| report(.world_start, err);
     return state;
+}
+
+/// What can fail each frame, and the error each last failed with: one failing every frame is
+/// logged once, and again only when it fails differently or after it recovers.
+const Hook = enum { update, event, world_start, world_update };
+var failures: [std.meta.fields(Hook).len]?anyerror = @splat(null);
+
+fn report(hook: Hook, err: anyerror) void {
+    const last = &failures[@intFromEnum(hook)];
+    if (last.*) |previous| if (previous == err) return;
+    last.* = err;
+    const what = switch (hook) {
+        .update => "an update hook",
+        .event => "an event hook",
+        .world_start => "a system in the world's Init stages",
+        .world_update => "a system in the world's Update stages",
+    };
+    std.log.err("{s} failed: {t}. The game keeps running; this is logged again only if it fails differently.", .{ what, err });
+}
+
+fn recovered(hook: Hook) void {
+    failures[@intFromEnum(hook)] = null;
 }
 
 fn stop(state_ptr: *anyopaque) callconv(.c) void {
@@ -105,19 +136,27 @@ fn stop(state_ptr: *anyopaque) callconv(.c) void {
 }
 
 fn update(state_ptr: *anyopaque, app_ptr: *anyopaque) callconv(.c) bool {
-    stateOf(state_ptr).plugins.update(appOf(app_ptr)) catch |err| {
-        std.log.err("the game's update failed: {t}", .{err});
-        return false;
-    };
-    return true;
+    const app = appOf(app_ptr);
+    var ok = true;
+    if (stateOf(state_ptr).plugins.update(app)) recovered(.update) else |err| {
+        report(.update, err);
+        ok = false;
+    }
+    // The world's systems run here, where their errors have their names.
+    if (app.updateWorld()) recovered(.world_update) else |err| {
+        report(.world_update, err);
+        ok = false;
+    }
+    return ok;
 }
 
 fn event(state_ptr: *anyopaque, app_ptr: *anyopaque, event_ptr: *const anyopaque) callconv(.c) bool {
     const curr_event: *const eggy.Event = @ptrCast(@alignCast(event_ptr));
     stateOf(state_ptr).plugins.event(appOf(app_ptr), curr_event.*) catch |err| {
-        std.log.err("the game's event hook failed: {t}", .{err});
+        report(.event, err);
         return false;
     };
+    recovered(.event);
     return true;
 }
 
@@ -157,6 +196,15 @@ fn readField(world: *anyopaque, entity: api.Entity, component: usize, field: usi
 fn writeField(world: *anyopaque, entity: api.Entity, component: usize, field: usize, text: [*:0]const u8) callconv(.c) bool {
     Plugins.Components.setField(worldOf(world), entityOf(entity), component, field, std.mem.span(text)) catch return false;
     return true;
+}
+
+fn readName(world: *anyopaque, entity: api.Entity, buffer: [*]u8, capacity: usize) callconv(.c) isize {
+    const name = access.name(worldOf(world), entityOf(entity), buffer[0..capacity]) orelse return -1;
+    return @intCast(name.len);
+}
+
+fn writeName(world: *anyopaque, entity: api.Entity, text: [*]const u8, len: usize) callconv(.c) void {
+    access.setName(worldOf(world), entityOf(entity), text[0..len]);
 }
 
 fn worldOf(ptr: *anyopaque) *eggy.ecs.World {

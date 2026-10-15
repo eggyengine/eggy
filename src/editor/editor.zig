@@ -29,6 +29,7 @@ const ProjectFlow = @import("projects/flow.zig").ProjectFlow;
 const HotGame = @import("hot_reload/hot_reload.zig").HotGame;
 const preferences = @import("preferences/preferences.zig");
 const entities = @import("entities/entities.zig");
+const scene_file = @import("scene_file.zig");
 
 /// The editor for `project`, which declares `name` and `game_library` (the game library's
 /// `file_name`, beside the editor). The game and its plugins run as they do in the runtime,
@@ -52,11 +53,10 @@ pub fn Editor(comptime project: type) type {
         mono: *ui.Font,
         /// The Console panel's UI and state, drawing with `ui`'s font.
         console_ui: ui.Context,
-        /// The Hierarchy panel's UI, drawing with `ui`'s font, and the entity selected there,
-        /// whose components the Inspector shows.
+        /// The Hierarchy panel's UI, drawing with `ui`'s font.
         hierarchy_ui: ui.Context,
-        selected_entity: ?eggy.ecs.EntityId = null,
-        entity_inspector: entities.EntityInspector,
+        /// The Hierarchy's and the Inspector's entity views, and the entity selected.
+        entity_editor: entities.EntityEditor,
         console: Console,
         /// A UI of its own for each plugin panel there can be, drawing with `ui`'s font.
         plugin_pages: [panels.max_pages - panels.first_plugin_page]ui.Context,
@@ -166,7 +166,7 @@ pub fn Editor(comptime project: type) type {
             // The game, from its library beside the editor.
             const library_path = try libraryPath(gpa);
             defer gpa.free(library_path);
-            var game: ?HotGame = HotGame.load(gpa, library_path, &app) catch |err| blk: {
+            var game: ?HotGame = HotGame.load(gpa, library_path) catch |err| blk: {
                 std.log.err("cannot load the game from {s}: {t}", .{ library_path, err });
                 break :blk null;
             };
@@ -175,9 +175,13 @@ pub fn Editor(comptime project: type) type {
                 workspace.setPluginPanels(loaded.panels);
                 preferences.writeRegistry(gpa, preference_folders, loaded.preference_manifests) catch |err| std.log.warn("cannot update .eggy/plugins.zon: {t}", .{err});
             }
-            app.startWorld() catch if (game) |*loaded| loaded.pause(&app);
+            // The project's scene first, so the game's plugins start among its entities.
+            if (game) |*loaded| {
+                if (opened_project) |opened| scene_file.load(gpa, opened.dir, &app.world, loaded.sceneAccess());
+                loaded.start(&app);
+            }
             const upgrades = Upgrades.init(gpa, if (opened_project) |opened| opened.dir else null, @import("build_options").source_dir);
-            var self = Self{ .gpa = gpa, .game = game, .game_modified = modifiedAt(library_path), .app = app, .ui = context, .mono = mono, .console_ui = console_ui, .hierarchy_ui = hierarchy_ui, .entity_inspector = .init(gpa), .console = console, .plugin_pages = plugin_pages, .workspace = workspace, .frame = frame, .scene = scene, .overlay = overlay, .project = opened_project, .editor_modified = if (opened_project) |opened| editorModified(gpa, opened) else null, .upgrades = upgrades, .preference_folders = preference_folders };
+            var self = Self{ .gpa = gpa, .game = game, .game_modified = modifiedAt(library_path), .app = app, .ui = context, .mono = mono, .console_ui = console_ui, .hierarchy_ui = hierarchy_ui, .entity_editor = .init(gpa), .console = console, .plugin_pages = plugin_pages, .workspace = workspace, .frame = frame, .scene = scene, .overlay = overlay, .project = opened_project, .editor_modified = if (opened_project) |opened| editorModified(gpa, opened) else null, .upgrades = upgrades, .preference_folders = preference_folders };
             self.built_sources = self.sourcesNow();
             return self;
         }
@@ -206,7 +210,7 @@ pub fn Editor(comptime project: type) type {
             self.console.deinit();
             self.console_ui.deinit();
             self.hierarchy_ui.deinit();
-            self.entity_inspector.deinit();
+            self.entity_editor.deinit();
             self.mono.deinit();
             self.gpa.destroy(self.mono);
             self.ui.deinit();
@@ -227,11 +231,7 @@ pub fn Editor(comptime project: type) type {
             self.applyPendingMaximize(false);
             const viewport = try self.uiViewport() orelse return .run; // minimized
             // The game stays paused while the Build progress window is up.
-            if (self.build_window == null) if (self.game) |*game| {
-                game.update(&self.app);
-                // The world's systems are the game's: one failing stops the game, not the editor.
-                self.app.updateWorld() catch game.pause(&self.app);
-            };
+            if (self.build_window == null) if (self.game) |*game| game.update(&self.app);
             try self.syncPopOuts();
 
             // Lay out every window, then tell the OS where the main title bar is.
@@ -282,7 +282,7 @@ pub fn Editor(comptime project: type) type {
                 switch (index) {
                     panels.inspector_page => self.buildInspector(),
                     panels.console_page => self.console.build(page_ui),
-                    panels.hierarchy_page => entities.hierarchy.build(page_ui, &self.app, if (self.game) |*game| game else null, &self.selected_entity),
+                    panels.hierarchy_page => self.entity_editor.buildHierarchy(page_ui, &self.app, self.gamePtr()),
                     else => if (self.game) |*game| game.editorPanelUi(index - panels.first_plugin_page, page_ui),
                 }
                 vertices.* = try page_ui.render();
@@ -343,6 +343,13 @@ pub fn Editor(comptime project: type) type {
             var buffer: [64]u8 = undefined;
             const placement = window_placement.Placement.of(self.app.window.window) orelse return job.launchEditor(&.{});
             try job.launchEditor(&.{ window_placement.flag, try placement.format(&buffer) });
+        }
+
+        /// File > Save (Ctrl+S): write the world to the project's scene.
+        fn saveScene(self: *Self) void {
+            const opened = self.project orelse return std.log.info("save: open a project first; its scene is where entities are kept", .{});
+            const game = if (self.game) |*loaded| loaded else return std.log.err("save: the game's library isn't loaded, so its components can't be saved", .{});
+            scene_file.save(self.gpa, opened.dir, &self.app.world, game.sceneAccess()) catch |err| std.log.err("cannot save {s}: {t}", .{ scene_file.relative_path, err });
         }
 
         /// The Preferences window's sections: the editor's, then (with a project) each plugin's that
@@ -508,6 +515,7 @@ pub fn Editor(comptime project: type) type {
                 },
                 .upgrade_editor => if (self.upgrades.can_upgrade) try self.upgradeEditor() else self.upgrades.logUnavailable(.upgrade),
                 .toggle_devtools => self.toggleDevtools(),
+                .save => self.saveScene(),
                 .preferences => if (self.preferences_window == null) {
                     self.preferences_window = preferences.PreferencesWindow.open(self.gpa, &self.app.graphics, self.ui.font) catch |err| blk: {
                         std.log.err("cannot open Preferences: {t}", .{err});
@@ -758,18 +766,31 @@ pub fn Editor(comptime project: type) type {
             const modified = modifiedAt(library_path);
             if (std.meta.eql(modified, self.game_modified)) return;
             self.game_modified = modified;
+            // The world as it is, to put back into the rebuilt game's: entities and their values
+            // carry over the swap.
+            var kept: ?eggy.scene.Scene = null;
+            defer if (kept) |*scene| scene.deinit();
             if (self.game) |*game| {
+                kept = eggy.scene.Scene.capture(self.gpa, &self.app.world, game.sceneAccess(), null) catch |err| blk: {
+                    std.log.err("cannot keep the scene across the swap ({t}): the game starts over", .{err});
+                    break :blk null;
+                };
                 game.reload(&self.app) catch |err| std.log.err("cannot load the rebuilt game: {t}", .{err});
             } else {
-                self.game = HotGame.load(self.gpa, library_path, &self.app) catch |err| {
+                self.game = HotGame.load(self.gpa, library_path) catch |err| {
                     std.log.err("cannot load the game from {s}: {t}", .{ library_path, err });
                     return;
                 };
+                if (self.project) |opened| scene_file.load(self.gpa, opened.dir, &self.app.world, self.game.?.sceneAccess());
             }
             const game = &self.game.?;
+            if (kept) |*scene| if (scene.instantiate(self.gpa, &self.app.world, game.sceneAccess(), null)) |made| {
+                self.gpa.free(made.entities);
+                if (made.skipped > 0) std.log.warn("{d} components or fields didn't carry over the swap (see above)", .{made.skipped});
+            } else |err| std.log.err("cannot put the scene back: {t}", .{err});
             self.workspace.setPluginPanels(game.panels);
             preferences.writeRegistry(self.gpa, self.preference_folders, game.preference_manifests) catch |err| std.log.warn("cannot update .eggy/plugins.zon: {t}", .{err});
-            self.app.startWorld() catch game.pause(&self.app);
+            game.start(&self.app);
         }
 
         /// Hand `curr_event` from window `slot` to the pages in that window that want it: pointer
@@ -798,8 +819,22 @@ pub fn Editor(comptime project: type) type {
                 if (!wanted) continue;
                 // ponytail: only the Inspector is exposed to screen readers; give plugin pages AccessKit too once one adapter can serve several contexts.
                 if (index == panels.console_page and self.console.terminal.handle(input)) continue;
+                // The Hierarchy's right-clicks, double-clicks, drags and keys, before its UI.
+                if (index == panels.hierarchy_page) {
+                    const used = switch (input) {
+                        .key_down => |key| self.entity_editor.hierarchyKey(&self.app, self.gamePtr(), key),
+                        .pointer_down, .pointer_move, .pointer_up => self.entity_editor.hierarchyPointer(&self.hierarchy_ui, &self.app, self.gamePtr(), input),
+                        else => false,
+                    };
+                    if (used) continue;
+                }
                 if (index == panels.inspector_page) weeoui_sdl3.handleEvent(&self.ui, curr_event) else self.page(index).handle(input);
             }
+        }
+
+        /// The game's library, if loaded.
+        fn gamePtr(self: *Self) ?*const HotGame {
+            return if (self.game) |*game| game else null;
         }
 
         /// Page `index`'s UI (see `panels.max_pages`).
@@ -877,9 +912,7 @@ pub fn Editor(comptime project: type) type {
         /// The Inspector panel: the entity selected in the Hierarchy, else the project's name and
         /// whatever the game and plugins add.
         fn buildInspector(self: *Self) void {
-            if (self.selected_entity) |entity| if (self.app.world.isAlive(entity)) {
-                return self.entity_inspector.build(&self.ui, &self.app, if (self.game) |*game| game else null, entity);
-            };
+            if (self.entity_editor.buildInspector(&self.ui, &self.app, self.gamePtr())) return;
             self.ui.heading(3, project.name);
             if (self.game) |*game| game.editorUi(&self.ui) else self.ui.muted("The game's library didn't load: see the Console.");
             self.ui.muted("Select an entity in the Hierarchy to see its components.");

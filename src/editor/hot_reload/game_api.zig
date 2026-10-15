@@ -6,7 +6,7 @@
 const std = @import("std");
 
 /// Bumped whenever these types change, so an editor refuses a library built for another.
-pub const version: u32 = 3;
+pub const version: u32 = 4;
 
 /// The library's one exported function: `fn () callconv(.c) *const Game`.
 pub const entry_symbol = "eggy_game";
@@ -68,11 +68,13 @@ pub const Entity = extern struct { id: u32, generation: u32 };
 pub const Game = extern struct {
     version: u32 = version,
     /// Start the game and its plugins on `app` (an `*eggy.App`), allocating with `gpa` (an
-    /// `*const std.mem.Allocator`) and logging through `host`; null when one failed to start.
+    /// `*const std.mem.Allocator`) and logging through `host`, then run the world's Init
+    /// stages; null when a plugin failed to start.
     start: *const fn (host: *const Host, gpa: *const anyopaque, app: *anyopaque) callconv(.c) ?*anyopaque,
     /// Stop them all and free `state`.
     stop: *const fn (state: *anyopaque) callconv(.c) void,
-    /// One frame; false when a hook failed (and logged why).
+    /// One frame: the plugins' `update`, then the world's Update stages. False when something
+    /// failed this frame (logged, once until it changes); the game carries on regardless.
     update: *const fn (state: *anyopaque, app: *anyopaque) callconv(.c) bool,
     /// An `*const eggy.Event`; false when a hook failed (and logged why).
     event: *const fn (state: *anyopaque, app: *anyopaque, event: *const anyopaque) callconv(.c) bool,
@@ -98,4 +100,8 @@ pub const Game = extern struct {
     read_field: *const fn (world: *anyopaque, entity: Entity, component: usize, field: usize, buffer: [*]u8, capacity: usize) callconv(.c) usize,
     /// Set a field from ZON `text`; false if it doesn't parse as the field's type.
     write_field: *const fn (world: *anyopaque, entity: Entity, component: usize, field: usize, text: [*:0]const u8) callconv(.c) bool,
+    /// The entity's `eggy.Name` into `buffer`, returning its length; null without one.
+    read_name: *const fn (world: *anyopaque, entity: Entity, buffer: [*]u8, capacity: usize) callconv(.c) isize,
+    /// Give the entity `eggy.Name` `text` (`len` bytes), or take its name away when empty.
+    write_name: *const fn (world: *anyopaque, entity: Entity, text: [*]const u8, len: usize) callconv(.c) void,
 };

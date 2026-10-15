@@ -33,14 +33,23 @@ pub const HotGame = struct {
     /// How many copies this editor has loaded, which names the next one.
     loads: u32 = 0,
 
-    /// Load the library at `path` (absolute) and start the game on `app`. Then run
-    /// `app.startWorld`, once, as for any start.
-    pub fn load(gpa: std.mem.Allocator, path: []const u8, app: *eggy.App) !HotGame {
+    /// Load the library at `path` (absolute). Then put any scene into `app`'s world, `start`
+    /// the game, and run `app.startWorld`.
+    pub fn load(gpa: std.mem.Allocator, path: []const u8) !HotGame {
         var self = HotGame{ .gpa = gpa, .path = try gpa.dupe(u8, path), .copy_path = &.{}, .library = null, .game = undefined, .state = null, .panels = &.{}, .manifest_arena = .init(gpa) };
         errdefer gpa.free(self.path);
         errdefer self.manifest_arena.deinit();
-        try self.open(app);
+        try self.open();
         return self;
+    }
+
+    /// Start the game and its plugins on `app`, whose world may already hold a scene, and run the
+    /// world's Init stages. If a plugin fails to start (logged), the game stays stopped until
+    /// the next swap.
+    pub fn start(self: *HotGame, app: *eggy.App) void {
+        if (self.library == null or self.state != null) return;
+        self.state = self.game.start(&host, &self.gpa, app);
+        if (self.state == null) log.err("the game didn't start: see the errors above. It starts again when its code is rebuilt.", .{});
     }
 
     /// Stop the game, empty the world, and unload the library.
@@ -51,23 +60,25 @@ pub const HotGame = struct {
     }
 
     /// Swap in the library rebuilt at `path`: stop the game and empty `app`'s world, unload the
-    /// old library, then load the new one and start the game again. Then run `app.startWorld`.
-    /// If the new library can't load, the editor carries on without a game until the next swap.
+    /// old library, and load the new one. Then put the scene back, `start` the game, and run
+    /// `app.startWorld`. If the new library can't load, the editor carries on without a game
+    /// until the next swap.
     pub fn reload(self: *HotGame, app: *eggy.App) !void {
         self.close(app);
-        try self.open(app);
+        try self.open();
         log.info("swapped in the rebuilt game", .{});
     }
 
-    /// Run a frame of the game, if it is running.
+    /// Run a frame of the game and its world, if it is running. Failures are logged by the
+    /// library and don't stop it.
     pub fn update(self: *HotGame, app: *eggy.App) void {
         const state = self.state orelse return;
-        if (!self.game.update(state, app)) self.pause(app);
+        _ = self.game.update(state, app);
     }
 
     pub fn event(self: *HotGame, app: *eggy.App, curr_event: eggy.Event) void {
         const state = self.state orelse return;
-        if (!self.game.event(state, app, &curr_event)) self.pause(app);
+        _ = self.game.event(state, app, &curr_event);
     }
 
     pub fn editorUi(self: *HotGame, context: *eggy.ui.Context) void {
@@ -80,8 +91,8 @@ pub const HotGame = struct {
         if (panel < self.panels.len) self.game.editor_panel_ui(state, panel, context);
     }
 
-    /// Copy the library, load the copy, and start the game.
-    fn open(self: *HotGame, app: *eggy.App) !void {
+    /// Copy the library and load the copy.
+    fn open(self: *HotGame) !void {
         const gpa = self.gpa;
         var threaded: std.Io.Threaded = .init_single_threaded;
         const io = threaded.io();
@@ -116,8 +127,6 @@ pub const HotGame = struct {
         const manifests = try copyManifests(self.manifest_arena.allocator(), game.preferences[0..game.preference_count]);
         const component_types = try copyComponentTypes(self.manifest_arena.allocator(), game.components[0..game.component_count]);
         self.* = .{ .gpa = gpa, .path = self.path, .copy_path = copy_path, .library = library, .game = game, .state = null, .panels = panels, .loads = self.loads, .preference_manifests = manifests, .component_types = component_types, .manifest_arena = self.manifest_arena };
-        self.state = game.start(&host, &self.gpa, app);
-        if (self.state == null) log.err("the game didn't start: see the errors above. It starts again when its code is rebuilt.", .{});
     }
 
     /// Stop the game, empty the world while its code is still loaded, and unload and delete the copy.
@@ -177,13 +186,29 @@ pub const HotGame = struct {
         return self.game.write_field(&app.world, entityOf(entity), component, field, text.ptr);
     }
 
-    /// A hook or one of the world's systems failed (and the game logged why): stop the game,
-    /// emptying its world, until the next swap.
-    pub fn pause(self: *HotGame, app: *eggy.App) void {
-        log.err("the game stopped after an error: see above. It starts again when its code is rebuilt.", .{});
-        if (self.state) |state| self.game.stop(state);
-        self.state = null;
-        app.resetWorld();
+    /// `entity`'s `eggy.Name` in `buffer`; null without one (or without a library).
+    pub fn readName(self: *const HotGame, app: *eggy.App, entity: eggy.ecs.EntityId, buffer: []u8) ?[]const u8 {
+        if (self.library == null) return null;
+        const len = self.game.read_name(&app.world, entityOf(entity), buffer.ptr, buffer.len);
+        if (len < 0) return null;
+        return buffer[0..@intCast(len)];
+    }
+
+    /// Name `entity` `text`, or take its name away when `text` is empty.
+    pub fn writeName(self: *const HotGame, app: *eggy.App, entity: eggy.ecs.EntityId, text: []const u8) void {
+        if (self.library == null) return;
+        self.game.write_name(&app.world, entityOf(entity), text.ptr, text.len);
+    }
+
+    /// The typed steps scenes need, through the library (see `eggy.scene.Access`).
+    pub fn sceneAccess(self: *const HotGame) eggy.scene.Access {
+        return .{ .context = self, .vtable = &scene_vtable };
+    }
+
+    /// Whether the game is running: it started (a plugin's `init` failing stops it until the
+    /// next swap).
+    pub fn running(self: *const HotGame) bool {
+        return self.state != null;
     }
 };
 
@@ -206,6 +231,58 @@ fn copyManifests(arena: std.mem.Allocator, sets: []const api.Preferences) ![]con
         manifest.* = .{ .key = try arena.dupeZ(u8, std.mem.span(set.key)), .fields = fields };
     }
     return manifests;
+}
+
+/// `HotGame` as an `eggy.scene.Access`. The world given is always the app's (`HotGame`'s calls
+/// take the app, and the world is its field).
+const scene_vtable = eggy.scene.Access.VTable{
+    .types = struct {
+        fn f(context: *const anyopaque) []const eggy.components.Info {
+            return gameOf(context).component_types;
+        }
+    }.f,
+    .has = struct {
+        fn f(context: *const anyopaque, world: *eggy.ecs.World, entity: eggy.ecs.EntityId, component: usize) bool {
+            return gameOf(context).hasComponent(appOf(world), entity, component);
+        }
+    }.f,
+    .add = struct {
+        fn f(context: *const anyopaque, world: *eggy.ecs.World, entity: eggy.ecs.EntityId, component: usize) bool {
+            return gameOf(context).addComponent(appOf(world), entity, component);
+        }
+    }.f,
+    .read_field = struct {
+        fn f(context: *const anyopaque, world: *eggy.ecs.World, entity: eggy.ecs.EntityId, component: usize, field: usize, buffer: []u8) ?[]const u8 {
+            const game = gameOf(context);
+            if (game.library == null or component >= game.component_types.len) return null;
+            // Whole values only: one cut short isn't worth saving.
+            const len = game.game.read_field(world, entityOf(entity), component, field, buffer.ptr, buffer.len);
+            return if (len == 0 or len > buffer.len) null else buffer[0..len];
+        }
+    }.f,
+    .write_field = struct {
+        fn f(context: *const anyopaque, world: *eggy.ecs.World, entity: eggy.ecs.EntityId, component: usize, field: usize, text: [:0]const u8) bool {
+            return gameOf(context).writeField(appOf(world), entity, component, field, text);
+        }
+    }.f,
+    .name = struct {
+        fn f(context: *const anyopaque, world: *eggy.ecs.World, entity: eggy.ecs.EntityId, buffer: []u8) ?[]const u8 {
+            return gameOf(context).readName(appOf(world), entity, buffer);
+        }
+    }.f,
+    .set_name = struct {
+        fn f(context: *const anyopaque, world: *eggy.ecs.World, entity: eggy.ecs.EntityId, text: []const u8) void {
+            gameOf(context).writeName(appOf(world), entity, text);
+        }
+    }.f,
+};
+
+fn gameOf(context: *const anyopaque) *const HotGame {
+    return @ptrCast(@alignCast(context));
+}
+
+fn appOf(world: *eggy.ecs.World) *eggy.App {
+    return @fieldParentPtr("world", world);
 }
 
 /// The library's component types, copied into `arena`.

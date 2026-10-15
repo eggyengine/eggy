@@ -15,8 +15,8 @@ test "the game's library loads, runs, swaps for a fresh copy, and unloads cleanl
     app.preference_values = .init(gpa);
     defer app.preference_values.deinit();
 
-    var game = try HotGame.load(gpa, path, &app);
-    try app.startWorld();
+    var game = try HotGame.load(gpa, path);
+    game.start(&app);
     game.update(&app);
     try std.testing.expect(game.state != null);
     const first_copy = try gpa.dupe(u8, game.copy_path);
@@ -24,7 +24,7 @@ test "the game's library loads, runs, swaps for a fresh copy, and unloads cleanl
 
     // A swap loads a copy of its own and deletes the old one.
     try game.reload(&app);
-    try app.startWorld();
+    game.start(&app);
     game.update(&app);
     try std.testing.expect(game.state != null);
     try std.testing.expect(!std.mem.eql(u8, first_copy, game.copy_path));

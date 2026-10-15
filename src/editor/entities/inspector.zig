@@ -1,27 +1,64 @@
-//! The Inspector's view of the entity selected in the Hierarchy: a card per component it has,
-//! each field with the control its kind calls for (the rest as ZON text), Remove on each card,
-//! and Add component for the types it doesn't have yet. Values are read from the world every
-//! frame, so a field a system changes changes here too, except one being typed into.
+//! The Inspector's view of the entity selected in the Hierarchy: its name, then a card per
+//! component, each field with the control its kind calls for (the rest as ZON text). A card's
+//! header folds it away; Remove takes the component off; Add component offers the types it
+//! doesn't have. Values are read from the world every frame, so fields a system changes change
+//! here too, except one being typed into.
+//!
+//! Like the Hierarchy, the page doesn't change the world itself: `build` returns the `Action` the
+//! user took.
 const std = @import("std");
 const eggy = @import("eggy");
 const ui = eggy.ui;
 const ecs = eggy.ecs;
 const components = eggy.components;
-const HotGame = @import("../hot_reload/hot_reload.zig").HotGame;
 const page_style = @import("../page_style.zig");
 const restyle = page_style.restyle;
 
+/// What the Inspector shows: the entity, its name, and its components with their values.
+pub const Details = struct {
+    entity: ecs.EntityId,
+    name: []const u8,
+    components: []const Component,
+    /// The component types it doesn't have and can be given, as `(index, label)`.
+    addable: []const Addable,
+
+    pub const Component = struct {
+        /// Its index among the game's component types.
+        index: usize,
+        info: components.Info,
+        /// Each field's value as ZON; null where it can't be read.
+        values: []const ?[]const u8,
+    };
+    pub const Addable = struct { index: usize, label: []const u8 };
+};
+
+pub const Action = union(enum) {
+    rename: []const u8,
+    set_field: struct { component: usize, field: usize, text: []const u8 },
+    add_component: usize,
+    remove_component: usize,
+};
+
 const FieldEdit = ui.TextEdit(256);
-const control_width: f32 = 170;
+const NameEdit = ui.TextEdit(eggy.Name.max_len);
+const control_width: f32 = 160;
+/// The narrowest a field's control gets in a narrow Inspector.
+const min_control_width: f32 = 80;
 
 pub const EntityInspector = struct {
     gpa: std.mem.Allocator,
+    name: NameEdit = NameEdit.init("") catch unreachable,
     /// The text of each field shown as a text box, by `fieldKey`, for the entity shown.
     edits: std.AutoHashMapUnmanaged(u32, FieldEdit) = .empty,
-    /// The field typed into last frame, which keeps its text rather than the world's.
-    focused_field: ?u32 = null,
-    /// The entity `edits` are for.
+    /// The text box typed into last frame (`name_key` for the name), which keeps its text
+    /// rather than the world's.
+    focused: ?u32 = null,
+    /// Components folded away, by index.
+    folded: std.AutoHashMapUnmanaged(usize, void) = .empty,
+    /// The entity the state above is for.
     shown: ?ecs.EntityId = null,
+
+    const name_key = std.math.maxInt(u32);
 
     pub fn init(gpa: std.mem.Allocator) EntityInspector {
         return .{ .gpa = gpa };
@@ -29,76 +66,90 @@ pub const EntityInspector = struct {
 
     pub fn deinit(self: *EntityInspector) void {
         self.edits.deinit(self.gpa);
+        self.folded.deinit(self.gpa);
     }
 
-    /// Draw `entity`'s components into `context`. `game` has their types; without it there is
-    /// nothing to show but the entity.
-    pub fn build(self: *EntityInspector, context: *ui.Context, app: *eggy.App, game: ?*const HotGame, entity: ecs.EntityId) void {
+    /// Draw `details` into `context`. Returns what the user did this frame, if anything.
+    pub fn build(self: *EntityInspector, context: *ui.Context, details: Details) ?Action {
         const arena = context.builder().allocator;
-        if (self.shown == null or !self.shown.?.eql(entity)) {
+        if (self.shown == null or !self.shown.?.eql(details.entity)) {
             self.edits.clearRetainingCapacity();
-            self.focused_field = null;
-            self.shown = entity;
+            self.folded.clearRetainingCapacity();
+            self.focused = null;
+            self.shown = details.entity;
         }
-
-        context.heading(3, std.fmt.allocPrint(arena, "Entity {d}", .{entity.id}) catch "Entity");
-        const loaded = game orelse {
-            context.muted("The game's library didn't load, so its components can't be shown.");
-            return;
-        };
-        if (loaded.component_types.len == 0) {
-            context.muted("Your game and plugins list no components yet. List them with `pub const components = .{ ... };` in your game or a plugin.");
-            page_style.smallText(context, 13);
-            return;
-        }
-
+        var action: ?Action = null;
         var focused: ?u32 = null;
-        var has_any = false;
-        for (loaded.component_types, 0..) |info, component| {
-            if (!loaded.hasComponent(app, entity, component)) continue;
-            has_any = true;
-            self.componentCard(context, app, loaded, entity, info, component, &focused);
-        }
-        self.focused_field = focused;
-        if (!has_any) {
-            context.muted("No components. Add one below.");
+
+        // The name, typed into directly; "Entity N" until it has one.
+        if (self.focused != name_key) self.name = NameEdit.init(details.name) catch NameEdit.init("") catch unreachable;
+        const placeholder = std.fmt.allocPrint(arena, "Entity {d}", .{details.entity.id}) catch "Entity";
+        if (context.textInput("##entity name", &self.name, placeholder)) action = .{ .rename = arena.dupe(u8, self.name.text()) catch "" };
+        if (context.last_added) |input| if (context.focus == input.id) {
+            focused = name_key;
+        };
+        context.muted(std.fmt.allocPrint(arena, "Entity {d} · {d} component{s}", .{ details.entity.id, details.components.len, if (details.components.len == 1) "" else "s" }) catch "");
+        page_style.smallText(context, 12);
+
+        if (details.components.len == 0) {
+            context.muted("No components yet.");
             page_style.smallText(context, 13);
         }
-        addComponentPicker(context, app, loaded, entity);
+        const width = @max(0, context.viewport.w - 32);
+        const field_control = std.math.clamp(width * 0.45, min_control_width, control_width);
+        for (details.components) |component| if (self.componentCard(context, component, field_control, &focused)) |card_action| {
+            action = card_action;
+        };
+        self.focused = focused;
+
+        if (addComponentPicker(context, details.addable)) |index| action = .{ .add_component = index };
+        return action;
     }
 
-    /// A card for `entity`'s component `component`: its name and owner, Remove, and its fields.
-    fn componentCard(self: *EntityInspector, context: *ui.Context, app: *eggy.App, game: *const HotGame, entity: ecs.EntityId, info: components.Info, component: usize, focused: *?u32) void {
+    /// A card for one component: a header (fold, name, owner, Remove), then its fields.
+    fn componentCard(self: *EntityInspector, context: *ui.Context, component: Details.Component, field_control: f32, focused: *?u32) ?Action {
         const arena = context.builder().allocator;
+        const b = context.builder();
+        var action: ?Action = null;
+        const folded = self.folded.contains(component.index);
         context.begin(.card);
 
+        // The header folds the card when pressed.
         context.begin(.row);
-        context.begin(.column);
-        context.text(info.name);
-        context.muted(std.fmt.allocPrint(arena, "from {s}", .{info.owner}) catch "");
-        page_style.smallText(context, 12);
-        context.end();
-        restyle(context, .{ .grow = 1, .gap = 2 });
-        if (context.buttonVariant(std.fmt.allocPrint(arena, "Remove##remove {d}", .{component}) catch return, .ghost)) {
-            game.removeComponent(app, entity, component);
+        const fold_id = context.idFor(std.fmt.allocPrint(arena, "fold {d}", .{component.index}) catch return null);
+        if (context.activated(fold_id)) {
+            if (folded) _ = self.folded.remove(component.index) else self.folded.put(self.gpa, component.index, {}) catch {};
         }
+        const header = b.node(fold_id, .{ .direction = .row, .gap = 8, .align_items = .center, .grow = 1 }, .none, &.{
+            b.node(0, .{ .width = 14, .height = 14 }, .{ .icon = if (folded) .chevron_right else .chevron_down }, &.{}) catch return null,
+            b.node(0, .{ .grow = 1, .gap = 1 }, .none, &.{
+                b.node(0, .{}, .{ .text = .{ .value = component.info.name, .size = 14, .wrap = true } }, &.{}) catch return null,
+                b.node(0, .{}, .{ .text = .{ .value = std.fmt.allocPrint(arena, "from {s}", .{component.info.owner}) catch "", .size = 11, .tone = .muted, .wrap = true } }, &.{}) catch return null,
+            }) catch return null,
+        }) catch return null;
+        header.cursor = .pointer;
+        header.accessibility = .{ .role = .button, .label = component.info.name, .expanded = !folded };
+        context.element(header);
+        if (context.buttonVariant(std.fmt.allocPrint(arena, "Remove##remove {d}", .{component.index}) catch return null, .ghost)) action = .{ .remove_component = component.index };
         context.end();
-        restyle(context, .{ .direction = .row, .gap = 12, .align_items = .center });
+        restyle(context, .{ .direction = .row, .gap = 8, .align_items = .center });
 
-        for (info.fields, 0..) |field, index| self.fieldRow(context, app, game, entity, component, field, index, focused);
+        if (!folded) for (component.info.fields, component.values, 0..) |field, value, index| {
+            if (self.fieldRow(context, component.index, field, value orelse "", index, field_control, focused)) |field_action| action = field_action;
+        };
 
         context.end();
-        restyle(context, .{ .gap = 8, .padding = .{ .left = 14, .right = 14, .top = 12, .bottom = 12 } });
+        restyle(context, .{ .gap = 8, .padding = .{ .left = 12, .right = 12, .top = 10, .bottom = 10 } });
+        return action;
     }
 
-    /// One field: its name on the left, its control on the right.
-    fn fieldRow(self: *EntityInspector, context: *ui.Context, app: *eggy.App, game: *const HotGame, entity: ecs.EntityId, component: usize, field: components.Field, index: usize, focused: *?u32) void {
+    /// One field: its name on the left (wrapping if need be), its control on the right.
+    fn fieldRow(self: *EntityInspector, context: *ui.Context, component: usize, field: components.Field, value: []const u8, index: usize, field_control: f32, focused: *?u32) ?Action {
         const arena = context.builder().allocator;
-        var buffer: [256]u8 = undefined;
-        const value = game.readField(app, entity, component, index, &buffer) orelse "";
         const key = fieldKey(component, index);
         // Controls take their ids from their (hidden) label: the component and field.
-        const hidden = std.fmt.allocPrint(arena, "##{d}.{s}", .{ component, field.name }) catch return;
+        const hidden = std.fmt.allocPrint(arena, "##{d}.{s}", .{ component, field.name }) catch return null;
+        var action: ?Action = null;
 
         context.begin(.row);
         context.text(displayName(arena, field.name));
@@ -108,62 +159,56 @@ pub const EntityInspector = struct {
         if (!field.editable) {
             context.muted(value);
             page_style.noteText(context);
+            if (context.last_added) |text| text.paint_kind.text.wrap = true;
         } else switch (field.kind) {
             .bool => {
                 var on = std.mem.eql(u8, value, "true");
-                if (context.toggle(hidden, &on)) self.write(app, game, entity, component, index, if (on) "true" else "false");
+                if (context.toggle(hidden, &on)) action = .{ .set_field = .{ .component = component, .field = index, .text = if (on) "true" else "false" } };
             },
             .@"enum" => {
-                const options = arena.alloc([]const u8, field.options.len) catch return;
+                const options = arena.alloc([]const u8, field.options.len) catch return null;
                 var selected: usize = 0;
                 for (options, field.options, 0..) |*option, name, i| {
                     option.* = displayName(arena, name);
                     if (value.len > 1 and std.mem.eql(u8, value[1..], name)) selected = i;
                 }
-                if (context.select(hidden, options, &selected)) {
-                    self.write(app, game, entity, component, index, std.fmt.allocPrint(arena, ".{s}", .{field.options[selected]}) catch return);
-                }
+                if (context.select(hidden, options, &selected)) action = .{ .set_field = .{ .component = component, .field = index, .text = std.fmt.allocPrint(arena, ".{s}", .{field.options[selected]}) catch return null } };
+                // The dropdown keeps to the column rather than its own minimum width.
+                if (context.last_added) |trigger| if (trigger.id != 0 and trigger.overlay == null) {
+                    trigger.style.min_width = 0;
+                };
             },
             .int, .float, .other => {
                 // The world's value, unless this field is being typed into.
-                const entry = self.edits.getOrPut(self.gpa, key) catch return;
-                if (!entry.found_existing or self.focused_field != key) entry.value_ptr.* = FieldEdit.init(value) catch FieldEdit.init("") catch unreachable;
-                if (context.textInput(hidden, entry.value_ptr, "")) self.write(app, game, entity, component, index, std.mem.trim(u8, entry.value_ptr.text(), " "));
+                const entry = self.edits.getOrPut(self.gpa, key) catch return null;
+                if (!entry.found_existing or self.focused != key) entry.value_ptr.* = FieldEdit.init(value) catch FieldEdit.init("") catch unreachable;
+                if (context.textInput(hidden, entry.value_ptr, "")) action = .{ .set_field = .{ .component = component, .field = index, .text = arena.dupe(u8, std.mem.trim(u8, entry.value_ptr.text(), " ")) catch return null } };
                 if (context.last_added) |input| if (context.focus == input.id) {
                     focused.* = key;
                 };
             },
         }
         context.end();
-        restyle(context, .{ .width = control_width, .align_items = .end });
+        restyle(context, .{ .width = field_control, .align_items = .end });
         context.end();
-        restyle(context, .{ .direction = .row, .gap = 12, .align_items = .center });
-    }
-
-    /// Set a field from `text` (ZON); text that doesn't parse leaves it as it was, until fixed.
-    fn write(_: *EntityInspector, app: *eggy.App, game: *const HotGame, entity: ecs.EntityId, component: usize, field: usize, text: []const u8) void {
-        var buffer: [257]u8 = undefined;
-        const terminated = std.fmt.bufPrintZ(&buffer, "{s}", .{text}) catch return;
-        _ = game.writeField(app, entity, component, field, terminated);
+        restyle(context, .{ .direction = .row, .gap = 10, .align_items = .center });
+        return action;
     }
 };
 
-/// A dropdown of the component types `entity` doesn't have and the editor can add; picking one
-/// adds it.
-fn addComponentPicker(context: *ui.Context, app: *eggy.App, game: *const HotGame, entity: ecs.EntityId) void {
+/// A dropdown of the component types that can be added; picking one returns its index.
+fn addComponentPicker(context: *ui.Context, addable: []const Details.Addable) ?usize {
+    if (addable.len == 0) return null;
     const arena = context.builder().allocator;
-    var labels: std.ArrayList([]const u8) = .empty;
-    var types: std.ArrayList(usize) = .empty;
-    labels.append(arena, "Add component...") catch return;
-    types.append(arena, 0) catch return;
-    for (game.component_types, 0..) |info, component| {
-        if (!info.addable or game.hasComponent(app, entity, component)) continue;
-        labels.append(arena, std.fmt.allocPrint(arena, "{s}  ({s})", .{ info.name, info.owner }) catch continue) catch return;
-        types.append(arena, component) catch return;
-    }
-    if (labels.items.len == 1) return;
+    const labels = arena.alloc([]const u8, addable.len + 1) catch return null;
+    labels[0] = "Add component...";
+    for (labels[1..], addable) |*label, choice| label.* = choice.label;
     var picked: usize = 0;
-    if (context.select("##add component", labels.items, &picked) and picked > 0) _ = game.addComponent(app, entity, types.items[picked]);
+    const changed = context.select("##add component", labels, &picked);
+    if (context.last_added) |trigger| if (trigger.overlay == null) {
+        trigger.style.min_width = 0;
+    };
+    return if (changed and picked > 0) addable[picked - 1].index else null;
 }
 
 /// A field's key in `EntityInspector.edits`.
@@ -179,4 +224,35 @@ fn displayName(arena: std.mem.Allocator, name: []const u8) []const u8 {
     };
     if (label.len > 0) label[0] = std.ascii.toUpper(label[0]);
     return label;
+}
+
+const ui_checks = @import("../ui_checks.zig");
+
+test "a component with long names and values fits a narrow Inspector" {
+    var context = try ui.Context.init(std.testing.allocator);
+    defer context.deinit();
+    var inspector = EntityInspector.init(std.testing.allocator);
+    defer inspector.deinit();
+
+    const fields = [_]components.Field{
+        .{ .name = "a_field_with_a_very_long_name_that_wraps", .kind = .float, .editable = true },
+        .{ .name = "mode", .kind = .@"enum", .options = &.{ "first_choice_with_a_long_name", "second" }, .editable = true },
+        .{ .name = "enabled", .kind = .bool, .editable = true },
+        .{ .name = "points", .kind = .other, .editable = false },
+    };
+    const info = components.Info{ .name = "AComponentWithAnUnreasonablyLongTypeName", .owner = "a_plugin_with_a_long_name", .fields = &fields, .addable = true };
+    const values = [_]?[]const u8{ "1234567.25", ".first_choice_with_a_long_name", "true", ".{ .{ 1, 2, 3 }, .{ 4, 5, 6 }, .{ 7, 8, 9 } }" };
+    const details = Details{
+        .entity = .init(3, 0),
+        .name = "An entity with a name long enough to need the whole field and then some",
+        .components = &.{.{ .index = 0, .info = info, .values = &values }},
+        .addable = &.{.{ .index = 1, .label = "AnotherComponentWithALongName (some_plugin)" }},
+    };
+    for ([_]f32{ 220, 320, 600 }) |width| {
+        const viewport = ui.Rect{ .x = 0, .y = 0, .w = width, .h = 800 };
+        context.newFrame(viewport);
+        _ = inspector.build(&context, details);
+        _ = try context.render();
+        try ui_checks.expectFits(context.last_root.?, context.font, viewport);
+    }
 }

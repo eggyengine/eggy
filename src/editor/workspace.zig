@@ -50,6 +50,8 @@ pub const Outcome = union(enum) {
     toggle_devtools,
     /// Edit > Preferences: open the Preferences window.
     preferences,
+    /// File > Save (Ctrl+S): save the scene.
+    save,
     /// File > Open Project Folder: show the project in the system's file manager.
     open_project_folder,
     /// File > Upgrade Editor: move the project to the newest Eggy.
@@ -489,6 +491,7 @@ pub const Workspace = struct {
                 .link_developer => return .link_developer,
                 .devtools => return .toggle_devtools,
                 .preferences => return .preferences,
+                .save => return .save,
                 .reset_layout => self.resetLayout() catch |err| std.log.warn("cannot reset the layout: {t}", .{err}),
                 // ponytail: stubs until the editor has projects, undo history and settings.
                 else => std.log.info("{t}: not implemented yet", .{command}),
