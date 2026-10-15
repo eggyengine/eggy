@@ -20,8 +20,10 @@ pub const Editor = struct {
     rebuild_on_focus: bool = true,
     show_debug_logs: bool = false,
     assets_view: enum { list, grid } = .list,
+    autosave_seconds: u32 = 60,
 
     pub const descriptions = .{
+        .autosave_seconds = "How often the open scene saves itself while it has changes, in seconds. 0 turns it off.",
         .assets_view = "Whether the Assets panel shows files as a tree or as a grid of icons. Its buttons set it too.",
         .theme = "The editor's colours. System follows the desktop's light or dark setting.",
         .rebuild_on_focus = "Rebuild the project when you come back to the editor after changing its code.",
@@ -182,6 +184,6 @@ test "the registry lists each plugin, whether it is on, and its preferences" {
 }
 
 test "the editor's preferences have a manifest" {
-    try std.testing.expectEqual(@as(usize, 4), editor_manifest.fields.len);
+    try std.testing.expectEqual(@as(usize, 5), editor_manifest.fields.len);
     try std.testing.expectEqualStrings("system", editor_manifest.fields[0].options[0]);
 }

@@ -36,6 +36,7 @@ const PlayMode = @import("play_mode.zig").PlayMode;
 const history_zig = @import("history.zig");
 const PluginSwitches = @import("plugin_switches.zig").PluginSwitches;
 const Dragged = @import("dragged.zig").Dragged;
+const save_prompt_zig = @import("save_prompt.zig");
 const page_style = @import("page_style.zig");
 const file_ops = @import("assets/file_ops.zig");
 const hit_test = @import("hit_test.zig");
@@ -59,6 +60,13 @@ pub fn Editor(comptime project: type) type {
         /// The dock's layout as last saved (`layout_file.fingerprint`), when it was last looked
         /// at, and since when it has differed from that.
         layout_saved: u64 = 0,
+        /// "Save changes?", while it asks; where the editor was going when it opened; and
+        /// whether the answer let the next attempt through.
+        save_prompt: ?*save_prompt_zig.SavePrompt = null,
+        leaving: Leaving = .quit,
+        leave_approved: bool = false,
+        /// When the open scene last saved itself (see `autosave`).
+        autosaved_ms: u64 = 0,
         layout_checked_ms: u64 = 0,
         layout_changed_ms: ?u64 = null,
         /// Undo and redo.
@@ -143,6 +151,9 @@ pub fn Editor(comptime project: type) type {
         /// SDL's default double-click time.
         const double_click_ns = 500 * std.time.ns_per_ms;
         const title = project.name ++ " - eggy editor";
+
+        /// What would lose the scene's unsaved changes, and so asks first (see `mayLeave`).
+        const Leaving = enum { quit, reload, new_project, open_project, open_project_linked };
 
         pub fn init(gpa: std.mem.Allocator, args: []const [*:0]const u8) !Self {
             var app = try eggy.App.init(gpa, title);
@@ -248,6 +259,7 @@ pub fn Editor(comptime project: type) type {
             if (self.build_window) |window| window.close(&self.app.graphics);
             if (self.devtools_window) |window| window.close(&self.app.graphics);
             if (self.preferences_window) |window| window.close(&self.app.graphics);
+            if (self.save_prompt) |prompt| prompt.close(&self.app.graphics);
             // The dock as this user left it, for the next editor.
             layout_file.save(self.gpa, self.preference_folders.global, &self.workspace.dock, self.workspace.seen_plugin_panels.items);
             self.preference_folders.deinit(self.gpa);
@@ -405,6 +417,11 @@ pub fn Editor(comptime project: type) type {
             }
             // File > New/Open Project's window, if open.
             if (self.project_flow) |flow| if (try self.updateProjectFlow(flow) == .success) return .success;
+            // "Save changes?", if asking.
+            if (self.save_prompt) |prompt| if (try prompt.update(&self.app.graphics, &self.ui)) |answer| {
+                if (try self.answerSavePrompt(answer)) return .success;
+            };
+            self.autosave();
             // Edit > Preferences, if open.
             if (self.preferences_window) |window| {
                 const flipped = try window.update(&self.app.graphics, &self.ui, try self.preferenceSections(frame_arena.allocator()), &self.app.preference_values, self.preference_folders, &self.history);
@@ -440,8 +457,96 @@ pub fn Editor(comptime project: type) type {
             if (self.?.picked_project.swap(copy.ptr, .acq_rel)) |old| std.heap.c_allocator.free(std.mem.span(old));
         }
 
-        /// Open the editor `job` rebuilt in place of this one, where this one's window is.
-        fn launchRebuilt(self: *Self, job: *Job) !void {
+        /// Open the editor `job` rebuilt in place of this one, where this one's window is. Returns
+        /// false, launching nothing, while "Save changes?" asks first.
+        fn launchRebuilt(self: *Self, job: *Job) !bool {
+            if (!self.mayLeave(.reload)) return false;
+            try self.launchEditorFrom(job);
+            return true;
+        }
+
+        /// Whether the editor may go ahead with `leaving`: yes when the scene has no unsaved
+        /// changes, or the person just answered "Save changes?" for it. Otherwise it opens the
+        /// prompt (once) and says no; the answer carries `leaving` out (`answerSavePrompt`).
+        fn mayLeave(self: *Self, leaving: Leaving) bool {
+            if (self.leave_approved) {
+                self.leave_approved = false;
+                return true;
+            }
+            // What a play did isn't the scene: compare the scene as it was before.
+            self.stopPlaying();
+            if (!self.sceneUnsaved()) return true;
+            if (self.save_prompt != null) return false;
+            const doing = switch (leaving) {
+                .quit => "quitting",
+                .reload => "reloading the editor",
+                .new_project, .open_project, .open_project_linked => "opening another project",
+            };
+            const name = if (self.open_scene) |*scene| scene.name() else null;
+            self.save_prompt = save_prompt_zig.SavePrompt.open(self.gpa, &self.app.graphics, self.ui.font, self.app.window.window, name, doing) catch |err| {
+                // Without the prompt, keep the changes rather than lose them.
+                std.log.err("cannot ask about unsaved changes ({t}): save first", .{err});
+                return false;
+            };
+            self.leaving = leaving;
+            return false;
+        }
+
+        /// Carry out the answer to "Save changes?". Returns whether the editor should now close
+        /// (quitting, or a reload launched).
+        fn answerSavePrompt(self: *Self, answer: save_prompt_zig.Answer) !bool {
+            if (self.save_prompt) |prompt| prompt.close(&self.app.graphics);
+            self.save_prompt = null;
+            switch (answer) {
+                .cancel => return false,
+                .save => {
+                    self.saveScene();
+                    if (self.sceneUnsaved()) return false; // the save failed: stay
+                },
+                .discard => {},
+            }
+            // Go where the editor was going, this time without asking. A reload waiting for its
+            // build keeps the answer until it launches.
+            self.leave_approved = true;
+            switch (self.leaving) {
+                .quit => return true,
+                .reload => return try self.forceReload(),
+                .new_project => self.project_flow = try ProjectFlow.create(self.gpa, &self.app.graphics, self.ui.font, self.mono),
+                .open_project, .open_project_linked => {
+                    self.picking_to_link = self.leaving == .open_project_linked;
+                    sdl3.dialog.showOpenFolder(Self, pickedProject, self, self.app.window.window, null, false);
+                },
+            }
+            self.leave_approved = false;
+            return false;
+        }
+
+        /// Whether the world has changes its scene file doesn't (or, with no scene open, has any
+        /// entities). False without a project, where there is nowhere to save.
+        fn sceneUnsaved(self: *Self) bool {
+            const scene = if (self.open_scene) |*open| open else return false;
+            const text = self.sceneText() orelse return false;
+            defer self.gpa.free(text);
+            return scene.unsavedHash(std.hash.Wyhash.hash(0, text), &self.app.world);
+        }
+
+        /// Save the open scene by itself every `autosave_seconds` (a preference; 0: never) while
+        /// it has changes, unless playing or typing.
+        fn autosave(self: *Self) void {
+            const every_s = preferences.editor(&self.app.preference_values).autosave_seconds;
+            const now = sdl3.timer.getMillisecondsSinceInit();
+            if (every_s == 0 or now -| self.autosaved_ms < @as(u64, every_s) * 1000) return;
+            self.autosaved_ms = now;
+            const scene = if (self.open_scene) |*open| open else return;
+            if (scene.path == null or self.play_mode.playing() or self.typing() or !self.workspace.scene_unsaved) return;
+            const game = if (self.game) |*loaded| loaded else return;
+            scene.save(&self.app.world, game.sceneAccess(), self.entity_editor.roots(&self.app.world)) catch |err| return std.log.err("cannot autosave the scene: {t}", .{err});
+            self.workspace.scene_unsaved = false;
+            var message: [96]u8 = undefined;
+            self.workspace.toast(std.fmt.bufPrint(&message, "Autosaved {s}", .{scene.name() orelse "the scene"}) catch "Autosaved");
+        }
+
+        fn launchEditorFrom(self: *Self, job: *Job) !void {
             var buffer: [64]u8 = undefined;
             // The layout first: the new editor reads it as it starts, before this one has closed.
             layout_file.save(self.gpa, self.preference_folders.global, &self.workspace.dock, self.workspace.seen_plugin_panels.items);
@@ -734,6 +839,12 @@ pub fn Editor(comptime project: type) type {
         }
 
         pub fn event(self: *Self, curr_event: sdl3.events.Event) !sdl3.AppResult {
+            // "Save changes?" takes its own events, and the editor no input meanwhile.
+            if (self.save_prompt) |prompt| {
+                if (prompt.keyAnswer(curr_event)) |answer| return if (try self.answerSavePrompt(answer)) .success else .run;
+                if (prompt.handle(curr_event)) return .run;
+                if (weeoui_sdl3.translate(curr_event) != null) return .run;
+            }
             // File > New/Open Project's window takes its own events; closing it, or Escape, cancels.
             if (self.project_flow) |flow| {
                 if (flow.closeRequested(curr_event)) {
@@ -806,15 +917,17 @@ pub fn Editor(comptime project: type) type {
 
             const outcome: workspace_zig.Outcome = if (weeoui_sdl3.translate(curr_event)) |input| self.workspace.handle(slot, input) else .ignored;
             switch (outcome) {
-                .quit => return .success,
-                .window => |button| if (weeoui_sdl3.windowAction(self.app.window.window, button)) return .success,
+                .quit => if (self.mayLeave(.quit)) return .success,
+                .window => |button| if (button != .close or self.mayLeave(.quit)) {
+                    if (weeoui_sdl3.windowAction(self.app.window.window, button)) return .success;
+                },
                 .play => |playing| if (playing) self.startPlaying() else self.stopPlaying(),
-                .new_project => if (self.project_flow == null) {
+                .new_project => if (self.project_flow == null and self.mayLeave(.new_project)) {
                     layout_file.save(self.gpa, self.preference_folders.global, &self.workspace.dock, self.workspace.seen_plugin_panels.items);
                     self.project_flow = try ProjectFlow.create(self.gpa, &self.app.graphics, self.ui.font, self.mono);
                 },
                 .reload => if (try self.forceReload()) return .success,
-                .open_project, .open_project_linked => |_, tag| if (self.project_flow == null) {
+                .open_project, .open_project_linked => |_, tag| if (self.project_flow == null and self.mayLeave(if (tag == .open_project) .open_project else .open_project_linked)) {
                     if (tag == .open_project_linked and self.upgrades.developer_dir == null) {
                         self.upgrades.logUnavailable(.link);
                     } else {
@@ -854,6 +967,9 @@ pub fn Editor(comptime project: type) type {
             if (outcome == .ignored or curr_event == .mouse_motion) self.routeToPages(slot, curr_event);
             // Input reaches the game only while it plays.
             if (self.play_mode.playing()) if (self.game) |*game| game.event(&self.app, curr_event);
+            // Quitting from the system (or closing the window) asks about unsaved changes too.
+            const quitting = curr_event == .quit or (curr_event == .window_close_requested and slot == main_slot);
+            if (quitting and !self.mayLeave(.quit)) return .run;
             return self.app.event(curr_event);
         }
 
@@ -993,10 +1109,7 @@ pub fn Editor(comptime project: type) type {
             };
             const status = try job.status(arena);
             // Reload asked for the editor as soon as it is built.
-            if (self.reload_when_built and status.stage == .done) {
-                try self.launchRebuilt(job);
-                return true;
-            }
+            if (self.reload_when_built and status.stage == .done) return try self.launchRebuilt(job);
             switch (try window.update(&self.app.graphics, &self.ui, status, self.workspace.build_state == .ready)) {
                 .none => {},
                 .close => self.closeBuildWindow(),
@@ -1004,10 +1117,7 @@ pub fn Editor(comptime project: type) type {
                     self.cancelBuild();
                     self.closeBuildWindow();
                 },
-                .reload => {
-                    try self.launchRebuilt(job);
-                    return true;
-                },
+                .reload => return try self.launchRebuilt(job),
             }
             return false;
         }
@@ -1039,10 +1149,7 @@ pub fn Editor(comptime project: type) type {
         /// rebuild (in the Build progress window) and open the result, changed or not. Returns
         /// whether the editor should quit, as the new one is open.
         fn forceReload(self: *Self) !bool {
-            if (self.workspace.build_state == .ready) if (self.rebuild) |job| {
-                try self.launchRebuilt(job);
-                return true;
-            };
+            if (self.workspace.build_state == .ready) if (self.rebuild) |job| return try self.launchRebuilt(job);
             if (self.buildRunning()) {
                 self.reload_when_built = true;
                 return false;
@@ -1442,6 +1549,7 @@ test {
     _ = @import("history.zig");
     _ = @import("plugin_switches.zig");
     _ = @import("dragged.zig");
+    _ = @import("save_prompt.zig");
     _ = @import("assets/assets.zig");
     _ = @import("assets/listing.zig");
     _ = @import("assets/icons.zig");
