@@ -10,6 +10,7 @@ const workspace_zig = @import("workspace.zig");
 const Workspace = workspace_zig.Workspace;
 const Slot = workspace_zig.Slot;
 const main_slot = workspace_zig.main_slot;
+const slot_count = 1 + ui.dock.max_windows;
 const PopOut = @import("popout.zig").PopOut;
 const icon = @import("icon.zig");
 const job_zig = @import("projects/job.zig");
@@ -118,8 +119,6 @@ pub fn Editor(comptime project: type) type {
         upgrades: Upgrades,
         /// When the main title bar was last pressed, to spot a double-click; see `titlebarPressed`.
         titlebar_press_ns: u64 = 0,
-        /// The window SDL is sending typed text to (see `syncTextInput`), by slot; null when none.
-        text_input_slot: ?Slot = null,
         /// When a double-click on the title bar asked to maximize or restore, until that is done.
         maximize_pending_ns: ?u64 = null,
 
@@ -946,17 +945,20 @@ pub fn Editor(comptime project: type) type {
         }
 
         /// Have SDL send typed text to the window whose page has a text field focused, and only
-        /// then: it is what a text field types with, and the on-screen keyboard follows it.
+        /// that one: it is what a text field types with, and the on-screen keyboard follows it.
+        /// SDL's own state is checked each frame, as Weeoui's Inspector handling switches it too.
         fn syncTextInput(self: *Self) void {
             var wanted: ?Slot = null;
             for (0..self.pageCount()) |index| {
                 const placed = self.workspace.placed.pages[index] orelse continue;
                 if (self.page(index).wants_text) wanted = placed.slot;
             }
-            if (std.meta.eql(wanted, self.text_input_slot)) return;
-            if (self.text_input_slot) |slot| if (self.windowOf(slot)) |window| sdl3.keyboard.stopTextInput(window) catch {};
-            if (wanted) |slot| if (self.windowOf(slot)) |window| sdl3.keyboard.startTextInput(window) catch {};
-            self.text_input_slot = wanted;
+            for (0..slot_count) |slot| {
+                const window = self.windowOf(slot) orelse continue;
+                const on = if (wanted) |chosen| chosen == slot else false;
+                if (sdl3.keyboard.textInputActive(window) == on) continue;
+                (if (on) sdl3.keyboard.startTextInput(window) else sdl3.keyboard.stopTextInput(window)) catch {};
+            }
         }
 
         /// The OS window for `slot`, if it is open.
