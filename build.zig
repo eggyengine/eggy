@@ -298,6 +298,7 @@ fn addEngine(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.buil
     const mesh_fragment = vitellus_build.compileSlang(b, vitellus, target, mesh_shader, "fragmentMain", .fragment) orelse return null;
     const outline_vertex = vitellus_build.compileSlang(b, vitellus, target, mesh_shader, "vertexOutline", .vertex) orelse return null;
     const outline_fragment = vitellus_build.compileSlang(b, vitellus, target, mesh_shader, "fragmentOutline", .fragment) orelse return null;
+    const mask_vertex = vitellus_build.compileSlang(b, vitellus, target, mesh_shader, "vertexMask", .vertex) orelse return null;
     const blit_shader = b.path("src/core/shaders/scene_blit.slang");
     const blit_vertex = vitellus_build.compileSlang(b, vitellus, target, blit_shader, "vertexMain", .vertex) orelse return null;
     const blit_fragment = vitellus_build.compileSlang(b, vitellus, target, blit_shader, "fragmentMain", .fragment) orelse return null;
@@ -308,6 +309,7 @@ fn addEngine(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.buil
     _ = shader_files.addCopyFile(mesh_fragment, "mesh.frag");
     _ = shader_files.addCopyFile(outline_vertex, "outline.vert");
     _ = shader_files.addCopyFile(outline_fragment, "outline.frag");
+    _ = shader_files.addCopyFile(mask_vertex, "mask.vert");
     _ = shader_files.addCopyFile(blit_vertex, "scene_blit.vert");
     _ = shader_files.addCopyFile(blit_fragment, "scene_blit.frag");
     const shader_module = b.createModule(.{
@@ -318,6 +320,7 @@ fn addEngine(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.buil
             \\pub const mesh_fragment = @embedFile("mesh.frag");
             \\pub const outline_vertex = @embedFile("outline.vert");
             \\pub const outline_fragment = @embedFile("outline.frag");
+            \\pub const mask_vertex = @embedFile("mask.vert");
             \\pub const blit_vertex = @embedFile("scene_blit.vert");
             \\pub const blit_fragment = @embedFile("scene_blit.frag");
         ),

@@ -1,7 +1,8 @@
 //! Draws `mesh.Drawable`s: every shape's geometry sits in one vertex and index buffer, and each
-//! shape is drawn once, instanced, for every entity shown as it. A selected entity is outlined:
-//! its hull, pushed outwards on screen and a little back in depth, goes into the depth buffer
-//! first, so the meshes then cover all of it but the rim.
+//! shape is drawn once, instanced, for every entity shown as it. A selected entity is outlined,
+//! through anything in front of it too: after the meshes, its mask goes into the depth buffer at
+//! the nearest depth (without colour), then its hull, pushed outwards on screen, just behind
+//! that, so the hull shows everywhere but the mask: its rim.
 const std = @import("std");
 const vit = @import("vitellus");
 const ecs = @import("clutch");
@@ -36,6 +37,7 @@ pub const MeshRenderer = struct {
     pipeline_layout: vit.PipelineLayout,
     pipeline: vit.GraphicsPipeline,
     outline_pipeline: vit.GraphicsPipeline,
+    mask_pipeline: vit.GraphicsPipeline,
 
     /// Build the shapes and a pipeline drawing into `format`, with a `.d32_float` depth buffer.
     pub fn init(device: vit.Device, format: vit.Format, shaderSource: *const fn ([]const u8, []const u8) vit.ShaderModule) !MeshRenderer {
@@ -77,9 +79,11 @@ pub const MeshRenderer = struct {
 
         const pipeline_layout = try vit.PipelineLayout.init(device, .{ .label = "mesh layout", .bind_group_layouts = &.{group_layout} });
         errdefer pipeline_layout.deinit();
-        const pipeline = try makePipeline(device, format, pipeline_layout, shaderSource, "mesh", shaders.mesh_vertex, "vertexMain", shaders.mesh_fragment, "fragmentMain");
+        const pipeline = try makePipeline(device, format, pipeline_layout, shaderSource, "mesh", shaders.mesh_vertex, "vertexMain", shaders.mesh_fragment, "fragmentMain", .drawn);
         errdefer pipeline.deinit();
-        const outline_pipeline = try makePipeline(device, format, pipeline_layout, shaderSource, "outline", shaders.outline_vertex, "vertexOutline", shaders.outline_fragment, "fragmentOutline");
+        const outline_pipeline = try makePipeline(device, format, pipeline_layout, shaderSource, "outline", shaders.outline_vertex, "vertexOutline", shaders.outline_fragment, "fragmentOutline", .over_all_but_mask);
+        errdefer outline_pipeline.deinit();
+        const mask_pipeline = try makePipeline(device, format, pipeline_layout, shaderSource, "selection mask", shaders.mask_vertex, "vertexMask", shaders.outline_fragment, "fragmentOutline", .mask);
         return .{
             .vertices = vertices,
             .indices = indices,
@@ -91,11 +95,13 @@ pub const MeshRenderer = struct {
             .pipeline_layout = pipeline_layout,
             .pipeline = pipeline,
             .outline_pipeline = outline_pipeline,
+            .mask_pipeline = mask_pipeline,
         };
     }
 
     /// Free everything. The GPU must be done with it.
     pub fn deinit(self: *MeshRenderer) void {
+        self.mask_pipeline.deinit();
         self.outline_pipeline.deinit();
         self.pipeline.deinit();
         self.pipeline_layout.deinit();
@@ -132,13 +138,6 @@ pub const MeshRenderer = struct {
         cmd.setVertexBuffer(1, self.instances[self.slot], 0);
         cmd.setIndexBuffer(self.indices, .uint32, 0);
 
-        // The selected entity's outline hull first, so the meshes cover all of it but the rim.
-        if (selected) |entity| for (sorted, 0..) |drawable, i| if (drawable.entity().eql(entity)) {
-            const range = self.ranges[@intFromEnum(drawable.shape)];
-            cmd.setGraphicsPipeline(self.outline_pipeline);
-            cmd.drawIndexed(range.index_count, 1, range.first_index, 0, @intCast(i));
-        };
-
         // One instanced draw per run of the same shape.
         cmd.setGraphicsPipeline(self.pipeline);
         var start: usize = 0;
@@ -150,6 +149,15 @@ pub const MeshRenderer = struct {
             cmd.drawIndexed(range.index_count, @intCast(end - start), range.first_index, 0, @intCast(start));
             start = end;
         }
+
+        // The selected entity's mask, then its outline wherever the mask isn't.
+        if (selected) |entity| for (sorted, 0..) |drawable, i| if (drawable.entity().eql(entity)) {
+            const range = self.ranges[@intFromEnum(drawable.shape)];
+            for ([_]vit.GraphicsPipeline{ self.mask_pipeline, self.outline_pipeline }) |pass| {
+                cmd.setGraphicsPipeline(pass);
+                cmd.drawIndexed(range.index_count, 1, range.first_index, 0, @intCast(i));
+            }
+        };
     }
 };
 
@@ -159,9 +167,13 @@ fn upload(buffer: vit.Buffer, bytes: []const u8) !void {
     buffer.unmap(.{ .size = bytes.len });
 }
 
+/// How a pipeline meets the depth buffer: drawn as usual; the selection's mask (depth only,
+/// over everything); or over everything but the mask (the outline).
+const DepthUse = enum { drawn, mask, over_all_but_mask };
+
 /// A pipeline drawing shapes into `format` with a `.d32_float` depth buffer, from the given
 /// vertex and fragment shaders, labelled `label`.
-fn makePipeline(device: vit.Device, format: vit.Format, layout: vit.PipelineLayout, shaderSource: *const fn ([]const u8, []const u8) vit.ShaderModule, label: []const u8, vertex: []const u8, vertex_entry: []const u8, fragment: []const u8, fragment_entry: []const u8) !vit.GraphicsPipeline {
+fn makePipeline(device: vit.Device, format: vit.Format, layout: vit.PipelineLayout, shaderSource: *const fn ([]const u8, []const u8) vit.ShaderModule, label: []const u8, vertex: []const u8, vertex_entry: []const u8, fragment: []const u8, fragment_entry: []const u8, depth: DepthUse) !vit.GraphicsPipeline {
     const vs = try vit.Shader.init(device, .{ .label = label, .stage = .vertex, .source = shaderSource(vertex, vertex_entry) });
     defer vs.deinit();
     const fs = try vit.Shader.init(device, .{ .label = label, .stage = .fragment, .source = shaderSource(fragment, fragment_entry) });
@@ -183,8 +195,12 @@ fn makePipeline(device: vit.Device, format: vit.Format, layout: vit.PipelineLayo
                 .{ .location = 6, .format = .float32x4, .offset = @offsetOf(mesh.Drawable, "color") },
             } },
         },
-        .color_targets = &.{.{ .format = format }},
-        .depth_stencil = .{ .format = .d32_float, .depth_write = true, .depth_compare = .less },
+        .color_targets = &.{.{ .format = format, .write_mask = if (depth == .mask) .{ .red = false, .green = false, .blue = false, .alpha = false } else .{} }},
+        .depth_stencil = switch (depth) {
+            .drawn => .{ .format = .d32_float, .depth_write = true, .depth_compare = .less },
+            .mask => .{ .format = .d32_float, .depth_write = true, .depth_compare = .always },
+            .over_all_but_mask => .{ .format = .d32_float, .depth_write = false, .depth_compare = .less },
+        },
         // ponytail: no culling, as the shapes' winding isn't checked against Vitellus's front face; cull back faces once it is.
         .raster = .{ .cull_mode = .none },
         .layout = layout,

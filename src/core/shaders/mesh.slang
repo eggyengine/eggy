@@ -28,8 +28,10 @@ cbuffer Camera : register(b0, space0) {
     float4 outline_size;     // xy: the viewport in pixels; z: the outline's width in pixels
 };
 
-// How far behind its object an outline's hull sits, in depth, so the object covers its middle.
-static const float outline_depth_bias = 0.0015;
+// The depth a selected object's mask is drawn at (the nearest there is), and its outline's hull
+// just behind it: the hull is drawn wherever the mask isn't, in front of everything else.
+static const float mask_depth = 0.0;
+static const float outline_depth = 0.000001;
 
 float4 toClip(float4 world) {
     return view_projection0 * world.x + view_projection1 * world.y + view_projection2 * world.z + view_projection3 * world.w;
@@ -53,8 +55,20 @@ float4 fragmentMain(VertexOutput input) : SV_Target0 {
     return float4(color, input.color.a);
 }
 
+// The selected object's mask: the object itself, at the nearest depth, without colour.
+[shader("vertex")]
+VertexOutput vertexMask(VertexInput input) {
+    float4 world = input.model0 * input.position.x + input.model1 * input.position.y + input.model2 * input.position.z + input.model3;
+    float4 clip = toClip(world);
+    VertexOutput output;
+    output.position = float4(clip.xy, mask_depth * clip.w, clip.w);
+    output.normal = input.normal;
+    output.color = input.color;
+    return output;
+}
+
 // The selection outline: the object's hull, pushed outwards on screen from its centre by the
-// outline's width, and a little back in depth.
+// outline's width, just behind the mask and in front of everything else.
 [shader("vertex")]
 VertexOutput vertexOutline(VertexInput input) {
     float4 world = input.model0 * input.position.x + input.model1 * input.position.y + input.model2 * input.position.z + input.model3;
@@ -65,7 +79,7 @@ VertexOutput vertexOutline(VertexInput input) {
     float distance = length(away);
     float2 push = distance > 0.0001 ? away / distance * outline_size.z / half_viewport : float2(0.0, 0.0);
     VertexOutput output;
-    output.position = float4(clip.xy + push * clip.w, clip.z + outline_depth_bias * clip.w, clip.w);
+    output.position = float4(clip.xy + push * clip.w, outline_depth * clip.w, clip.w);
     output.normal = float3(0.0, 1.0, 0.0);
     output.color = outline;
     return output;
