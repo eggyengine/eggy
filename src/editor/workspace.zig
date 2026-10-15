@@ -12,6 +12,7 @@ const dock = ui.dock;
 const menus = @import("menus.zig");
 const panels = @import("panels.zig");
 const play_button = @import("play_button.zig");
+const pause_button = @import("pause_button.zig");
 const scene_view = @import("scene_view/scene_view.zig");
 const hit_test = @import("hit_test.zig");
 const reload_button = @import("reload_button.zig");
@@ -40,6 +41,8 @@ pub const Outcome = union(enum) {
     window: titlebar.Button,
     /// The play button: start the game (true) or stop it (false).
     play: bool,
+    /// The pause button, while playing: hold the game (true) or let it go on (false).
+    pause: bool,
     /// A button floating over the Scene panel.
     scene_button: scene_view.toolbar.Button,
     /// File > New Project.
@@ -98,13 +101,14 @@ const playing_blink_ms = 600;
 /// The status bar's "Playing": red text after a red dot, lit or not.
 const PlayingLight = struct {
     lit: bool,
+    label: []const u8,
 
     fn draw(context: *const anyopaque, c: *ui.Canvas, r: ui.Rect) anyerror!void {
         const self: *const PlayingLight = @ptrCast(@alignCast(context));
         const red = c.theme.destructive;
         const dot: f32 = 8;
         if (self.lit) try c.roundRect(.{ .x = r.x, .y = r.y + (r.h - dot) / 2, .w = dot, .h = dot }, red, dot / 2);
-        try c.textIn(.{ .x = r.x + 14, .y = r.y, .w = r.w - 14, .h = r.h }, "Playing", 12, red, .start);
+        try c.textIn(.{ .x = r.x + 14, .y = r.y, .w = r.w - 14, .h = r.h }, self.label, 12, red, .start);
     }
 };
 
@@ -132,6 +136,8 @@ pub const Workspace = struct {
     window_state: titlebar.State = .{},
     /// Whether the game is playing, which turns the play button into a stop button.
     playing: bool = false,
+    /// Whether play is paused, which lights the pause button.
+    paused: bool = false,
     /// What floats over the Scene panel, set by the editor before each `build`.
     scene_overlay: scene_view.Overlay = .{},
     /// Why Play won't start, shown in the status bar while it won't (borrowed for the frame).
@@ -304,13 +310,15 @@ pub const Workspace = struct {
         try main_children.appendSlice(b.allocator, &.{ top_bar, docked, status, play });
         const reload = if (self.project != null) try reload_button.element(b, self.build_state == .ready, viewport.x, viewport.w, bar_height) else null;
         if (reload) |button| try main_children.append(b.allocator, button);
+        const pause = if (self.playing) try pause_button.element(b, self.paused, viewport.x, viewport.w, bar_height) else null;
+        if (pause) |button| try main_children.append(b.allocator, button);
         // A tooltip for the play or Reload button once the pointer has rested on it a moment.
         if (hot != self.hover_id) {
             self.hover_id = hot;
             self.hover_since_ms = self.time_ms;
         }
         if (self.time_ms -| self.hover_since_ms >= tooltip_delay_ms) if (self.tooltipText(hot)) |text| {
-            const button = if (hot == play_button.id) play else reload orelse unreachable;
+            const button = if (hot == play_button.id) play else if (hot == pause_button.id) pause.? else reload orelse unreachable;
             // Sized to its text: an overlay in this column would otherwise stretch across it.
             const tooltip = try widgets.tooltipAt(b, button, text);
             tooltip.style.width = font.measure(text, 13) + 20;
@@ -353,7 +361,8 @@ pub const Workspace = struct {
 
     /// What the title bar button `id` (play or Reload) does, for its tooltip; null for others.
     fn tooltipText(self: *const Workspace, id: u32) ?[]const u8 {
-        if (id == play_button.id) return if (self.playing) "Stop" else "Play";
+        if (id == play_button.id) return if (self.playing) "Stop (Esc three times)" else "Play";
+        if (id == pause_button.id and self.playing) return if (self.paused) "Resume" else "Pause";
         if (id == reload_button.id) return if (self.build_state == .ready) "Reload (ready)" else "Reload";
         return null;
     }
@@ -392,11 +401,12 @@ pub const Workspace = struct {
             try children.append(b.allocator, shown);
         }
         if (self.playing) {
-            // Red, with a dot that blinks like a camera's recording light.
+            // Red, with a dot that blinks like a camera's recording light, steady while paused.
+            const label = if (self.paused) "Paused" else "Playing";
             const look = try b.allocator.create(PlayingLight);
-            look.* = .{ .lit = (self.time_ms / playing_blink_ms) % 2 == 0 };
-            const light = try b.node(0, .{ .width = 14 + font.measure("Playing", 12), .height = status_height }, .{ .custom = .{ .context = look, .draw = PlayingLight.draw } }, &.{});
-            light.accessibility = .{ .role = .status, .label = "Playing" };
+            look.* = .{ .lit = self.paused or (self.time_ms / playing_blink_ms) % 2 == 0, .label = label };
+            const light = try b.node(0, .{ .width = 14 + font.measure(label, 12), .height = status_height }, .{ .custom = .{ .context = look, .draw = PlayingLight.draw } }, &.{});
+            light.accessibility = .{ .role = .status, .label = label };
             try children.append(b.allocator, light);
         }
         const version = if (self.engine_label) |label|
@@ -427,7 +437,7 @@ pub const Workspace = struct {
         };
         if (controls) |rect| frame.controls = rect;
         // The play and Reload buttons float on the bar, and take presses too.
-        for ([_]u32{ play_button.id, reload_button.id }) |id| if (root.find(id)) |button| {
+        for ([_]u32{ play_button.id, reload_button.id, pause_button.id }) |id| if (root.find(id)) |button| {
             frame.extra_controls[frame.extra_count] = button.bounds;
             frame.extra_count += 1;
         };
@@ -542,6 +552,10 @@ pub const Workspace = struct {
                     if (id == play_button.id) {
                         self.playing = !self.playing;
                         return .{ .play = self.playing };
+                    }
+                    if (id == pause_button.id and self.playing) {
+                        self.paused = !self.paused;
+                        return .{ .pause = self.paused };
                     }
                     if (self.menubar.press(id)) |action| return self.run(action);
                 }
@@ -687,6 +701,25 @@ test "the play button turns into a stop button and back" {
     const press = ui.input.Event{ .pointer_down = .{ .position = play.bounds.center(), .button = .left, .clicks = 1 } };
     try std.testing.expectEqual(Outcome{ .play = true }, workspace.handle(main_slot, press));
     try std.testing.expectEqual(Outcome{ .play = false }, workspace.handle(main_slot, press));
+}
+
+test "while playing, a pause button left of play holds the game and lets it go" {
+    var workspace = try testWorkspace();
+    defer workspace.deinit();
+    var font = try ui.Font.init(std.testing.allocator, ui.default_font);
+    defer font.deinit();
+    const viewport = ui.Rect{ .x = 0, .y = 0, .w = 1000, .h = 600 };
+    try workspace.build(viewport, @splat(null), &font);
+    try std.testing.expect(workspace.roots[main_slot].?.find(pause_button.id) == null);
+
+    workspace.playing = true;
+    try workspace.build(viewport, @splat(null), &font);
+    const pause = workspace.roots[main_slot].?.find(pause_button.id).?;
+    const play = workspace.roots[main_slot].?.find(play_button.id).?;
+    try std.testing.expect(pause.bounds.x + pause.bounds.w <= play.bounds.x);
+    const press = ui.input.Event{ .pointer_down = .{ .position = pause.bounds.center(), .button = .left, .clicks = 1 } };
+    try std.testing.expectEqual(Outcome{ .pause = true }, workspace.handle(main_slot, press));
+    try std.testing.expectEqual(Outcome{ .pause = false }, workspace.handle(main_slot, press));
 }
 
 test "the menus' shortcuts run their commands" {

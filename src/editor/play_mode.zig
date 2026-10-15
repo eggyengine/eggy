@@ -1,14 +1,24 @@
 //! Play mode: the game runs (its `update` hooks, the world's systems, input events) only while
-//! playing; otherwise only its editor tools do (`editorUpdate`), so nothing changes by itself.
-//! Play keeps the scene as it was, and Stop starts the game over on it: whatever happened while
-//! playing, every value goes back.
+//! playing and not paused; otherwise only its editor tools do (`editorUpdate`), so nothing
+//! changes by itself. Play keeps the scene as it was, and Stop starts the game over on it:
+//! whatever happened while playing, every value goes back. Three presses of Escape in a row
+//! (`escape_presses` within `escape_window_ms`) stop it too.
 const std = @import("std");
 const eggy = @import("eggy");
 const HotGame = @import("hot_reload/hot_reload.zig").HotGame;
 
+/// How many presses of Escape, each within `escape_window_ms` of the last, stop play.
+pub const escape_presses = 3;
+const escape_window_ms = 600;
+
 pub const PlayMode = struct {
     /// The scene as it was when play began; null while not playing.
     before: ?eggy.scene.Scene = null,
+    /// Whether play is paused: the game is held where it is until resumed.
+    paused: bool = false,
+    /// Escape presses in a row while playing, and when the last one was.
+    escapes: u8 = 0,
+    last_escape_ms: u64 = 0,
 
     pub fn deinit(self: *PlayMode) void {
         if (self.before) |*scene| scene.deinit();
@@ -16,6 +26,22 @@ pub const PlayMode = struct {
 
     pub fn playing(self: *const PlayMode) bool {
         return self.before != null;
+    }
+
+    /// Whether the game runs this frame: playing, and not paused.
+    pub fn running(self: *const PlayMode) bool {
+        return self.playing() and !self.paused;
+    }
+
+    /// Count a press of Escape at `now_ms`; true when it makes `escape_presses` in a row while
+    /// playing, which should stop play.
+    pub fn escapePressed(self: *PlayMode, now_ms: u64) bool {
+        if (!self.playing()) return false;
+        self.escapes = if (now_ms -| self.last_escape_ms <= escape_window_ms) self.escapes + 1 else 1;
+        self.last_escape_ms = now_ms;
+        if (self.escapes < escape_presses) return false;
+        self.escapes = 0;
+        return true;
     }
 
     /// Start playing: keep the scene as it is now, from its top-level entities `roots` in order,
@@ -30,7 +56,22 @@ pub const PlayMode = struct {
     pub fn stop(self: *PlayMode, app: *eggy.App, game: *HotGame, off: []const []const u8) void {
         var scene = self.before orelse return;
         self.before = null;
+        self.paused = false;
+        self.escapes = 0;
         defer scene.deinit();
         game.restart(app, &scene, off);
     }
 };
+
+test "three quick presses of Escape stop play, slow ones don't" {
+    var mode = PlayMode{};
+    try std.testing.expect(!mode.escapePressed(0)); // not playing
+    mode.before = undefined; // playing, as far as `playing` can tell
+    try std.testing.expect(!mode.escapePressed(1000));
+    try std.testing.expect(!mode.escapePressed(1300));
+    try std.testing.expect(mode.escapePressed(1600));
+    try std.testing.expect(!mode.escapePressed(5000));
+    try std.testing.expect(!mode.escapePressed(6000));
+    try std.testing.expect(!mode.escapePressed(7000));
+    mode.before = null;
+}

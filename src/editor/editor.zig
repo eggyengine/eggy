@@ -322,7 +322,7 @@ pub fn Editor(comptime project: type) type {
             // The game stays paused while the Build progress window is up.
             // The game runs only while playing; otherwise only its editor tools do.
             if (self.build_window == null) if (self.game) |*game| {
-                if (self.play_mode.playing()) game.update(&self.app) else game.editorUpdate(&self.app);
+                if (self.play_mode.running()) game.update(&self.app) else game.editorUpdate(&self.app);
             };
             try self.syncPopOuts();
             self.keepLayout();
@@ -618,6 +618,7 @@ pub fn Editor(comptime project: type) type {
         /// selection goes.
         fn stopPlaying(self: *Self) void {
             self.workspace.playing = false;
+            self.workspace.paused = false;
             if (!self.play_mode.playing()) return;
             const game = if (self.game) |*loaded| loaded else return;
             self.play_mode.stop(&self.app, game, self.plugin_switches.off());
@@ -958,6 +959,14 @@ pub fn Editor(comptime project: type) type {
                 return .run;
             };
 
+            // Escape three times in a row stops play, whatever else each press does.
+            if (curr_event == .key_down) if (curr_event.key_down.key) |key| if (key == .escape and !curr_event.key_down.repeat) {
+                if (self.play_mode.escapePressed(sdl3.timer.getMillisecondsSinceInit())) {
+                    self.stopPlaying();
+                    return .run;
+                }
+            };
+
             // A pop-out window's close button docks its panels back into the main window.
             if (slot != main_slot and curr_event == .window_close_requested) {
                 self.workspace.dock.redock(.{ .window = @intCast(slot - 1) });
@@ -984,6 +993,7 @@ pub fn Editor(comptime project: type) type {
                 },
                 .play => |playing| if (playing) self.startPlaying() else self.stopPlaying(),
                 .scene_button => |button| self.scene_view.press(button),
+                .pause => |paused| self.play_mode.paused = paused,
                 .new_project => if (self.project_flow == null and self.mayLeave(.new_project)) {
                     layout_file.save(self.gpa, self.preference_folders.global, &self.workspace.dock, self.workspace.seen_plugin_panels.items);
                     self.project_flow = try ProjectFlow.create(self.gpa, &self.app.graphics, self.ui.font, self.mono);
@@ -1032,7 +1042,7 @@ pub fn Editor(comptime project: type) type {
             // The pages get the rest, and every pointer move so their hover state stays current.
             if (outcome == .ignored or curr_event == .mouse_motion) self.routeToPages(slot, curr_event);
             // Input reaches the game only while it plays.
-            if (self.play_mode.playing()) if (self.game) |*game| game.event(&self.app, curr_event);
+            if (self.play_mode.running()) if (self.game) |*game| game.event(&self.app, curr_event);
             // Quitting from the system (or closing the window) asks about unsaved changes too.
             const quitting = curr_event == .quit or (curr_event == .window_close_requested and slot == main_slot);
             if (quitting and !self.mayLeave(.quit)) return .run;
@@ -1639,6 +1649,7 @@ test {
     _ = @import("scene_file.zig");
     _ = @import("layout_file.zig");
     _ = @import("play_mode.zig");
+    _ = @import("pause_button.zig");
     _ = @import("history.zig");
     _ = @import("plugin_switches.zig");
     _ = @import("dragged.zig");
