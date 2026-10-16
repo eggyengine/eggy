@@ -22,6 +22,9 @@ pub const Gpu = struct {
     indices: vit.Buffer,
     /// Owned by the cache.
     parts: []const Part,
+    /// The box round its vertices, in its own space.
+    min: [3]f32,
+    max: [3]f32,
 
     pub const Part = struct {
         first_index: u32,
@@ -77,6 +80,14 @@ pub const ModelCache = struct {
         return loaded;
     }
 
+    /// The box round the model at `path`, in its own space, if it is loaded (this doesn't
+    /// load it).
+    pub fn bounds(self: *const ModelCache, path: []const u8) ?[2][3]f32 {
+        const known = self.entries.get(path) orelse return null;
+        const gpu = known orelse return null;
+        return .{ gpu.min, gpu.max };
+    }
+
     /// Forget every model, so each loads again when next drawn (its file or import settings may
     /// have changed). The GPU must be done with them.
     pub fn forgetAll(self: *ModelCache, textures: *TextureCache) void {
@@ -126,6 +137,12 @@ pub const ModelCache = struct {
             } else false;
             if (!used) textures.release(gpu);
         };
-        return .{ .vertices = vertices, .indices = indices, .parts = parts };
+        var min: [3]f32 = @splat(std.math.inf(f32));
+        var max: [3]f32 = @splat(-std.math.inf(f32));
+        for (model.vertices) |vertex| for (&min, &max, vertex.position) |*low, *high, at| {
+            low.* = @min(low.*, at);
+            high.* = @max(high.*, at);
+        };
+        return .{ .vertices = vertices, .indices = indices, .parts = parts, .min = min, .max = max };
     }
 };

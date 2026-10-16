@@ -155,7 +155,7 @@ pub const SceneView = struct {
                     self.drag = startDrag(target, layout, handle, at);
                     return true;
                 };
-                target.selected.* = instanceRoot(target, picking.pick(self.drawn, self.view, area, at));
+                target.selected.* = instanceRoot(target, picking.pick(self.drawn, &target.app.graphics.models, self.view, area, at));
                 return true;
             },
             .mouse_motion => |motion| {
@@ -191,8 +191,8 @@ pub const SceneView = struct {
 
     /// The entity whose mesh is under `at` on the panel at `scene`, as last drawn; null over
     /// nothing.
-    pub fn entityAt(self: *const SceneView, scene: ui.Rect, at: ui.Vec2) ?eggy.ecs.EntityId {
-        return picking.pick(self.drawn, self.view, scene, at);
+    pub fn entityAt(self: *const SceneView, models: *const eggy.model_cache.ModelCache, scene: ui.Rect, at: ui.Vec2) ?eggy.ecs.EntityId {
+        return picking.pick(self.drawn, models, self.view, scene, at);
     }
 
     /// Where something let go at `at` on the panel at `scene` goes: on the ground (y = 0) under

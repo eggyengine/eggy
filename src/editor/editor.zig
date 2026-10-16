@@ -1544,7 +1544,7 @@ pub fn Editor(comptime project: type) type {
             if (eggy.assets.Kind.isTexture(path)) {
                 const scene = self.sceneRect(slot);
                 const target = if (scene != null and scene.?.contains(at.x, at.y) and over == null)
-                    self.scene_view.entityAt(scene.?, at)
+                    self.scene_view.entityAt(&self.app.graphics.models, scene.?, at)
                 else if (over == panels.hierarchy_page) self.entity_editor.hierarchy.entityAt(&self.hierarchy_ui, at) else null;
                 const entity = target orelse return;
                 if (!self.entity_editor.paint(&self.app, game, entity, path)) self.workspace.toast("Only an entity with a Mesh can be painted");
