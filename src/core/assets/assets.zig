@@ -5,9 +5,12 @@ pub const descriptor = @import("descriptor.zig");
 pub const Descriptor = descriptor.Descriptor;
 pub const model = @import("model.zig");
 pub const Model = model.Model;
+pub const texture = @import("texture.zig");
+pub const Texture = texture.Texture;
 
 test {
     _ = @import("kind.zig");
     _ = @import("descriptor.zig");
     _ = @import("model.zig");
+    _ = @import("texture.zig");
 }

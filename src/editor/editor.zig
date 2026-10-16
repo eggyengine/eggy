@@ -45,7 +45,7 @@ const scene_view = @import("scene_view/scene_view.zig");
 const assets = @import("assets/assets.zig");
 const AssetIcons = @import("assets/icons.zig").Icons;
 const descriptors = @import("assets/descriptors.zig");
-const ProjectModels = @import("assets/model_loader.zig").ProjectModels;
+const ProjectAssets = @import("assets/project_assets.zig").ProjectAssets;
 
 /// The editor for `project`, which declares `name` and `game_library` (the game library's
 /// `file_name`, beside the editor). The game and its plugins run as they do in the runtime,
@@ -136,8 +136,8 @@ pub fn Editor(comptime project: type) type {
         hidden: bool = false,
         /// The project this editor opened (`--project <dir>`), from its `eggy.zon`.
         project: ?workspace_zig.Project = null,
-        /// The open project's model files, imported for the scene's model cache.
-        project_models: ?*ProjectModels = null,
+        /// The open project's model and image files, imported for the scene's caches.
+        project_assets: ?*ProjectAssets = null,
         /// The build started when the window regains focus, while it runs or once it made a new
         /// editor (see `rebuildState`).
         rebuild: ?*Job = null,
@@ -267,15 +267,16 @@ pub fn Editor(comptime project: type) type {
                 loaded.start(&app, plugin_switches.off());
             }
             const upgrades = Upgrades.init(gpa, if (opened_project) |opened| opened.dir else null, @import("build_options").source_dir);
-            // Model files, imported from the project as the scene first shows each.
-            const project_models: ?*ProjectModels = if (opened_project) |opened| blk: {
-                const models = try gpa.create(ProjectModels);
-                models.* = .{ .project_dir = opened.dir };
-                app.graphics.models.loader = models.loader();
-                break :blk models;
+            // Model and image files, imported from the project as the scene first shows each.
+            const project_assets: ?*ProjectAssets = if (opened_project) |opened| blk: {
+                const loaders = try gpa.create(ProjectAssets);
+                loaders.* = .{ .project_dir = opened.dir };
+                app.graphics.models.loader = loaders.models();
+                app.graphics.textures.loader = loaders.textures();
+                break :blk loaders;
             } else null;
-            errdefer if (project_models) |models| gpa.destroy(models);
-            var self = Self{ .gpa = gpa, .game = game, .game_modified = modifiedAt(library_path), .app = app, .ui = context, .mono = mono, .console_ui = console_ui, .hierarchy_ui = hierarchy_ui, .assets_ui = assets_ui, .assets_panel = .init(gpa), .asset_icons = asset_icons, .entity_editor = .init(gpa), .console = console, .plugin_pages = plugin_pages, .workspace = workspace, .frame = frame, .scene = scene, .drawables = drawables, .overlay = overlay, .project = opened_project, .editor_modified = if (opened_project) |opened| editorModified(gpa, opened) else null, .upgrades = upgrades, .preference_folders = preference_folders, .open_scene = open_scene, .history = .{ .gpa = gpa }, .plugin_switches = plugin_switches, .project_models = project_models };
+            errdefer if (project_assets) |loaders| gpa.destroy(loaders);
+            var self = Self{ .gpa = gpa, .game = game, .game_modified = modifiedAt(library_path), .app = app, .ui = context, .mono = mono, .console_ui = console_ui, .hierarchy_ui = hierarchy_ui, .assets_ui = assets_ui, .assets_panel = .init(gpa), .asset_icons = asset_icons, .entity_editor = .init(gpa), .console = console, .plugin_pages = plugin_pages, .workspace = workspace, .frame = frame, .scene = scene, .drawables = drawables, .overlay = overlay, .project = opened_project, .editor_modified = if (opened_project) |opened| editorModified(gpa, opened) else null, .upgrades = upgrades, .preference_folders = preference_folders, .open_scene = open_scene, .history = .{ .gpa = gpa }, .plugin_switches = plugin_switches, .project_assets = project_assets };
             self.built_sources = self.sourcesNow();
             self.syncDescriptors();
             return self;
@@ -299,7 +300,7 @@ pub fn Editor(comptime project: type) type {
             if (self.rebuild) |job| job.deinit();
             if (self.picked_project.swap(null, .acq_rel)) |path| std.heap.c_allocator.free(std.mem.span(path));
             if (self.project) |opened| freeProject(self.gpa, opened);
-            if (self.project_models) |models| self.gpa.destroy(models);
+            if (self.project_assets) |loaders| self.gpa.destroy(loaders);
             self.upgrades.deinit();
             for (&self.popouts) |*popout| if (popout.*) |*open| {
                 open.close(&self.app.graphics);
@@ -1155,9 +1156,8 @@ pub fn Editor(comptime project: type) type {
             if (curr_event == .window_focus_gained and self.cameBack()) {
                 // Another editor may have unpacked a newer Eggy meanwhile.
                 self.upgrades.refresh();
-                // Files may have changed outside: models import again, and descriptors catch up.
-                self.app.graphics.queue.waitIdle() catch {};
-                self.app.graphics.models.forgetAll();
+                // Files may have changed outside: models and images import again, and descriptors catch up.
+                self.app.graphics.forgetAssets();
                 self.filesChanged();
                 try self.rebuildOnFocus();
             }
@@ -1520,11 +1520,21 @@ pub fn Editor(comptime project: type) type {
 
         /// A file dragged from Assets let go at `at` in window `slot`, over page `over` (if any):
         /// a model or scene becomes an entity, on the ground under the pointer in the Scene
-        /// panel, or under the row it is let go on in the Hierarchy (at the top level off them).
+        /// panel, or under the row it is let go on in the Hierarchy (at the top level off them);
+        /// an image paints the mesh it is let go on, in either.
         fn spawnDropped(self: *Self, slot: Slot, at: ui.Vec2, path: []const u8, over: ?usize) void {
+            const game = self.gamePtr();
+            if (eggy.assets.Kind.isTexture(path)) {
+                const scene = self.sceneRect(slot);
+                const target = if (scene != null and scene.?.contains(at.x, at.y) and over == null)
+                    self.scene_view.entityAt(scene.?, at)
+                else if (over == panels.hierarchy_page) self.entity_editor.hierarchy.entityAt(&self.hierarchy_ui, at) else null;
+                const entity = target orelse return;
+                if (!self.entity_editor.paint(&self.app, game, entity, path)) self.workspace.toast("Only an entity with a Mesh can be painted");
+                return;
+            }
             const kind = eggy.assets.Kind.of(path);
             if (kind != .model and kind != .scene) return;
-            const game = self.gamePtr();
             if (self.sceneRect(slot)) |scene| if (scene.contains(at.x, at.y) and over == null) {
                 _ = self.entity_editor.spawnFrom(&self.app, game, path, self.scene_view.dropPoint(scene, at), null);
                 return;
@@ -1562,8 +1572,7 @@ pub fn Editor(comptime project: type) type {
             const changes = descriptors.sync(self.gpa, io, files) catch |err| return std.log.warn("cannot update the resources' descriptors: {t}", .{err});
             if (!changes.any()) return;
             std.log.debug("descriptors: {d} made, {d} removed", .{ changes.made, changes.removed });
-            self.app.graphics.queue.waitIdle() catch {};
-            self.app.graphics.models.forgetAll();
+            self.app.graphics.forgetAssets();
         }
 
         /// The chip beside the pointer while `dragged` is over page `index`: its name, or why
@@ -1863,7 +1872,7 @@ test {
     _ = @import("assets/icons.zig");
     _ = @import("assets/file_ops.zig");
     _ = @import("assets/descriptors.zig");
-    _ = @import("assets/model_loader.zig");
+    _ = @import("assets/project_assets.zig");
     _ = @import("window_placement.zig");
     _ = @import("hot_reload/hot_reload.zig");
     _ = @import("preferences/preferences.zig");

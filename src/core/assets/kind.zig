@@ -29,6 +29,16 @@ pub const Kind = enum(u8) {
         return .any;
     }
 
+    /// Whether the file at `path` is an image a mesh can be painted with: one stb_image decodes
+    /// (not an SVG or WebP).
+    pub fn isTexture(path: []const u8) bool {
+        const extension = std.fs.path.extension(path);
+        for ([_][]const u8{ ".png", ".jpg", ".jpeg", ".gif", ".bmp" }) |known| {
+            if (std.ascii.eqlIgnoreCase(extension, known)) return true;
+        }
+        return false;
+    }
+
     /// Whether a field of this kind takes the file at `path`.
     pub fn takes(self: Kind, path: []const u8) bool {
         return self == .any or Kind.of(path) == self;
@@ -40,4 +50,6 @@ test "a file's kind comes from its name" {
     try std.testing.expect(!Kind.audio.takes("art/ship.png"));
     try std.testing.expectEqual(Kind.scene, Kind.of("levels/one.scene.zon"));
     try std.testing.expectEqual(Kind.model, Kind.of("ships/Fighter.GLB"));
+    try std.testing.expect(Kind.isTexture("art/Wood.PNG"));
+    try std.testing.expect(!Kind.isTexture("art/logo.svg"));
 }

@@ -1,5 +1,6 @@
 // Meshes: each instance's model matrix (as columns) places a shape's vertices; one light from
-// above lights them, with some ambient so the far side isn't black.
+// above lights them, with some ambient so the far side isn't black. Each is painted with its
+// texture (white without one), tinted by its colour.
 struct VertexInput {
     [[vk::location(0)]] float3 position : POSITION;
     [[vk::location(1)]] float3 normal : NORMAL;
@@ -8,12 +9,14 @@ struct VertexInput {
     [[vk::location(4)]] float4 model2 : TEXCOORD2;
     [[vk::location(5)]] float4 model3 : TEXCOORD3;
     [[vk::location(6)]] float4 color : COLOR0;
+    [[vk::location(7)]] float2 uv : TEXCOORD4;
 };
 
 struct VertexOutput {
     float4 position : SV_Position;
     [[vk::location(0)]] float3 normal : NORMAL;
     [[vk::location(1)]] float4 color : COLOR0;
+    [[vk::location(2)]] float2 uv : TEXCOORD0;
 };
 
 [[vk::binding(0, 0)]]
@@ -27,6 +30,12 @@ cbuffer Camera : register(b0, space0) {
     float4 outline;          // the selection outline's colour
     float4 outline_size;     // xy: the viewport in pixels; z: the outline's width in pixels
 };
+
+// The texture the mesh is painted with, and how it is sampled.
+[[vk::binding(0, 1)]]
+Texture2D paint : register(t0, space1);
+[[vk::binding(1, 1)]]
+SamplerState paint_sampler : register(s1, space1);
 
 // The depth a selected object's mask is drawn at (the nearest there is), and its outline's hull
 // just behind it: the hull is drawn wherever the mask isn't, in front of everything else.
@@ -44,15 +53,17 @@ VertexOutput vertexMain(VertexInput input) {
     output.position = toClip(world);
     output.normal = input.model0.xyz * input.normal.x + input.model1.xyz * input.normal.y + input.model2.xyz * input.normal.z;
     output.color = input.color;
+    output.uv = input.uv;
     return output;
 }
 
 [shader("pixel")]
 float4 fragmentMain(VertexOutput input) : SV_Target0 {
     float lit = 0.3 + 0.7 * max(dot(normalize(input.normal), normalize(light.xyz)), 0.0);
-    float3 color = input.color.rgb * lit;
+    float4 texel = paint.Sample(paint_sampler, input.uv);
+    float3 color = input.color.rgb * texel.rgb * lit;
     color = options.x > 0.5 ? pow(color, float3(2.2, 2.2, 2.2)) : color;
-    return float4(color, input.color.a);
+    return float4(color, input.color.a * texel.a);
 }
 
 // The selected object's mask: the object itself, at the nearest depth, without colour.
@@ -64,6 +75,7 @@ VertexOutput vertexMask(VertexInput input) {
     output.position = float4(clip.xy, mask_depth * clip.w, clip.w);
     output.normal = input.normal;
     output.color = input.color;
+    output.uv = input.uv;
     return output;
 }
 
@@ -82,6 +94,7 @@ VertexOutput vertexOutline(VertexInput input) {
     output.position = float4(clip.xy + push * clip.w, outline_depth * clip.w, clip.w);
     output.normal = float3(0.0, 1.0, 0.0);
     output.color = outline;
+    output.uv = input.uv;
     return output;
 }
 

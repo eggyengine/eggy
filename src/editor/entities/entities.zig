@@ -243,6 +243,22 @@ pub const EntityEditor = struct {
         return true;
     }
 
+    /// Paint `entity`'s `Mesh` with the image at `path` (relative to the project), and select
+    /// it. Returns false, changing nothing, when it has no `Mesh` or there's no game library.
+    pub fn paint(self: *EntityEditor, app: *eggy.App, game: ?*const HotGame, entity: ecs.EntityId, path: []const u8) bool {
+        const loaded = game orelse return false;
+        const component = loaded.builtinComponent("Mesh") orelse return false;
+        if (!loaded.hasComponent(app, entity, component)) return false;
+        const field = for (loaded.component_types[component].fields, 0..) |info, i| {
+            if (std.mem.eql(u8, info.name, "texture")) break i;
+        } else return false;
+        var buffer: [eggy.refs.max_path_len + 8]u8 = undefined;
+        const text = std.fmt.bufPrintZ(&buffer, "\"{f}\"", .{std.zig.fmtString(path)}) catch return false;
+        if (!loaded.writeField(app, entity, component, field, text)) return false;
+        self.selected = entity;
+        return true;
+    }
+
     /// Drop the selection once its entity is gone.
     pub fn forgetDead(self: *EntityEditor, app: *eggy.App) void {
         if (self.selected) |entity| if (!app.world.isAlive(entity)) {

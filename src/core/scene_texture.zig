@@ -40,7 +40,7 @@ pub const SceneTexture = struct {
 
     pub fn init(graphics: *const Graphics) !SceneTexture {
         const device = graphics.device;
-        var preview = try viewport3d.Preview.init(device, graphics.color_format, .{ .width = 1, .height = 1 });
+        var preview = try viewport3d.Preview.init(device, graphics.color_format, .{ .width = 1, .height = 1 }, graphics.textures.layout);
         errdefer preview.deinit();
         // A vertex buffer rather than SV_VertexID, which needs Vulkan's shaderDrawParameters.
         const triangle = try vit.Buffer.init(device, .{ .label = "scene blit triangle", .size = @sizeOf(@TypeOf(blit_triangle)), .usage = .{ .vertex = true }, .initial_data = std.mem.asBytes(&blit_triangle) });
@@ -91,7 +91,7 @@ pub const SceneTexture = struct {
         // Render, then leave the texture ready for `draw` to sample.
         try cmd.barrier(&.{.{ .texture = .{ .texture = target.texture, .before = if (target.rendered) .sampled else .common, .after = .color_attachment } }});
         const whole = ui.Rect{ .x = 0, .y = 0, .w = @floatFromInt(extent_px.width), .h = @floatFromInt(extent_px.height) };
-        try self.preview.draw(cmd, target.view, whole, whole, whole, extent_px, weeoui_vitellus.isSrgb(graphics.color_format), drawables, &graphics.models, view, selected);
+        try self.preview.draw(cmd, target.view, whole, whole, whole, extent_px, weeoui_vitellus.isSrgb(graphics.color_format), drawables, graphics.sources(), view, selected);
         try cmd.barrier(&.{.{ .texture = .{ .texture = target.texture, .before = .color_attachment, .after = .sampled } }});
         target.rendered = true;
     }

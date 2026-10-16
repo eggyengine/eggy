@@ -7,6 +7,8 @@ const mesh = @import("mesh.zig");
 const camera = @import("camera.zig");
 const weeoui_vitellus = @import("weeoui_vitellus");
 const ModelCache = @import("model_cache.zig").ModelCache;
+const TextureCache = @import("texture_cache.zig").TextureCache;
+const Sources = @import("mesh_renderer.zig").Sources;
 
 /// The GPU device, the main window's `Surface`, and the 3D scene that draws into it.
 pub const Graphics = struct {
@@ -21,6 +23,8 @@ pub const Graphics = struct {
     preview: viewport3d.Preview,
     /// The model files meshes are drawn as, shared by every scene drawn; set its `loader`.
     models: ModelCache,
+    /// The images meshes are painted with, likewise; set its `loader`.
+    textures: TextureCache,
 
     pub fn init(allocator: std.mem.Allocator, window: sdl_adapter.Sdl3Window) !Graphics {
         // Eggy's shaders are SPIR-V and WGSL; each platform only tries the backends it has.
@@ -37,7 +41,9 @@ pub const Graphics = struct {
         var surface = try Surface.initFor(instance, adapter, device, queue, window, null);
         errdefer surface.deinit();
         const color_format = weeoui_vitellus.colorFormat(surface.swapchain.info().format);
-        const preview = try viewport3d.Preview.init(device, color_format, surface.extent);
+        var textures = try TextureCache.init(allocator, device);
+        errdefer textures.deinit();
+        const preview = try viewport3d.Preview.init(device, color_format, surface.extent, textures.layout);
         std.log.info("Graphics ready: {d}x{d} px, {s}", .{ surface.extent.width, surface.extent.height, @tagName(color_format) });
         return .{
             .instance = instance,
@@ -48,7 +54,21 @@ pub const Graphics = struct {
             .surface = surface,
             .preview = preview,
             .models = .init(allocator, device),
+            .textures = textures,
         };
+    }
+
+    /// Where the scene's model files and textures come from, for drawing it.
+    pub fn sources(self: *Graphics) Sources {
+        return .{ .models = &self.models, .textures = &self.textures };
+    }
+
+    /// Forget every model file and image, so each loads again when next drawn: their files may
+    /// have changed. Waits for the GPU to finish with them.
+    pub fn forgetAssets(self: *Graphics) void {
+        self.queue.waitIdle() catch {};
+        self.models.forgetAll(&self.textures);
+        self.textures.forgetAll();
     }
 
     /// Match the main window's swapchain to its pixel size.
@@ -61,8 +81,9 @@ pub const Graphics = struct {
 
     pub fn deinit(self: *Graphics) void {
         self.queue.waitIdle() catch {};
-        self.models.deinit();
+        self.models.deinit(&self.textures);
         self.preview.deinit();
+        self.textures.deinit();
         self.surface.deinit();
         self.queue.deinit();
         self.device.deinit();
@@ -89,7 +110,7 @@ pub const Graphics = struct {
     /// `view`, over the whole of `frame`. Call outside a render pass.
     pub fn drawScene(self: *Graphics, frame: Frame, drawables: []mesh.Drawable, view: camera.View) !void {
         const window = ui.Rect{ .x = 0, .y = 0, .w = @floatFromInt(frame.extent.width), .h = @floatFromInt(frame.extent.height) };
-        try self.preview.draw(frame.cmd, frame.target, window, window, window, frame.extent, weeoui_vitellus.isSrgb(self.color_format), drawables, &self.models, view, null);
+        try self.preview.draw(frame.cmd, frame.target, window, window, window, frame.extent, weeoui_vitellus.isSrgb(self.color_format), drawables, self.sources(), view, null);
     }
 };
 

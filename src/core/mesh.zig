@@ -1,5 +1,5 @@
-//! `Mesh`: the shape an entity is drawn as (built in, or a model file of the project), and its
-//! colour. A built-in component, drawn by `mesh_renderer.zig` wherever the entity's `Transform`
+//! `Mesh`: the shape an entity is drawn as (built in, or a model file of the project), its
+//! colour, and the image painted on it (a model's own textures, without one). A built-in component, drawn by `mesh_renderer.zig` wherever the entity's `Transform`
 //! puts it. `gather` lists what to draw; it
 //! runs where the component types are known (the runtime, or the editor's game library).
 const std = @import("std");
@@ -35,8 +35,10 @@ pub const Mesh = struct {
     pub const dependencies = .{Transform};
 
     shape: Source = .cube,
-    /// Red, green and blue, 0 to 1.
+    /// Red, green and blue, 0 to 1; the texture is tinted by it.
     color: [3]f32 = .{ 0.8, 0.8, 0.8 },
+    /// An image painted over the shape; none keeps a model's own textures, or plain colour.
+    texture: AssetRef(.image) = .{},
 };
 
 /// One entity to draw: where (its model matrix's columns), in what colour, as what shape or
@@ -53,6 +55,10 @@ pub const Drawable = extern struct {
     /// points into the world's `Mesh`, so it lasts only until the world next changes.
     model_file_len: u32 = 0,
     model_file: ?[*]const u8 = null,
+    /// The image it is painted with (its path in the project), if any; it points into the
+    /// world's `Mesh` as `model_file` does.
+    texture_file_len: u32 = 0,
+    texture_file: ?[*]const u8 = null,
 
     pub fn entity(self: Drawable) ecs.EntityId {
         return .init(self.entity_id, self.entity_generation);
@@ -62,6 +68,12 @@ pub const Drawable = extern struct {
     pub fn modelFile(self: Drawable) ?[]const u8 {
         const file = self.model_file orelse return null;
         return file[0..self.model_file_len];
+    }
+
+    /// The image's path, or null without one.
+    pub fn textureFile(self: Drawable) ?[]const u8 {
+        const file = self.texture_file orelse return null;
+        return file[0..self.texture_file_len];
     }
 };
 
@@ -84,13 +96,17 @@ pub fn gather(world: *ecs.World, out: []Drawable) usize {
             },
             inline else => |_, tag| out[count].shape = @field(Shape, @tagName(tag)),
         }
+        if (mesh.texture.len > 0) {
+            out[count].texture_file = &mesh.texture.buffer;
+            out[count].texture_file_len = mesh.texture.len;
+        }
         for (&out[count].model, model.data) |*column, data| column.* = data;
         count += 1;
     }
     return count;
 }
 
-/// A vertex of a shape or model: where it is, and which way its surface faces.
+/// A vertex of a shape or model: where it is, which way its surface faces, and where on a texture.
 pub const Vertex = assets.model.Vertex;
 
 /// Every shape's vertices and triangles in one pair of lists; `ranges[shape]` says which part of
@@ -130,8 +146,8 @@ const Builder = struct {
     vertices: std.ArrayList(Vertex) = .empty,
     indices: std.ArrayList(u32) = .empty,
 
-    fn vertex(self: *Builder, position: [3]f32, normal: [3]f32) !u32 {
-        try self.vertices.append(self.arena, .{ .position = position, .normal = normal });
+    fn vertex(self: *Builder, position: [3]f32, normal: [3]f32, uv: [2]f32) !u32 {
+        try self.vertices.append(self.arena, .{ .position = position, .normal = normal, .uv = uv });
         return @intCast(self.vertices.items.len - 1);
     }
 
@@ -144,10 +160,11 @@ const Builder = struct {
         const c: @Vector(3, f32) = centre;
         const r = @as(@Vector(3, f32), right) * @as(@Vector(3, f32), @splat(0.5));
         const u = @as(@Vector(3, f32), up) * @as(@Vector(3, f32), @splat(0.5));
-        const a = try self.vertex(c - r - u, normal);
-        const b = try self.vertex(c + r - u, normal);
-        const d = try self.vertex(c + r + u, normal);
-        const e = try self.vertex(c - r + u, normal);
+        // The whole texture on each face, its top along `up`.
+        const a = try self.vertex(c - r - u, normal, .{ 0, 1 });
+        const b = try self.vertex(c + r - u, normal, .{ 1, 1 });
+        const d = try self.vertex(c + r + u, normal, .{ 1, 0 });
+        const e = try self.vertex(c - r + u, normal, .{ 0, 0 });
         try self.triangle(a, b, d);
         try self.triangle(a, d, e);
     }
@@ -170,7 +187,9 @@ const Builder = struct {
             for (0..segments + 1) |side| {
                 const round = std.math.tau * @as(f32, @floatFromInt(side)) / segments;
                 const normal = [3]f32{ @sin(down) * @cos(round), @cos(down), @sin(down) * @sin(round) };
-                _ = try self.vertex(.{ normal[0] * 0.5, normal[1] * 0.5, normal[2] * 0.5 }, normal);
+                // The texture wrapped round once, top to bottom.
+                const uv = [2]f32{ @as(f32, @floatFromInt(side)) / segments, @as(f32, @floatFromInt(ring)) / rings };
+                _ = try self.vertex(.{ normal[0] * 0.5, normal[1] * 0.5, normal[2] * 0.5 }, normal, uv);
             }
         }
         for (0..rings) |ring| for (0..segments) |side| {
@@ -194,8 +213,10 @@ const Builder = struct {
             const z = @sin(round);
             const length = @sqrt(1 + slope * slope);
             const normal = [3]f32{ x / length, slope / length, z / length };
-            _ = try self.vertex(.{ x * bottom, -0.5, z * bottom }, normal);
-            _ = try self.vertex(.{ x * top, 0.5, z * top }, normal);
+            // The side wrapped in the texture once round.
+            const u = @as(f32, @floatFromInt(side)) / segments;
+            _ = try self.vertex(.{ x * bottom, -0.5, z * bottom }, normal, .{ u, 1 });
+            _ = try self.vertex(.{ x * top, 0.5, z * top }, normal, .{ u, 0 });
         }
         for (0..segments) |side| {
             const a = first + @as(u32, @intCast(side * 2));
@@ -206,10 +227,11 @@ const Builder = struct {
         for ([_]struct { y: f32, radius: f32 }{ .{ .y = -0.5, .radius = bottom }, .{ .y = 0.5, .radius = top } }) |end| {
             if (end.radius == 0) continue;
             const normal = [3]f32{ 0, if (end.y > 0) 1 else -1, 0 };
-            const centre = try self.vertex(.{ 0, end.y, 0 }, normal);
+            // The texture's middle on the centre, its edge round the rim.
+            const centre = try self.vertex(.{ 0, end.y, 0 }, normal, .{ 0.5, 0.5 });
             for (0..segments + 1) |side| {
                 const round = std.math.tau * @as(f32, @floatFromInt(side)) / segments;
-                _ = try self.vertex(.{ @cos(round) * end.radius, end.y, @sin(round) * end.radius }, normal);
+                _ = try self.vertex(.{ @cos(round) * end.radius, end.y, @sin(round) * end.radius }, normal, .{ 0.5 + @cos(round) * 0.5, 0.5 + @sin(round) * 0.5 });
             }
             for (0..segments) |side| try self.triangle(centre, centre + 1 + @as(u32, @intCast(side)), centre + 2 + @as(u32, @intCast(side)));
         }
@@ -246,7 +268,7 @@ test "a model's mesh is drawn as its file, and one with no file isn't drawn" {
     defer world.deinit();
     _ = try world.spawn(.{ Transform{}, Mesh{ .shape = .{ .model = .init("ships/fighter.glb") } } });
     _ = try world.spawn(.{ Transform{}, Mesh{ .shape = .{ .model = .{} } } });
-    _ = try world.spawn(.{ Transform{}, Mesh{ .shape = .of(.cone) } });
+    _ = try world.spawn(.{ Transform{}, Mesh{ .shape = .of(.cone), .texture = .init("art/wood.png") } });
 
     var drawn: [4]Drawable = undefined;
     try std.testing.expectEqual(@as(usize, 2), gather(&world, &drawn));
@@ -255,4 +277,6 @@ test "a model's mesh is drawn as its file, and one with no file isn't drawn" {
     try std.testing.expectEqualStrings("ships/fighter.glb", model.modelFile().?);
     try std.testing.expectEqual(Shape.cone, cone.shape);
     try std.testing.expect(cone.modelFile() == null);
+    try std.testing.expectEqualStrings("art/wood.png", cone.textureFile().?);
+    try std.testing.expect(model.textureFile() == null);
 }

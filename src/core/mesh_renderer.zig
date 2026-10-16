@@ -1,6 +1,7 @@
 //! Draws `mesh.Drawable`s: every shape's geometry sits in one vertex and index buffer, and each
-//! shape is drawn once, instanced, for every entity shown as it; each model file likewise, from
-//! its own buffers in the `ModelCache`. A selected entity is outlined,
+//! shape is drawn once, instanced, for every entity shown as it with the same texture; each
+//! model file likewise, from its own buffers in the `ModelCache`, a draw per part, each part
+//! painted with the `Mesh`'s texture or else its own. A selected entity is outlined,
 //! through anything in front of it too: after the meshes, its mask goes into the depth buffer at
 //! the nearest depth (without colour), then its hull, pushed outwards on screen, just behind
 //! that, so the hull shows everywhere but the mask: its rim.
@@ -10,6 +11,8 @@ const ecs = @import("clutch");
 const shaders = @import("scene_shaders");
 const mesh = @import("mesh.zig");
 const ModelCache = @import("model_cache.zig").ModelCache;
+const texture_cache = @import("texture_cache.zig");
+const TextureCache = texture_cache.TextureCache;
 const frames_in_flight = @import("weeoui_vitellus").frames_in_flight;
 
 /// The most meshes drawn in one frame; any more are left out.
@@ -17,6 +20,12 @@ pub const max_drawables = 4096;
 /// The selection outline: its colour, and how wide it is in pixels.
 const outline_color = [4]f32{ 1, 0.62, 0.15, 1 };
 const outline_width_px: f32 = 2.5;
+
+/// Where meshes' model files and textures come from.
+pub const Sources = struct {
+    models: *ModelCache,
+    textures: *TextureCache,
+};
 
 const CameraUniforms = extern struct {
     view_projection: [4][4]f32,
@@ -41,8 +50,9 @@ pub const MeshRenderer = struct {
     outline_pipeline: vit.GraphicsPipeline,
     mask_pipeline: vit.GraphicsPipeline,
 
-    /// Build the shapes and a pipeline drawing into `format`, with a `.d32_float` depth buffer.
-    pub fn init(device: vit.Device, format: vit.Format, shaderSource: *const fn ([]const u8, []const u8) vit.ShaderModule) !MeshRenderer {
+    /// Build the shapes and a pipeline drawing into `format`, with a `.d32_float` depth buffer,
+    /// painting with textures bound as `texture_layout` describes (`TextureCache.layout`).
+    pub fn init(device: vit.Device, format: vit.Format, shaderSource: *const fn ([]const u8, []const u8) vit.ShaderModule, texture_layout: vit.BindGroupLayout) !MeshRenderer {
         var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
         defer arena.deinit();
         const geometry = try mesh.Geometry.build(arena.allocator());
@@ -79,7 +89,7 @@ pub const MeshRenderer = struct {
             instance.deinit();
         };
 
-        const pipeline_layout = try vit.PipelineLayout.init(device, .{ .label = "mesh layout", .bind_group_layouts = &.{group_layout} });
+        const pipeline_layout = try vit.PipelineLayout.init(device, .{ .label = "mesh layout", .bind_group_layouts = &.{ group_layout, texture_layout } });
         errdefer pipeline_layout.deinit();
         const pipeline = try makePipeline(device, format, pipeline_layout, shaderSource, "mesh", shaders.mesh_vertex, "vertexMain", shaders.mesh_fragment, "fragmentMain", .drawn);
         errdefer pipeline.deinit();
@@ -117,17 +127,28 @@ pub const MeshRenderer = struct {
         self.vertices.deinit();
     }
 
+    /// Load the model files and textures `drawables` need from `sources`, and ready new
+    /// textures for sampling. Call outside a render pass, before `draw`.
+    pub fn prepare(self: *MeshRenderer, cmd: vit.CommandBuffer, drawables: []const mesh.Drawable, sources: Sources) !void {
+        _ = self;
+        for (drawables[0..@min(drawables.len, max_drawables)]) |drawable| {
+            if (drawable.modelFile()) |file| _ = sources.models.get(file, sources.textures);
+            if (drawable.textureFile()) |file| _ = sources.textures.get(file);
+        }
+        try sources.textures.prepare(cmd);
+    }
+
     /// Draw `drawables` (at most `max_drawables`; they are sorted in place) in the render pass in
     /// progress, whose viewport is `viewport_px`, through `view_projection` (a `camera.View`'s),
-    /// outlining `selected`'s, with model files' triangles from `models`. `srgb`: whether the
-    /// target encodes sRGB itself.
-    pub fn draw(self: *MeshRenderer, cmd: vit.CommandBuffer, drawables: []mesh.Drawable, models: *ModelCache, view_projection: [4][4]f32, viewport_px: [2]f32, selected: ?ecs.EntityId, srgb: bool) !void {
+    /// outlining `selected`'s, with model files and textures from `sources` (`prepare`d for
+    /// them). `srgb`: whether the target encodes sRGB itself.
+    pub fn draw(self: *MeshRenderer, cmd: vit.CommandBuffer, drawables: []mesh.Drawable, sources: Sources, view_projection: [4][4]f32, viewport_px: [2]f32, selected: ?ecs.EntityId, srgb: bool) !void {
         const sorted = drawables[0..@min(drawables.len, max_drawables)];
         if (sorted.len == 0) return;
         self.slot = (self.slot + 1) % frames_in_flight;
 
-        // Sort so each shape's, then each model file's, are one instanced draw; then upload them
-        // and the camera.
+        // Sort so each shape's, then each model file's, with the same texture are one instanced
+        // draw; then upload them and the camera.
         std.mem.sort(mesh.Drawable, sorted, {}, drawnBefore);
         try upload(self.instances[self.slot], std.mem.sliceAsBytes(sorted));
         const camera = CameraUniforms{ .view_projection = view_projection, .light = .{ 0.4, 1, 0.6, 0 }, .options = .{ if (srgb) 1 else 0, 0, 0, 0 }, .outline = outline_color, .outline_size = .{ viewport_px[0], viewport_px[1], outline_width_px, 0 } };
@@ -136,47 +157,60 @@ pub const MeshRenderer = struct {
         cmd.setBindGroup(0, self.groups[self.slot], &.{});
         cmd.setVertexBuffer(1, self.instances[self.slot], 0);
 
-        // One instanced draw per run of the same shape or model file.
+        // One instanced draw per run of the same shape or model file and texture, per part.
         cmd.setGraphicsPipeline(self.pipeline);
         var start: usize = 0;
         while (start < sorted.len) {
             var end = start + 1;
             while (end < sorted.len and !drawnBefore({}, sorted[start], sorted[end])) end += 1;
-            if (self.bind(cmd, models, sorted[start])) |range| cmd.drawIndexed(range.index_count, @intCast(end - start), range.first_index, 0, @intCast(start));
+            self.drawRun(cmd, sources, sorted[start], @intCast(start), @intCast(end - start));
             start = end;
         }
 
         // The selected entity's mask, then its outline wherever the mask isn't.
         if (selected) |entity| for (sorted, 0..) |drawable, i| if (drawable.entity().eql(entity)) {
-            const range = self.bind(cmd, models, drawable) orelse break;
             for ([_]vit.GraphicsPipeline{ self.mask_pipeline, self.outline_pipeline }) |pass| {
                 cmd.setGraphicsPipeline(pass);
-                cmd.drawIndexed(range.index_count, 1, range.first_index, 0, @intCast(i));
+                self.drawRun(cmd, sources, drawable, @intCast(i), 1);
             }
         };
     }
 
-    /// Bind the vertex and index buffers `drawable` is drawn from, and say which of its indices;
-    /// null for a model file that can't be drawn.
-    fn bind(self: *MeshRenderer, cmd: vit.CommandBuffer, models: *ModelCache, drawable: mesh.Drawable) ?mesh.Geometry.Range {
+    /// Draw `count` instances from `first` of `drawable`'s shape or model file, each part with
+    /// its texture. A model file that can't be drawn draws nothing.
+    fn drawRun(self: *MeshRenderer, cmd: vit.CommandBuffer, sources: Sources, drawable: mesh.Drawable, first: u32, count: u32) void {
+        const own = if (drawable.textureFile()) |file| sources.textures.get(file) else null;
         if (drawable.modelFile()) |file| {
-            const model = models.get(file) orelse return null;
+            const model = sources.models.get(file, sources.textures) orelse return;
             cmd.setVertexBuffer(0, model.vertices, 0);
             cmd.setIndexBuffer(model.indices, .uint32, 0);
-            return .{ .first_index = 0, .index_count = model.index_count };
+            for (model.parts) |part| {
+                const paint = own orelse part.texture orelse sources.textures.white;
+                cmd.setBindGroup(1, paint.group, &.{});
+                cmd.drawIndexed(part.index_count, count, part.first_index, 0, first);
+            }
+            return;
         }
         cmd.setVertexBuffer(0, self.vertices, 0);
         cmd.setIndexBuffer(self.indices, .uint32, 0);
-        return self.ranges[@intFromEnum(drawable.shape)];
+        cmd.setBindGroup(1, (own orelse sources.textures.white).group, &.{});
+        const range = self.ranges[@intFromEnum(drawable.shape)];
+        cmd.drawIndexed(range.index_count, count, range.first_index, 0, first);
     }
 };
 
-/// The order meshes are drawn in: built-in shapes first, by shape, then model files, by path.
-/// Two that neither comes before are drawn in one go.
+/// The order meshes are drawn in: built-in shapes first, by shape, then model files, by path,
+/// and those alike by texture. Two that neither comes before are drawn in one go.
 fn drawnBefore(_: void, a: mesh.Drawable, b: mesh.Drawable) bool {
-    const a_file = a.modelFile() orelse return if (b.modelFile() != null) true else @intFromEnum(a.shape) < @intFromEnum(b.shape);
-    const b_file = b.modelFile() orelse return false;
-    return std.mem.lessThan(u8, a_file, b_file);
+    const by_source = sourceOrder(a, b);
+    if (by_source != .eq) return by_source == .lt;
+    return std.mem.order(u8, a.textureFile() orelse "", b.textureFile() orelse "") == .lt;
+}
+
+fn sourceOrder(a: mesh.Drawable, b: mesh.Drawable) std.math.Order {
+    const a_file = a.modelFile() orelse return if (b.modelFile() != null) .lt else std.math.order(@intFromEnum(a.shape), @intFromEnum(b.shape));
+    const b_file = b.modelFile() orelse return .gt;
+    return std.mem.order(u8, a_file, b_file);
 }
 
 fn upload(buffer: vit.Buffer, bytes: []const u8) !void {
@@ -204,6 +238,7 @@ fn makePipeline(device: vit.Device, format: vit.Format, layout: vit.PipelineLayo
             .{ .stride = @sizeOf(mesh.Vertex), .attributes = &.{
                 .{ .location = 0, .format = .float32x3, .offset = @offsetOf(mesh.Vertex, "position") },
                 .{ .location = 1, .format = .float32x3, .offset = @offsetOf(mesh.Vertex, "normal") },
+                .{ .location = 7, .format = .float32x2, .offset = @offsetOf(mesh.Vertex, "uv") },
             } },
             .{ .stride = @sizeOf(mesh.Drawable), .step_mode = .instance, .attributes = &.{
                 .{ .location = 2, .format = .float32x4, .offset = @offsetOf(mesh.Drawable, "model") },
@@ -225,15 +260,17 @@ fn makePipeline(device: vit.Device, format: vit.Format, layout: vit.PipelineLayo
     });
 }
 
-test "shapes are drawn before model files, and each kind together" {
+test "shapes are drawn before model files, and each kind and texture together" {
     var drawables = [_]mesh.Drawable{
         .{ .model = undefined, .color = undefined, .shape = .cube, .entity_id = 0, .entity_generation = 0, .model_file = "b.glb", .model_file_len = 5 },
         .{ .model = undefined, .color = undefined, .shape = .sphere, .entity_id = 1, .entity_generation = 0 },
         .{ .model = undefined, .color = undefined, .shape = .cube, .entity_id = 2, .entity_generation = 0, .model_file = "a.glb", .model_file_len = 5 },
-        .{ .model = undefined, .color = undefined, .shape = .cube, .entity_id = 3, .entity_generation = 0 },
+        .{ .model = undefined, .color = undefined, .shape = .cube, .entity_id = 3, .entity_generation = 0, .texture_file = "wood.png", .texture_file_len = 8 },
+        .{ .model = undefined, .color = undefined, .shape = .cube, .entity_id = 4, .entity_generation = 0 },
     };
     std.mem.sort(mesh.Drawable, &drawables, {}, drawnBefore);
-    var order: [4]u32 = undefined;
+    var order: [5]u32 = undefined;
     for (&order, drawables) |*id, drawable| id.* = drawable.entity_id;
-    try std.testing.expectEqualSlices(u32, &.{ 3, 1, 2, 0 }, &order);
+    // Plain cubes before painted ones, so each texture is one draw.
+    try std.testing.expectEqualSlices(u32, &.{ 4, 3, 1, 2, 0 }, &order);
 }

@@ -168,7 +168,7 @@ fn addProject(b: *std.Build, engine: *std.Build, emscripten: Emscripten, target:
     const runtime_app = addDesktopApp(b, target, runtime_module, runtime_name);
     const runtime_step = b.step("runtime", "Build the game");
     runtime_step.dependOn(&runtime_app.install.step);
-    // Packaging: the game's models, converted for the runtime, installed beside it.
+    // Packaging: the game's models and images, converted for the runtime, installed beside it.
     if (models.addPackaging(b, engine, optimize)) |packaged| {
         runtime_step.dependOn(packaged);
         runtime_app.run.step.dependOn(packaged);

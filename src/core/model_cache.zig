@@ -1,9 +1,12 @@
-//! The model files a scene draws, on the GPU: each one's triangles, loaded through `loader` the
-//! first time a `Mesh` shows it, then kept. The editor's loader imports model files with assimp;
-//! the runtime's reads what packaging made of them (`.eggmodel`).
+//! The model files a scene draws, on the GPU: each one's triangles and the textures its parts
+//! are painted with, loaded through `loader` the first time a `Mesh` shows it, then kept. The
+//! editor's loader imports model files with assimp; the runtime's reads what packaging made of
+//! them (`.eggmodel`).
 const std = @import("std");
 const vit = @import("vitellus");
 const assets = @import("eggy_assets");
+const texture_cache = @import("texture_cache.zig");
+const TextureCache = texture_cache.TextureCache;
 const log = std.log.scoped(.models);
 
 /// How a model file (by its path in the project) becomes triangles.
@@ -13,13 +16,29 @@ pub const Loader = struct {
     load: *const fn (context: *anyopaque, gpa: std.mem.Allocator, path: []const u8) ?assets.Model,
 };
 
-/// A model's triangles on the GPU.
+/// A model's triangles on the GPU, in parts each painted with its own texture (or not).
 pub const Gpu = struct {
     vertices: vit.Buffer,
     indices: vit.Buffer,
-    index_count: u32,
+    /// Owned by the cache.
+    parts: []const Part,
 
-    fn deinit(self: Gpu) void {
+    pub const Part = struct {
+        first_index: u32,
+        index_count: u32,
+        /// One of `textures`; null to paint it with the `Mesh`'s texture, or white.
+        texture: ?texture_cache.Gpu,
+    };
+
+    fn deinit(self: Gpu, gpa: std.mem.Allocator, textures: *TextureCache) void {
+        // Each texture once, though several parts may share it.
+        for (self.parts, 0..) |part, i| if (part.texture) |texture| {
+            const shared = for (self.parts[0..i]) |earlier| {
+                if (earlier.texture) |seen| if (std.meta.eql(seen.texture, texture.texture)) break true;
+            } else false;
+            if (!shared) textures.release(texture);
+        };
+        gpa.free(self.parts);
         self.indices.deinit();
         self.vertices.deinit();
     }
@@ -37,20 +56,22 @@ pub const ModelCache = struct {
         return .{ .gpa = gpa, .device = device };
     }
 
-    /// Free every model. The GPU must be done with them (`Graphics.queue.waitIdle`).
-    pub fn deinit(self: *ModelCache) void {
-        self.forgetAll();
+    /// Free every model, and its textures from `textures`. The GPU must be done with them
+    /// (`Graphics.queue.waitIdle`).
+    pub fn deinit(self: *ModelCache, textures: *TextureCache) void {
+        self.forgetAll(textures);
         self.entries.deinit(self.gpa);
     }
 
-    /// The model at `path`, loading it the first time; null when it can't be drawn.
-    pub fn get(self: *ModelCache, path: []const u8) ?Gpu {
+    /// The model at `path`, loading it the first time (its textures into `textures`); null when
+    /// it can't be drawn.
+    pub fn get(self: *ModelCache, path: []const u8, textures: *TextureCache) ?Gpu {
         if (self.entries.get(path)) |known| return known;
         const key = self.gpa.dupe(u8, path) catch return null;
-        const loaded = self.upload(path);
+        const loaded = self.upload(path, textures);
         self.entries.put(self.gpa, key, loaded) catch {
             self.gpa.free(key);
-            if (loaded) |gpu| gpu.deinit();
+            if (loaded) |gpu| gpu.deinit(self.gpa, textures);
             return null;
         };
         return loaded;
@@ -58,17 +79,17 @@ pub const ModelCache = struct {
 
     /// Forget every model, so each loads again when next drawn (its file or import settings may
     /// have changed). The GPU must be done with them.
-    pub fn forgetAll(self: *ModelCache) void {
+    pub fn forgetAll(self: *ModelCache, textures: *TextureCache) void {
         var it = self.entries.iterator();
         while (it.next()) |entry| {
-            if (entry.value_ptr.*) |gpu| gpu.deinit();
+            if (entry.value_ptr.*) |gpu| gpu.deinit(self.gpa, textures);
             self.gpa.free(entry.key_ptr.*);
         }
         self.entries.clearRetainingCapacity();
     }
 
-    /// Load the model at `path` and put it on the GPU.
-    fn upload(self: *ModelCache, path: []const u8) ?Gpu {
+    /// Load the model at `path` and put it, and its textures, on the GPU.
+    fn upload(self: *ModelCache, path: []const u8, textures: *TextureCache) ?Gpu {
         const loader = self.loader orelse return null;
         var model = loader.load(loader.context, self.gpa, path) orelse return null;
         defer model.deinit(self.gpa);
@@ -76,15 +97,35 @@ pub const ModelCache = struct {
             log.warn("{s} has no triangles", .{path});
             return null;
         }
-        const vertices = vit.Buffer.init(self.device, .{ .label = "model vertices", .size = model.vertices.len * @sizeOf(assets.model.Vertex), .usage = .{ .vertex = true }, .initial_data = std.mem.sliceAsBytes(model.vertices) }) catch |err| {
+        return self.uploadModel(path, model, textures) catch |err| {
             log.err("cannot upload {s}: {t}", .{ path, err });
             return null;
         };
-        const indices = vit.Buffer.init(self.device, .{ .label = "model indices", .size = model.indices.len * @sizeOf(u32), .usage = .{ .index = true }, .initial_data = std.mem.sliceAsBytes(model.indices) }) catch |err| {
-            vertices.deinit();
-            log.err("cannot upload {s}: {t}", .{ path, err });
-            return null;
+    }
+
+    fn uploadModel(self: *ModelCache, path: []const u8, model: assets.Model, textures: *TextureCache) !Gpu {
+        const vertices = try vit.Buffer.init(self.device, .{ .label = "model vertices", .size = model.vertices.len * @sizeOf(assets.model.Vertex), .usage = .{ .vertex = true }, .initial_data = std.mem.sliceAsBytes(model.vertices) });
+        errdefer vertices.deinit();
+        const indices = try vit.Buffer.init(self.device, .{ .label = "model indices", .size = model.indices.len * @sizeOf(u32), .usage = .{ .index = true }, .initial_data = std.mem.sliceAsBytes(model.indices) });
+        errdefer indices.deinit();
+
+        // Its textures, then its parts painted with them; a model without parts is one.
+        const made = try self.gpa.alloc(?texture_cache.Gpu, model.textures.len);
+        defer self.gpa.free(made);
+        @memset(made, null);
+        errdefer for (made) |texture| if (texture) |gpu| textures.release(gpu);
+        for (model.textures, made) |texture, *gpu| gpu.* = try textures.make(texture, path);
+        const whole = [_]assets.model.Part{.{ .first_index = 0, .index_count = @intCast(model.indices.len) }};
+        const source = if (model.parts.len > 0) model.parts else &whole;
+        const parts = try self.gpa.alloc(Gpu.Part, source.len);
+        for (source, parts) |part, *gpu| gpu.* = .{ .first_index = part.first_index, .index_count = part.index_count, .texture = if (part.texture) |at| made[at] else null };
+        // A texture no part paints with goes now: the parts are what free them.
+        for (made, 0..) |texture, at| if (texture) |gpu| {
+            const used = for (source) |part| {
+                if (part.texture == @as(u32, @intCast(at))) break true;
+            } else false;
+            if (!used) textures.release(gpu);
         };
-        return .{ .vertices = vertices, .indices = indices, .index_count = @intCast(model.indices.len) };
+        return .{ .vertices = vertices, .indices = indices, .parts = parts };
     }
 };

@@ -189,6 +189,12 @@ pub const SceneView = struct {
         }
     }
 
+    /// The entity whose mesh is under `at` on the panel at `scene`, as last drawn; null over
+    /// nothing.
+    pub fn entityAt(self: *const SceneView, scene: ui.Rect, at: ui.Vec2) ?eggy.ecs.EntityId {
+        return picking.pick(self.drawn, self.view, scene, at);
+    }
+
     /// Where something let go at `at` on the panel at `scene` goes: on the ground (y = 0) under
     /// the pointer, or a few metres out when the ground there is behind the camera or far off.
     pub fn dropPoint(self: *const SceneView, scene: ui.Rect, at: ui.Vec2) [3]f32 {

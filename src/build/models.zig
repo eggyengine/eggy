@@ -1,6 +1,7 @@
-//! Models in the build: `eggy_assimp`, the shared library the editor imports model files with,
-//! and packaging, which converts a game's model files to `.eggmodel` for its runtime (installed
-//! into `<prefix>/data/`, where the runtime looks).
+//! Models and images in the build: `eggy_assimp`, the shared library the editor imports model
+//! files and decodes images with, and packaging, which converts a game's model and image files
+//! to `.eggmodel` and `.eggtexture` for its runtime (installed into `<prefix>/data/`, where the
+//! runtime looks).
 const std = @import("std");
 const assimp = @import("assimp.zig");
 const Kind = @import("../core/assets/kind.zig").Kind;
@@ -32,6 +33,7 @@ pub fn addImporter(eggy: *std.Build, target: std.Build.ResolvedTarget, optimize:
     // assimp's C API, for the library's Zig.
     const translated = eggy.addTranslateC(.{ .root_source_file = eggy.path("src/model_import/assimp.h"), .target = target, .optimize = optimize });
     translated.addIncludePath(built.include);
+    translated.addIncludePath(source.path("contrib"));
     translated.addConfigHeader(built.config);
 
     const library = eggy.addLibrary(.{
@@ -51,6 +53,9 @@ pub fn addImporter(eggy: *std.Build, target: std.Build.ResolvedTarget, optimize:
         .use_llvm = true,
     });
     library.root_module.linkLibrary(built.library);
+    // stb_image, from assimp's copy, for images.
+    library.root_module.addIncludePath(source.path("contrib"));
+    library.root_module.addCSourceFile(.{ .file = eggy.path("src/model_import/stb_image.c"), .flags = &.{"-fno-sanitize=undefined"} });
 
     const module = eggy.createModule(.{
         .root_source_file = eggy.path("src/model_import/model_import.zig"),
@@ -69,16 +74,17 @@ pub fn installedPath(target: std.Target, library: *std.Build.Step.Compile) []con
 }
 
 /// Packaging for the game `b` builds: each model file in its `resources/` converted to
-/// `<prefix>/data/<path>.eggmodel`, by a tool built with `eggy` for the machine building. Null
-/// when the game has no models (so assimp isn't built for it), or until assimp is fetched.
+/// `<prefix>/data/<path>.eggmodel`, and each image to `<path>.eggtexture`, by a tool built with
+/// `eggy` for the machine building. Null when the game has neither (so assimp isn't built for
+/// it), or until assimp is fetched.
 pub fn addPackaging(b: *std.Build, eggy: *std.Build, optimize: std.builtin.OptimizeMode) ?*std.Build.Step {
-    const models = findModels(b);
-    if (models.len == 0) return null;
+    const packaged = findPackaged(b);
+    if (packaged.len == 0) return null;
     const host = eggy.graph.host;
     const assets = assetsModule(eggy, host, optimize);
     const importer = addImporter(eggy, host, optimize, assets) orelse return null;
     const tool = eggy.addExecutable(.{
-        .name = "eggy_package_models",
+        .name = "eggy_package_assets",
         .root_module = eggy.createModule(.{
             .root_source_file = eggy.path("src/model_import/package.zig"),
             .target = host,
@@ -91,11 +97,11 @@ pub fn addPackaging(b: *std.Build, eggy: *std.Build, optimize: std.builtin.Optim
         .use_llvm = true,
     });
 
-    // Each model and its descriptor is an input, so changing either packages again.
+    // Each file and its descriptor is an input, so changing either packages again.
     const package = b.addRunArtifact(tool);
     package.addArg(b.build_root.handle.realPathFileAlloc(b.graph.io, ".", b.allocator) catch |err| std.debug.panic("cannot resolve the project's directory: {t}", .{err}));
-    const output = package.addOutputDirectoryArg("models");
-    for (models) |path| {
+    const output = package.addOutputDirectoryArg("assets");
+    for (packaged) |path| {
         package.addArg(path);
         package.addFileInput(b.path(path));
         if (b.build_root.handle.access(b.graph.io, b.fmt("{s}.eggy", .{path}), .{})) {
@@ -105,24 +111,25 @@ pub fn addPackaging(b: *std.Build, eggy: *std.Build, optimize: std.builtin.Optim
     return &b.addInstallDirectory(.{ .source_dir = output, .install_dir = .prefix, .install_subdir = "data" }).step;
 }
 
-/// The model files in `b`'s project's `resources/`, relative to the project with `/` between
-/// parts, sorted so the same files always package the same way.
-fn findModels(b: *std.Build) []const []const u8 {
+/// The model files and textures (images `Kind.isTexture`) in `b`'s project's `resources/`, relative to the project with `/`
+/// between parts, sorted so the same files always package the same way.
+fn findPackaged(b: *std.Build) []const []const u8 {
     const io = b.graph.io;
-    var models: std.ArrayList([]const u8) = .empty;
+    var found: std.ArrayList([]const u8) = .empty;
     var dir = b.build_root.handle.openDir(io, "resources", .{ .iterate = true }) catch return &.{};
     defer dir.close(io);
     var walker = dir.walk(b.allocator) catch @panic("OOM");
     defer walker.deinit();
     while (walker.next(io) catch null) |entry| {
-        if (entry.kind != .file or Kind.of(entry.basename) != .model) continue;
+        const kind = Kind.of(entry.basename);
+        if (entry.kind != .file or (kind != .model and !Kind.isTexture(entry.basename))) continue;
         const path = std.mem.replaceOwned(u8, b.allocator, entry.path, std.fs.path.sep_str, "/") catch @panic("OOM");
-        models.append(b.allocator, b.fmt("resources/{s}", .{path})) catch @panic("OOM");
+        found.append(b.allocator, b.fmt("resources/{s}", .{path})) catch @panic("OOM");
     }
-    std.mem.sort([]const u8, models.items, {}, struct {
+    std.mem.sort([]const u8, found.items, {}, struct {
         fn before(_: void, x: []const u8, y: []const u8) bool {
             return std.mem.lessThan(u8, x, y);
         }
     }.before);
-    return models.items;
+    return found.items;
 }

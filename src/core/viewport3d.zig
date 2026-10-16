@@ -7,8 +7,8 @@ const frames_in_flight = @import("weeoui_vitellus").frames_in_flight;
 const mesh = @import("mesh.zig");
 const camera = @import("camera.zig");
 const ecs = @import("clutch");
-const MeshRenderer = @import("mesh_renderer.zig").MeshRenderer;
-const ModelCache = @import("model_cache.zig").ModelCache;
+const mesh_renderer = @import("mesh_renderer.zig");
+const MeshRenderer = mesh_renderer.MeshRenderer;
 
 const Vertex = extern struct {
     position: [2]f32,
@@ -39,7 +39,9 @@ pub const Preview = struct {
     depth_initialized: bool = false,
     meshes: MeshRenderer,
 
-    pub fn init(device: vit.Device, format: vit.Format, extent: vit.Extent2D) !Preview {
+    /// The backdrop and meshes for a target in `format` at `extent`, painting with textures
+    /// bound as `texture_layout` describes (`TextureCache.layout`).
+    pub fn init(device: vit.Device, format: vit.Format, extent: vit.Extent2D, texture_layout: vit.BindGroupLayout) !Preview {
         const geometry = try vit.Buffer.init(device, .{
             .label = "scene backdrop",
             .size = @sizeOf(@TypeOf(vertex_data)),
@@ -97,7 +99,7 @@ pub const Preview = struct {
         errdefer depth.deinit();
         const depth_view = try vit.TextureView.init(device, .{ .texture = depth, .aspect = .depth });
         errdefer depth_view.deinit();
-        var meshes = try MeshRenderer.init(device, format, shaderSource);
+        var meshes = try MeshRenderer.init(device, format, shaderSource, texture_layout);
         errdefer meshes.deinit();
         return .{
             .geometry = geometry,
@@ -139,9 +141,10 @@ pub const Preview = struct {
 
     /// Draw the backdrop and `drawables` (sorted in place), seen from `view` with `selected`'s
     /// outlined, into `scene` of `target`, a window `window` big at `extent` pixels, cut to
-    /// `clip`. Call outside a render pass.
-    pub fn draw(self: *Preview, cmd: vit.CommandBuffer, target: vit.TextureView, scene: ui.Rect, clip: ui.Rect, window: ui.Rect, extent: vit.Extent2D, srgb: bool, drawables: []mesh.Drawable, models: *ModelCache, view: camera.View, selected: ?ecs.EntityId) !void {
+    /// `clip`, with model files and textures from `sources`. Call outside a render pass.
+    pub fn draw(self: *Preview, cmd: vit.CommandBuffer, target: vit.TextureView, scene: ui.Rect, clip: ui.Rect, window: ui.Rect, extent: vit.Extent2D, srgb: bool, drawables: []mesh.Drawable, sources: mesh_renderer.Sources, view: camera.View, selected: ?ecs.EntityId) !void {
         const scissor = previewScissor(scene, clip, window, extent) orelse return;
+        try self.meshes.prepare(cmd, drawables, sources);
         const transform = SceneUniforms{
             .screen = .{
                 2 * (scene.x + scene.w / 2) / window.w - 1,
@@ -180,7 +183,7 @@ pub const Preview = struct {
         const px = @as(f32, @floatFromInt(extent.width)) / window.w;
         const py = @as(f32, @floatFromInt(extent.height)) / window.h;
         cmd.setViewport(.{ .x = (scene.x - window.x) * px, .y = (scene.y - window.y) * py, .width = scene.w * px, .height = scene.h * py });
-        try self.meshes.draw(cmd, drawables, models, view.viewProjection(scene.w / scene.h), .{ scene.w * px, scene.h * py }, selected, srgb);
+        try self.meshes.draw(cmd, drawables, sources, view.viewProjection(scene.w / scene.h), .{ scene.w * px, scene.h * py }, selected, srgb);
         cmd.endRenderPass();
     }
 };
