@@ -13,6 +13,7 @@ const menus = @import("menus.zig");
 const panels = @import("panels.zig");
 const play_button = @import("play_button.zig");
 const pause_button = @import("pause_button.zig");
+const simulate_button = @import("simulate_button.zig");
 const scene_view = @import("scene_view/scene_view.zig");
 const hit_test = @import("hit_test.zig");
 const reload_button = @import("reload_button.zig");
@@ -41,6 +42,8 @@ pub const Outcome = union(enum) {
     window: titlebar.Button,
     /// The play button: start the game (true) or stop it (false).
     play: bool,
+    /// The Simulate button: start the game, seen through the Scene panel's own camera.
+    simulate,
     /// The pause button, while playing: hold the game (true) or let it go on (false).
     pause: bool,
     /// A button floating over the Scene panel.
@@ -140,6 +143,8 @@ pub const Workspace = struct {
     playing: bool = false,
     /// Whether play is paused, which lights the pause button.
     paused: bool = false,
+    /// Whether the game runs as Simulate started it, rather than Play.
+    simulating: bool = false,
     /// What floats over the Scene panel, set by the editor before each `build`.
     scene_overlay: scene_view.Overlay = .{},
     /// Why Play won't start, shown in the status bar while it won't (borrowed for the frame).
@@ -314,13 +319,15 @@ pub const Workspace = struct {
         if (reload) |button| try main_children.append(b.allocator, button);
         const pause = if (self.playing) try pause_button.element(b, self.paused, viewport.x, viewport.w, bar_height) else null;
         if (pause) |button| try main_children.append(b.allocator, button);
+        const simulate = if (!self.playing) try simulate_button.element(b, viewport.x, viewport.w, bar_height) else null;
+        if (simulate) |button| try main_children.append(b.allocator, button);
         // A tooltip for the play or Reload button once the pointer has rested on it a moment.
         if (hot != self.hover_id) {
             self.hover_id = hot;
             self.hover_since_ms = self.time_ms;
         }
         if (self.time_ms -| self.hover_since_ms >= tooltip_delay_ms) if (self.tooltipText(hot)) |text| {
-            const button = if (hot == play_button.id) play else if (hot == pause_button.id) pause.? else if (hot == reload_button.id) reload.? else docked.find(hot) orelse unreachable;
+            const button = if (hot == play_button.id) play else if (hot == pause_button.id) pause.? else if (hot == simulate_button.id) simulate.? else if (hot == reload_button.id) reload.? else docked.find(hot) orelse unreachable;
             // Sized to its text: an overlay in this column would otherwise stretch across it.
             const tooltip = try widgets.tooltipAt(b, button, text);
             tooltip.style.width = font.measure(text, 13) + 20;
@@ -367,6 +374,7 @@ pub const Workspace = struct {
         if (scene_view.toolbar.buttonOf(id)) |button| return scene_view.toolbar.describe(button, self.scene_overlay.tools);
         if (id == play_button.id) return if (self.playing) "Stop (Esc three times)" else "Play";
         if (id == pause_button.id and self.playing) return if (self.paused) "Resume" else "Pause";
+        if (id == simulate_button.id and !self.playing) return "Simulate: run the game, seen through the Scene panel's camera";
         if (id == reload_button.id) return if (self.build_state == .ready) "Reload (ready)" else "Reload";
         return null;
     }
@@ -406,7 +414,7 @@ pub const Workspace = struct {
         }
         if (self.playing) {
             // Red, with a dot that blinks like a camera's recording light, steady while paused.
-            const label = if (self.paused) "Paused" else "Playing";
+            const label = if (self.paused) "Paused" else if (self.simulating) "Simulating" else "Playing";
             const look = try b.allocator.create(PlayingLight);
             look.* = .{ .lit = self.paused or (self.time_ms / playing_blink_ms) % 2 == 0, .label = label };
             const light = try b.node(0, .{ .width = 14 + font.measure(label, 12), .height = status_height }, .{ .custom = .{ .context = look, .draw = PlayingLight.draw } }, &.{});
@@ -441,7 +449,7 @@ pub const Workspace = struct {
         };
         if (controls) |rect| frame.controls = rect;
         // The play and Reload buttons float on the bar, and take presses too.
-        for ([_]u32{ play_button.id, reload_button.id, pause_button.id }) |id| if (root.find(id)) |button| {
+        for ([_]u32{ play_button.id, reload_button.id, pause_button.id, simulate_button.id }) |id| if (root.find(id)) |button| {
             frame.extra_controls[frame.extra_count] = button.bounds;
             frame.extra_count += 1;
         };
@@ -555,7 +563,13 @@ pub const Workspace = struct {
                     if (id == reload_button.id) return .reload;
                     if (id == play_button.id) {
                         self.playing = !self.playing;
+                        self.simulating = false;
                         return .{ .play = self.playing };
+                    }
+                    if (id == simulate_button.id and !self.playing) {
+                        self.playing = true;
+                        self.simulating = true;
+                        return .simulate;
                     }
                     if (id == pause_button.id and self.playing) {
                         self.paused = !self.paused;
@@ -702,10 +716,30 @@ test "the play button turns into a stop button and back" {
     try workspace.build(viewport, @splat(null), &font);
     const play = workspace.roots[main_slot].?.find(play_button.id).?;
     try std.testing.expectApproxEqAbs(viewport.w / 2, play.bounds.x + play.bounds.w / 2, 0.5);
-    try std.testing.expect(workspace.titlebarFrame().extra_count == 1);
+    // Play and Simulate take presses on the bar.
+    try std.testing.expect(workspace.titlebarFrame().extra_count == 2);
     const press = ui.input.Event{ .pointer_down = .{ .position = play.bounds.center(), .button = .left, .clicks = 1 } };
     try std.testing.expectEqual(Outcome{ .play = true }, workspace.handle(main_slot, press));
     try std.testing.expectEqual(Outcome{ .play = false }, workspace.handle(main_slot, press));
+}
+
+test "Simulate runs the game, and play's stop button ends it" {
+    var workspace = try testWorkspace();
+    defer workspace.deinit();
+    var font = try ui.Font.init(std.testing.allocator, ui.default_font);
+    defer font.deinit();
+    const viewport = ui.Rect{ .x = 0, .y = 0, .w = 1000, .h = 600 };
+    try workspace.build(viewport, @splat(null), &font);
+    const simulate = workspace.roots[main_slot].?.find(simulate_button.id).?;
+    try std.testing.expectEqual(Outcome.simulate, workspace.handle(main_slot, .{ .pointer_down = .{ .position = simulate.bounds.center(), .button = .left, .clicks = 1 } }));
+    try std.testing.expect(workspace.playing and workspace.simulating);
+
+    // While it runs, Simulate gives way to the pause button.
+    try workspace.build(viewport, @splat(null), &font);
+    try std.testing.expect(workspace.roots[main_slot].?.find(simulate_button.id) == null);
+    const play = workspace.roots[main_slot].?.find(play_button.id).?;
+    try std.testing.expectEqual(Outcome{ .play = false }, workspace.handle(main_slot, .{ .pointer_down = .{ .position = play.bounds.center(), .button = .left, .clicks = 1 } }));
+    try std.testing.expect(!workspace.simulating);
 }
 
 test "while playing, a pause button left of play holds the game and lets it go" {

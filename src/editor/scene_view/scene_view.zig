@@ -2,7 +2,9 @@
 //! toolbar floating over it (`toolbar.zig`), the view's orientation in its corner
 //! (`orientation.zig`), clicking an entity to select it (`picking.zig`), and the gizmo that moves,
 //! turns and resizes the selected one (`gizmo.zig`), which edits its `Transform` through the
-//! game's library. W, E, R and T pick Move, Rotate, Scale and Universal while the pointer is over
+//! game's library. It can look through the game's camera instead (`game_camera.zig`), and while
+//! editing, its controls then move that camera; with none to look through it says so. A camera
+//! selected shows what it sees in a corner. W, E, R and T pick Move, Rotate, Scale and Universal while the pointer is over
 //! the panel; Ctrl turns snapping round while dragging.
 const std = @import("std");
 const eggy = @import("eggy");
@@ -13,6 +15,7 @@ const HotGame = @import("../hot_reload/hot_reload.zig").HotGame;
 const gizmo = @import("gizmo.zig");
 const picking = @import("picking.zig");
 const orientation = @import("orientation.zig");
+const game_camera = @import("game_camera.zig");
 pub const toolbar = @import("toolbar.zig");
 pub const SceneCamera = @import("scene_camera.zig").SceneCamera;
 
@@ -27,6 +30,10 @@ pub const Overlay = struct {
     pointer: ui.Vec2 = .{ .x = 0, .y = 0 },
     /// The drag's feedback beside the pointer.
     feedback: []const u8 = "",
+    /// Whether it looks through the game's camera, and there is none.
+    no_camera: bool = false,
+    /// Where the selected camera's view is shown, in the panel's points.
+    preview: ?ui.Rect = null,
 
     pub const none: Overlay = .{};
 };
@@ -45,8 +52,28 @@ pub fn overlayElements(b: L.Builder, overlay: Overlay, scene: ui.Rect) ![]*L.Ele
         handles.accessibility.role = .ignored;
         try parts.append(b.allocator, handles);
     }
+    // Nothing to see through: say so, in the middle.
+    if (overlay.no_camera) {
+        const notice = try b.node(0, .{ .width = scene.w, .height = scene.h, .z_index = 12, .align_items = .center, .justify = .center }, .{ .surface = .card }, &.{
+            try b.node(0, .{ .width = scene.w }, .{ .text = .{ .value = "No camera available", .size = 16, .tone = .muted, .alignment = .center } }, &.{}),
+        });
+        notice.overlay = .{ .point = .init(scene.x, scene.y) };
+        try parts.append(b.allocator, notice);
+    }
+    // The selected camera's view, framed and named.
+    if (overlay.preview) |inset| {
+        const frame = try b.node(0, .{ .width = inset.w, .height = inset.h, .z_index = 12 }, .{ .custom = .{ .context = undefined, .draw = drawPreviewFrame } }, &.{});
+        frame.overlay = .{ .point = .init(inset.x, inset.y) };
+        frame.accessibility = .{ .role = .ignored };
+        try parts.append(b.allocator, frame);
+    }
     try parts.append(b.allocator, try toolbar.element(b, overlay.tools, scene));
     return parts.items;
+}
+
+/// The border round the selected camera's view, and its name.
+fn drawPreviewFrame(_: *const anyopaque, c: *ui.Canvas, r: ui.Rect) anyerror!void {
+    try c.roundRectStroke(r, c.theme.primary, 2, 2);
 }
 
 /// What the Scene panel works on: the game's library, the app whose world it shows, and the
@@ -74,21 +101,40 @@ pub const SceneView = struct {
     scene: ?ui.Rect = null,
     gizmo: ?gizmo.Layout = null,
     feedback_buffer: [32]u8 = undefined,
+    /// Whether it looks through the game's camera this frame, and there is none.
+    no_camera: bool = false,
+    /// The game camera the panel's controls move, while they do, and where they left it.
+    steering: ?eggy.ecs.EntityId = null,
+    steered_pose: [6]f32 = @splat(0),
+    /// The selected camera's view, while one is selected and not looked through.
+    preview: ?eggy.camera.View = null,
+
+    /// How the panel looks at the scene: through its own camera (the game camera when the
+    /// toolbar says), or through the game's while it plays.
+    pub const Look = enum { editing, simulating, playing };
 
     /// What the dock draws over the panel.
     pub fn overlay(self: *SceneView) Overlay {
         const feedback = if (self.drag) |drag| drag.feedback(self.pointer, self.snapping(), &self.feedback_buffer) else "";
-        return .{ .tools = self.tools, .view = self.view, .gizmo = self.gizmo, .hot = self.hot, .drag = self.drag, .hot_end = self.hot_end, .pointer = self.pointer, .feedback = feedback };
+        const inset = if (self.preview != null) if (self.scene) |area| previewRect(area) else null else null;
+        return .{ .tools = self.tools, .view = self.view, .gizmo = self.gizmo, .hot = self.hot, .drag = self.drag, .hot_end = self.hot_end, .pointer = self.pointer, .feedback = feedback, .no_camera = self.no_camera, .preview = inset };
     }
 
-    /// Before each frame: what the panel at `scene` is seen from, and where the gizmo goes.
-    pub fn update(self: *SceneView, target: ?Target, scene: ?ui.Rect) void {
+    /// Before each frame: what the panel at `scene` is seen from, as `look` says, the selected
+    /// camera's view, and where the gizmo goes.
+    pub fn update(self: *SceneView, target: ?Target, scene: ?ui.Rect, look: Look) void {
         self.view = self.camera.view();
         self.gizmo = null;
         self.scene = scene;
-        const working = target orelse return;
-        if (self.tools.through_game_camera) if (working.game.findCamera(working.app)) |view| {
-            self.view = view;
+        self.no_camera = false;
+        self.preview = null;
+        const working = target orelse {
+            self.steering = null;
+            return;
+        };
+        self.lookThroughGame(working, look);
+        if (working.selected.*) |selected| if (self.steering == null or !self.steering.?.eql(selected)) {
+            self.preview = game_camera.viewOf(working.game, working.app, selected);
         };
         const area = scene orelse return;
         self.tools.offset = toolbar.keepInside(self.tools, self.tools.offset, area);
@@ -97,6 +143,38 @@ pub const SceneView = struct {
         if (!working.game.hasComponent(working.app, entity, component)) return;
         const placed = working.game.worldMatrix(working.app, entity) orelse return;
         self.gizmo = gizmo.layout(self.tools.tool, self.tools.space, placed, self.view, area);
+    }
+
+    /// Look through the game's camera when playing, or when the toolbar says so; while
+    /// editing, the panel's controls move it then.
+    fn lookThroughGame(self: *SceneView, target: Target, look: Look) void {
+        const through_game = look == .playing or self.tools.through_game_camera;
+        const found = if (through_game) game_camera.find(target.game, target.app) else null;
+        const camera = found orelse {
+            self.no_camera = through_game;
+            self.steering = null;
+            return;
+        };
+        if (look != .editing) {
+            self.steering = null;
+            self.view = camera.view;
+            return;
+        }
+        // The panel's camera moved: the game's follows it. Otherwise the panel's camera follows
+        // the game's, which the Inspector or the gizmo may have moved.
+        const steered = if (self.steering) |entity| entity.eql(camera.entity) and !std.meta.eql(self.steered_pose, self.camera.pose()) else false;
+        if (steered) game_camera.steer(target.game, target.app, camera.entity, &self.camera) else self.camera.place(camera.view);
+        self.steering = camera.entity;
+        self.steered_pose = self.camera.pose();
+        self.view = self.camera.view();
+        self.view.fov_deg = camera.view.fov_deg;
+        self.view.near = camera.view.near;
+        self.view.far = camera.view.far;
+    }
+
+    /// Whether the panel's controls are moving a camera now, which history waits out.
+    pub fn steeringNow(self: *const SceneView) bool {
+        return self.drag != null or self.camera.drag != null;
     }
 
     /// A toolbar button was pressed.
@@ -211,6 +289,15 @@ pub const SceneView = struct {
     }
 };
 
+/// Where the selected camera's view goes in the panel at `scene`: its bottom right corner, a
+/// quarter of its width, as wide for its height as the panel.
+pub fn previewRect(scene: ui.Rect) ui.Rect {
+    const margin: f32 = 12;
+    const w = @max(120, scene.w * 0.25);
+    const h = w * scene.h / @max(1, scene.w);
+    return .{ .x = scene.x + scene.w - w - margin, .y = scene.y + scene.h - h - margin, .w = w, .h = h };
+}
+
 /// A drag of `handle`, from the selected entity's `Transform` as it is now.
 fn startDrag(target: Target, layout: gizmo.Layout, handle: gizmo.Handle, at: ui.Vec2) ?gizmo.Drag {
     const entity = target.selected.* orelse return null;
@@ -260,6 +347,7 @@ fn instanceRoot(target: Target, entity: ?eggy.ecs.EntityId) ?eggy.ecs.EntityId {
 }
 
 test {
+    _ = game_camera;
     _ = gizmo;
     _ = picking;
     _ = toolbar;

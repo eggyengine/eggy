@@ -19,6 +19,8 @@ pub fn Runtime(comptime project: type) type {
         fps_capper: sdl3.extras.FramerateCapper(f32),
         /// The meshes drawn each frame, gathered from the world.
         drawables: []eggy.mesh.Drawable,
+        /// "No camera available", made the first time the scene has no camera to look through.
+        notice: ?eggy.Notice = null,
 
         const Self = @This();
 
@@ -54,6 +56,10 @@ pub fn Runtime(comptime project: type) type {
         }
 
         pub fn deinit(self: *Self) void {
+            if (self.notice) |*notice| {
+                self.app.graphics.queue.waitIdle() catch {};
+                notice.deinit();
+            }
             self.plugins.deinit();
             self.app.deinit();
             self.gpa.free(self.drawables);
@@ -66,10 +72,14 @@ pub fn Runtime(comptime project: type) type {
             try self.plugins.update(&self.app);
             try self.app.updateWorld();
             const frame = try self.app.graphics.beginFrame();
-            const drawn = eggy.mesh.gather(&self.app.world, self.drawables);
-            // Through the game's camera, or the default view without one.
-            const view = eggy.camera.find(&self.app.world) orelse eggy.camera.View.default;
-            try self.app.graphics.drawScene(frame, self.drawables[0..drawn], view);
+            // Through the game's camera; without one, there is nothing to see it from.
+            if (eggy.camera.find(&self.app.world)) |view| {
+                const drawn = eggy.mesh.gather(&self.app.world, self.drawables);
+                try self.app.graphics.drawScene(frame, self.drawables[0..drawn], view);
+            } else {
+                if (self.notice == null) self.notice = try eggy.Notice.init(self.gpa, &self.app.graphics);
+                try self.notice.?.draw(frame, "No camera available");
+            }
             try self.app.graphics.endFrame(frame);
             return .run;
         }

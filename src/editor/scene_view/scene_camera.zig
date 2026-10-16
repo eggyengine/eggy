@@ -108,6 +108,19 @@ pub const SceneCamera = struct {
         self.focus = add(self.focus, step);
     }
 
+    /// Where it is and which way it looks, to tell when it moved.
+    pub fn pose(self: *const SceneCamera) [6]f32 {
+        return .{ self.focus[0], self.focus[1], self.focus[2], self.yaw_deg, self.pitch_deg, self.distance };
+    }
+
+    /// Look from `from`'s eye the way it looks, keeping the distance to the focus point.
+    pub fn place(self: *SceneCamera, from: View) void {
+        const f = from.forward;
+        self.yaw_deg = @mod(std.math.atan2(-f[0], -f[2]) * std.math.deg_per_rad, 360);
+        self.pitch_deg = std.math.clamp(std.math.asin(std.math.clamp(f[1], -1, 1)) * std.math.deg_per_rad, -89, 89);
+        self.focus = add(from.eye, scale(self.forward(), self.distance));
+    }
+
     /// Look at `centre` from far enough away to see `radius` around it.
     pub fn frame(self: *SceneCamera, centre: [3]f32, radius: f32) void {
         self.focus = centre;

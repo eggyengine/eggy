@@ -118,6 +118,8 @@ pub fn Editor(comptime project: type) type {
         frame: *weeoui_sdl3.Frame,
         /// The game's scene, rendered offscreen and drawn into the Scene panel.
         scene: eggy.SceneTexture,
+        /// What the selected camera sees, drawn in the Scene panel's corner.
+        camera_preview: eggy.SceneTexture,
         /// The meshes the scene draws, gathered from the world through the game's library.
         drawables: []eggy.mesh.Drawable,
         /// The Scene panel's camera, gizmo, picking and buttons.
@@ -220,6 +222,8 @@ pub fn Editor(comptime project: type) type {
             errdefer overlay.deinit();
             var scene = try eggy.SceneTexture.init(&app.graphics);
             errdefer scene.deinit();
+            var camera_preview = try eggy.SceneTexture.init(&app.graphics);
+            errdefer camera_preview.deinit();
             const drawables = try gpa.alloc(eggy.mesh.Drawable, eggy.max_drawables);
             errdefer gpa.free(drawables);
 
@@ -279,7 +283,7 @@ pub fn Editor(comptime project: type) type {
                 break :blk loaders;
             } else null;
             errdefer if (project_assets) |loaders| gpa.destroy(loaders);
-            var self = Self{ .gpa = gpa, .game = game, .game_modified = modifiedAt(library_path), .app = app, .ui = context, .mono = mono, .console_ui = console_ui, .hierarchy_ui = hierarchy_ui, .assets_ui = assets_ui, .assets_panel = .init(gpa), .asset_icons = asset_icons, .entity_editor = .init(gpa), .console = console, .plugin_pages = plugin_pages, .workspace = workspace, .frame = frame, .scene = scene, .drawables = drawables, .overlay = overlay, .project = opened_project, .editor_modified = if (opened_project) |opened| editorModified(gpa, opened) else null, .upgrades = upgrades, .preference_folders = preference_folders, .open_scene = open_scene, .history = .{ .gpa = gpa }, .plugin_switches = plugin_switches, .project_assets = project_assets };
+            var self = Self{ .gpa = gpa, .game = game, .game_modified = modifiedAt(library_path), .app = app, .ui = context, .mono = mono, .console_ui = console_ui, .hierarchy_ui = hierarchy_ui, .assets_ui = assets_ui, .assets_panel = .init(gpa), .asset_icons = asset_icons, .entity_editor = .init(gpa), .console = console, .plugin_pages = plugin_pages, .workspace = workspace, .frame = frame, .scene = scene, .camera_preview = camera_preview, .drawables = drawables, .overlay = overlay, .project = opened_project, .editor_modified = if (opened_project) |opened| editorModified(gpa, opened) else null, .upgrades = upgrades, .preference_folders = preference_folders, .open_scene = open_scene, .history = .{ .gpa = gpa }, .plugin_switches = plugin_switches, .project_assets = project_assets };
             self.built_sources = self.sourcesNow();
             self.syncDescriptors();
             return self;
@@ -313,6 +317,7 @@ pub fn Editor(comptime project: type) type {
             // The overlay's and scene's GPU resources must outlive any frame still in flight.
             self.app.graphics.queue.waitIdle() catch {};
             self.scene.deinit();
+            self.camera_preview.deinit();
             self.gpa.free(self.drawables);
             self.overlay.deinit();
             self.workspace.deinit();
@@ -358,7 +363,8 @@ pub fn Editor(comptime project: type) type {
             // selection's gizmo over it.
             self.syncSceneInstances();
             self.entity_editor.forgetDead(&self.app);
-            self.scene_view.update(self.sceneTarget(), if (self.workspace.placed.scene) |placed| placed.rect else null);
+            const look: scene_view.SceneView.Look = if (!self.play_mode.playing()) .editing else if (self.workspace.simulating) .simulating else .playing;
+            self.scene_view.update(self.sceneTarget(), if (self.workspace.placed.scene) |placed| placed.rect else null, look);
             self.workspace.scene_overlay = self.scene_view.overlay();
 
             // Lay out every window, then tell the OS where the main title bar is.
@@ -389,7 +395,7 @@ pub fn Editor(comptime project: type) type {
                     const hash = std.hash.Wyhash.hash(0, text);
                     self.workspace.scene_unsaved = if (self.open_scene) |*scene| scene.unsavedHash(hash, &self.app.world) else false;
                     // A gizmo drag, or a number dragged in the Inspector, becomes one step once let go.
-                    if (self.scene_view.drag == null and !self.entity_editor.inspector.scrubbing()) self.history.watch(text, self.workspace.time_ms, self.typing()) else self.gpa.free(text);
+                    if (!self.scene_view.steeringNow() and !self.entity_editor.inspector.scrubbing()) self.history.watch(text, self.workspace.time_ms, self.typing()) else self.gpa.free(text);
                 }
                 self.watchLayout();
                 self.workspace.play_warning = self.playWarning();
@@ -634,15 +640,18 @@ pub fn Editor(comptime project: type) type {
             // Not with components whose plugin is off: their code isn't there to run them.
             if (self.playWarning()) |warning| {
                 self.workspace.playing = false;
+                self.workspace.simulating = false;
                 self.workspace.toast("Can't play: see the status bar");
                 return std.log.warn("{s}", .{warning});
             }
             const game = if (self.game) |*loaded| loaded else {
                 self.workspace.playing = false;
+                self.workspace.simulating = false;
                 return std.log.err("play: the game's library isn't loaded", .{});
             };
             self.play_mode.play(self.gpa, &self.app, game, self.entity_editor.roots(&self.app.world)) catch |err| {
                 self.workspace.playing = false;
+                self.workspace.simulating = false;
                 return std.log.err("cannot start playing: {t}", .{err});
             };
             self.workspace.playing = true;
@@ -652,6 +661,7 @@ pub fn Editor(comptime project: type) type {
         /// selection follows its entity there.
         fn stopPlaying(self: *Self) void {
             self.workspace.playing = false;
+            self.workspace.simulating = false;
             self.workspace.paused = false;
             if (!self.play_mode.playing()) return;
             const game = if (self.game) |*loaded| loaded else return;
@@ -986,10 +996,15 @@ pub fn Editor(comptime project: type) type {
             // Render the scene offscreen at the Scene panel's pixel size.
             const frame = try surface.beginFrame();
             const scene_px = if (self.workspace.placed.scene) |placed| if (placed.slot == slot) self.toPixels(placed.rect) else null else null;
+            // Nothing at all without a camera to see it through.
+            const preview_px = if (scene_px != null and self.scene_view.preview != null) self.toPixels(scene_view.previewRect(self.workspace.placed.scene.?.rect)) else null;
             if (scene_px) |rect| {
-                const meshes = if (self.game) |*game| game.gatherMeshes(&self.app, self.drawables) else self.drawables[0..0];
+                const gathered = if (self.game) |*game| game.gatherMeshes(&self.app, self.drawables) else self.drawables[0..0];
+                const meshes = if (self.scene_view.no_camera) gathered[0..0] else gathered;
                 self.scene_view.drawn = meshes;
-                try self.scene.render(&self.app.graphics, frame.cmd, .{ .width = @intFromFloat(@round(rect.w)), .height = @intFromFloat(@round(rect.h)) }, meshes, self.scene_view.view, self.entity_editor.selected);
+                try self.scene.render(&self.app.graphics, frame.cmd, pixelSize(rect), meshes, self.scene_view.view, self.entity_editor.selected);
+                // The selected camera's view, unoutlined. Rendering sorts `meshes`, which is no matter.
+                if (preview_px) |inset| try self.camera_preview.render(&self.app.graphics, frame.cmd, pixelSize(inset), meshes, self.scene_view.preview.?, null);
             }
 
             // The UI under the Scene panel, the scene texture, then the UI over it.
@@ -997,9 +1012,14 @@ pub fn Editor(comptime project: type) type {
             try frame.cmd.beginRenderPass(.{ .label = "editor ui", .color_attachments = &.{.{ .view = frame.target, .load_op = .load, .store_op = .store }} });
             overlay.draw(frame.cmd, frame.extent, 0, drawn.scene_at);
             if (scene_px) |rect| self.scene.draw(frame.cmd, rect, frame.extent);
+            if (preview_px) |inset| self.camera_preview.draw(frame.cmd, inset, frame.extent);
             overlay.draw(frame.cmd, frame.extent, drawn.scene_at, drawn.vertices.len - drawn.scene_at);
             frame.cmd.endRenderPass();
             try surface.endFrame(self.app.graphics.queue, frame);
+        }
+
+        fn pixelSize(rect: ui.Rect) eggy.vit.Extent2D {
+            return .{ .width = @intFromFloat(@max(1, @round(rect.w))), .height = @intFromFloat(@max(1, @round(rect.h))) };
         }
 
         /// Open an OS window for each panel the dock has popped out, and close those it took back.
@@ -1134,6 +1154,7 @@ pub fn Editor(comptime project: type) type {
                     if (weeoui_sdl3.windowAction(self.app.window.window, button)) return .success;
                 },
                 .play => |playing| if (playing) self.startPlaying() else self.stopPlaying(),
+                .simulate => self.startPlaying(),
                 .scene_button => |button| self.scene_view.press(button),
                 .pause => |paused| self.play_mode.paused = paused,
                 .new_project => if (self.project_flow == null and self.mayLeave(.new_project)) {
@@ -1883,6 +1904,7 @@ test {
     _ = @import("layout_file.zig");
     _ = @import("play_mode.zig");
     _ = @import("pause_button.zig");
+    _ = @import("simulate_button.zig");
     _ = @import("code_editor.zig");
     _ = @import("history.zig");
     _ = @import("plugin_switches.zig");
