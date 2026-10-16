@@ -5,6 +5,7 @@ const models = @import("src/build/models.zig");
 const game_export = @import("src/build/export.zig");
 const build_runner = @import("src/build/runner.zig");
 const game_resources = @import("src/build/resources.zig");
+const game_metadata = @import("src/build/metadata.zig");
 
 pub fn build(b: *std.Build) void {
     const update_submodules = b.addSystemCommand(&.{ "git", "submodule", "update", "--init", "--remote", "--recursive" });
@@ -149,6 +150,9 @@ fn addProject(b: *std.Build, engine: *std.Build, emscripten: Emscripten, target:
     const scene_option = b.option([]const u8, "scene", "The scene the game starts in (default: eggy.zon's .default_scene); export needs one");
     const main_scene = if (own) null else game_resources.mainScene(b, scene_option, false);
     if (main_scene) |path| source.print(b.allocator, "pub const main_scene: ?[]const u8 = \"{f}\";\n", .{std.zig.fmtString(path)}) catch @panic("OOM");
+    // And what its executable says about itself, which it keeps in a section of its own.
+    const metadata = if (own) &.{} else game_metadata.read(b);
+    if (metadata.len > 0) source.print(b.allocator, "pub const metadata_text = \"{f}\".*;\n", .{std.zig.fmtString(game_metadata.text(b, metadata))}) catch @panic("OOM");
     const runtime_project = b.createModule(.{ .root_source_file = addPreferenceFiles(b, source.items), .target = target, .optimize = optimize });
     runtime_project.addImport("game", options.game);
     for (options.plugins, 0..) |plugin, i| runtime_project.addImport(b.fmt("plugin_{d}", .{i}), plugin);
@@ -176,6 +180,7 @@ fn addProject(b: *std.Build, engine: *std.Build, emscripten: Emscripten, target:
         return null;
     }
     const runtime_app = addDesktopApp(b, target, runtime_module, runtime_name);
+    game_metadata.addTo(b, runtime_app.install.artifact, metadata);
     const runtime_step = b.step("runtime", "Build the game");
     runtime_step.dependOn(&runtime_app.install.step);
     installRuntimeLibraries(b, engine, runtime_step);

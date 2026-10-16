@@ -28,8 +28,23 @@ pub fn Runtime(comptime project: type) type {
 
         const Self = @This();
 
+        // What the executable says about itself (`eggy.zon`'s metadata, from `addGame`), kept in
+        // a section of its own.
+        comptime {
+            if (@hasDecl(project, "metadata_text")) {
+                const section: ?[]const u8 = switch (builtin.object_format) {
+                    .elf => ".eggy_metadata",
+                    .macho => "__DATA,__eggy_meta",
+                    else => null,
+                };
+                if (section) |name| @export(&project.metadata_text, .{ .name = "eggy_metadata", .section = name });
+            }
+        }
+
         pub fn init(gpa: std.mem.Allocator, args: []const [*:0]const u8) !Self {
             _ = args;
+            // Used, so a release build's linker keeps the metadata's section.
+            if (@hasDecl(project, "metadata_text")) std.mem.doNotOptimizeAway(&project.metadata_text);
             var app = try eggy.App.init(gpa, project.name);
             errdefer app.deinit();
             // Model and image files, and scenes, as packaging made them.
