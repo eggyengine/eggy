@@ -133,6 +133,7 @@ pub const Hierarchy = struct {
         };
         context.end();
         page_style.restyle(context, .{ .gap = 0 });
+        page_style.passThrough(context);
 
         // While dragging: the space below the tree is the top level.
         if (self.drag) |drag| if (drag.moving) {
@@ -645,4 +646,23 @@ test "a double-click renames only with both clicks on the name, in the same spot
     click(&hierarchy, &context, on_name, 1);
     click(&hierarchy, &context, on_name, 2);
     try std.testing.expect(hierarchy.renaming != null);
+}
+
+test "the only row takes a click, as any row does" {
+    var context = try ui.Context.init(std.testing.allocator);
+    defer context.deinit();
+    var hierarchy = Hierarchy.init(std.testing.allocator);
+    defer hierarchy.deinit();
+    const rows = [_]Row{.{ .entity = .init(0, 0), .name = "Sun", .depth = 0, .has_parent = false, .components = &.{} }};
+    const viewport = ui.Rect{ .x = 0, .y = 0, .w = 300, .h = 600 };
+    context.newFrame(viewport);
+    _ = hierarchy.build(&context, &rows, null);
+    _ = try context.render();
+    const at = context.last_bounds.get(row_id_base).?.rect.center();
+    context.handle(.{ .pointer_move = at });
+    context.handle(.{ .pointer_down = .{ .position = at, .button = .left, .clicks = 1 } });
+    context.handle(.{ .pointer_up = .{ .position = at, .button = .left } });
+    context.newFrame(viewport);
+    try std.testing.expectEqual(Action{ .select = rows[0].entity }, hierarchy.build(&context, &rows, null).?);
+    _ = try context.render();
 }

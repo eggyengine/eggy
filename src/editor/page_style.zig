@@ -4,6 +4,14 @@
 const std = @import("std");
 const ui = @import("eggy").ui;
 
+/// Make the element just added (a container `begin` made) take no presses itself, leaving them
+/// to what it holds. weeoui gives containers ids, and a container exactly the size of the one
+/// thing in it (a list of one row) can win the press over it.
+// ponytail: weeoui's hoveredWidget breaks a tie in area by hash map order; prefer the element painted later there, then drop this.
+pub fn passThrough(context: *ui.Context) void {
+    if (context.last_added) |element| element.id = 0;
+}
+
 /// Restyle the element `context` added last: a widget, or a container just ended. `layout`
 /// sets the fields given; a container keeps its children.
 pub fn restyle(context: *ui.Context, layout: struct {

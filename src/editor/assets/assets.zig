@@ -270,6 +270,7 @@ pub const AssetsPanel = struct {
             for (self.shown, 0..) |item, i| self.row(context, icons, item, i, open_scene, searching);
             context.end();
             page_style.restyle(context, .{ .gap = 0 });
+            page_style.passThrough(context);
         }
         self.upZone(context);
 

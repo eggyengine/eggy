@@ -18,7 +18,8 @@ const Hit = struct {
     fn visit(self: *Hit, element: *const L.Element, layer: i16, x: f32, y: f32) void {
         const z = if (element.overlay != null) element.style.z_index else layer;
         const rect = element.bounds.intersection(element.clip);
-        if (element.id != 0 and rect.contains(x, y) and (z > self.z or (z == self.z and rect.w * rect.h < self.area))) {
+        // The topmost layer, then the smallest; on a tie, the inner one (visited later).
+        if (element.id != 0 and rect.contains(x, y) and (z > self.z or (z == self.z and rect.w * rect.h <= self.area))) {
             self.* = .{ .id = element.id, .z = z, .area = rect.w * rect.h };
         }
         for (element.children) |child| self.visit(child, z, x, y);
