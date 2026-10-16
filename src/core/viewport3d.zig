@@ -9,6 +9,7 @@ const camera = @import("camera.zig");
 const ecs = @import("clutch");
 const mesh_renderer = @import("mesh_renderer.zig");
 const MeshRenderer = mesh_renderer.MeshRenderer;
+const Grid = @import("grid.zig").Grid;
 
 const Vertex = extern struct {
     position: [2]f32,
@@ -38,6 +39,7 @@ pub const Preview = struct {
     depth_view: vit.TextureView,
     depth_initialized: bool = false,
     meshes: MeshRenderer,
+    grid: Grid,
 
     /// The backdrop and meshes for a target in `format` at `extent`, painting with textures
     /// bound as `texture_layout` describes (`TextureCache.layout`).
@@ -101,6 +103,8 @@ pub const Preview = struct {
         errdefer depth_view.deinit();
         var meshes = try MeshRenderer.init(device, format, shaderSource, texture_layout);
         errdefer meshes.deinit();
+        var grid = try Grid.init(device, format, shaderSource);
+        errdefer grid.deinit();
         return .{
             .geometry = geometry,
             .uniforms = uniforms,
@@ -111,6 +115,7 @@ pub const Preview = struct {
             .depth = depth,
             .depth_view = depth_view,
             .meshes = meshes,
+            .grid = grid,
         };
     }
 
@@ -126,6 +131,7 @@ pub const Preview = struct {
     }
 
     pub fn deinit(self: *Preview) void {
+        self.grid.deinit();
         self.meshes.deinit();
         self.depth_view.deinit();
         self.depth.deinit();
@@ -141,8 +147,9 @@ pub const Preview = struct {
 
     /// Draw the backdrop and `drawables` (sorted in place), seen from `view` with `selected`'s
     /// outlined, into `scene` of `target`, a window `window` big at `extent` pixels, cut to
-    /// `clip`, with model files and textures from `sources`. Call outside a render pass.
-    pub fn draw(self: *Preview, cmd: vit.CommandBuffer, target: vit.TextureView, scene: ui.Rect, clip: ui.Rect, window: ui.Rect, extent: vit.Extent2D, srgb: bool, drawables: []mesh.Drawable, sources: mesh_renderer.Sources, view: camera.View, selected: ?ecs.EntityId) !void {
+    /// `clip`, with model files and textures from `sources`, and the editor's ground grid when
+    /// `grid` says. Call outside a render pass.
+    pub fn draw(self: *Preview, cmd: vit.CommandBuffer, target: vit.TextureView, scene: ui.Rect, clip: ui.Rect, window: ui.Rect, extent: vit.Extent2D, srgb: bool, drawables: []mesh.Drawable, sources: mesh_renderer.Sources, view: camera.View, selected: ?ecs.EntityId, grid: bool) !void {
         const scissor = previewScissor(scene, clip, window, extent) orelse return;
         try self.meshes.prepare(cmd, drawables, sources);
         const transform = SceneUniforms{
@@ -184,6 +191,7 @@ pub const Preview = struct {
         const py = @as(f32, @floatFromInt(extent.height)) / window.h;
         cmd.setViewport(.{ .x = (scene.x - window.x) * px, .y = (scene.y - window.y) * py, .width = scene.w * px, .height = scene.h * py });
         try self.meshes.draw(cmd, drawables, sources, view.viewProjection(scene.w / scene.h), .{ scene.w * px, scene.h * py }, selected, srgb);
+        if (grid) try self.grid.draw(cmd, view, .{ .x = (scene.x - window.x) * px, .y = (scene.y - window.y) * py, .w = scene.w * px, .h = scene.h * py }, srgb);
         cmd.endRenderPass();
     }
 };
@@ -248,5 +256,5 @@ test "preview scissor respects UI clipping, window and fractional pixel scale" {
 test "preview skips an empty viewport without recording commands" {
     var preview: Preview = undefined;
     const empty = ui.Rect{ .x = 0, .y = 0, .w = 0, .h = 0 };
-    try preview.draw(undefined, undefined, empty, empty, empty, .{ .width = 200, .height = 120 }, false, &.{}, undefined, .default, null);
+    try preview.draw(undefined, undefined, empty, empty, empty, .{ .width = 200, .height = 120 }, false, &.{}, undefined, .default, null, false);
 }

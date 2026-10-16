@@ -1030,9 +1030,10 @@ pub fn Editor(comptime project: type) type {
                 const gathered = if (self.game) |*game| game.gatherMeshes(&self.app, self.drawables) else self.drawables[0..0];
                 const meshes = if (self.scene_view.no_camera) gathered[0..0] else gathered;
                 self.scene_view.drawn = meshes;
-                try self.scene.render(&self.app.graphics, frame.cmd, pixelSize(rect), meshes, self.scene_view.view, self.entity_editor.selected);
+                // The ground grid only through the panel's own camera, not the game's.
+                try self.scene.render(&self.app.graphics, frame.cmd, pixelSize(rect), meshes, self.scene_view.view, self.entity_editor.selected, !self.scene_view.throughGameCamera());
                 // The selected camera's view, unoutlined. Rendering sorts `meshes`, which is no matter.
-                if (preview_px) |inset| try self.camera_preview.render(&self.app.graphics, frame.cmd, pixelSize(inset), meshes, self.scene_view.preview.?, null);
+                if (preview_px) |inset| try self.camera_preview.render(&self.app.graphics, frame.cmd, pixelSize(inset), meshes, self.scene_view.preview.?, null, false);
             }
 
             // The UI under the Scene panel, the scene texture, then the UI over it.

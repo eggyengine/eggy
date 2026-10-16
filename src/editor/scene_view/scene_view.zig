@@ -103,6 +103,8 @@ pub const SceneView = struct {
     feedback_buffer: [32]u8 = undefined,
     /// Whether it looks through the game's camera this frame, and there is none.
     no_camera: bool = false,
+    /// Whether it looks through the game's camera this frame (the panel's own, otherwise).
+    looking_through_game: bool = false,
     /// The game camera the panel's controls move, while they do, and where they left it.
     steering: ?eggy.ecs.EntityId = null,
     steered_pose: [6]f32 = @splat(0),
@@ -127,6 +129,7 @@ pub const SceneView = struct {
         self.gizmo = null;
         self.scene = scene;
         self.no_camera = false;
+        self.looking_through_game = false;
         self.preview = null;
         const working = target orelse {
             self.steering = null;
@@ -149,6 +152,7 @@ pub const SceneView = struct {
     /// editing, the panel's controls move it then.
     fn lookThroughGame(self: *SceneView, target: Target, look: Look) void {
         const through_game = look == .playing or self.tools.through_game_camera;
+        self.looking_through_game = through_game;
         const found = if (through_game) game_camera.find(target.game, target.app) else null;
         const camera = found orelse {
             self.no_camera = through_game;
@@ -170,6 +174,11 @@ pub const SceneView = struct {
         self.view.fov_deg = camera.view.fov_deg;
         self.view.near = camera.view.near;
         self.view.far = camera.view.far;
+    }
+
+    /// Whether the panel looks through the game's camera this frame (or would, without one).
+    pub fn throughGameCamera(self: *const SceneView) bool {
+        return self.looking_through_game;
     }
 
     /// Whether the panel's controls are moving a camera now, which history waits out.

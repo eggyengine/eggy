@@ -45,6 +45,7 @@ test {
     _ = @import("graphics.zig");
     _ = @import("scene_texture.zig");
     _ = @import("notice.zig");
+    _ = @import("grid.zig");
     _ = @import("plugins.zig");
     _ = @import("project.zig");
     _ = @import("preferences.zig");

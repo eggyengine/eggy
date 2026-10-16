@@ -337,6 +337,9 @@ fn addEngine(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.buil
     const blit_shader = b.path("src/core/shaders/scene_blit.slang");
     const blit_vertex = vitellus_build.compileSlang(b, vitellus, target, blit_shader, "vertexMain", .vertex) orelse return null;
     const blit_fragment = vitellus_build.compileSlang(b, vitellus, target, blit_shader, "fragmentMain", .fragment) orelse return null;
+    const grid_shader = b.path("src/core/shaders/grid.slang");
+    const grid_vertex = vitellus_build.compileSlang(b, vitellus, target, grid_shader, "vertexMain", .vertex) orelse return null;
+    const grid_fragment = vitellus_build.compileSlang(b, vitellus, target, grid_shader, "fragmentMain", .fragment) orelse return null;
     const shader_files = b.addWriteFiles();
     _ = shader_files.addCopyFile(viewport_vertex, "viewport3d.vert");
     _ = shader_files.addCopyFile(viewport_fragment, "viewport3d.frag");
@@ -347,6 +350,8 @@ fn addEngine(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.buil
     _ = shader_files.addCopyFile(mask_vertex, "mask.vert");
     _ = shader_files.addCopyFile(blit_vertex, "scene_blit.vert");
     _ = shader_files.addCopyFile(blit_fragment, "scene_blit.frag");
+    _ = shader_files.addCopyFile(grid_vertex, "grid.vert");
+    _ = shader_files.addCopyFile(grid_fragment, "grid.frag");
     const shader_module = b.createModule(.{
         .root_source_file = shader_files.add("root.zig",
             \\pub const viewport_vertex = @embedFile("viewport3d.vert");
@@ -358,6 +363,8 @@ fn addEngine(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.buil
             \\pub const mask_vertex = @embedFile("mask.vert");
             \\pub const blit_vertex = @embedFile("scene_blit.vert");
             \\pub const blit_fragment = @embedFile("scene_blit.frag");
+            \\pub const grid_vertex = @embedFile("grid.vert");
+            \\pub const grid_fragment = @embedFile("grid.frag");
         ),
         .target = target,
         .optimize = optimize,

@@ -82,16 +82,17 @@ pub const SceneTexture = struct {
     }
 
     /// Render the scene, with `drawables` (sorted in place) seen from `view` and `selected`'s
-    /// outlined, into the texture at `extent_px`. Call outside a render pass. A new size recreates the texture, which first
-    /// waits for the GPU to finish earlier frames.
-    pub fn render(self: *SceneTexture, graphics: *Graphics, cmd: vit.CommandBuffer, extent_px: vit.Extent2D, drawables: []mesh.Drawable, view: camera.View, selected: ?ecs.EntityId) !void {
+    /// outlined, and the editor's ground grid when `grid` says, into the texture at `extent_px`.
+    /// Call outside a render pass. A new size recreates the texture, which first waits for the GPU
+    /// to finish earlier frames.
+    pub fn render(self: *SceneTexture, graphics: *Graphics, cmd: vit.CommandBuffer, extent_px: vit.Extent2D, drawables: []mesh.Drawable, view: camera.View, selected: ?ecs.EntityId, grid: bool) !void {
         if (extent_px.width == 0 or extent_px.height == 0) return;
         const target = try self.targetSized(graphics, extent_px);
 
         // Render, then leave the texture ready for `draw` to sample.
         try cmd.barrier(&.{.{ .texture = .{ .texture = target.texture, .before = if (target.rendered) .sampled else .common, .after = .color_attachment } }});
         const whole = ui.Rect{ .x = 0, .y = 0, .w = @floatFromInt(extent_px.width), .h = @floatFromInt(extent_px.height) };
-        try self.preview.draw(cmd, target.view, whole, whole, whole, extent_px, weeoui_vitellus.isSrgb(graphics.color_format), drawables, graphics.sources(), view, selected);
+        try self.preview.draw(cmd, target.view, whole, whole, whole, extent_px, weeoui_vitellus.isSrgb(graphics.color_format), drawables, graphics.sources(), view, selected, grid);
         try cmd.barrier(&.{.{ .texture = .{ .texture = target.texture, .before = .color_attachment, .after = .sampled } }});
         target.rendered = true;
     }
