@@ -33,16 +33,19 @@ pub const Graphics = struct {
     /// (no adapter, no surface for the window) gives way to the next. Validation only in debug
     /// builds: a release asks for none.
     pub fn init(allocator: std.mem.Allocator, window: sdl_adapter.Sdl3Window) !Graphics {
-        var allowed: vit.BackendType = .{ .dx12 = true, .vulkan = true, .metal = true, .webgpu = true };
+        // Null: Vitellus's own choice; once one fails, every other.
+        var allowed: ?vit.BackendType = null;
         while (true) {
             const validation: vit.ValidationLevel = if (builtin.mode == .Debug) .core else .none;
             const instance = try vit.Instance.init(allocator, .{ .backend = allowed, .validation = validation });
             const backend = instance.selected_backend;
             return initOn(allocator, window, instance) catch |err| {
                 std.log.warn("cannot render with {t} ({t}): trying the next backend", .{ backend, err });
+                var rest = allowed orelse vit.BackendType{ .dx12 = true, .vulkan = true, .metal = true, .webgpu = true };
                 switch (backend) {
-                    inline else => |tag| @field(allowed, @tagName(tag)) = false,
+                    inline else => |tag| @field(rest, @tagName(tag)) = false,
                 }
+                allowed = rest;
                 continue;
             };
         }
