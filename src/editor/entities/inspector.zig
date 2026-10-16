@@ -173,17 +173,16 @@ pub const EntityInspector = struct {
             b.node(0, .{ .width = 14, .height = 14 }, .{ .icon = if (folded) .chevron_right else .chevron_down }, &.{}) catch return null,
             b.node(0, .{ .grow = 1, .gap = 1 }, .none, &.{
                 b.node(0, .{}, .{ .text = .{ .value = component.info.name, .size = 14, .wrap = true } }, &.{}) catch return null,
-                b.node(0, .{}, .{ .text = .{ .value = std.fmt.allocPrint(arena, "{s}from {s}{s}{s}", .{ if (component.disabled) "Disabled: its plugin is off · " else "", component.info.owner, if (component.needs.len > 0) " · needs " else "", component.needs }) catch "", .size = 11, .tone = .muted, .wrap = true } }, &.{}) catch return null,
+                b.node(0, .{}, .{ .text = .{ .value = std.fmt.allocPrint(arena, "{s}from {s}{s}{s}{s}{s}", .{ if (component.disabled) "Disabled: its plugin is off · " else "", component.info.owner, if (component.needs.len > 0) " · needs " else "", component.needs, if (component.needed_by.len > 0) " · needed by " else "", component.needed_by }) catch "", .size = 11, .tone = .muted, .wrap = true } }, &.{}) catch return null,
             }) catch return null,
         }) catch return null;
         header.cursor = .pointer;
         header.accessibility = .{ .role = .button, .label = component.info.name, .expanded = !folded };
         context.element(header);
-        // Removable unless another of its components depends on it.
-        if (component.needed_by.len > 0) {
-            context.muted(std.fmt.allocPrint(arena, "Needed by {s}", .{component.needed_by}) catch "Needed");
-            page_style.smallText(context, 11);
-        } else if (context.buttonVariant(std.fmt.allocPrint(arena, "Remove##remove {d}", .{component.index}) catch return null, .ghost)) action = .{ .remove_component = component.index };
+        // Removable unless another of its components depends on it (the line under its name says which).
+        if (component.needed_by.len == 0) if (context.buttonVariant(std.fmt.allocPrint(arena, "Remove##remove {d}", .{component.index}) catch return null, .ghost)) {
+            action = .{ .remove_component = component.index };
+        };
         context.end();
         restyle(context, .{ .direction = .row, .gap = 8, .align_items = .center });
 
