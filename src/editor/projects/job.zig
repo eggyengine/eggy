@@ -552,7 +552,8 @@ pub const Job = struct {
             const summary = summarize(nodes[0..count], parents[0..count]) orelse continue;
             self.mutex.lockUncancelable(io_);
             defer self.mutex.unlock(io_);
-            self.build_fraction = summary.fraction;
+            // Never back: steps after a nested build are counted as less than it was.
+            self.build_fraction = @max(self.build_fraction, summary.fraction);
             self.detail.clearRetainingCapacity();
             self.detail.print(self.gpa, "{s} ({d}/{d})", .{ summary.step, summary.done, summary.total }) catch {};
         }
@@ -601,15 +602,16 @@ fn summarize(nodes: []const ProgressNode, parents: []const u8) ?Summary {
         count = 1;
     }
 
-    // Each build's share of the step it runs in, from the innermost out.
+    // From the innermost out: a nested build does the bulk of the work, so it stands for every
+    // step of the build around it still to come.
     var fraction: f32 = 0;
     var i = count;
     while (i > 0) {
         i -= 1;
         const node = nodes[counters[i]];
-        const done = std.mem.littleToNative(u32, node.completed_count);
-        const total = std.mem.littleToNative(u32, node.estimated_total_count);
-        fraction = std.math.clamp((@as(f32, @floatFromInt(done)) + fraction) / @as(f32, @floatFromInt(total)), 0, 1);
+        const done: f32 = @floatFromInt(std.mem.littleToNative(u32, node.completed_count));
+        const total: f32 = @floatFromInt(std.mem.littleToNative(u32, node.estimated_total_count));
+        fraction = std.math.clamp((done + fraction * (total - done)) / total, 0, 1);
     }
     const innermost = counters[count - 1];
     var step = nodes[innermost].nameText();
@@ -694,7 +696,7 @@ test "a build nested in a step counts as that step's progress" {
         @memcpy(node.name[0..name.len], name);
     }
     const summary = summarize(&nodes, &.{ 255, 0, 1, 2, 3, 0 }).?;
-    try std.testing.expectApproxEqAbs(@as(f32, 1.5 / 4.0), summary.fraction, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 2.5 / 4.0), summary.fraction, 0.001);
     try std.testing.expectEqualStrings("compile exe game", summary.step);
     try std.testing.expectEqual(@as(u32, 6), summary.total);
 }
