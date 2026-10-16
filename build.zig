@@ -298,10 +298,14 @@ const Engine = struct {
 fn addEngine(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builtin.OptimizeMode, emscripten: Emscripten) ?Engine {
     // The web build renders with WebGPU, takes WGSL, and is linked by emcc instead of Zig.
     const web = target.result.os.tag == .emscripten;
+    // On Windows DirectX 12 comes first, running the SPIR-V shaders through SPIRV-Cross and DXC.
+    const windows = target.result.os.tag == .windows;
     const vitellus = b.dependency("vitellus", .{
         .target = target,
         .optimize = optimize,
         .dx12 = true,
+        .enable_dxc = windows,
+        .enable_spirv_cross = windows,
         .vk = !web,
         .emsdk = emscripten.emsdk,
         .enable_slang = true,

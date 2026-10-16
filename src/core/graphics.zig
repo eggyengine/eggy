@@ -1,3 +1,4 @@
+const builtin = @import("builtin");
 const std = @import("std");
 const vit = @import("vitellus");
 const sdl_adapter = @import("vitellus_sdl3");
@@ -26,9 +27,30 @@ pub const Graphics = struct {
     /// The images meshes are painted with, likewise; set its `loader`.
     textures: TextureCache,
 
+    /// Graphics for `window`, on the platform's backends in Vitellus's order: on Windows
+    /// DirectX 12, then Vulkan; on macOS Metal (not there yet), then Vulkan through MoltenVK; on
+    /// Linux Vulkan; on the web WebGPU. `VITELLUS_BACKEND` puts one first. One that fails part way
+    /// (no adapter, no surface for the window) gives way to the next. Validation only in debug
+    /// builds: a release asks for none.
     pub fn init(allocator: std.mem.Allocator, window: sdl_adapter.Sdl3Window) !Graphics {
-        // Eggy's shaders are SPIR-V and WGSL; each platform only tries the backends it has.
-        const instance = try vit.Instance.init(allocator, .{ .backend = .{ .vulkan = true, .webgpu = true }, .validation = .core });
+        var allowed: vit.BackendType = .{ .dx12 = true, .vulkan = true, .metal = true, .webgpu = true };
+        while (true) {
+            const validation: vit.ValidationLevel = if (builtin.mode == .Debug) .core else .none;
+            const instance = try vit.Instance.init(allocator, .{ .backend = allowed, .validation = validation });
+            const backend = instance.selected_backend;
+            return initOn(allocator, window, instance) catch |err| {
+                std.log.warn("cannot render with {t} ({t}): trying the next backend", .{ backend, err });
+                switch (backend) {
+                    inline else => |tag| @field(allowed, @tagName(tag)) = false,
+                }
+                continue;
+            };
+        }
+    }
+
+    /// `init` on `instance`, which it owns from now on (freed if this fails).
+    fn initOn(allocator: std.mem.Allocator, window: sdl_adapter.Sdl3Window, instance: vit.Instance) !Graphics {
+        std.log.info("rendering with {t}", .{instance.selected_backend});
         errdefer instance.deinit();
         const adapter = try vit.Adapter.init(instance, .{ .label = "vitellus adapter" });
         errdefer adapter.deinit();
