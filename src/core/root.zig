@@ -21,6 +21,7 @@ pub const components = @import("components.zig");
 pub const scene = @import("scene.zig");
 pub const scene_instance = @import("scene_instance.zig");
 pub const SceneInstance = scene_instance.SceneInstance;
+pub const SceneInstances = @import("scene_instances.zig").SceneInstances;
 pub const Name = @import("name.zig").Name;
 pub const transform = @import("transform.zig");
 pub const Transform = transform.Transform;
@@ -49,6 +50,7 @@ test {
     _ = @import("components.zig");
     _ = @import("scene.zig");
     _ = @import("scene_instance.zig");
+    _ = @import("scene_instances.zig");
     _ = @import("name.zig");
     _ = @import("transform.zig");
     _ = @import("mesh.zig");

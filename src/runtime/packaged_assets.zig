@@ -1,6 +1,6 @@
-//! Model and image files as the runtime draws them: the `.eggmodel`s and `.eggtexture`s
-//! packaging made of them, installed in `data/` beside the game's `bin/` (see `addGame`), read
-//! with no importer or decoder.
+//! The game's resources as packaging installed them in `data/` beside its `bin/` (see
+//! `addGame`): models and images as the `.eggmodel`s and `.eggtexture`s made of them, read with
+//! no importer or decoder, and every other file (scenes...) as it is (`openData`).
 const std = @import("std");
 const eggy = @import("eggy");
 const sdl3 = eggy.sdl_adapter.sdl;
@@ -20,19 +20,26 @@ fn loadTexture(_: *anyopaque, gpa: std.mem.Allocator, path: []const u8) ?eggy.as
     return readPackaged(eggy.assets.Texture, eggy.assets.texture, gpa, path);
 }
 
+/// The game's `data/` folder.
+pub fn openData(io: std.Io) !std.Io.Dir {
+    const base = try sdl3.filesystem.getBasePath();
+    var path_buffer: [std.fs.max_path_bytes]u8 = undefined;
+    return std.Io.Dir.cwd().openDir(io, try std.fmt.bufPrint(&path_buffer, "{s}../data", .{base}), .{});
+}
+
 /// What packaging made of the file at `path` (in the project), read by `format`'s `read`.
 fn readPackaged(comptime T: type, comptime format: type, gpa: std.mem.Allocator, path: []const u8) ?T {
     var threaded: std.Io.Threaded = .init_single_threaded;
     const io = threaded.io();
-    const base = sdl3.filesystem.getBasePath() catch |err| {
-        log.err("cannot find where the game is: {t}", .{err});
+    var data = openData(io) catch |err| {
+        log.err("cannot find the game's data: {t}", .{err});
         return null;
     };
+    defer data.close(io);
     var path_buffer: [std.fs.max_path_bytes]u8 = undefined;
-    const packaged = std.fmt.bufPrint(&path_buffer, "{s}../data/{s}{s}", .{ base, path, format.extension }) catch return null;
-
-    var file = std.Io.Dir.cwd().openFile(io, packaged, .{}) catch |err| {
-        log.err("{s} wasn't packaged with the game ({s}: {t})", .{ path, packaged, err });
+    const packaged = std.fmt.bufPrint(&path_buffer, "{s}{s}", .{ path, format.extension }) catch return null;
+    var file = data.openFile(io, packaged, .{}) catch |err| {
+        log.err("{s} wasn't packaged with the game ({t})", .{ path, err });
         return null;
     };
     defer file.close(io);

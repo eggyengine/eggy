@@ -1,12 +1,15 @@
 //! The entities each `SceneInstance` stands for, made in the world under it from its scene file
-//! (see `eggy.scene_instance`). They are made again when the instance's file is picked or
+//! (see `scene_instance.zig`), in the editor and the runtime alike. They are made again when the instance's file is picked or
 //! changes, after the world is rebuilt (they aren't saved, so a scene opened, undone or carried
 //! across a reload comes back without them), and once files change on disk; they go when the
 //! instance does, or loses the component. An instance inside its own scene, however deep, is
 //! left empty rather than made forever.
 const std = @import("std");
-const eggy = @import("eggy");
-const ecs = eggy.ecs;
+const ecs = @import("clutch");
+const components = @import("components.zig");
+const scene_zig = @import("scene.zig");
+const scene_instance = @import("scene_instance.zig");
+const refs = @import("refs.zig");
 const log = std.log.scoped(.scene_instances);
 
 pub const SceneInstances = struct {
@@ -44,8 +47,8 @@ pub const SceneInstances = struct {
     /// changed or whose entities are gone, from the scene files in `project`, and take away
     /// those of instances that are gone. `open_scene` (the scene being edited, relative to the
     /// project) is never made inside itself.
-    pub fn sync(self: *SceneInstances, io: std.Io, project: std.Io.Dir, world: *ecs.World, access: eggy.scene.Access, open_scene: ?[]const u8) void {
-        const component = eggy.scene_instance.typeIndex(access.types()) orelse return;
+    pub fn sync(self: *SceneInstances, io: std.Io, project: std.Io.Dir, world: *ecs.World, access: scene_zig.Access, open_scene: ?[]const u8) void {
+        const component = scene_instance.typeIndex(access.types()) orelse return;
         var seen: std.AutoHashMapUnmanaged(u32, void) = .empty;
         defer seen.deinit(self.gpa);
 
@@ -57,8 +60,8 @@ pub const SceneInstances = struct {
             const entity = ecs.EntityId.init(@intCast(i), slot.generation);
             if (!access.has(world, entity, component)) continue;
             seen.put(self.gpa, entity.id, {}) catch return;
-            var zon_buffer: [eggy.refs.max_path_len + 8]u8 = undefined;
-            var path_buffer: [eggy.refs.max_path_len + 8]u8 = undefined;
+            var zon_buffer: [refs.max_path_len + 8]u8 = undefined;
+            var path_buffer: [refs.max_path_len + 8]u8 = undefined;
             const path = scenePath(access.readField(world, entity, component, 0, &zon_buffer) orelse continue, &path_buffer) orelse continue;
             if (self.made.get(entity.id)) |made| {
                 if (made.generation == entity.generation and !made.stale and std.mem.eql(u8, made.path, path) and allUnder(world, made.roots, entity)) continue;
@@ -77,7 +80,7 @@ pub const SceneInstances = struct {
 
     /// Make the scene at `path` under `instance`, and remember what was made (nothing, if it
     /// can't be, so it isn't tried again every frame).
-    fn make(self: *SceneInstances, io: std.Io, project: std.Io.Dir, world: *ecs.World, access: eggy.scene.Access, instance: ecs.EntityId, path: []const u8, open_scene: ?[]const u8) void {
+    fn make(self: *SceneInstances, io: std.Io, project: std.Io.Dir, world: *ecs.World, access: scene_zig.Access, instance: ecs.EntityId, path: []const u8, open_scene: ?[]const u8) void {
         const owned_path = self.gpa.dupe(u8, path) catch return;
         var roots: []ecs.EntityId = &.{};
         if (path.len > 0) if (self.isInsideItself(world, instance, path, open_scene)) {
@@ -95,10 +98,10 @@ pub const SceneInstances = struct {
     }
 
     /// The scene at `path` read and made under `instance`; its top-level entities, caller-owned.
-    fn instantiate(self: *SceneInstances, io: std.Io, project: std.Io.Dir, world: *ecs.World, access: eggy.scene.Access, instance: ecs.EntityId, path: []const u8) ![]ecs.EntityId {
+    fn instantiate(self: *SceneInstances, io: std.Io, project: std.Io.Dir, world: *ecs.World, access: scene_zig.Access, instance: ecs.EntityId, path: []const u8) ![]ecs.EntityId {
         const source = try project.readFileAllocOptions(io, path, self.gpa, .limited(64 << 20), .of(u8), 0);
         defer self.gpa.free(source);
-        var scene = try eggy.scene.Scene.parse(self.gpa, source);
+        var scene = try scene_zig.Scene.parse(self.gpa, source);
         defer scene.deinit();
         const made = try scene.instantiate(self.gpa, world, access, instance);
         defer self.gpa.free(made.entities);
@@ -150,7 +153,7 @@ fn allUnder(world: *ecs.World, roots: []const ecs.EntityId, instance: ecs.Entity
 
 /// The path in `zon` (an `AssetRef`'s field, a string literal), in `buffer`; null if it isn't one.
 fn scenePath(zon: []const u8, buffer: []u8) ?[]const u8 {
-    var source: [eggy.refs.max_path_len + 8:0]u8 = undefined;
+    var source: [refs.max_path_len + 8:0]u8 = undefined;
     if (zon.len > source.len) return null;
     @memcpy(source[0..zon.len], zon);
     source[zon.len] = 0;
@@ -163,12 +166,15 @@ fn scenePath(zon: []const u8, buffer: []u8) ?[]const u8 {
     return buffer[0..path.len];
 }
 
+const Transform = @import("transform.zig").Transform;
+const SceneInstance = scene_instance.SceneInstance;
+
 test "an instance gets its scene's entities, again when they go, and none inside itself" {
     const gpa = std.testing.allocator;
     const io = std.testing.io;
     const Spin = struct { speed: f32 = 1 };
-    const Registry = eggy.components.Registry(&.{ eggy.Transform, eggy.SceneInstance, Spin }, &.{ "eggy", "eggy", "game" });
-    const access = eggy.scene.registryAccess(Registry);
+    const Registry = components.Registry(&.{ Transform, SceneInstance, Spin }, &.{ "eggy", "eggy", "game" });
+    const access = scene_zig.registryAccess(Registry);
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
     // A rat with a hat on it.
@@ -183,7 +189,7 @@ test "an instance gets its scene's entities, again when they go, and none inside
     defer world.deinit();
     var instances = SceneInstances.init(gpa);
     defer instances.deinit();
-    const sewer_rat = try world.spawn(.{ eggy.Transform{}, eggy.SceneInstance{ .scene = .init("rat.scene.zon") } });
+    const sewer_rat = try world.spawn(.{ Transform{}, SceneInstance{ .scene = .init("rat.scene.zon") } });
     instances.sync(io, tmp.dir, &world, access, null);
     const rat = firstChild(&world, sewer_rat).?;
     try std.testing.expectEqual(@as(f32, 3), world.get(rat, Spin).?.speed);
@@ -197,12 +203,12 @@ test "an instance gets its scene's entities, again when they go, and none inside
     try std.testing.expect(firstChild(&world, sewer_rat) != null);
 
     // Without the component, its entities go.
-    world.remove(sewer_rat, eggy.SceneInstance);
+    world.remove(sewer_rat, SceneInstance);
     instances.sync(io, tmp.dir, &world, access, null);
     try std.testing.expect(firstChild(&world, sewer_rat) == null);
 
     // The rat scene, being edited, doesn't get a rat inside it.
-    _ = try world.spawn(.{ eggy.Transform{}, eggy.SceneInstance{ .scene = .init("rat.scene.zon") } });
+    _ = try world.spawn(.{ Transform{}, SceneInstance{ .scene = .init("rat.scene.zon") } });
     std.testing.log_level = .err;
     defer std.testing.log_level = .warn;
     instances.sync(io, tmp.dir, &world, access, "rat.scene.zon");

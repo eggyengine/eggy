@@ -2,7 +2,7 @@
 //! Inspector's view of the one selected there, and carrying out what they ask (selecting,
 //! adding, deleting, renaming, reparenting, duplicating, and changing components) on the app's
 //! world through the game's library. A model or scene file dropped into the world becomes an
-//! entity of its own, and each scene instance's entities are kept made (`scene_instances.zig`).
+//! entity of its own, and each scene instance's entities are kept made (`eggy.SceneInstances`).
 const std = @import("std");
 const eggy = @import("eggy");
 const ui = eggy.ui;
@@ -13,7 +13,7 @@ const hierarchy_zig = @import("hierarchy.zig");
 const inspector_zig = @import("inspector.zig");
 const RootOrder = @import("root_order.zig").RootOrder;
 const Dragged = @import("../dragged.zig").Dragged;
-pub const SceneInstances = @import("scene_instances.zig").SceneInstances;
+pub const SceneInstances = eggy.SceneInstances;
 const log = std.log.scoped(.entities);
 
 pub const EntityEditor = struct {
@@ -370,7 +370,6 @@ test {
     _ = @import("inspector.zig");
     _ = @import("field_editor.zig");
     _ = @import("field_value.zig");
-    _ = @import("scene_instances.zig");
 }
 
 test "moves place an entity before or after a sibling, at the top level or under a parent" {

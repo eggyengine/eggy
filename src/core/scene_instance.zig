@@ -1,11 +1,10 @@
 //! `SceneInstance`: an entity that stands for a whole scene file, as an instanced scene does in
 //! Godot. The scene's entities are made under it, from the file, and they aren't saved with the
 //! scene the instance is in, only the instance itself, so a change to the file shows wherever
-//! it is instanced. A built-in component. The editor makes and remakes the entities
-//! (`src/editor/scene_instances.zig`).
+//! it is instanced. A built-in component, whose entities `scene_instances.zig` makes and remakes,
+//! in the editor and the runtime.
 //!
 //!     .{ .type = "SceneInstance", .owner = "eggy", .fields = .{ .scene = "resources/scene/rat.scene.zon" } }
-// ponytail: the runtime doesn't load scenes yet, so instances are only made in the editor; make them where the runtime loads its scene, once it does.
 const std = @import("std");
 const components = @import("components.zig");
 const AssetRef = @import("refs.zig").AssetRef;

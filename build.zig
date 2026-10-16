@@ -4,6 +4,7 @@ const Emscripten = vitellus_build.Emscripten;
 const models = @import("src/build/models.zig");
 const game_export = @import("src/build/export.zig");
 const build_runner = @import("src/build/runner.zig");
+const game_resources = @import("src/build/resources.zig");
 
 pub fn build(b: *std.Build) void {
     const update_submodules = b.addSystemCommand(&.{ "git", "submodule", "update", "--init", "--remote", "--recursive" });
@@ -142,6 +143,11 @@ fn addProject(b: *std.Build, engine: *std.Build, emscripten: Emscripten, target:
 
     // The runtime's project module also carries the project's preferences (`.eggy/plugins`),
     // baked in. The editor's game library doesn't, so changing them doesn't rebuild it.
+    // It starts in the project's main scene (none for Eggy's own executables, whose resources
+    // are the editor's).
+    const own = b == engine;
+    const main_scene = if (own) null else game_resources.mainScene(b);
+    if (main_scene) |path| source.print(b.allocator, "pub const main_scene: ?[]const u8 = \"{f}\";\n", .{std.zig.fmtString(path)}) catch @panic("OOM");
     const runtime_project = b.createModule(.{ .root_source_file = addPreferenceFiles(b, source.items), .target = target, .optimize = optimize });
     runtime_project.addImport("game", options.game);
     for (options.plugins, 0..) |plugin, i| runtime_project.addImport(b.fmt("plugin_{d}", .{i}), plugin);
@@ -172,12 +178,12 @@ fn addProject(b: *std.Build, engine: *std.Build, emscripten: Emscripten, target:
     const runtime_step = b.step("runtime", "Build the game");
     runtime_step.dependOn(&runtime_app.install.step);
     installRuntimeLibraries(b, engine, runtime_step);
-    // Packaging: the game's models and images, converted for the runtime, installed beside it.
-    if (models.addPackaging(b, engine, optimize)) |packaged| {
+    // Its resources: models and textures converted, everything else copied, all into data/.
+    if (!own) for ([_]?*std.Build.Step{ models.addPackaging(b, engine, optimize), game_resources.addCopies(b) }) |found| if (found) |packaged| {
         runtime_step.dependOn(packaged);
         runtime_app.run.step.dependOn(packaged);
         b.getInstallStep().dependOn(packaged);
-    }
+    };
     b.step("run-runtime", "Run the game").dependOn(&runtime_app.run.step);
     all_step.dependOn(&runtime_app.install.step);
 
