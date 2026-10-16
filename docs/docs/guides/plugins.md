@@ -137,7 +137,7 @@ Drag a model file from Assets into the Scene panel and it becomes a new entity, 
 
 Files from outside the editor (from the system's file manager) are copied into the project when dropped on the Assets panel, into the folder they land on.
 
-The game starts in the project's main scene: `.main_scene` in `eggy.zon` (a path such as `"resources/scene/level1.scene.zon"`), else the scene the editor last had open, else the first scene in `resources/`. Building the game (`zig build runtime`, or `zig build export` to ship it) puts every file of `resources/` beside it in `data/`: models and images converted so the game reads them without an importer, everything else as it is. The scene is in place before your plugins' `init` runs.
+Play runs the scene open in the editor. A built game starts in the project's default scene, set in File > Project Settings (`.default_scene` in `eggy.zon`), or the one `-Dscene=<path>` names; `zig build runtime` without either takes the scene the editor last had open. Exporting needs one or the other, and the Export window asks for it. Building the game puts every file of `resources/` beside it in `data/`, named by its id rather than its name: models and images converted so the game reads them without an importer, everything else as it is, and `data/manifest.zon` to find each. The scene is in place before your plugins' `init` runs.
 
 ### Models and descriptors
 

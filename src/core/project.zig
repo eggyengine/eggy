@@ -22,9 +22,10 @@ pub const Config = struct {
     /// The project's name as people see it (window titles, the editor); any text.
     title: []const u8,
     version: []const u8 = "0.0.1",
-    /// The scene the game starts in, relative to the project; when unset, the scene the editor
-    /// has open, else the first in `resources_dir` (see `src/build/resources.zig`).
-    main_scene: ?[]const u8 = null,
+    /// The scene the game starts in, relative to the project: what exports start in unless
+    /// told otherwise, and `zig build runtime` too (which, without it, takes the scene the
+    /// editor has open, else the first in `resources_dir`: see `src/build/resources.zig`).
+    default_scene: ?[]const u8 = null,
 };
 
 /// `source` (an `eggy.zon`) parsed. Strings live in `arena`.

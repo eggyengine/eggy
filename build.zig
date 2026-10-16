@@ -146,7 +146,8 @@ fn addProject(b: *std.Build, engine: *std.Build, emscripten: Emscripten, target:
     // It starts in the project's main scene (none for Eggy's own executables, whose resources
     // are the editor's).
     const own = b == engine;
-    const main_scene = if (own) null else game_resources.mainScene(b);
+    const scene_option = b.option([]const u8, "scene", "The scene the game starts in (default: eggy.zon's .default_scene); export needs one");
+    const main_scene = if (own) null else game_resources.mainScene(b, scene_option, false);
     if (main_scene) |path| source.print(b.allocator, "pub const main_scene: ?[]const u8 = \"{f}\";\n", .{std.zig.fmtString(path)}) catch @panic("OOM");
     const runtime_project = b.createModule(.{ .root_source_file = addPreferenceFiles(b, source.items), .target = target, .optimize = optimize });
     runtime_project.addImport("game", options.game);
@@ -165,7 +166,7 @@ fn addProject(b: *std.Build, engine: *std.Build, emscripten: Emscripten, target:
         },
     });
     const all_step = b.step("all", "Build every executable for this target");
-    game_export.addExport(b, engine, target, runtime_name);
+    game_export.addExport(b, engine, target, runtime_name, if (own) null else game_resources.mainScene(b, scene_option, true));
     build_runner.record(b);
     if (target.result.os.tag == .emscripten) {
         const app = emscripten.addApp(b, .{ .name = runtime_name, .root_module = runtime_module });
@@ -179,7 +180,8 @@ fn addProject(b: *std.Build, engine: *std.Build, emscripten: Emscripten, target:
     runtime_step.dependOn(&runtime_app.install.step);
     installRuntimeLibraries(b, engine, runtime_step);
     // Its resources: models and textures converted, everything else copied, all into data/.
-    if (!own) for ([_]?*std.Build.Step{ models.addPackaging(b, engine, optimize), game_resources.addCopies(b) }) |found| if (found) |packaged| {
+    const files = if (own) &.{} else game_resources.entries(b);
+    for ([_]?*std.Build.Step{ models.addPackaging(b, engine, optimize, files), game_resources.addData(b, files) }) |found| if (found) |packaged| {
         runtime_step.dependOn(packaged);
         runtime_app.run.step.dependOn(packaged);
         b.getInstallStep().dependOn(packaged);

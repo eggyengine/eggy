@@ -4,9 +4,6 @@
 const std = @import("std");
 const s2s = @import("s2s");
 
-/// What packaging adds to an image file's name for its `.eggtexture`.
-pub const extension = ".eggtexture";
-
 /// An image: rows of red, green, blue and alpha bytes (as the file stores them, sRGB), top row
 /// first.
 pub const Texture = struct {

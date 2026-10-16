@@ -12,6 +12,29 @@ const scene_instance = @import("scene_instance.zig");
 const refs = @import("refs.zig");
 const log = std.log.scoped(.scene_instances);
 
+/// Where scene files come from, by their paths in the project: the project's folder in the
+/// editor (`FolderFiles`), what packaging made of them in the runtime.
+pub const Files = struct {
+    context: *anyopaque,
+    /// The file at `path`, allocated with `gpa`.
+    read: *const fn (context: *anyopaque, gpa: std.mem.Allocator, path: []const u8) anyerror![:0]u8,
+};
+
+/// `Files` from a folder: paths are relative to it.
+pub const FolderFiles = struct {
+    io: std.Io,
+    dir: std.Io.Dir,
+
+    pub fn files(self: *FolderFiles) Files {
+        return .{ .context = self, .read = read };
+    }
+
+    fn read(context: *anyopaque, gpa: std.mem.Allocator, path: []const u8) anyerror![:0]u8 {
+        const self: *FolderFiles = @ptrCast(@alignCast(context));
+        return self.dir.readFileAllocOptions(self.io, path, gpa, .limited(64 << 20), .of(u8), 0);
+    }
+};
+
 pub const SceneInstances = struct {
     gpa: std.mem.Allocator,
     /// By the instance's entity id: what was made under it.
@@ -44,10 +67,10 @@ pub const SceneInstances = struct {
     }
 
     /// Bring each instance in `world` up to date: make the entities of one whose file is new,
-    /// changed or whose entities are gone, from the scene files in `project`, and take away
+    /// changed or whose entities are gone, from the scene files in `files`, and take away
     /// those of instances that are gone. `open_scene` (the scene being edited, relative to the
     /// project) is never made inside itself.
-    pub fn sync(self: *SceneInstances, io: std.Io, project: std.Io.Dir, world: *ecs.World, access: scene_zig.Access, open_scene: ?[]const u8) void {
+    pub fn sync(self: *SceneInstances, files: Files, world: *ecs.World, access: scene_zig.Access, open_scene: ?[]const u8) void {
         const component = scene_instance.typeIndex(access.types()) orelse return;
         var seen: std.AutoHashMapUnmanaged(u32, void) = .empty;
         defer seen.deinit(self.gpa);
@@ -67,7 +90,7 @@ pub const SceneInstances = struct {
                 if (made.generation == entity.generation and !made.stale and std.mem.eql(u8, made.path, path) and allUnder(world, made.roots, entity)) continue;
                 self.unmake(world, entity.id);
             }
-            self.make(io, project, world, access, entity, path, open_scene);
+            self.make(files, world, access, entity, path, open_scene);
         }
 
         // Instances gone, or no longer instances: their entities go too.
@@ -80,13 +103,13 @@ pub const SceneInstances = struct {
 
     /// Make the scene at `path` under `instance`, and remember what was made (nothing, if it
     /// can't be, so it isn't tried again every frame).
-    fn make(self: *SceneInstances, io: std.Io, project: std.Io.Dir, world: *ecs.World, access: scene_zig.Access, instance: ecs.EntityId, path: []const u8, open_scene: ?[]const u8) void {
+    fn make(self: *SceneInstances, files: Files, world: *ecs.World, access: scene_zig.Access, instance: ecs.EntityId, path: []const u8, open_scene: ?[]const u8) void {
         const owned_path = self.gpa.dupe(u8, path) catch return;
         var roots: []ecs.EntityId = &.{};
         if (path.len > 0) if (self.isInsideItself(world, instance, path, open_scene)) {
             log.warn("{s} is instanced inside itself: that instance is left empty", .{path});
         } else {
-            roots = self.instantiate(io, project, world, access, instance, path) catch |err| blk: {
+            roots = self.instantiate(files, world, access, instance, path) catch |err| blk: {
                 log.err("cannot make the entities of {s}: {t}", .{ path, err });
                 break :blk &.{};
             };
@@ -98,8 +121,8 @@ pub const SceneInstances = struct {
     }
 
     /// The scene at `path` read and made under `instance`; its top-level entities, caller-owned.
-    fn instantiate(self: *SceneInstances, io: std.Io, project: std.Io.Dir, world: *ecs.World, access: scene_zig.Access, instance: ecs.EntityId, path: []const u8) ![]ecs.EntityId {
-        const source = try project.readFileAllocOptions(io, path, self.gpa, .limited(64 << 20), .of(u8), 0);
+    fn instantiate(self: *SceneInstances, files: Files, world: *ecs.World, access: scene_zig.Access, instance: ecs.EntityId, path: []const u8) ![]ecs.EntityId {
+        const source = try files.read(files.context, self.gpa, path);
         defer self.gpa.free(source);
         var scene = try scene_zig.Scene.parse(self.gpa, source);
         defer scene.deinit();
@@ -189,29 +212,31 @@ test "an instance gets its scene's entities, again when they go, and none inside
     defer world.deinit();
     var instances = SceneInstances.init(gpa);
     defer instances.deinit();
+    var folder = FolderFiles{ .io = io, .dir = tmp.dir };
+    const files = folder.files();
     const sewer_rat = try world.spawn(.{ Transform{}, SceneInstance{ .scene = .init("rat.scene.zon") } });
-    instances.sync(io, tmp.dir, &world, access, null);
+    instances.sync(files, &world, access, null);
     const rat = firstChild(&world, sewer_rat).?;
     try std.testing.expectEqual(@as(f32, 3), world.get(rat, Spin).?.speed);
     try std.testing.expect(firstChild(&world, rat) != null);
 
     // In sync, nothing changes; once the rat is gone, it is made again.
-    instances.sync(io, tmp.dir, &world, access, null);
+    instances.sync(files, &world, access, null);
     try std.testing.expect(firstChild(&world, sewer_rat).?.eql(rat));
     world.despawnRecursive(rat);
-    instances.sync(io, tmp.dir, &world, access, null);
+    instances.sync(files, &world, access, null);
     try std.testing.expect(firstChild(&world, sewer_rat) != null);
 
     // Without the component, its entities go.
     world.remove(sewer_rat, SceneInstance);
-    instances.sync(io, tmp.dir, &world, access, null);
+    instances.sync(files, &world, access, null);
     try std.testing.expect(firstChild(&world, sewer_rat) == null);
 
     // The rat scene, being edited, doesn't get a rat inside it.
     _ = try world.spawn(.{ Transform{}, SceneInstance{ .scene = .init("rat.scene.zon") } });
     std.testing.log_level = .err;
     defer std.testing.log_level = .warn;
-    instances.sync(io, tmp.dir, &world, access, "rat.scene.zon");
+    instances.sync(files, &world, access, "rat.scene.zon");
     try std.testing.expectEqual(@as(usize, 2), aliveCount(&world));
 }
 

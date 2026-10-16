@@ -1,10 +1,10 @@
 //! Models and images in the build: `eggy_assimp`, the shared library the editor imports model
 //! files and decodes images with, and packaging, which converts a game's model and image files
-//! to `.eggmodel` and `.eggtexture` for its runtime (installed into `<prefix>/data/`, where the
-//! runtime looks).
+//! to `.eggmodel` and `.eggtexture` for its runtime (installed into `<prefix>/data/`, named by
+//! id, where the runtime looks).
 const std = @import("std");
 const assimp = @import("assimp.zig");
-const Kind = @import("../core/assets/kind.zig").Kind;
+const manifest = @import("../core/assets/manifest.zig");
 
 /// `eggy_assimp` and the `eggy_model_import` module, which links it.
 pub const Importer = struct {
@@ -73,13 +73,14 @@ pub fn installedPath(target: std.Target, library: *std.Build.Step.Compile) []con
     return if (target.os.tag == .windows) owner.fmt("bin/{s}", .{library.out_filename}) else owner.fmt("lib/{s}", .{library.out_filename});
 }
 
-/// Packaging for the game `b` builds: each model file in its `resources/` converted to
-/// `<prefix>/data/<path>.eggmodel`, and each image to `<path>.eggtexture`, by a tool built with
-/// `eggy` for the machine building. Null when the game has neither (so assimp isn't built for
-/// it), or until assimp is fetched.
-pub fn addPackaging(b: *std.Build, eggy: *std.Build, optimize: std.builtin.OptimizeMode) ?*std.Build.Step {
-    const packaged = findPackaged(b);
-    if (packaged.len == 0) return null;
+/// Packaging for the game `b` builds: each model file of `files` (its resources) converted to
+/// `<prefix>/data/<id>.eggmodel`, and each texture to `<id>.eggtexture` (see
+/// `assets/manifest.zig`), by a tool built with `eggy` for the machine building. Null when the
+/// game has neither (so assimp isn't built for it), or until assimp is fetched.
+pub fn addPackaging(b: *std.Build, eggy: *std.Build, optimize: std.builtin.OptimizeMode, files: []const manifest.Entry) ?*std.Build.Step {
+    var converted: std.ArrayList(manifest.Entry) = .empty;
+    for (files) |entry| if (manifest.Packaged.of(entry.path) != .copy) converted.append(b.allocator, entry) catch @panic("OOM");
+    if (converted.items.len == 0) return null;
     const host = eggy.graph.host;
     const assets = assetsModule(eggy, host, optimize);
     const importer = addImporter(eggy, host, optimize, assets) orelse return null;
@@ -101,35 +102,13 @@ pub fn addPackaging(b: *std.Build, eggy: *std.Build, optimize: std.builtin.Optim
     const package = b.addRunArtifact(tool);
     package.addArg(b.build_root.handle.realPathFileAlloc(b.graph.io, ".", b.allocator) catch |err| std.debug.panic("cannot resolve the project's directory: {t}", .{err}));
     const output = package.addOutputDirectoryArg("assets");
-    for (packaged) |path| {
-        package.addArg(path);
-        package.addFileInput(b.path(path));
-        if (b.build_root.handle.access(b.graph.io, b.fmt("{s}.eggy", .{path}), .{})) {
-            package.addFileInput(b.path(b.fmt("{s}.eggy", .{path})));
+    for (converted.items) |entry| {
+        var name: [32]u8 = undefined;
+        package.addArgs(&.{ entry.path, b.dupe(manifest.packagedName(&name, entry)) });
+        package.addFileInput(b.path(entry.path));
+        if (b.build_root.handle.access(b.graph.io, b.fmt("{s}.eggy", .{entry.path}), .{})) {
+            package.addFileInput(b.path(b.fmt("{s}.eggy", .{entry.path})));
         } else |_| {}
     }
     return &b.addInstallDirectory(.{ .source_dir = output, .install_dir = .prefix, .install_subdir = "data" }).step;
-}
-
-/// The model files and textures (images `Kind.isTexture`) in `b`'s project's `resources/`, relative to the project with `/`
-/// between parts, sorted so the same files always package the same way.
-fn findPackaged(b: *std.Build) []const []const u8 {
-    const io = b.graph.io;
-    var found: std.ArrayList([]const u8) = .empty;
-    var dir = b.build_root.handle.openDir(io, "resources", .{ .iterate = true }) catch return &.{};
-    defer dir.close(io);
-    var walker = dir.walk(b.allocator) catch @panic("OOM");
-    defer walker.deinit();
-    while (walker.next(io) catch null) |entry| {
-        const kind = Kind.of(entry.basename);
-        if (entry.kind != .file or (kind != .model and !Kind.isTexture(entry.basename))) continue;
-        const path = std.mem.replaceOwned(u8, b.allocator, entry.path, std.fs.path.sep_str, "/") catch @panic("OOM");
-        found.append(b.allocator, b.fmt("resources/{s}", .{path})) catch @panic("OOM");
-    }
-    std.mem.sort([]const u8, found.items, {}, struct {
-        fn before(_: void, x: []const u8, y: []const u8) bool {
-            return std.mem.lessThan(u8, x, y);
-        }
-    }.before);
-    return found.items;
 }

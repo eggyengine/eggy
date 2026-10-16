@@ -21,9 +21,9 @@ pub fn Runtime(comptime project: type) type {
         drawables: []eggy.mesh.Drawable,
         /// "No camera available", made the first time the scene has no camera to look through.
         notice: ?eggy.Notice = null,
-        /// Where packaging put the game's resources (null where there is none: the web), and
-        /// the entities each scene instance made from them.
-        data: ?std.Io.Dir,
+        /// What packaging put beside the game (null where there is none: the web), and the
+        /// entities each scene instance made from it.
+        data: ?*packaged_assets.Data,
         instances: eggy.SceneInstances,
 
         const Self = @This();
@@ -32,9 +32,16 @@ pub fn Runtime(comptime project: type) type {
             _ = args;
             var app = try eggy.App.init(gpa, project.name);
             errdefer app.deinit();
-            // Model and image files, as packaging made them.
-            app.graphics.models.loader = packaged_assets.models;
-            app.graphics.textures.loader = packaged_assets.textures;
+            // Model and image files, and scenes, as packaging made them.
+            const data: ?*packaged_assets.Data = if (web) null else packaged_assets.Data.open(gpa) catch |err| blk: {
+                std.log.warn("the game's data folder can't be read ({t}): it starts with no scene, models or textures", .{err});
+                break :blk null;
+            };
+            errdefer if (data) |packaged| packaged.close();
+            if (data) |packaged| {
+                app.graphics.models.loader = packaged.models();
+                app.graphics.textures.loader = packaged.textures();
+            }
             // The project's preferences, baked in by `addGame`, before the plugins start.
             if (@hasDecl(project, "preference_files")) for (project.preference_files) |file| {
                 app.preference_values.read(.project, file.key, file.zon) catch |err| std.log.warn("the preferences for {s} don't parse ({t}): they are ignored", .{ file.key, err });
@@ -47,14 +54,7 @@ pub fn Runtime(comptime project: type) type {
                 break :blk &.{};
             } else &.{};
             // The game's first scene, before the plugins start, as the editor puts it in.
-            var threaded: std.Io.Threaded = .init_single_threaded;
-            const io = threaded.io();
-            const data: ?std.Io.Dir = if (web) null else packaged_assets.openData(io) catch |err| blk: {
-                std.log.warn("the game has no data folder ({t}): it starts with no scene", .{err});
-                break :blk null;
-            };
-            errdefer if (data) |dir| dir.close(io);
-            if (@hasDecl(project, "main_scene")) if (project.main_scene) |path| if (data) |dir| startScene(gpa, io, dir, &app.world, path);
+            if (@hasDecl(project, "main_scene")) if (project.main_scene) |path| if (data) |packaged| startScene(gpa, packaged.copies(), &app.world, path);
             var plugins = try Plugins.init(gpa, &app, Plugins.enabledExcept(off));
             errdefer plugins.deinit();
             try app.startWorld();
@@ -70,10 +70,10 @@ pub fn Runtime(comptime project: type) type {
             };
         }
 
-        /// Put the scene at `path` (in `data`) into `world`; a scene that can't be read leaves
+        /// Put the scene at `path` (from `files`) into `world`; a scene that can't be read leaves
         /// it empty, having said why.
-        fn startScene(gpa: std.mem.Allocator, io: std.Io, data: std.Io.Dir, world: *eggy.ecs.World, path: []const u8) void {
-            const source = data.readFileAllocOptions(io, path, gpa, .limited(64 << 20), .of(u8), 0) catch |err| return std.log.err("cannot read the scene {s}: {t}", .{ path, err });
+        fn startScene(gpa: std.mem.Allocator, files: eggy.scene_instances.Files, world: *eggy.ecs.World, path: []const u8) void {
+            const source = files.read(files.context, gpa, path) catch |err| return std.log.err("cannot read the scene {s}: {t}", .{ path, err });
             defer gpa.free(source);
             var scene = eggy.scene.Scene.parse(gpa, source) catch |err| return std.log.err("cannot read the scene {s}: {t}", .{ path, err });
             defer scene.deinit();
@@ -84,10 +84,7 @@ pub fn Runtime(comptime project: type) type {
 
         pub fn deinit(self: *Self) void {
             self.instances.deinit();
-            if (self.data) |dir| {
-                var threaded: std.Io.Threaded = .init_single_threaded;
-                dir.close(threaded.io());
-            }
+            if (self.data) |packaged| packaged.close();
             if (self.notice) |*notice| {
                 self.app.graphics.queue.waitIdle() catch {};
                 notice.deinit();
@@ -102,10 +99,7 @@ pub fn Runtime(comptime project: type) type {
             // The browser already paces frames to the display.
             if (!web) _ = self.fps_capper.delay();
             // Scene instances' entities, from their files, for any made or changed.
-            if (self.data) |dir| {
-                var threaded: std.Io.Threaded = .init_single_threaded;
-                self.instances.sync(threaded.io(), dir, &self.app.world, eggy.scene.registryAccess(Plugins.Components), null);
-            }
+            if (self.data) |packaged| self.instances.sync(packaged.copies(), &self.app.world, eggy.scene.registryAccess(Plugins.Components), null);
             try self.plugins.update(&self.app);
             try self.app.updateWorld();
             const frame = try self.app.graphics.beginFrame();

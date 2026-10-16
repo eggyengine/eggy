@@ -5,9 +5,6 @@ const std = @import("std");
 const s2s = @import("s2s");
 const Texture = @import("texture.zig").Texture;
 
-/// What packaging adds to a model file's name for its `.eggmodel`.
-pub const extension = ".eggmodel";
-
 /// A corner of a triangle: where it is, which way its surface faces, and where on a texture it
 /// is (from its top left corner, 0 to 1 across).
 pub const Vertex = extern struct {

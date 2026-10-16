@@ -1592,7 +1592,8 @@ pub fn Editor(comptime project: type) type {
             const io = threaded.io();
             var files = std.Io.Dir.cwd().openDir(io, opened.dir, .{}) catch return;
             defer files.close(io);
-            self.entity_editor.instances.sync(io, files, &self.app.world, game.sceneAccess(), self.openScenePath());
+            var folder = eggy.scene_instances.FolderFiles{ .io = io, .dir = files };
+            self.entity_editor.instances.sync(folder.files(), &self.app.world, game.sceneAccess(), self.openScenePath());
         }
 
         /// The project's files changed: the Assets panel lists them again, descriptors keep up,
