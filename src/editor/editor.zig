@@ -1134,13 +1134,23 @@ pub fn Editor(comptime project: type) type {
                 return .run;
             };
 
-            // The Scene panel's camera takes presses, drags and wheels over it; F frames the
-            // selection, and Delete deletes it.
-            if (self.scene_view.handleFirst(curr_event, self.sceneRect(slot))) {
-                if (curr_event == .mouse_button_down) self.unfocusOnPress(slot, .{ .x = curr_event.mouse_button_down.x, .y = curr_event.mouse_button_down.y }, false);
+            // While the game plays, the Scene panel is the game's: the mouse over it goes to it.
+            const game_has_scene = self.play_mode.playing() and !self.workspace.simulating;
+            if (game_has_scene and self.overScene(slot, curr_event)) {
+                if (self.play_mode.running()) if (self.game) |*game| {
+                    self.app.input.handle(curr_event);
+                    game.event(&self.app, curr_event);
+                };
                 return .run;
             }
-            if (curr_event == .key_down) if (curr_event.key_down.key) |key| if (self.scene_view.camera.hovered and self.scene_view.camera.drag == null and self.scene_view.drag == null) switch (key) {
+
+            // The Scene panel's camera takes presses, drags and wheels over it; F frames the
+            // selection, and Delete deletes it.
+            if (!game_has_scene) if (self.scene_view.handleFirst(curr_event, self.sceneRectFor(slot, curr_event))) {
+                if (curr_event == .mouse_button_down) self.unfocusOnPress(slot, .{ .x = curr_event.mouse_button_down.x, .y = curr_event.mouse_button_down.y }, false);
+                return .run;
+            };
+            if (!game_has_scene) if (curr_event == .key_down) if (curr_event.key_down.key) |key| if (self.scene_view.camera.hovered and self.scene_view.camera.drag == null and self.scene_view.drag == null) switch (key) {
                 .f => {
                     self.frameSelected();
                     return .run;
@@ -1884,6 +1894,35 @@ pub fn Editor(comptime project: type) type {
             self.ui.heading(3, project.name);
             if (self.game) |*game| game.editorUi(&self.ui) else self.ui.muted("The game's library didn't load: see the Console.");
             self.ui.muted("Select an entity in the Hierarchy to see its components.");
+        }
+
+        /// Whether `curr_event` is the mouse over the Scene panel in window `slot`: a press, release,
+        /// move or wheel there, and not on a workspace control floating over it (a panel menu, the
+        /// Scene's toolbar), which takes it instead.
+        fn overScene(self: *const Self, slot: Slot, curr_event: sdl3.events.Event) bool {
+            const scene = self.sceneRect(slot) orelse return false;
+            const at = pointerOf(curr_event) orelse return false;
+            return scene.contains(at.x, at.y) and !self.workspace.hasControlAt(slot, at.x, at.y);
+        }
+
+        /// The Scene panel's rect in window `slot` for the scene camera: null when `curr_event` is a
+        /// press or wheel on a workspace control floating over it, which takes it instead.
+        fn sceneRectFor(self: *const Self, slot: Slot, curr_event: sdl3.events.Event) ?ui.Rect {
+            const on_control = switch (curr_event) {
+                .mouse_button_down, .mouse_wheel => if (pointerOf(curr_event)) |at| self.workspace.hasControlAt(slot, at.x, at.y) else false,
+                else => false,
+            };
+            return if (on_control) null else self.sceneRect(slot);
+        }
+
+        /// Where the mouse is for a press, release, move or wheel; null for other events.
+        fn pointerOf(curr_event: sdl3.events.Event) ?ui.Vec2 {
+            return switch (curr_event) {
+                .mouse_button_down, .mouse_button_up => |button| .{ .x = button.x, .y = button.y },
+                .mouse_motion => |motion| .{ .x = motion.x, .y = motion.y },
+                .mouse_wheel => |wheel| .{ .x = wheel.x, .y = wheel.y },
+                else => null,
+            };
         }
 
         /// The Scene panel's rect in window `slot`; null when it is in another window or hidden.

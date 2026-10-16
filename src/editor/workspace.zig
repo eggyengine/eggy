@@ -655,6 +655,12 @@ pub const Workspace = struct {
         self.dock.add(panel, null, .center) catch |err| std.log.warn("cannot reopen panel {d}: {t}", .{ panel, err });
     }
 
+    /// Whether one of the workspace's controls (a menu, a tab, the Scene's toolbar) is under (x, y)
+    /// in window `slot`, so a press there is the workspace's rather than what lies beneath.
+    pub fn hasControlAt(self: *const Workspace, slot: Slot, x: f32, y: f32) bool {
+        return self.controlAt(slot, x, y) != 0;
+    }
+
     /// The topmost interactive element under (x, y) in window `slot`'s last tree, or 0.
     fn controlAt(self: *const Workspace, slot: Slot, x: f32, y: f32) u32 {
         const root = self.roots[slot] orelse return 0;
@@ -862,6 +868,41 @@ test "the save toast shows for a while, inside the window" {
     workspace.time_ms = 1000 + toast_ms;
     try workspace.build(viewport, @splat(null), &font);
     try std.testing.expect(workspace.roots[main_slot].?.children[workspace.roots[main_slot].?.children.len - 1].paint_kind != .surface);
+}
+
+test "the Scene's panel menu, dropped over the Scene, takes presses there" {
+    var workspace = try testWorkspace();
+    defer workspace.deinit();
+    var font = try ui.Font.init(std.testing.allocator, ui.default_font);
+    defer font.deinit();
+    const viewport = ui.Rect{ .x = 0, .y = 0, .w = 1400, .h = 800 };
+    try workspace.build(viewport, @splat(null), &font);
+
+    // Open the Scene stack's menu with its burger, at the right of the Scene's tab bar.
+    const scene = workspace.placed.scene.?.rect;
+    const burger = workspace.controlAt(main_slot, scene.x + scene.w - 12, scene.y - 12);
+    try std.testing.expectEqual(Outcome.handled, workspace.handle(main_slot, .{ .pointer_down = .{ .position = .{ .x = scene.x + scene.w - 12, .y = scene.y - 12 }, .button = .left, .clicks = 1 } }));
+    try std.testing.expect(burger != 0);
+    try workspace.build(viewport, @splat(null), &font);
+
+    // Its Pop out row lies over the Scene, and is the workspace's to press.
+    const findRow = struct {
+        fn f(element: *const L.Element, label: []const u8) ?*const L.Element {
+            if (element.paint_kind == .menu_item and std.mem.eql(u8, element.paint_kind.menu_item.label, label)) return element;
+            for (element.children) |child| if (f(child, label)) |found| return found;
+            return null;
+        }
+    }.f;
+    const row = findRow(workspace.roots[main_slot].?, "Pop out into window").?;
+    const at = ui.Vec2{ .x = @max(row.bounds.x, scene.x) + 4, .y = row.bounds.center().y };
+    try std.testing.expect(scene.contains(at.x, at.y));
+    try std.testing.expect(workspace.hasControlAt(main_slot, at.x, at.y));
+    _ = workspace.handle(main_slot, .{ .pointer_down = .{ .position = at, .button = .left, .clicks = 1 } });
+    try std.testing.expect(workspace.dock.windows[0] != null);
+
+    // The Scene itself is not a control: the scene camera and the game take presses there.
+    try workspace.build(viewport, @splat(null), &font);
+    try std.testing.expect(!workspace.hasControlAt(main_slot, viewport.w / 2, viewport.h / 2));
 }
 
 test "a plugin panel closed stays closed across swaps and restarts" {
