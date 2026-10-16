@@ -1,7 +1,9 @@
-//! File > Export: a window to build the open project's game to ship. Pick where it runs and the
-//! scene it starts in (the project's default scene at first; there must be one), and press Export; it runs `zig build export` (see `src/build/export.zig`) in the background,
-//! showing the step under way, a bar for the whole build, and Zig's output as it comes. Once
-//! done, the folder and its zip are in the project's `zig-out/export/`, which it can show.
+//! File > Export: a window to build the open project's game to ship. It first asks which scene
+//! the game starts in on launch (the project's default scene picked; the choice becomes the new
+//! default, a step to undo), then where it runs; Export runs `zig build export` (see
+//! `src/build/export.zig`) in the background, showing the step under way, a bar for the whole
+//! build, and Zig's output as it comes. Once done, the folder and its zip are in the project's
+//! `zig-out/export/`, which it can show.
 const std = @import("std");
 const eggy = @import("eggy");
 const sdl3 = eggy.sdl_adapter.sdl;
@@ -14,6 +16,7 @@ const terminal_view = @import("terminal_view.zig");
 const TerminalView = terminal_view.TerminalView;
 const file_manager = @import("file_manager.zig");
 const listing = @import("assets/listing.zig");
+const project_settings = @import("project_settings.zig");
 
 /// Where a game can be exported to run: what people see, what `-Dtarget` it is, and what that
 /// needs beyond Zig.
@@ -33,10 +36,14 @@ pub const ExportWindow = struct {
     project_dir: []u8,
     /// Which of `platforms`.
     platform: usize = 0,
-    /// The project's scenes, "Choose a scene" first (in `scenes_arena`), and which it starts in.
+    /// The project's scenes (in `scenes_arena`), and which it starts in.
     scenes: []const []const u8 = &.{},
     scenes_arena: std.heap.ArenaAllocator,
     scene: usize = 0,
+    /// Whether the scene was chosen yet: the window asks for it first.
+    scene_chosen: bool = false,
+    /// The default scene changed this frame, for `update` to hand back.
+    change: ?project_settings.Change = null,
     /// The export under way or finished; none until Export is pressed.
     job: ?*Job = null,
     /// Whether the window asked to close.
@@ -57,6 +64,10 @@ pub const ExportWindow = struct {
     /// Close the window, stopping an export under way.
     pub fn close(self: *ExportWindow, graphics: *eggy.Graphics) void {
         if (self.job) |job| job.deinit();
+        if (self.change) |change| {
+            self.gpa.free(change.before);
+            self.gpa.free(change.after);
+        }
         self.scenes_arena.deinit();
         self.terminal.deinit();
         self.window.close(graphics);
@@ -77,8 +88,9 @@ pub const ExportWindow = struct {
         return true;
     }
 
-    /// Draw a frame. Returns false once the window should close.
-    pub fn update(self: *ExportWindow, graphics: *eggy.Graphics, style: *const ui.Context) !bool {
+    /// Draw a frame. Returns the project's default scene's change this frame (caller-owned, for
+    /// the editor to record), and whether the window should stay open.
+    pub fn update(self: *ExportWindow, graphics: *eggy.Graphics, style: *const ui.Context) !struct { change: ?project_settings.Change, open: bool } {
         var arena = std.heap.ArenaAllocator.init(self.gpa);
         defer arena.deinit();
         const status: ?job_zig.Status = if (self.job) |job| try job.status(arena.allocator()) else null;
@@ -91,10 +103,12 @@ pub const ExportWindow = struct {
         };
         var page = Page{ .window = self, .status = status };
         try self.window.present(graphics, style, &page);
-        return !self.closing;
+        defer self.change = null;
+        return .{ .change = self.change, .open = !self.closing };
     }
 
     fn build(self: *ExportWindow, context: *ui.Context, maybe_status: ?job_zig.Status) void {
+        if (!self.scene_chosen) return self.chooseScene(context);
         context.heading(3, "Export the game");
         const status = maybe_status orelse return self.choose(context);
 
@@ -128,18 +142,37 @@ pub const ExportWindow = struct {
         }
     }
 
-    /// Before an export: where it should run, and Export.
+    /// First: which scene the game starts in, kept as the project's default scene.
+    fn chooseScene(self: *ExportWindow, context: *ui.Context) void {
+        context.heading(3, "Which scene starts first?");
+        if (self.scenes.len == 0) {
+            context.muted("The project has no scenes. Make one in the Assets panel, then export.");
+            if (context.buttonVariant("Close", .outline)) self.closing = true;
+            return;
+        }
+        context.muted("The game opens in this scene on launch. It is kept as the project's default scene (File > Project Settings).");
+        _ = context.select("Starts in", self.scenes, &self.scene);
+        context.begin(.row);
+        defer context.end();
+        if (context.button("Continue")) {
+            self.change = project_settings.setDefaultScene(self.gpa, self.project_dir, self.scenes[self.scene]) catch |err| blk: {
+                std.log.err("cannot keep the default scene: {t}", .{err});
+                break :blk null;
+            };
+            self.scene_chosen = true;
+        }
+        if (context.buttonVariant("Cancel", .outline)) self.closing = true;
+    }
+
+    /// Then: where it should run, and Export.
     fn choose(self: *ExportWindow, context: *ui.Context) void {
         context.muted("Builds the game as fast as it runs, with everything it needs, ready to hand out.");
+        context.label("Starts in {s}", .{std.fs.path.basename(self.scenes[self.scene])});
+        if (context.buttonVariant("Choose another scene", .link)) self.scene_chosen = false;
         var labels: [platforms.len][]const u8 = undefined;
         for (&labels, platforms) |*label, platform| label.* = platform.label;
         _ = context.select("Runs on", &labels, &self.platform);
         context.muted(platforms[self.platform].note);
-        _ = context.select("Starts in", self.scenes, &self.scene);
-        if (self.scene == 0) {
-            context.muted("Choose the scene the game starts in. File > Project Settings sets the one chosen at first.");
-            return;
-        }
         if (context.button("Export")) self.start();
     }
 
@@ -160,10 +193,7 @@ pub const ExportWindow = struct {
         const arena = self.scenes_arena.allocator();
         var project = std.Io.Dir.cwd().openDir(io, self.project_dir, .{}) catch return;
         defer project.close(io);
-        var scenes: std.ArrayList([]const u8) = .empty;
-        scenes.append(arena, "Choose a scene") catch return;
-        scenes.appendSlice(arena, listing.scenes(arena, io, project, eggy.project.resources_dir) catch &.{}) catch return;
-        self.scenes = scenes.items;
+        self.scenes = listing.scenes(arena, io, project, eggy.project.resources_dir) catch &.{};
         const config = eggy.project.load(arena, io, project) catch return;
         const default = config.default_scene orelse return;
         for (self.scenes, 0..) |scene, i| if (std.mem.eql(u8, scene, default)) {

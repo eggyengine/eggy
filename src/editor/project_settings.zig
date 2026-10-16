@@ -202,3 +202,39 @@ pub const ProjectSettingsWindow = struct {
         return .{ .before = before, .after = after };
     }
 };
+
+/// Make `scene` the default scene in the `eggy.zon` of the project in `project_dir`; what changed
+/// (caller-owned), or null when it already was.
+pub fn setDefaultScene(gpa: std.mem.Allocator, project_dir: []const u8, scene: []const u8) !?Change {
+    var threaded: std.Io.Threaded = .init_single_threaded;
+    const io = threaded.io();
+    var project = try std.Io.Dir.cwd().openDir(io, project_dir, .{});
+    defer project.close(io);
+    var arena_state = std.heap.ArenaAllocator.init(gpa);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const before = try project.readFileAllocOptions(io, eggy.project.file_name, arena, .limited(1 << 20), .of(u8), 0);
+    var config = try eggy.project.parse(arena, before);
+    if (config.default_scene) |current| if (std.mem.eql(u8, current, scene)) return null;
+    config.default_scene = scene;
+    var after: std.Io.Writer.Allocating = .init(arena);
+    try eggy.project.write(&after.writer, config);
+    try project.writeFile(io, .{ .sub_path = eggy.project.file_name, .data = after.written() });
+    const owned_before = try gpa.dupe(u8, before);
+    errdefer gpa.free(owned_before);
+    return .{ .before = owned_before, .after = try gpa.dupe(u8, after.written()) };
+}
+
+test "the default scene is written into eggy.zon, and an unchanged one is no change" {
+    const gpa = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = eggy.project.file_name, .data = ".{ .name = \"rats\", .title = \"Rats\" }\n" });
+    const dir = try tmp.dir.realPathFileAlloc(std.testing.io, ".", gpa);
+    defer gpa.free(dir);
+    const change = (try setDefaultScene(gpa, dir, "resources/scene/sewer.scene.zon")).?;
+    defer gpa.free(change.before);
+    defer gpa.free(change.after);
+    try std.testing.expect(std.mem.indexOf(u8, change.after, "sewer.scene.zon") != null);
+    try std.testing.expect(try setDefaultScene(gpa, dir, "resources/scene/sewer.scene.zon") == null);
+}

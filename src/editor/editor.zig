@@ -495,10 +495,18 @@ pub fn Editor(comptime project: type) type {
                 }
             }
             // File > Export, if open.
-            if (self.export_window) |window| if (!try window.update(&self.app.graphics, &self.ui)) {
-                window.close(&self.app.graphics);
-                self.export_window = null;
-            };
+            if (self.export_window) |window| {
+                const result = try window.update(&self.app.graphics, &self.ui);
+                // Choosing the scene it starts in keeps it as the default: a step to undo.
+                if (result.change) |change| {
+                    self.history.recordProjectSettings(change.before, change.after, self.workspace.time_ms);
+                    if (self.settings_window) |settings| settings.reload() catch {};
+                }
+                if (!result.open) {
+                    window.close(&self.app.graphics);
+                    self.export_window = null;
+                }
+            }
             // The Build progress window, if open.
             if (self.build_window) |window| if (try self.updateBuildWindow(window, frame_arena.allocator())) return .success;
 
