@@ -19,6 +19,7 @@ const Upgrades = @import("projects/upgrades.zig").Upgrades;
 const file_manager = @import("file_manager.zig");
 const BuildWindow = @import("build_window.zig").BuildWindow;
 const ExportWindow = @import("export_window.zig").ExportWindow;
+const ProjectSettingsWindow = @import("project_settings.zig").ProjectSettingsWindow;
 const DevtoolsWindow = @import("devtools_window.zig").DevtoolsWindow;
 const window_placement = @import("window_placement.zig");
 const source_stamp = @import("projects/source_stamp.zig");
@@ -93,6 +94,8 @@ pub fn Editor(comptime project: type) type {
         preferences_window: ?*preferences.PreferencesWindow = null,
         /// File > Export, while open.
         export_window: ?*ExportWindow = null,
+        /// File > Project Settings, while open.
+        settings_window: ?*ProjectSettingsWindow = null,
         /// The Inspector's UI (the game's and plugins' `editorUi`), and the font every page shares.
         ui: ui.Context,
         /// JetBrains Mono, in `ui`'s font's atlas, for terminal output. On the heap, as views keep it.
@@ -296,6 +299,7 @@ pub fn Editor(comptime project: type) type {
             if (self.devtools_window) |window| window.close(&self.app.graphics);
             if (self.preferences_window) |window| window.close(&self.app.graphics);
             if (self.export_window) |window| window.close(&self.app.graphics);
+            if (self.settings_window) |window| window.close(&self.app.graphics);
             if (self.save_prompt) |prompt| prompt.close(&self.app.graphics);
             // The dock as this user left it, for the next editor.
             layout_file.save(self.gpa, self.preference_folders.global, &self.workspace.dock, self.workspace.seen_plugin_panels.items);
@@ -480,6 +484,15 @@ pub fn Editor(comptime project: type) type {
             if (self.preferences_window) |window| {
                 const flipped = try window.update(&self.app.graphics, &self.ui, try self.preferenceSections(frame_arena.allocator()), &self.app.preference_values, self.preference_folders, &self.history);
                 if (flipped) |plugin| self.flipPlugin(plugin);
+            }
+            // File > Project Settings, if open: what it changes is a step to undo.
+            if (self.settings_window) |window| {
+                const result = try window.update(&self.app.graphics, &self.ui);
+                if (result.change) |change| self.history.recordProjectSettings(change.before, change.after, self.workspace.time_ms);
+                if (!result.open) {
+                    window.close(&self.app.graphics);
+                    self.settings_window = null;
+                }
             }
             // File > Export, if open.
             if (self.export_window) |window| if (!try window.update(&self.app.graphics, &self.ui)) {
@@ -891,6 +904,10 @@ pub fn Editor(comptime project: type) type {
                     try self.app.preference_values.set(change.layer, change.key, change.field, if (back) change.before else change.after);
                     try preferences.save(self.gpa, &self.app.preference_values, self.preference_folders, change.layer, change.key);
                 },
+                .project_settings => |change| {
+                    try files.writeFile(io, .{ .sub_path = eggy.project.file_name, .data = if (back) change.before else change.after });
+                    if (self.settings_window) |window| try window.reload();
+                },
                 .layout => |change| {
                     const text = if (back) change.before else change.after;
                     if (!layout_file.restore(self.gpa, text, &self.workspace.dock)) return error.ParseZon;
@@ -1071,6 +1088,8 @@ pub fn Editor(comptime project: type) type {
                 }
                 if (window.handle(curr_event)) return self.toolWindowTook(curr_event);
             }
+            // File > Project Settings' window takes its own events.
+            if (self.settings_window) |window| if (window.handle(curr_event)) return self.toolWindowTook(curr_event);
             // File > Export's window takes its own events.
             if (self.export_window) |window| if (window.handle(curr_event)) return self.toolWindowTook(curr_event);
             // Help > DevTools' window takes its own events; while inspecting, the main window's
@@ -1176,6 +1195,12 @@ pub fn Editor(comptime project: type) type {
                 .upgrade_editor => if (self.upgrades.can_upgrade) try self.upgradeEditor() else self.upgrades.logUnavailable(.upgrade),
                 .toggle_devtools => self.toggleDevtools(),
                 .save => self.saveScene(),
+                .project_settings => if (self.settings_window == null) if (self.project) |opened| {
+                    self.settings_window = ProjectSettingsWindow.open(self.gpa, &self.app.graphics, self.ui.font, opened.dir) catch |err| blk: {
+                        std.log.err("cannot open Project Settings: {t}", .{err});
+                        break :blk null;
+                    };
+                },
                 .export_game => if (self.export_window == null) if (self.project) |opened| {
                     self.export_window = ExportWindow.open(self.gpa, &self.app.graphics, self.ui.font, self.mono, opened.dir) catch |err| blk: {
                         std.log.err("cannot open Export: {t}", .{err});
@@ -1899,6 +1924,7 @@ test {
     _ = @import("file_manager.zig");
     _ = @import("build_window.zig");
     _ = @import("export_window.zig");
+    _ = @import("project_settings.zig");
     _ = @import("devtools_window.zig");
     _ = @import("hit_test.zig");
     _ = @import("scene_file.zig");

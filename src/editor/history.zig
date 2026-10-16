@@ -14,6 +14,9 @@ const typing_pause_ms = 1000;
 
 /// One change, owning its text. The editor fills in what it learns while carrying a step out
 /// (where a file went in the trash) so it can carry it back.
+/// A change as the text before and after it, owned.
+pub const Texts = struct { before: []u8, after: []u8 };
+
 pub const Step = union(enum) {
     /// The world went from `before` to `after` (both scene files' text).
     scene: struct { before: []u8, after: []u8 },
@@ -27,8 +30,10 @@ pub const Step = union(enum) {
     plugin: struct { key: []u8, on: bool },
     /// A preference changed from `before` to `after` (ZON literals; null: not set).
     preference: struct { layer: eggy.preferences.Store.Layer, key: []u8, field: []u8, before: ?[]u8, after: ?[]u8 },
+    /// The project's settings (`eggy.zon`) went from `before` to `after` (its text).
+    project_settings: Texts,
     /// The dock's panels were rearranged from `before` to `after` (layout snapshots).
-    layout: struct { before: []u8, after: []u8 },
+    layout: Texts,
     /// Another scene was opened, or a new one made (`created`; undone, its file waits in
     /// `trashed`): the open scene went from `from` (none: no scene) to `to`, each with its world
     /// (scene text) and the hash of what its file held.
@@ -62,7 +67,7 @@ pub const Step = union(enum) {
                 if (step.trashed) |trashed| gpa.free(trashed);
             },
             .plugin => |step| gpa.free(step.key),
-            .layout => |step| {
+            .layout, .project_settings => |step| {
                 gpa.free(step.before);
                 gpa.free(step.after);
             },
@@ -91,6 +96,7 @@ pub const Step = union(enum) {
             .create => "a new file",
             .preference => "a preference",
             .layout => "a layout change",
+            .project_settings => "a project setting",
             .open_scene => |step| if (step.created) "a new scene" else "opening a scene",
             .plugin => |step| if (step.on) "turning a plugin on" else "turning a plugin off",
         };
@@ -200,6 +206,24 @@ pub const History = struct {
         self.preference_at_ms = now_ms;
     }
 
+    /// Record that the project's settings went from `before` to `after` (owned now). Typing
+    /// changes them on every key, so a change within `typing_pause_ms` of the last one, when
+    /// that was one too, joins it.
+    pub fn recordProjectSettings(self: *History, before: []u8, after: []u8, now_ms: u64) void {
+        if (self.undo_steps.items.len > 0 and self.redo_steps.items.len == 0 and now_ms -| self.preference_at_ms < typing_pause_ms) {
+            const last = &self.undo_steps.items[self.undo_steps.items.len - 1];
+            if (last.* == .project_settings) {
+                self.gpa.free(last.project_settings.after);
+                last.project_settings.after = after;
+                self.gpa.free(before);
+                self.preference_at_ms = now_ms;
+                return;
+            }
+        }
+        self.record(.{ .project_settings = .{ .before = before, .after = after } });
+        self.preference_at_ms = now_ms;
+    }
+
     /// The step to undo, moved onto the redo stack; the caller carries it back. Null with none.
     pub fn undo(self: *History) ?*Step {
         const step = self.undo_steps.pop() orelse return null;
@@ -268,4 +292,18 @@ test "layout and scene-opening steps own their text" {
     } });
     try std.testing.expectEqualStrings("a new scene", history.undo().?.describe());
     try std.testing.expectEqualStrings("a layout change", history.undo().?.describe());
+}
+
+test "typing into the project's settings is one step" {
+    const gpa = std.testing.allocator;
+    var history = History{ .gpa = gpa };
+    defer history.deinit();
+    history.recordProjectSettings(try gpa.dupe(u8, "a"), try gpa.dupe(u8, "ab"), 0);
+    history.recordProjectSettings(try gpa.dupe(u8, "ab"), try gpa.dupe(u8, "abc"), 300);
+    try std.testing.expectEqual(@as(usize, 1), history.undo_steps.items.len);
+    try std.testing.expectEqualStrings("a", history.undo_steps.items[0].project_settings.before);
+    try std.testing.expectEqualStrings("abc", history.undo_steps.items[0].project_settings.after);
+    // After a pause, another.
+    history.recordProjectSettings(try gpa.dupe(u8, "abc"), try gpa.dupe(u8, "abcd"), 5000);
+    try std.testing.expectEqual(@as(usize, 2), history.undo_steps.items.len);
 }

@@ -71,6 +71,21 @@ fn before(_: void, a: Entry, b: Entry) bool {
     return std.ascii.lessThanIgnoreCase(a.name, b.name);
 }
 
+/// Every scene file under `folder` (relative to `project`), by path, in `arena`.
+pub fn scenes(arena: std.mem.Allocator, io: std.Io, project: std.Io.Dir, folder: []const u8) ![]const []const u8 {
+    var found: std.ArrayList([]const u8) = .empty;
+    try collectScenes(arena, io, project, folder, &found);
+    return found.items;
+}
+
+fn collectScenes(arena: std.mem.Allocator, io: std.Io, project: std.Io.Dir, folder: []const u8, out: *std.ArrayList([]const u8)) !void {
+    for (list(arena, io, project, folder) catch return) |entry| switch (entry.kind) {
+        .folder => try collectScenes(arena, io, project, entry.path, out),
+        .scene => try out.append(arena, entry.path),
+        else => {},
+    };
+}
+
 /// The folder holding `path`, empty for the project itself.
 pub fn parentOf(path: []const u8) []const u8 {
     return path[0 .. std.mem.lastIndexOfScalar(u8, path, '/') orelse 0];

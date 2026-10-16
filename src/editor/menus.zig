@@ -43,6 +43,7 @@ pub const Command = enum(u32) {
     link_developer,
     save,
     export_game,
+    project_settings,
     quit,
     undo,
     redo,
@@ -109,6 +110,7 @@ pub const Menubar = struct {
             .{ .id = @intFromEnum(Command.open_project_folder), .label = "Open Project Folder", .disabled = !project.open },
             .{ .id = @intFromEnum(Command.save), .label = "Save", .shortcut = "Ctrl+S" },
             .{ .id = @intFromEnum(Command.export_game), .label = "Export...", .disabled = !project.open },
+            .{ .id = @intFromEnum(Command.project_settings), .label = "Project Settings...", .disabled = !project.open },
             .{ .kind = .separator },
             if (project.shift_held)
                 .{ .id = @intFromEnum(Command.link_developer), .label = "Link Developer Eggy...", .disabled = !project.can_link }

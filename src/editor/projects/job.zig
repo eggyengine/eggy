@@ -38,9 +38,10 @@ pub const Action = union(enum) {
     /// Point the project in `dir` at this Eggy codebase (absolute) for good: see
     /// `engine.ProjectEngine.linked`.
     link: []const u8,
-    /// Build the game to ship for this `-Dtarget` (`native`: this machine's system), into the
-    /// project's `zig-out/export/`, rather than its editor.
-    export_game: []const u8,
+    /// Build the game to ship for `target` (a `-Dtarget`; `native`: this machine's system),
+    /// starting in `scene` (relative to the project), into its `zig-out/export/`, rather than its
+    /// editor.
+    export_game: struct { target: []const u8, scene: []const u8 },
 };
 
 /// The editor's resources (beside its `bin` folder) and the user's engines folder, for `Options`.
@@ -137,7 +138,10 @@ pub const Job = struct {
                 self.name = try gpa.dupe(u8, create.name);
             },
             .link => |dir| self.action = .{ .link = try gpa.dupe(u8, dir) },
-            .export_game => |target| self.action = .{ .export_game = try gpa.dupe(u8, target) },
+            .export_game => |game| {
+                self.action = .{ .export_game = .{ .target = try gpa.dupe(u8, game.target), .scene = "" } };
+                self.action.export_game.scene = try gpa.dupe(u8, game.scene);
+            },
             else => self.action = options.action,
         }
         self.worker = try self.io().concurrent(run, .{self});
@@ -162,7 +166,10 @@ pub const Job = struct {
         gpa.free(self.engines_dir);
         gpa.free(self.name);
         if (self.action == .link) gpa.free(self.action.link);
-        if (self.action == .export_game) gpa.free(self.action.export_game);
+        if (self.action == .export_game) {
+            gpa.free(self.action.export_game.target);
+            gpa.free(self.action.export_game.scene);
+        }
         if (self.action == .create) inline for (.{ "title", "name" }) |field| gpa.free(@field(self.action.create, field));
     }
 
@@ -260,7 +267,12 @@ pub const Job = struct {
         if (self.action == .export_game) {
             self.setStage(.exporting, "Starting zig build");
             var target_arg: [128]u8 = undefined;
-            try self.build(&.{ "export", try std.fmt.bufPrint(&target_arg, "-Dtarget={s}", .{self.action.export_game}) });
+            var scene_arg: [std.fs.max_path_bytes]u8 = undefined;
+            try self.build(&.{
+                "export",
+                try std.fmt.bufPrint(&target_arg, "-Dtarget={s}", .{self.action.export_game.target}),
+                try std.fmt.bufPrint(&scene_arg, "-Dscene={s}", .{self.action.export_game.scene}),
+            });
         } else {
             self.setStage(.building, "Starting zig build");
             try self.build(&.{"editor"});

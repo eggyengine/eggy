@@ -1,5 +1,5 @@
-//! File > Export: a window to build the open project's game to ship. Pick where it runs and
-//! press Export; it runs `zig build export` (see `src/build/export.zig`) in the background,
+//! File > Export: a window to build the open project's game to ship. Pick where it runs and the
+//! scene it starts in (the project's default scene at first; there must be one), and press Export; it runs `zig build export` (see `src/build/export.zig`) in the background,
 //! showing the step under way, a bar for the whole build, and Zig's output as it comes. Once
 //! done, the folder and its zip are in the project's `zig-out/export/`, which it can show.
 const std = @import("std");
@@ -13,6 +13,7 @@ const Job = job_zig.Job;
 const terminal_view = @import("terminal_view.zig");
 const TerminalView = terminal_view.TerminalView;
 const file_manager = @import("file_manager.zig");
+const listing = @import("assets/listing.zig");
 
 /// Where a game can be exported to run: what people see, what `-Dtarget` it is, and what that
 /// needs beyond Zig.
@@ -32,6 +33,10 @@ pub const ExportWindow = struct {
     project_dir: []u8,
     /// Which of `platforms`.
     platform: usize = 0,
+    /// The project's scenes, "Choose a scene" first (in `scenes_arena`), and which it starts in.
+    scenes: []const []const u8 = &.{},
+    scenes_arena: std.heap.ArenaAllocator,
+    scene: usize = 0,
     /// The export under way or finished; none until Export is pressed.
     job: ?*Job = null,
     /// Whether the window asked to close.
@@ -44,13 +49,15 @@ pub const ExportWindow = struct {
         errdefer gpa.destroy(self);
         const dir = try gpa.dupe(u8, project_dir);
         errdefer gpa.free(dir);
-        self.* = .{ .gpa = gpa, .window = try ToolWindow.open(gpa, graphics, font, "Export", .{ 680, 520 }, .{ .resizable = true }), .terminal = .init(gpa, mono), .project_dir = dir };
+        self.* = .{ .gpa = gpa, .window = try ToolWindow.open(gpa, graphics, font, "Export", .{ 680, 520 }, .{ .resizable = true }), .terminal = .init(gpa, mono), .project_dir = dir, .scenes_arena = .init(gpa) };
+        self.findScenes();
         return self;
     }
 
     /// Close the window, stopping an export under way.
     pub fn close(self: *ExportWindow, graphics: *eggy.Graphics) void {
         if (self.job) |job| job.deinit();
+        self.scenes_arena.deinit();
         self.terminal.deinit();
         self.window.close(graphics);
         self.gpa.free(self.project_dir);
@@ -128,6 +135,11 @@ pub const ExportWindow = struct {
         for (&labels, platforms) |*label, platform| label.* = platform.label;
         _ = context.select("Runs on", &labels, &self.platform);
         context.muted(platforms[self.platform].note);
+        _ = context.select("Starts in", self.scenes, &self.scene);
+        if (self.scene == 0) {
+            context.muted("Choose the scene the game starts in. File > Project Settings sets the one chosen at first.");
+            return;
+        }
         if (context.button("Export")) self.start();
     }
 
@@ -135,9 +147,27 @@ pub const ExportWindow = struct {
         const folders = job_zig.editorFolders(self.gpa) catch |err| return std.log.err("cannot export: {t}", .{err});
         defer self.gpa.free(folders.resources_dir);
         defer self.gpa.free(folders.engines_dir);
-        self.job = Job.start(self.gpa, .{ .dir = self.project_dir, .resources_dir = folders.resources_dir, .engines_dir = folders.engines_dir, .action = .{ .export_game = platforms[self.platform].target } }) catch |err| blk: {
+        self.job = Job.start(self.gpa, .{ .dir = self.project_dir, .resources_dir = folders.resources_dir, .engines_dir = folders.engines_dir, .action = .{ .export_game = .{ .target = platforms[self.platform].target, .scene = self.scenes[self.scene] } } }) catch |err| blk: {
             std.log.err("cannot export: {t}", .{err});
             break :blk null;
+        };
+    }
+
+    /// The project's scenes to start in, its default scene picked.
+    fn findScenes(self: *ExportWindow) void {
+        var threaded: std.Io.Threaded = .init_single_threaded;
+        const io = threaded.io();
+        const arena = self.scenes_arena.allocator();
+        var project = std.Io.Dir.cwd().openDir(io, self.project_dir, .{}) catch return;
+        defer project.close(io);
+        var scenes: std.ArrayList([]const u8) = .empty;
+        scenes.append(arena, "Choose a scene") catch return;
+        scenes.appendSlice(arena, listing.scenes(arena, io, project, eggy.project.resources_dir) catch &.{}) catch return;
+        self.scenes = scenes.items;
+        const config = eggy.project.load(arena, io, project) catch return;
+        const default = config.default_scene orelse return;
+        for (self.scenes, 0..) |scene, i| if (std.mem.eql(u8, scene, default)) {
+            self.scene = i;
         };
     }
 
