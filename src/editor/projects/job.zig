@@ -95,7 +95,8 @@ pub const Status = struct {
     fraction: f32,
     /// What it is doing now: for the build, its step under way and how many steps are done.
     detail: []const u8,
-    /// The job's output so far: what it did, then the build's own output.
+    /// The job's output so far: what it did, then the build's own output. The job's own, valid
+    /// until the next `status` or `deinit`.
     log: []const u8,
 };
 
@@ -120,7 +121,11 @@ pub const Job = struct {
     /// The build's own progress, 0 to 1.
     build_fraction: f32 = 0,
     detail: std.ArrayList(u8) = .empty,
+    /// Only grows (up to `max_output`), so `shown` catches up by copying what is new.
     output: std.ArrayList(u8) = .empty,
+
+    /// `output` as `status` last handed it out; only the thread calling `status` touches it.
+    shown: std.ArrayList(u8) = .empty,
 
     /// Start the job described by `options` (copied).
     pub fn start(gpa: std.mem.Allocator, options: Options) !*Job {
@@ -156,6 +161,7 @@ pub const Job = struct {
         self.freeText();
         self.detail.deinit(gpa);
         self.output.deinit(gpa);
+        self.shown.deinit(gpa);
         gpa.destroy(self);
     }
 
@@ -177,7 +183,8 @@ pub const Job = struct {
         return self.threaded.io();
     }
 
-    /// The job's progress, with its text copied into `arena`.
+    /// The job's progress, its detail copied into `arena` and its log the job's own (see
+    /// `Status.log`). Call it from one thread only.
     pub fn status(self: *Job, arena: std.mem.Allocator) !Status {
         self.mutex.lockUncancelable(self.io());
         defer self.mutex.unlock(self.io());
@@ -189,11 +196,13 @@ pub const Job = struct {
             .done => 1,
             .failed => 0,
         };
+        // Copy only the output added since the last call, not all of it every frame.
+        try self.shown.appendSlice(self.gpa, self.output.items[self.shown.items.len..]);
         return .{
             .stage = self.stage,
             .fraction = fraction,
             .detail = try arena.dupe(u8, self.detail.items),
-            .log = try arena.dupe(u8, self.output.items),
+            .log = self.shown.items,
         };
     }
 
