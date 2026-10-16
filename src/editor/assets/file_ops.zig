@@ -1,8 +1,8 @@
 //! What the Assets panel does to the project's files: new folders, renaming, duplicating, moving
 //! and copying into folders, importing files from outside, and deleting, which moves things into
 //! `.eggy/trash/` (so a deletion can be undone) rather than erasing them. Paths are relative to
-//! the project, with `/` between parts, and never leave it. A file's descriptor
-//! (`eggy.assets.descriptor`) goes wherever the file does; a copy gets none (`descriptors.zig`
+//! the project, with `/` between parts, and never leave it. A file's or folder's
+//! descriptor (`eggy.assets.descriptor`) goes wherever it does; a copy gets none (`descriptors.zig`
 //! makes it a new one).
 const std = @import("std");
 const descriptor = @import("eggy").assets.descriptor;
@@ -236,7 +236,7 @@ test "moving and copying into folders, and importing from outside" {
     try std.testing.expect(exists(io, project, "sounds/boom.ogg"));
 }
 
-test "a file's descriptor goes where it goes, and copies get none" {
+test "a file's or folder's descriptor goes where it goes, and copies get none" {
     const gpa = std.testing.allocator;
     const io = std.testing.io;
     var tmp = std.testing.tmpDir(.{});
@@ -264,4 +264,11 @@ test "a file's descriptor goes where it goes, and copies get none" {
     defer gpa.free(folder_copy);
     try std.testing.expect(exists(io, project, "art copy/fighter.glb"));
     try std.testing.expect(!exists(io, project, "art copy/fighter.glb.eggy"));
+
+    // A folder's descriptor goes with it too.
+    try project.writeFile(io, .{ .sub_path = "art.eggy", .data = ".{ .id = 2, .kind = .folder }" });
+    const renamed_folder = try rename(gpa, io, project, "art", "props");
+    defer gpa.free(renamed_folder);
+    try std.testing.expect(exists(io, project, "props.eggy"));
+    try std.testing.expect(!exists(io, project, "art.eggy"));
 }

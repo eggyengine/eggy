@@ -1,4 +1,4 @@
-//! Keeps every file in a project's `resources/` with a descriptor beside it
+//! Keeps every file and folder in a project's `resources/` with a descriptor beside it
 //! (`eggy.assets.descriptor`): `sync` makes the missing ones and removes those whose file has
 //! gone. Moves the editor makes carry descriptors along themselves (`file_ops.zig`); this catches
 //! what happens to the files outside the editor.
@@ -15,8 +15,8 @@ pub const Changes = struct {
     }
 };
 
-/// Give every file in `project`'s `resources/` a descriptor, and remove descriptors left without
-/// a file. A project without `resources/` has nothing to do.
+/// Give every file and folder in `project`'s `resources/` a descriptor, and remove descriptors
+/// left without one. A project without `resources/` has nothing to do.
 pub fn sync(gpa: std.mem.Allocator, io: std.Io, project: std.Io.Dir) !Changes {
     var resources = project.openDir(io, eggy.project.resources_dir, .{ .iterate = true }) catch |err| switch (err) {
         error.FileNotFound => return .{},
@@ -26,15 +26,18 @@ pub fn sync(gpa: std.mem.Allocator, io: std.Io, project: std.Io.Dir) !Changes {
     var arena = std.heap.ArenaAllocator.init(gpa);
     defer arena.deinit();
 
-    // Every file and every descriptor, by path inside `resources/`.
-    var files: std.StringHashMapUnmanaged(void) = .empty;
+    // Every file and folder (whether it is a folder), and every descriptor, by path inside
+    // `resources/`.
+    var files: std.StringHashMapUnmanaged(bool) = .empty;
     var descriptors: std.ArrayList([]const u8) = .empty;
     var walker = try resources.walk(gpa);
     defer walker.deinit();
     while (try walker.next(io)) |entry| {
-        if (entry.kind != .file) continue;
+        if (entry.kind != .file and entry.kind != .directory) continue;
         const path = try arena.allocator().dupe(u8, entry.path);
-        if (descriptor.isDescriptor(path)) try descriptors.append(arena.allocator(), path) else try files.put(arena.allocator(), path, {});
+        if (entry.kind == .file and descriptor.isDescriptor(path)) {
+            try descriptors.append(arena.allocator(), path);
+        } else try files.put(arena.allocator(), path, entry.kind == .directory);
     }
 
     var changes: Changes = .{};
@@ -46,15 +49,17 @@ pub fn sync(gpa: std.mem.Allocator, io: std.Io, project: std.Io.Dir) !Changes {
         changes.removed += 1;
     }
     // What is left in `files` has no descriptor yet.
-    var it = files.keyIterator();
-    while (it.next()) |file| {
-        try descriptor.write(io, resources, file.*, descriptor.new(io, file.*));
+    var it = files.iterator();
+    while (it.next()) |entry| {
+        var made = descriptor.new(io, entry.key_ptr.*);
+        if (entry.value_ptr.*) made.kind = .folder;
+        try descriptor.write(io, resources, entry.key_ptr.*, made);
         changes.made += 1;
     }
     return changes;
 }
 
-test "files get descriptors, and descriptors without files go" {
+test "files and folders get descriptors, and descriptors without them go" {
     const io = std.testing.io;
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
@@ -64,11 +69,12 @@ test "files get descriptors, and descriptors without files go" {
     try project.writeFile(io, .{ .sub_path = "resources/gone.png.eggy", .data = ".{ .id = 1, .kind = .image }" });
 
     const changes = try sync(std.testing.allocator, io, project);
-    try std.testing.expectEqual(Changes{ .made = 1, .removed = 1 }, changes);
+    try std.testing.expectEqual(Changes{ .made = 2, .removed = 1 }, changes);
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     const made = (try descriptor.read(arena.allocator(), io, project, "resources/models/ship.glb")).?;
     try std.testing.expectEqual(eggy.assets.Kind.model, made.kind);
+    try std.testing.expectEqual(eggy.assets.Kind.folder, (try descriptor.read(arena.allocator(), io, project, "resources/models")).?.kind);
 
     // Nothing to do the second time, and the id stays.
     try std.testing.expect(!(try sync(std.testing.allocator, io, project)).any());

@@ -11,6 +11,8 @@ pub const Kind = enum(u8) {
     code,
     /// A 3D model.
     model,
+    /// A folder: its descriptor says so. `of` never gives it, since a name doesn't tell.
+    folder,
 
     /// The kind of the file at `path`; `any` for a kind Eggy doesn't know.
     pub fn of(path: []const u8) Kind {
