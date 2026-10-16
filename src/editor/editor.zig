@@ -64,6 +64,9 @@ pub fn Editor(comptime project: type) type {
         /// The dock's layout as last saved (`layout_file.fingerprint`), when it was last looked
         /// at, and since when it has differed from that.
         layout_saved: u64 = 0,
+        /// The dock's layout as last recorded for undo (a snapshot, owned), and its arrangement.
+        layout_step: ?[]u8 = null,
+        layout_step_arrangement: u64 = 0,
         /// "Save changes?", while it asks; where the editor was going when it opened; and
         /// whether the answer let the next attempt through.
         save_prompt: ?*save_prompt_zig.SavePrompt = null,
@@ -291,6 +294,7 @@ pub fn Editor(comptime project: type) type {
             if (self.open_scene) |*scene| scene.deinit();
             self.play_mode.deinit();
             self.history.deinit();
+            if (self.layout_step) |text| self.gpa.free(text);
             self.plugin_switches.deinit();
             if (self.rebuild) |job| job.deinit();
             if (self.picked_project.swap(null, .acq_rel)) |path| std.heap.c_allocator.free(std.mem.span(path));
@@ -382,6 +386,7 @@ pub fn Editor(comptime project: type) type {
                     // A gizmo drag, or a number dragged in the Inspector, becomes one step once let go.
                     if (self.scene_view.drag == null and !self.entity_editor.inspector.scrubbing()) self.history.watch(text, self.workspace.time_ms, self.typing()) else self.gpa.free(text);
                 }
+                self.watchLayout();
                 self.workspace.play_warning = self.playWarning();
             }
             self.workspace.can_upgrade = self.upgrades.can_upgrade;
@@ -664,22 +669,7 @@ pub fn Editor(comptime project: type) type {
         fn applyAssetAction(self: *Self, action: assets.Action) void {
             const opened = self.project orelse return;
             switch (action) {
-                .open_scene, .create_scene => {
-                    self.stopPlaying();
-                    const scene = if (self.open_scene) |*open| open else return;
-                    const game = if (self.game) |*loaded| loaded else return std.log.err("the game's library isn't loaded, so scenes can't be opened", .{});
-                    const result = switch (action) {
-                        .open_scene => |path| scene.open(path, &self.app.world, game.sceneAccess()),
-                        .create_scene => |folder| scene.create(folder, &self.app.world, game.sceneAccess()),
-                        else => unreachable,
-                    };
-                    result catch |err| return std.log.err("cannot open the scene: {t}", .{err});
-                    self.entity_editor.selected = null;
-                    self.filesChanged();
-                    // A different scene: its history starts here.
-                    self.history.clear();
-                    if (self.sceneText()) |text| self.history.setBaseline(text);
-                },
+                .open_scene, .create_scene => self.openSceneStep(action) catch |err| std.log.err("cannot open the scene: {t}", .{err}),
                 .open_code => |path| {
                     const file = std.fs.path.join(self.gpa, &.{ opened.dir, path }) catch return;
                     defer self.gpa.free(file);
@@ -704,6 +694,56 @@ pub fn Editor(comptime project: type) type {
                     self.workspace.toast("Couldn't do that: see the Console");
                 },
             }
+        }
+
+        /// Open the scene `action` names, or make a new one, as a step to undo: undoing it puts
+        /// back the scene open before, as its world was.
+        fn openSceneStep(self: *Self, action: assets.Action) !void {
+            self.stopPlaying();
+            const scene = if (self.open_scene) |*open| open else return;
+            const game = if (self.game) |*loaded| loaded else return error.NoGameLibrary;
+            // What was open, with any change not recorded yet recorded first.
+            const from_world = self.sceneText() orelse return error.NoGameLibrary;
+            errdefer self.gpa.free(from_world);
+            self.history.watch(try self.gpa.dupe(u8, from_world), std.math.maxInt(u64), false);
+            const from = if (scene.path) |path| try self.gpa.dupe(u8, path) else null;
+            errdefer if (from) |path| self.gpa.free(path);
+            const from_saved = scene.saved_hash;
+
+            switch (action) {
+                .open_scene => |path| try scene.open(path, &self.app.world, game.sceneAccess()),
+                .create_scene => |folder| try scene.create(folder, &self.app.world, game.sceneAccess()),
+                else => unreachable,
+            }
+            self.entity_editor.selected = null;
+            self.filesChanged();
+            const to_world = self.sceneText() orelse return error.NoGameLibrary;
+            self.history.setBaseline(try self.gpa.dupe(u8, to_world));
+            self.history.record(.{ .open_scene = .{
+                .from = from,
+                .from_world = from_world,
+                .from_saved = from_saved,
+                .to = try self.gpa.dupe(u8, scene.path.?),
+                .to_world = to_world,
+                .to_saved = scene.saved_hash,
+                .created = action == .create_scene,
+            } });
+        }
+
+        /// Record a step when the dock's panels were rearranged (once let go, not mid-drag).
+        fn watchLayout(self: *Self) void {
+            if (self.workspace.dock.drag != .none) return;
+            const now = layout_file.arrangement(&self.workspace.dock);
+            if (self.layout_step != null and now == self.layout_step_arrangement) return;
+            const after = layout_file.snapshot(self.gpa, &self.workspace.dock) catch return;
+            if (self.layout_step) |before| self.history.record(.{ .layout = .{ .before = before, .after = self.gpa.dupe(u8, after) catch {
+                self.gpa.free(before);
+                self.layout_step = null;
+                self.gpa.free(after);
+                return;
+            } } });
+            self.layout_step = after;
+            self.layout_step_arrangement = now;
         }
 
         /// The Assets panel's file changes: new folders, renaming, duplicating, deleting (into
@@ -765,7 +805,10 @@ pub fn Editor(comptime project: type) type {
             // Steps are the scene's, not a play's: stop first.
             self.stopPlaying();
             // A change not recorded yet (typing just now) becomes a step first.
-            if (direction == .undo) if (self.sceneText()) |text| self.history.watch(text, std.math.maxInt(u64), false);
+            if (direction == .undo) {
+                if (self.sceneText()) |text| self.history.watch(text, std.math.maxInt(u64), false);
+                self.watchLayout();
+            }
             const step = (if (direction == .undo) self.history.undo() else self.history.redo()) orelse {
                 return self.workspace.toast(if (direction == .undo) "Nothing to undo" else "Nothing to redo");
             };
@@ -824,6 +867,36 @@ pub fn Editor(comptime project: type) type {
                 .preference => |change| {
                     try self.app.preference_values.set(change.layer, change.key, change.field, if (back) change.before else change.after);
                     try preferences.save(self.gpa, &self.app.preference_values, self.preference_folders, change.layer, change.key);
+                },
+                .layout => |change| {
+                    const text = if (back) change.before else change.after;
+                    if (!layout_file.restore(self.gpa, text, &self.workspace.dock)) return error.ParseZon;
+                    if (self.layout_step) |old| self.gpa.free(old);
+                    self.layout_step = try self.gpa.dupe(u8, text);
+                    self.layout_step_arrangement = layout_file.arrangement(&self.workspace.dock);
+                },
+                .open_scene => |*change| {
+                    const game = if (self.game) |*loaded| loaded else return error.NoGame;
+                    const scene = if (self.open_scene) |*open| open else return error.NoProject;
+                    // A new scene's file goes with it, and comes back with it.
+                    if (change.created) if (back) {
+                        if (change.trashed) |old| self.gpa.free(old);
+                        change.trashed = null;
+                        change.trashed = try file_ops.trash(self.gpa, io, files, change.to);
+                    } else if (change.trashed) |trashed| {
+                        try file_ops.restore(io, files, trashed, change.to);
+                        self.gpa.free(trashed);
+                        change.trashed = null;
+                    };
+                    const text = if (back) change.from_world else change.to_world;
+                    const source = try self.gpa.dupeZ(u8, text);
+                    defer self.gpa.free(source);
+                    var world = try eggy.scene.Scene.parse(self.gpa, source);
+                    defer world.deinit();
+                    game.restart(&self.app, &world, self.plugin_switches.off());
+                    try scene.reopenAs(if (back) change.from else change.to, if (back) change.from_saved else change.to_saved);
+                    self.entity_editor.selected = null;
+                    self.history.setBaseline(try self.gpa.dupe(u8, text));
                 },
             }
         }

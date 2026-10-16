@@ -105,6 +105,16 @@ pub const OpenScene = struct {
         try self.save(world, access, null);
     }
 
+    /// Make `path` (none: no scene) the open scene again, its file holding what hashes to
+    /// `saved_hash`, as undoing or redoing opening a scene does; the world is the caller's.
+    pub fn reopenAs(self: *OpenScene, path: ?[]const u8, saved_hash: ?u64) !void {
+        if (path) |chosen| try self.setPath(chosen) else if (self.path) |old| {
+            self.gpa.free(old);
+            self.path = null;
+        }
+        self.saved_hash = saved_hash;
+    }
+
     fn setPath(self: *OpenScene, path: []const u8) !void {
         const copy = try self.gpa.dupe(u8, path);
         if (self.path) |old| self.gpa.free(old);

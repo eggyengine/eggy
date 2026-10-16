@@ -1,8 +1,8 @@
 //! Undo and redo: every change the editor makes, as steps to go back and forward through.
 //! Changes to the scene are found rather than reported: a few times a second the world is
 //! compared with the state last recorded, and a difference becomes a step (typing into a field
-//! becomes one step, once the field is left or the typing pauses). File changes and preference
-//! edits are recorded as they are made. The editor carries steps out (`Step` says what each
+//! becomes one step, once the field is left or the typing pauses), and so is the dock's layout.
+//! File changes, preference edits and opening scenes are recorded as they are made. The editor carries steps out (`Step` says what each
 //! undoes and redoes); this keeps the order.
 const std = @import("std");
 const eggy = @import("eggy");
@@ -27,6 +27,21 @@ pub const Step = union(enum) {
     plugin: struct { key: []u8, on: bool },
     /// A preference changed from `before` to `after` (ZON literals; null: not set).
     preference: struct { layer: eggy.preferences.Store.Layer, key: []u8, field: []u8, before: ?[]u8, after: ?[]u8 },
+    /// The dock's panels were rearranged from `before` to `after` (layout snapshots).
+    layout: struct { before: []u8, after: []u8 },
+    /// Another scene was opened, or a new one made (`created`; undone, its file waits in
+    /// `trashed`): the open scene went from `from` (none: no scene) to `to`, each with its world
+    /// (scene text) and the hash of what its file held.
+    open_scene: struct {
+        from: ?[]u8,
+        from_world: []u8,
+        from_saved: ?u64,
+        to: []u8,
+        to_world: []u8,
+        to_saved: ?u64,
+        created: bool,
+        trashed: ?[]u8 = null,
+    },
 
     pub fn deinit(self: *Step, gpa: std.mem.Allocator) void {
         switch (self.*) {
@@ -47,6 +62,17 @@ pub const Step = union(enum) {
                 if (step.trashed) |trashed| gpa.free(trashed);
             },
             .plugin => |step| gpa.free(step.key),
+            .layout => |step| {
+                gpa.free(step.before);
+                gpa.free(step.after);
+            },
+            .open_scene => |step| {
+                if (step.from) |path| gpa.free(path);
+                gpa.free(step.from_world);
+                gpa.free(step.to);
+                gpa.free(step.to_world);
+                if (step.trashed) |trashed| gpa.free(trashed);
+            },
             .preference => |step| {
                 gpa.free(step.key);
                 gpa.free(step.field);
@@ -64,6 +90,8 @@ pub const Step = union(enum) {
             .delete => "a deletion",
             .create => "a new file",
             .preference => "a preference",
+            .layout => "a layout change",
+            .open_scene => |step| if (step.created) "a new scene" else "opening a scene",
             .plugin => |step| if (step.on) "turning a plugin on" else "turning a plugin off",
         };
     }
@@ -222,4 +250,22 @@ test "scene changes become steps, typing once it pauses, and undo and redo walk 
     _ = history.undo();
     history.record(.{ .rename = .{ .from = try gpa.dupe(u8, "x"), .to = try gpa.dupe(u8, "y") } });
     try std.testing.expect(history.redo() == null);
+}
+
+test "layout and scene-opening steps own their text" {
+    const gpa = std.testing.allocator;
+    var history = History{ .gpa = gpa };
+    defer history.deinit();
+    history.record(.{ .layout = .{ .before = try gpa.dupe(u8, "a"), .after = try gpa.dupe(u8, "b") } });
+    history.record(.{ .open_scene = .{
+        .from = null,
+        .from_world = try gpa.dupe(u8, ".{}"),
+        .from_saved = null,
+        .to = try gpa.dupe(u8, "resources/scene/sewer.scene.zon"),
+        .to_world = try gpa.dupe(u8, ".{}"),
+        .to_saved = 1,
+        .created = true,
+    } });
+    try std.testing.expectEqualStrings("a new scene", history.undo().?.describe());
+    try std.testing.expectEqualStrings("a layout change", history.undo().?.describe());
 }

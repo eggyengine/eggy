@@ -1,6 +1,7 @@
 //! The dock's layout (which panels go where, split how, floating or popped out) kept per user in
 //! Eggy's data folder as `layout.zon`: saved soon after it changes (and when the editor closes),
 //! so a crash or a reload keeps it, and restored when the next editor opens, in any project.
+//! The same text, kept in memory, is how Edit > Undo puts a layout back (`snapshot`, `restore`).
 const std = @import("std");
 const eggy = @import("eggy");
 const dock = eggy.ui.dock;
@@ -57,6 +58,52 @@ fn serialize(layout: *const dock.DockSpace, seen_panels: []const []const u8, wri
     try std.zon.stringify.serialize(saved, .{ .whitespace = false }, writer);
 }
 
+/// `layout` as text for `restore`, caller-owned.
+pub fn snapshot(gpa: std.mem.Allocator, layout: *const dock.DockSpace) ![]u8 {
+    var text: std.Io.Writer.Allocating = .init(gpa);
+    errdefer text.deinit();
+    try serialize(layout, &.{}, &text.writer);
+    return text.toOwnedSlice();
+}
+
+/// A hash of where `layout`'s panels are, leaving out what changes without anyone rearranging
+/// them: which floating panel is in front, and pop-out windows' sizes.
+pub fn arrangement(layout: *const dock.DockSpace) u64 {
+    var plain = layout.*;
+    plain.z_counter = 0;
+    for (&plain.floating) |*floating| if (floating.*) |*shown| {
+        shown.z = 0;
+    };
+    for (&plain.windows) |*window| if (window.*) |*open| {
+        open.size = .{ 0, 0 };
+    };
+    return fingerprint(&plain, &.{});
+}
+
+/// Put a layout `snapshot` made back into `layout`. Returns false, leaving it be, when `text`
+/// isn't one.
+pub fn restore(gpa: std.mem.Allocator, text: []const u8, layout: *dock.DockSpace) bool {
+    const source = gpa.dupeZ(u8, text) catch return false;
+    defer gpa.free(source);
+    var arena = std.heap.ArenaAllocator.init(gpa);
+    defer arena.deinit();
+    const saved = std.zon.parse.fromSliceAlloc(Saved, arena.allocator(), source, null, .{ .ignore_unknown_fields = true }) catch return false;
+    if (saved.version != version) return false;
+    apply(saved, layout);
+    return true;
+}
+
+fn apply(saved: Saved, layout: *dock.DockSpace) void {
+    layout.nodes = saved.nodes;
+    layout.homes = saved.homes;
+    layout.root = saved.root;
+    layout.floating = saved.floating;
+    for (&layout.windows, saved.windows) |*window, kept| window.* = if (kept) |open| .{ .root = open.root, .size = open.size } else null;
+    layout.z_counter = saved.z_counter;
+    layout.drag = .none;
+    layout.menu = 0xFF;
+}
+
 /// Put the user's saved layout into `layout`, keeping its buttons and settings, and the plugin
 /// panels it has seen into `seen_panels` (each title owned by `gpa`). Returns false, leaving both
 /// as they were, when there is none or it can't be read.
@@ -74,14 +121,7 @@ pub fn load(gpa: std.mem.Allocator, folder: []const u8, layout: *dock.DockSpace,
         return false;
     };
     if (saved.version != version) return false;
-    layout.nodes = saved.nodes;
-    layout.homes = saved.homes;
-    layout.root = saved.root;
-    layout.floating = saved.floating;
-    for (&layout.windows, saved.windows) |*window, kept| window.* = if (kept) |open| .{ .root = open.root, .size = open.size } else null;
-    layout.z_counter = saved.z_counter;
-    layout.drag = .none;
-    layout.menu = 0xFF;
+    apply(saved, layout);
     for (saved.seen_panels) |title| {
         const copy = gpa.dupe(u8, title) catch break;
         seen_panels.append(gpa, copy) catch {
@@ -122,4 +162,22 @@ test "a layout saved is a layout restored" {
     try std.testing.expectEqual(before, fingerprint(&restored, &.{}));
     try restored.add(3, 2, .bottom);
     try std.testing.expect(fingerprint(&restored, &.{}) != before);
+}
+
+test "a snapshot puts the layout back, and only rearranging changes its arrangement" {
+    const gpa = std.testing.allocator;
+    var layout = dock.DockSpace.init();
+    try layout.add(1, null, .center);
+    try layout.add(2, 1, .right);
+    const text = try snapshot(gpa, &layout);
+    defer gpa.free(text);
+    const before = arrangement(&layout);
+    layout.z_counter += 5;
+    try std.testing.expectEqual(before, arrangement(&layout));
+
+    try layout.add(3, 2, .bottom);
+    try std.testing.expect(arrangement(&layout) != before);
+    try std.testing.expect(restore(gpa, text, &layout));
+    try std.testing.expect(layout.nodeOf(3) == null);
+    try std.testing.expect(!restore(gpa, "not a layout", &layout));
 }
