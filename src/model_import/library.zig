@@ -11,8 +11,10 @@ const Vertex = assets.model.Vertex;
 const gpa = std.heap.c_allocator;
 
 /// What assimp does to every model: triangles only, each part moved to where its node puts it,
-/// normals where the file has none, shared corners joined, and textures' rows top first.
-const steps = c.aiProcess_Triangulate | c.aiProcess_PreTransformVertices | c.aiProcess_GenSmoothNormals | c.aiProcess_JoinIdenticalVertices | c.aiProcess_SortByPType | c.aiProcess_FlipUVs;
+/// normals where the file has none, shared corners joined, textures' rows top first, and sizes in
+/// metres, whatever unit the file is in (an FBX file's centimetres, say), so a model is as big as
+/// it was made.
+const steps = c.aiProcess_Triangulate | c.aiProcess_PreTransformVertices | c.aiProcess_GenSmoothNormals | c.aiProcess_JoinIdenticalVertices | c.aiProcess_SortByPType | c.aiProcess_FlipUVs | c.aiProcess_GlobalScale;
 
 /// Import the model file at `path`, `scale` times its size, into `out` as an `.eggmodel`'s
 /// bytes. False when it can't be (`eggy_import_error` says why).
