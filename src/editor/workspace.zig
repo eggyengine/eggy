@@ -58,6 +58,8 @@ pub const Outcome = union(enum) {
     preferences,
     /// File > Save (Ctrl+S): save the scene.
     save,
+    /// File > Export: open the Export window.
+    export_game,
     /// Edit > Undo (Ctrl+Z) and Redo (Ctrl+Shift+Z, Ctrl+Y).
     undo,
     redo,
@@ -620,6 +622,7 @@ pub const Workspace = struct {
                 .devtools => return .toggle_devtools,
                 .preferences => return .preferences,
                 .save => return .save,
+                .export_game => return .export_game,
                 .undo => return .undo,
                 .redo => return .redo,
                 .reset_layout => self.resetLayout() catch |err| std.log.warn("cannot reset the layout: {t}", .{err}),

@@ -2,7 +2,8 @@
 //! happens. Creating a project unpacks Eggy's bundled package (once per version, shared by every
 //! project) and writes the template as the new project; opening one reads its `eggy.zon`;
 //! upgrading one points it at the newest Eggy unpacked. Every way, the project's editor is then
-//! built, for `launchEditor`. `status` reports how far it is.
+//! built, for `launchEditor`; or, to export it, the game is built to ship (`zig build export`).
+//! `status` reports how far it is.
 const builtin = @import("builtin");
 const std = @import("std");
 const eggy = @import("eggy");
@@ -37,6 +38,9 @@ pub const Action = union(enum) {
     /// Point the project in `dir` at this Eggy codebase (absolute) for good: see
     /// `engine.ProjectEngine.linked`.
     link: []const u8,
+    /// Build the game to ship for this `-Dtarget` (`native`: this machine's system), into the
+    /// project's `zig-out/export/`, rather than its editor.
+    export_game: []const u8,
 };
 
 /// The editor's resources (beside its `bin` folder) and the user's engines folder, for `Options`.
@@ -64,6 +68,7 @@ pub const Stage = enum {
     linking,
     writing_files,
     building,
+    exporting,
     done,
     failed,
 
@@ -75,6 +80,7 @@ pub const Stage = enum {
             .linking => "Linking Eggy",
             .writing_files => "Writing the project",
             .building => "Building the editor",
+            .exporting => "Exporting the game",
             .done => "Done",
             .failed => "Failed",
         };
@@ -131,6 +137,7 @@ pub const Job = struct {
                 self.name = try gpa.dupe(u8, create.name);
             },
             .link => |dir| self.action = .{ .link = try gpa.dupe(u8, dir) },
+            .export_game => |target| self.action = .{ .export_game = try gpa.dupe(u8, target) },
             else => self.action = options.action,
         }
         self.worker = try self.io().concurrent(run, .{self});
@@ -155,6 +162,7 @@ pub const Job = struct {
         gpa.free(self.engines_dir);
         gpa.free(self.name);
         if (self.action == .link) gpa.free(self.action.link);
+        if (self.action == .export_game) gpa.free(self.action.export_game);
         if (self.action == .create) inline for (.{ "title", "name" }) |field| gpa.free(@field(self.action.create, field));
     }
 
@@ -170,7 +178,7 @@ pub const Job = struct {
             .reading_project => 0.01,
             .unpacking_engine, .upgrading, .linking => 0.02,
             .writing_files => 0.08,
-            .building => 0.1 + 0.88 * self.build_fraction,
+            .building, .exporting => 0.1 + 0.88 * self.build_fraction,
             .done => 1,
             .failed => 0,
         };
@@ -245,12 +253,18 @@ pub const Job = struct {
                 self.gpa.free(try self.unpackEngine());
                 try self.readProject();
             },
-            .rebuild, .upgrade, .link => try self.readProject(),
+            .rebuild, .upgrade, .link, .export_game => try self.readProject(),
         }
 
-        // Its editor, which `launchEditor` opens.
-        self.setStage(.building, "Starting zig build");
-        try self.build();
+        // The game to ship; or its editor, which `launchEditor` opens.
+        if (self.action == .export_game) {
+            self.setStage(.exporting, "Starting zig build");
+            var target_arg: [128]u8 = undefined;
+            try self.build(&.{ "export", try std.fmt.bufPrint(&target_arg, "-Dtarget={s}", .{self.action.export_game}) });
+        } else {
+            self.setStage(.building, "Starting zig build");
+            try self.build(&.{"editor"});
+        }
         self.setStage(.done, "");
     }
 
@@ -409,29 +423,40 @@ pub const Job = struct {
         self.say("Wrote {s} into {s}", .{ create.name, self.dir });
     }
 
-    /// `zig build editor` in the project, following its progress (on POSIX, through the
+    /// `zig build <steps>` in the project, following its progress (on POSIX, through the
     /// `ZIG_PROGRESS` pipe Zig reports to) and keeping its output for `status`.
-    fn build(self: *Job) !void {
+    fn build(self: *Job, steps: []const []const u8) !void {
         const io_ = self.io();
+        const gpa = self.gpa;
+        var arena_state = std.heap.ArenaAllocator.init(gpa);
+        defer arena_state.deinit();
+        const arena = arena_state.allocator();
 
-        // Zig writes its progress tree to the file descriptor named in ZIG_PROGRESS. Spawning
-        // removes that variable unless the progress goes into this process's own std.Progress
-        // tree, which can't be read back, so a shell sets it and execs zig with the pipe.
+        // Zig writes its progress tree to the file descriptor named in ZIG_PROGRESS. `zig build`
+        // doesn't pass it on to the build runner it starts, so the runner is started directly
+        // (see Eggy's `src/build/runner.zig`), by a shell that sets the variable for it. A project
+        // on an Eggy that can't say how runs `zig build`, without the steps' progress.
+        // `--summary all` lists every step, so the output says what was built even when all is well.
         var progress_fds: ?[2]std.c.fd_t = null;
         var fd_text: [16]u8 = undefined;
-        // `--summary all` lists every step, so the output says what was built even when all is well.
-        const plain_argv: []const []const u8 = &.{ "zig", "build", "editor", "--color", "off", "--summary", "all" };
-        var argv = plain_argv;
-        if (builtin.os.tag != .windows) {
+        var argv: std.ArrayList([]const u8) = .empty;
+        defer argv.deinit(gpa);
+        if (builtin.os.tag != .windows) if (self.runnerArgv(arena)) |runner| {
             var fds: [2]std.c.fd_t = undefined;
             if (std.c.pipe(&fds) == 0) {
                 progress_fds = fds;
-                argv = &.{ "/bin/sh", "-c", "ZIG_PROGRESS=\"$1\" exec zig build editor --color off --summary all", "sh", try std.fmt.bufPrint(&fd_text, "{d}", .{fds[1]}) };
+                try argv.appendSlice(gpa, &.{ "/bin/sh", "-c", "export ZIG_PROGRESS=\"$1\"; shift; exec \"$@\"", "sh", try std.fmt.bufPrint(&fd_text, "{d}", .{fds[1]}) });
+                try argv.appendSlice(gpa, runner);
             }
-        }
-        self.say("$ zig build editor --summary all   (in {s})", .{self.dir});
+        };
+        if (progress_fds == null) try argv.appendSlice(gpa, &.{ "zig", "build" });
+        try argv.appendSlice(gpa, steps);
+        try argv.appendSlice(gpa, &.{ "--color", "off", "--summary", "all" });
+        const shown = try std.mem.join(gpa, " ", steps);
+        defer gpa.free(shown);
+        self.say("$ zig build {s} --summary all   (in {s})", .{ shown, self.dir });
         var child = std.process.spawn(io_, .{
-            .argv = argv,
+            .argv = argv.items,
             .cwd = .{ .path = self.dir },
             .stdin = .ignore,
             .stdout = .pipe,
@@ -461,6 +486,31 @@ pub const Job = struct {
 
         const term = try child.wait(io_);
         if (term != .exited or term.exited != 0) return error.BuildFailed;
+    }
+
+    /// The command line starting the project's build runner, as its build records it through
+    /// `EGGY_RUNNER_FILE` while `zig build --help` compiles and runs it, in `arena`; null when the
+    /// project's Eggy doesn't record it, or its build doesn't compile (`zig build` then says why).
+    fn runnerArgv(self: *Job, arena: std.mem.Allocator) ?[]const []const u8 {
+        const io_ = self.io();
+        self.setStage(self.stage, "Compiling build.zig");
+        const file = std.fs.path.join(arena, &.{ self.dir, ".zig-cache", "eggy_runner.txt" }) catch return null;
+        std.Io.Dir.cwd().createDirPath(io_, std.fs.path.dirname(file).?) catch return null;
+        std.Io.Dir.cwd().deleteFile(io_, file) catch {};
+        var child = std.process.spawn(io_, .{
+            .argv = &.{ "/bin/sh", "-c", "EGGY_RUNNER_FILE=\"$1\" exec zig build --help", "sh", file },
+            .cwd = .{ .path = self.dir },
+            .stdin = .ignore,
+            .stdout = .ignore,
+            .stderr = .ignore,
+        }) catch return null;
+        const term = child.wait(io_) catch return null;
+        if (term != .exited or term.exited != 0) return null;
+        const text = std.Io.Dir.cwd().readFileAlloc(io_, file, arena, .limited(64 * 1024)) catch return null;
+        var args: std.ArrayList([]const u8) = .empty;
+        var lines = std.mem.tokenizeScalar(u8, text, '\n');
+        while (lines.next()) |line| args.append(arena, line) catch return null;
+        return if (args.items.len > 0) args.items else null;
     }
 
     /// Read the build's output from `file` line by line until it ends: keep it for `status`, and
@@ -523,10 +573,55 @@ const ProgressNode = extern struct {
 
 const Summary = struct { fraction: f32, step: []const u8, done: u32, total: u32 };
 
-/// The build's progress in a snapshot: the counter nearest the root (the build's steps, rather
-/// than the compiler's work inside one), and the first named step under it, which is what is
-/// being worked on.
+/// The build's progress in a snapshot: its "steps" counter (a build nested in one of its steps,
+/// as `zig build export` runs, has its own, inside), and the first named step under the innermost
+/// one, which is what is being worked on. Without one, the counter nearest the root (rather than
+/// the compiler's work inside a step) stands in.
 fn summarize(nodes: []const ProgressNode, parents: []const u8) ?Summary {
+    // The step counters, outermost first, by depth.
+    var counters: [8]usize = undefined;
+    var depths: [8]usize = undefined;
+    var count: usize = 0;
+    for (nodes, 0..) |node, i| {
+        if (!std.mem.eql(u8, node.nameText(), "steps") or count == counters.len) continue;
+        const total = std.mem.littleToNative(u32, node.estimated_total_count);
+        if (total == 0 or total == std.math.maxInt(u32)) continue;
+        const depth = depthOf(parents, i);
+        var at = count;
+        while (at > 0 and depths[at - 1] > depth) : (at -= 1) {
+            counters[at] = counters[at - 1];
+            depths[at] = depths[at - 1];
+        }
+        counters[at] = i;
+        depths[at] = depth;
+        count += 1;
+    }
+    if (count == 0) {
+        counters[0] = nearestCounter(nodes, parents) orelse return null;
+        count = 1;
+    }
+
+    // Each build's share of the step it runs in, from the innermost out.
+    var fraction: f32 = 0;
+    var i = count;
+    while (i > 0) {
+        i -= 1;
+        const node = nodes[counters[i]];
+        const done = std.mem.littleToNative(u32, node.completed_count);
+        const total = std.mem.littleToNative(u32, node.estimated_total_count);
+        fraction = std.math.clamp((@as(f32, @floatFromInt(done)) + fraction) / @as(f32, @floatFromInt(total)), 0, 1);
+    }
+    const innermost = counters[count - 1];
+    var step = nodes[innermost].nameText();
+    for (parents, 0..) |parent, child| if (parent == innermost and nodes[child].nameText().len > 0) {
+        step = nodes[child].nameText();
+        break;
+    };
+    return .{ .fraction = fraction, .step = step, .done = std.mem.littleToNative(u32, nodes[innermost].completed_count), .total = std.mem.littleToNative(u32, nodes[innermost].estimated_total_count) };
+}
+
+/// The counter nearest the root, if any.
+fn nearestCounter(nodes: []const ProgressNode, parents: []const u8) ?usize {
     var best: ?usize = null;
     var best_depth: usize = std.math.maxInt(usize);
     for (nodes, 0..) |node, i| {
@@ -538,15 +633,7 @@ fn summarize(nodes: []const ProgressNode, parents: []const u8) ?Summary {
             best_depth = depth;
         }
     }
-    const counter = best orelse return null;
-    const done = std.mem.littleToNative(u32, nodes[counter].completed_count);
-    const total = std.mem.littleToNative(u32, nodes[counter].estimated_total_count);
-    var step = nodes[counter].nameText();
-    for (parents, 0..) |parent, i| if (parent == counter and nodes[i].nameText().len > 0) {
-        step = nodes[i].nameText();
-        break;
-    };
-    return .{ .fraction = std.math.clamp(@as(f32, @floatFromInt(done)) / @as(f32, @floatFromInt(total)), 0, 1), .step = step, .done = done, .total = total };
+    return best;
 }
 
 /// How many parents node `index` has; a broken chain counts as deep.
@@ -597,6 +684,19 @@ test "a progress snapshot gives the build's step count and its current step" {
     try std.testing.expectEqualStrings("compile exe game_editor", summary.step);
     try std.testing.expectEqual(@as(u32, 12), summary.total);
     try std.testing.expect(summarize(nodes[0..1], &.{255}) == null);
+}
+
+test "a build nested in a step counts as that step's progress" {
+    // The outer build at 1 of 4 steps, running a nested build at 3 of 6.
+    var nodes: [6]ProgressNode = undefined;
+    for (&nodes, [_][]const u8{ "", "steps", "zig build runtime", "steps", "compile exe game", "steps-not" }, [_][2]u32{ .{ 0, 0 }, .{ 1, 4 }, .{ 0, std.math.maxInt(u32) }, .{ 3, 6 }, .{ 0, 0 }, .{ 0, 0 } }) |*node, name, counts| {
+        node.* = .{ .completed_count = counts[0], .estimated_total_count = counts[1], .name = @splat(0) };
+        @memcpy(node.name[0..name.len], name);
+    }
+    const summary = summarize(&nodes, &.{ 255, 0, 1, 2, 3, 0 }).?;
+    try std.testing.expectApproxEqAbs(@as(f32, 1.5 / 4.0), summary.fraction, 0.001);
+    try std.testing.expectEqualStrings("compile exe game", summary.step);
+    try std.testing.expectEqual(@as(u32, 6), summary.total);
 }
 
 test "the job compiles" {

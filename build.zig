@@ -2,6 +2,8 @@ const std = @import("std");
 const vitellus_build = @import("vitellus");
 const Emscripten = vitellus_build.Emscripten;
 const models = @import("src/build/models.zig");
+const game_export = @import("src/build/export.zig");
+const build_runner = @import("src/build/runner.zig");
 
 pub fn build(b: *std.Build) void {
     const update_submodules = b.addSystemCommand(&.{ "git", "submodule", "update", "--init", "--remote", "--recursive" });
@@ -76,7 +78,7 @@ pub const GameOptions = struct {
 /// only), and the steps `all`, `runtime`, `editor`, `run` (the editor; on the web, the runtime in
 /// a browser) and `run-runtime`. The game and each plugin get `@import("eggy")`, this package's
 /// eggy even for plugins from other packages, so every part shares one engine. Web builds find
-/// emsdk through `$EMSDK`, then `~/emsdk`.
+/// emsdk through `$EMSDK`, then `~/emsdk`. `export` builds the game to ship (`src/build/export.zig`).
 pub fn addGame(b: *std.Build, options: GameOptions) void {
     const target = options.target orelse b.standardTargetOptions(.{});
     const optimize = options.optimize orelse b.standardOptimizeOption(.{});
@@ -157,6 +159,8 @@ fn addProject(b: *std.Build, engine: *std.Build, emscripten: Emscripten, target:
         },
     });
     const all_step = b.step("all", "Build every executable for this target");
+    game_export.addExport(b, engine, target, runtime_name);
+    build_runner.record(b);
     if (target.result.os.tag == .emscripten) {
         const app = emscripten.addApp(b, .{ .name = runtime_name, .root_module = runtime_module });
         b.step("runtime", "Build the game for the browser").dependOn(&app.install.step);
@@ -164,10 +168,10 @@ fn addProject(b: *std.Build, engine: *std.Build, emscripten: Emscripten, target:
         all_step.dependOn(&app.install.step);
         return null;
     }
-    installRuntimeLibraries(b, engine);
     const runtime_app = addDesktopApp(b, target, runtime_module, runtime_name);
     const runtime_step = b.step("runtime", "Build the game");
     runtime_step.dependOn(&runtime_app.install.step);
+    installRuntimeLibraries(b, engine, runtime_step);
     // Packaging: the game's models and images, converted for the runtime, installed beside it.
     if (models.addPackaging(b, engine, optimize)) |packaged| {
         runtime_step.dependOn(packaged);
@@ -565,12 +569,14 @@ fn installEditorLibraries(b: *std.Build, engine: *std.Build) *std.Build.Step {
     return step;
 }
 
-/// Install the libraries Eggy's executables load at runtime (published by `addEngine`) into `b`'s prefix.
-fn installRuntimeLibraries(b: *std.Build, engine: *std.Build) void {
+/// Install the libraries Eggy's executables load at runtime (published by `addEngine`) into `b`'s prefix, with `zig build` and `runtime_step`.
+fn installRuntimeLibraries(b: *std.Build, engine: *std.Build, runtime_step: *std.Build.Step) void {
     var it = engine.named_lazy_paths.iterator();
     while (it.next()) |entry| {
         if (!std.mem.startsWith(u8, entry.key_ptr.*, runtime_library_prefix)) continue;
-        b.getInstallStep().dependOn(&b.addInstallFile(entry.value_ptr.*, entry.key_ptr.*[runtime_library_prefix.len..]).step);
+        const install = &b.addInstallFile(entry.value_ptr.*, entry.key_ptr.*[runtime_library_prefix.len..]).step;
+        b.getInstallStep().dependOn(install);
+        runtime_step.dependOn(install);
     }
 }
 
