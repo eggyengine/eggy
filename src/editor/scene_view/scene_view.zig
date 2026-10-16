@@ -155,7 +155,7 @@ pub const SceneView = struct {
                     self.drag = startDrag(target, layout, handle, at);
                     return true;
                 };
-                target.selected.* = picking.pick(self.drawn, self.view, area, at);
+                target.selected.* = instanceRoot(target, picking.pick(self.drawn, self.view, area, at));
                 return true;
             },
             .mouse_motion => |motion| {
@@ -187,6 +187,16 @@ pub const SceneView = struct {
             },
             else => return false,
         }
+    }
+
+    /// Where something let go at `at` on the panel at `scene` goes: on the ground (y = 0) under
+    /// the pointer, or a few metres out when the ground there is behind the camera or far off.
+    pub fn dropPoint(self: *const SceneView, scene: ui.Rect, at: ui.Vec2) [3]f32 {
+        const along = eggy.camera.normalize(picking.rayThrough(self.view, scene, at));
+        const eye = self.view.eye;
+        const to_ground = if (along[1] < -1e-3) -eye[1] / along[1] else std.math.inf(f32);
+        const distance: f32 = if (to_ground > 0 and to_ground < 100) to_ground else 5;
+        return .{ eye[0] + along[0] * distance, eye[1] + along[1] * distance, eye[2] + along[2] * distance };
     }
 
     /// Whether a drag snaps now: the toolbar's setting, turned round while Ctrl is held.
@@ -228,10 +238,19 @@ fn parseVector(text: []const u8) ?[3]f32 {
 
 /// Eggy's `Transform` among the game's component types.
 fn transformIndex(game: *const HotGame) ?usize {
-    for (game.component_types, 0..) |info, index| {
-        if (std.mem.eql(u8, info.name, "Transform") and std.mem.eql(u8, info.owner, "eggy")) return index;
+    return game.builtinComponent("Transform");
+}
+
+/// What a click on `entity` selects: the outermost scene instance it was made under, as its
+/// entities come from the instance's file and edits to them aren't kept; else itself.
+fn instanceRoot(target: Target, entity: ?eggy.ecs.EntityId) ?eggy.ecs.EntityId {
+    var picked = entity orelse return null;
+    const component = target.game.builtinComponent("SceneInstance") orelse return picked;
+    var above = target.app.world.getParent(picked);
+    while (above) |up| : (above = target.app.world.getParent(up)) {
+        if (target.game.hasComponent(target.app, up, component)) picked = up;
     }
-    return null;
+    return picked;
 }
 
 test {

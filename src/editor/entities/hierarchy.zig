@@ -400,6 +400,11 @@ pub const Hierarchy = struct {
         return false;
     }
 
+    /// The entity whose row is under `at` in last frame's layout.
+    pub fn entityAt(self: *const Hierarchy, context: *const ui.Context, at: ui.Vec2) ?ecs.EntityId {
+        return if (self.rowAt(context, at)) |row| row.entity else null;
+    }
+
     fn rowAt(self: *const Hierarchy, context: *const ui.Context, at: ui.Vec2) ?Row {
         for (self.rows.items) |row| {
             const target = context.last_bounds.get(row_id_base + row.entity.id) orelse continue;

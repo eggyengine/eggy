@@ -185,6 +185,14 @@ pub const HotGame = struct {
         self.copy_path = &.{};
     }
 
+    /// Where Eggy's own component `name` (`Transform`, `Mesh`...) is among `component_types`.
+    pub fn builtinComponent(self: *const HotGame, name: []const u8) ?usize {
+        for (self.component_types, 0..) |info, index| {
+            if (std.mem.eql(u8, info.name, name) and std.mem.eql(u8, info.owner, "eggy")) return index;
+        }
+        return null;
+    }
+
     /// Whether `entity` of `app`'s world has component type `component` (of `component_types`).
     pub fn hasComponent(self: *const HotGame, app: *eggy.App, entity: eggy.ecs.EntityId, component: usize) bool {
         if (self.library == null or component >= self.component_types.len) return false;

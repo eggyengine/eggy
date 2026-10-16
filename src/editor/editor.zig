@@ -345,7 +345,9 @@ pub fn Editor(comptime project: type) type {
             const now_ns = sdl3.timer.getNanosecondsSinceInit();
             if (self.camera_tick_ns != 0) self.scene_view.camera.fly(@as(f32, @floatFromInt(now_ns - self.camera_tick_ns)) / std.time.ns_per_s);
             self.camera_tick_ns = now_ns;
-            // What the Scene panel is seen from, and the selection's gizmo over it.
+            // Scene instances' entities, then what the Scene panel is seen from, and the
+            // selection's gizmo over it.
+            self.syncSceneInstances();
             self.entity_editor.forgetDead(&self.app);
             self.scene_view.update(self.sceneTarget(), if (self.workspace.placed.scene) |placed| placed.rect else null);
             self.workspace.scene_overlay = self.scene_view.overlay();
@@ -1422,12 +1424,13 @@ pub fn Editor(comptime project: type) type {
             return self.entity_editor.dragged(arena, &self.app, self.gamePtr());
         }
 
-        /// A file or folder dropped onto the window from outside: copy it into the project, into
-        /// the Assets folder it landed on, else `resources/`.
+        /// A file or folder dropped onto the Assets panel from outside: copy it into the project,
+        /// into the folder it landed on. Dropped anywhere else, it is left where it is.
         fn importDropped(self: *Self, slot: Slot, dropped: sdl3.events.DropFile) void {
             const opened = self.project orelse return self.workspace.toast("Open a project to bring files into it");
             const at = ui.Vec2{ .x = dropped.x, .y = dropped.y };
-            const folder = if (self.pageAt(slot, at.x, at.y) == panels.assets_page) self.assets_panel.importFolder(&self.assets_ui, at) else eggy.project.resources_dir;
+            if (self.pageAt(slot, at.x, at.y) != panels.assets_page) return self.workspace.toast("Drop files on the Assets panel to add them to the project");
+            const folder = self.assets_panel.importFolder(&self.assets_ui, at);
             var threaded: std.Io.Threaded = .init_single_threaded;
             const io = threaded.io();
             var files = std.Io.Dir.cwd().openDir(io, opened.dir, .{}) catch return;
@@ -1442,10 +1445,37 @@ pub fn Editor(comptime project: type) type {
             self.filesChanged();
         }
 
-        /// The project's files changed: the Assets panel lists them again, and descriptors keep up.
+        /// A file dragged from Assets let go at `at` in window `slot`, over page `over` (if any):
+        /// a model or scene becomes an entity, on the ground under the pointer in the Scene
+        /// panel, or under the row it is let go on in the Hierarchy (at the top level off them).
+        fn spawnDropped(self: *Self, slot: Slot, at: ui.Vec2, path: []const u8, over: ?usize) void {
+            const kind = eggy.assets.Kind.of(path);
+            if (kind != .model and kind != .scene) return;
+            const game = self.gamePtr();
+            if (self.sceneRect(slot)) |scene| if (scene.contains(at.x, at.y) and over == null) {
+                _ = self.entity_editor.spawnFrom(&self.app, game, path, self.scene_view.dropPoint(scene, at), null);
+                return;
+            };
+            if (over == panels.hierarchy_page) _ = self.entity_editor.spawnFrom(&self.app, game, path, .{ 0, 0, 0 }, self.entity_editor.hierarchy.entityAt(&self.hierarchy_ui, at));
+        }
+
+        /// Bring each scene instance's entities up to date with its file (see `SceneInstances`).
+        fn syncSceneInstances(self: *Self) void {
+            const opened = self.project orelse return;
+            const game = if (self.game) |*loaded| loaded else return;
+            var threaded: std.Io.Threaded = .init_single_threaded;
+            const io = threaded.io();
+            var files = std.Io.Dir.cwd().openDir(io, opened.dir, .{}) catch return;
+            defer files.close(io);
+            self.entity_editor.instances.sync(io, files, &self.app.world, game.sceneAccess(), self.openScenePath());
+        }
+
+        /// The project's files changed: the Assets panel lists them again, descriptors keep up,
+        /// and scene instances are made again from their files.
         fn filesChanged(self: *Self) void {
             self.assets_panel.refreshSoon();
             self.syncDescriptors();
+            self.entity_editor.instances.remakeAll();
         }
 
         /// Give every file in the project's `resources/` a descriptor, and drop those whose file
@@ -1516,10 +1546,13 @@ pub fn Editor(comptime project: type) type {
                 return;
             };
             // A drag let go over the Inspector sets the reference field there, before the panel
-            // it came from ends the drag.
+            // it came from ends the drag; a model or scene file let go over the Scene panel or
+            // the Hierarchy becomes an entity there.
             if (input == .pointer_up) if (self.dragging(self.ui.builder().allocator)) |dragged| {
                 const at = input.pointer_up.position;
-                if (self.pageAt(slot, at.x, at.y) == panels.inspector_page) _ = self.entity_editor.dropOnInspector(&self.ui, &self.app, self.gamePtr(), at, dragged);
+                const over = self.pageAt(slot, at.x, at.y);
+                if (over == panels.inspector_page) _ = self.entity_editor.dropOnInspector(&self.ui, &self.app, self.gamePtr(), at, dragged);
+                if (dragged == .asset) self.spawnDropped(slot, at, dragged.asset, over);
             };
             for (0..self.pageCount()) |index| {
                 const placed = self.workspace.placed.pages[index] orelse continue;

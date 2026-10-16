@@ -3,7 +3,8 @@
 //! project's scene, loads it at start, and carries the world across code changes with one; the
 //! runtime starts from the project's, baked in. An entity reference (`eggy.EntityRef`) to an
 //! entity of the scene is saved as its place, `.{ .scene = 3 }`, and points at the entity made
-//! from it when the scene is put into a world.
+//! from it when the scene is put into a world. A `SceneInstance`'s entities come from its own
+//! scene file, so they aren't captured, only the instance.
 //!
 //!     .{ .entities = .{
 //!         .{ .name = "Sun", .parent = null, .components = .{
@@ -14,6 +15,7 @@ const std = @import("std");
 const ecs = @import("clutch");
 const components = @import("components.zig");
 const Name = @import("name.zig").Name;
+const scene_instance = @import("scene_instance.zig");
 const log = std.log.scoped(.scene);
 
 /// The typed steps a scene needs, done by whatever has the component types: their `Registry`
@@ -127,7 +129,8 @@ pub const Scene = struct {
         self.arena.deinit();
     }
 
-    /// The entities of `world`, or with `roots` those and their descendants, parents first.
+    /// The entities of `world`, or with `roots` those and their descendants, parents first; a
+    /// `SceneInstance`'s descendants are left out, as they come from its scene file.
     pub fn capture(gpa: std.mem.Allocator, world: *ecs.World, access: Access, roots: ?[]const ecs.EntityId) !Scene {
         var self = Scene{ .arena = .init(gpa) };
         errdefer self.deinit();
@@ -141,6 +144,7 @@ pub const Scene = struct {
         defer captured.deinit(gpa);
         var pending: std.ArrayList(ecs.EntityId) = .empty;
         defer pending.deinit(gpa);
+        const instance_type = scene_instance.typeIndex(access.types());
         if (roots) |chosen| {
             var i = chosen.len;
             while (i > 0) : (i -= 1) try pending.append(gpa, chosen[i - 1]);
@@ -158,6 +162,7 @@ pub const Scene = struct {
             try captured.append(gpa, entity);
             const parent = if (world.getParent(entity)) |up| indices.get(up.id) else null;
             try entities.append(arena, try captureEntity(arena, world, access, entity, parent));
+            if (instance_type) |index| if (access.has(world, entity, index)) continue;
             // Children in reverse, so they come out in order.
             var children: std.ArrayList(ecs.EntityId) = .empty;
             defer children.deinit(gpa);
@@ -434,6 +439,9 @@ const Tag = struct { id: u32 };
 
 test "a scene saves names, parents and fields, and reads back into a new world" {
     const gpa = std.testing.allocator;
+    // Leaving Tag out is expected: its warning would fail the run.
+    std.testing.log_level = .err;
+    defer std.testing.log_level = .warn;
     const Components = components.Registry(&.{ Spin, Tag }, &.{ "game", "game" });
     const access = registryAccess(Components);
 
@@ -487,6 +495,24 @@ test "capturing roots takes their descendants only, which go under a new parent"
     defer gpa.free(made.entities);
     try std.testing.expect(world.getParent(made.entities[0]).?.eql(holder));
     try std.testing.expect(world.getParent(made.entities[1]).?.eql(made.entities[0]));
+}
+
+test "a scene instance is saved without the entities made from its file" {
+    const gpa = std.testing.allocator;
+    const SceneInstance = scene_instance.SceneInstance;
+    const Transform = @import("transform.zig").Transform;
+    const access = registryAccess(components.Registry(&.{ Spin, Transform, SceneInstance }, &.{ "game", "eggy", "eggy" }));
+    var world = ecs.World.init(gpa);
+    defer world.deinit();
+    const rat = try world.spawn(.{SceneInstance{ .scene = .init("resources/scene/rat.scene.zon") }});
+    const hat = try world.spawn(.{Spin{}});
+    try world.setParent(hat, rat);
+
+    var scene = try Scene.capture(gpa, &world, access, null);
+    defer scene.deinit();
+    try std.testing.expectEqual(@as(usize, 1), scene.entities.len);
+    try std.testing.expectEqualStrings("SceneInstance", scene.entities[0].components[0].type);
+    try std.testing.expectEqualStrings("\"resources/scene/rat.scene.zon\"", scene.entities[0].components[0].fields[0].value);
 }
 
 test "references to the scene's own entities point at their copies" {

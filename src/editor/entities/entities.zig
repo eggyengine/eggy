@@ -1,7 +1,8 @@
 //! Entities in the editor: the Hierarchy panel's tree of the world's entities and the
 //! Inspector's view of the one selected there, and carrying out what they ask (selecting,
 //! adding, deleting, renaming, reparenting, duplicating, and changing components) on the app's
-//! world through the game's library.
+//! world through the game's library. A model or scene file dropped into the world becomes an
+//! entity of its own, and each scene instance's entities are kept made (`scene_instances.zig`).
 const std = @import("std");
 const eggy = @import("eggy");
 const ui = eggy.ui;
@@ -12,6 +13,7 @@ const hierarchy_zig = @import("hierarchy.zig");
 const inspector_zig = @import("inspector.zig");
 const RootOrder = @import("root_order.zig").RootOrder;
 const Dragged = @import("../dragged.zig").Dragged;
+pub const SceneInstances = @import("scene_instances.zig").SceneInstances;
 const log = std.log.scoped(.entities);
 
 pub const EntityEditor = struct {
@@ -22,12 +24,15 @@ pub const EntityEditor = struct {
     selected: ?ecs.EntityId = null,
     /// The top-level entities' order.
     root_order: RootOrder,
+    /// What each scene instance's file made in the world.
+    instances: SceneInstances,
 
     pub fn init(gpa: std.mem.Allocator) EntityEditor {
-        return .{ .gpa = gpa, .hierarchy = .init(gpa), .inspector = .init(gpa), .root_order = .{ .gpa = gpa } };
+        return .{ .gpa = gpa, .hierarchy = .init(gpa), .inspector = .init(gpa), .root_order = .{ .gpa = gpa }, .instances = .init(gpa) };
     }
 
     pub fn deinit(self: *EntityEditor) void {
+        self.instances.deinit();
         self.hierarchy.deinit();
         self.inspector.deinit();
         self.root_order.deinit();
@@ -198,6 +203,46 @@ pub const EntityEditor = struct {
         }
     }
 
+    /// A new entity for the model or scene file at `path` (relative to the project), named
+    /// after it, at `position` within `parent` (none: the top level), and selected: a model as
+    /// its `Mesh`, a scene as its `SceneInstance`. Returns false, making nothing, for another
+    /// kind of file or without the game's library.
+    pub fn spawnFrom(self: *EntityEditor, app: *eggy.App, game: ?*const HotGame, path: []const u8, position: [3]f32, parent: ?ecs.EntityId) bool {
+        const loaded = game orelse return false;
+        const kind = eggy.assets.Kind.of(path);
+        const component = loaded.builtinComponent(switch (kind) {
+            .model => "Mesh",
+            .scene => "SceneInstance",
+            else => return false,
+        }) orelse return false;
+        const transform = loaded.builtinComponent("Transform") orelse return false;
+
+        const entity = app.world.spawn(.{}) catch |err| {
+            log.err("cannot add an entity for {s}: {t}", .{ path, err });
+            return false;
+        };
+        if (parent) |under| if (app.world.isAlive(under)) app.world.setParent(entity, under) catch {};
+        const base = std.fs.path.basename(path);
+        const suffix = if (kind == .scene) ".scene.zon" else std.fs.path.extension(base);
+        loaded.writeName(app, entity, base[0 .. base.len - suffix.len]);
+
+        // Its file (a model as the Mesh's shape), then where it goes; adding it adds Transform.
+        var buffer: [eggy.refs.max_path_len + 32]u8 = undefined;
+        const field_text = if (kind == .model)
+            std.fmt.bufPrintZ(&buffer, ".{{ .model = \"{f}\" }}", .{std.zig.fmtString(path)})
+        else
+            std.fmt.bufPrintZ(&buffer, "\"{f}\"", .{std.zig.fmtString(path)});
+        const field = for (loaded.component_types[component].fields, 0..) |info, i| {
+            if (std.mem.eql(u8, info.name, if (kind == .model) "shape" else "scene")) break i;
+        } else 0;
+        _ = loaded.addComponent(app, entity, component);
+        _ = loaded.writeField(app, entity, component, field, field_text catch return false);
+        const position_text = std.fmt.bufPrintZ(&buffer, ".{{ {d}, {d}, {d} }}", .{ position[0], position[1], position[2] }) catch unreachable;
+        _ = loaded.writeField(app, entity, transform, 0, position_text);
+        self.selected = entity;
+        return true;
+    }
+
     /// Drop the selection once its entity is gone.
     pub fn forgetDead(self: *EntityEditor, app: *eggy.App) void {
         if (self.selected) |entity| if (!app.world.isAlive(entity)) {
@@ -287,6 +332,7 @@ test {
     _ = @import("inspector.zig");
     _ = @import("field_editor.zig");
     _ = @import("field_value.zig");
+    _ = @import("scene_instances.zig");
 }
 
 test "moves place an entity before or after a sibling, at the top level or under a parent" {

@@ -1,5 +1,6 @@
 //! The world's entities as the Hierarchy lists them: in tree order (each followed by its
-//! children), with their names and components, narrowed by a filter.
+//! children, but not a scene instance's, which come from its file), with their names and
+//! components, narrowed by a filter.
 const std = @import("std");
 const eggy = @import("eggy");
 const ecs = eggy.ecs;
@@ -73,13 +74,16 @@ fn addSubtree(arena: std.mem.Allocator, rows: *std.ArrayList(Row), world: *ecs.W
     var name_buffer: [eggy.Name.max_len]u8 = undefined;
     var names: std.ArrayList([]const u8) = .empty;
     var name: []const u8 = "";
+    var instance = false;
     if (access) |through| {
         if (through.name(world, entity, &name_buffer)) |text| name = try arena.dupe(u8, text);
         for (through.types(), 0..) |info, component| {
             if (through.has(world, entity, component)) try names.append(arena, info.name);
         }
+        if (eggy.scene_instance.typeIndex(through.types())) |component| instance = through.has(world, entity, component);
     }
     try rows.append(arena, .{ .entity = entity, .name = name, .depth = depth, .has_parent = depth > 0, .components = names.items });
+    if (instance) return;
     var children = world.children(entity);
     while (children.next()) |child| try addSubtree(arena, rows, world, access, child, depth + 1);
 }
