@@ -115,8 +115,10 @@ pub fn Runtime(comptime project: type) type {
             if (!web) _ = self.fps_capper.delay();
             // Scene instances' entities, from their files, for any made or changed.
             if (self.data) |packaged| self.instances.sync(packaged.copies(), &self.app.world, eggy.scene.registryAccess(Plugins.Components), null);
+            self.app.time.tick(sdl3.timer.getNanosecondsSinceInit());
             try self.plugins.update(&self.app);
             try self.app.updateWorld();
+            self.app.input.endFrame();
             const frame = try self.app.graphics.beginFrame();
             // Through the game's camera; without one, there is nothing to see it from.
             if (eggy.camera.find(&self.app.world)) |view| {
@@ -131,6 +133,7 @@ pub fn Runtime(comptime project: type) type {
         }
 
         pub fn event(self: *Self, curr_event: sdl3.events.Event) !sdl3.AppResult {
+            self.app.input.handle(curr_event);
             try self.plugins.event(&self.app, curr_event);
             return self.app.event(curr_event);
         }

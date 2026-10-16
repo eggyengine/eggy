@@ -6,6 +6,8 @@ const sdl3 = sdl_adapter.sdl;
 const Graphics = @import("graphics.zig").Graphics;
 const clutch = @import("clutch");
 const preferences_zig = @import("preferences.zig");
+const Input = @import("input.zig").Input;
+const Time = @import("time.zig").Time;
 
 const web = builtin.os.tag == .emscripten;
 const width = 900;
@@ -22,6 +24,10 @@ pub const App = struct {
     /// Plugins' preference values (see `preferences`): the editor fills it from the user's and
     /// the project's files, the runtime from the project's, baked in.
     preference_values: preferences_zig.Store,
+    /// The keyboard and mouse as they are this frame (see `eggy.Input`).
+    input: Input = .{},
+    /// How long the last frame took, and how long the game has run (see `eggy.Time`).
+    time: Time = .{},
 
     pub fn init(gpa: std.mem.Allocator, title: [:0]const u8) !App {
         const init_flags = sdl3.InitFlags{ .video = true };
@@ -85,8 +91,11 @@ pub const App = struct {
     }
 
     /// Run the world's PreUpdate, Update and PostUpdate stages, then end the tick: `Added`,
-    /// `Changed` and `Removed` filters and this frame's events reset.
+    /// `Changed` and `Removed` filters and this frame's events reset. Systems see this frame's
+    /// `input` and `time` as the resources `eggy.Input` and `eggy.Time`.
     pub fn updateWorld(self: *App) !void {
+        try self.world.insertResource(self.input);
+        try self.world.insertResource(self.time);
         inline for (.{ .PreUpdate, .Update, .PostUpdate }) |stage| try self.world.runStage(stage);
         self.world.tick();
     }

@@ -355,7 +355,11 @@ pub fn Editor(comptime project: type) type {
             // The game stays paused while the Build progress window is up.
             // The game runs only while playing; otherwise only its editor tools do.
             if (self.build_window == null) if (self.game) |*game| {
-                if (self.play_mode.running()) game.update(&self.app) else game.editorUpdate(&self.app);
+                if (self.play_mode.running()) {
+                    self.app.time.tick(sdl3.timer.getNanosecondsSinceInit());
+                    game.update(&self.app);
+                    self.app.input.endFrame();
+                } else game.editorUpdate(&self.app);
             };
             try self.syncPopOuts();
             self.keepLayout();
@@ -670,7 +674,10 @@ pub fn Editor(comptime project: type) type {
                 self.workspace.simulating = false;
                 return std.log.err("play: the game's library isn't loaded", .{});
             };
-            // The game starts over on the scene, as it does when shipped: the selection follows.
+            // The game starts over on the scene, as it does when shipped, with no keys held and its
+            // clock at zero; the selection follows.
+            self.app.input = .{};
+            self.app.time = .{};
             const place = self.entity_editor.selectionPlace(&self.app, game);
             self.play_mode.play(self.gpa, &self.app, game, self.entity_editor.roots(&self.app.world), self.plugin_switches.off()) catch |err| {
                 self.workspace.playing = false;
@@ -1251,7 +1258,10 @@ pub fn Editor(comptime project: type) type {
             // The pages get the rest, and every pointer move so their hover state stays current.
             if (outcome == .ignored or curr_event == .mouse_motion) self.routeToPages(slot, curr_event);
             // Input reaches the game only while it plays.
-            if (self.play_mode.running()) if (self.game) |*game| game.event(&self.app, curr_event);
+            if (self.play_mode.running()) if (self.game) |*game| {
+                self.app.input.handle(curr_event);
+                game.event(&self.app, curr_event);
+            };
             // Quitting from the system (or closing the window) asks about unsaved changes too.
             const quitting = curr_event == .quit or (curr_event == .window_close_requested and slot == main_slot);
             if (quitting and !self.mayLeave(.quit)) return .run;

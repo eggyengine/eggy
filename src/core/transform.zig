@@ -18,6 +18,36 @@ pub const Transform = struct {
         const scaled = math.mul(f32, 4, 4, 4, turn, math.mat.scaling4x4(f32, self.scale[0], self.scale[1], self.scale[2]));
         return math.mul(f32, 4, 4, 4, math.mat.translation4x4(f32, self.position[0], self.position[1], self.position[2]), scaled);
     }
+
+    /// Which way it faces, in its parent's space: its -z turned by its rotation (one metre long).
+    /// A camera looks this way.
+    pub fn forward(self: Transform) [3]f32 {
+        return self.axis(.{ 0, 0, -1 });
+    }
+
+    /// Its right, in its parent's space: its +x turned by its rotation.
+    pub fn right(self: Transform) [3]f32 {
+        return self.axis(.{ 1, 0, 0 });
+    }
+
+    /// Its up, in its parent's space: its +y turned by its rotation.
+    pub fn up(self: Transform) [3]f32 {
+        return self.axis(.{ 0, 1, 0 });
+    }
+
+    /// Move it by `offset` (in its parent's space): `transform.translate(transform.forward())`
+    /// steps a metre ahead.
+    pub fn translate(self: *Transform, offset: [3]f32) void {
+        for (&self.position, offset) |*at, by| at.* += by;
+    }
+
+    /// `direction` turned by the rotation alone.
+    fn axis(self: Transform, direction: [3]f32) [3]f32 {
+        const turned = Transform{ .rotation_deg = self.rotation_deg };
+        var columns: [4][4]f32 = undefined;
+        for (&columns, turned.matrix().data) |*column, data| column.* = data;
+        return apply(columns, direction, 0);
+    }
 };
 
 /// `entity`'s transform within the world: its own (or none), inside each parent's.
@@ -73,4 +103,13 @@ test "a transform scales, then turns, then moves" {
     const corner = math.mat.transformPoint4x4(f32, transform.matrix(), .{ .x = 1, .y = 0, .z = 0 });
     try std.testing.expectApproxEqAbs(@as(f32, 10), corner.x, 0.001);
     try std.testing.expectApproxEqAbs(@as(f32, 2), corner.y, 0.001);
+}
+
+test "a transform faces down its -z, turned as it is" {
+    var transform = Transform{ .rotation_deg = .{ 0, 90, 0 } };
+    // Turned a quarter left about y: it faces -x, and its right is -z.
+    for (transform.forward(), [3]f32{ -1, 0, 0 }) |got, want| try std.testing.expectApproxEqAbs(want, got, 0.001);
+    for (transform.right(), [3]f32{ 0, 0, -1 }) |got, want| try std.testing.expectApproxEqAbs(want, got, 0.001);
+    transform.translate(transform.forward());
+    try std.testing.expectApproxEqAbs(@as(f32, -1), transform.position[0], 0.001);
 }

@@ -24,6 +24,7 @@ pub const SceneInstance = scene_instance.SceneInstance;
 pub const scene_instances = @import("scene_instances.zig");
 pub const SceneInstances = scene_instances.SceneInstances;
 pub const Name = @import("name.zig").Name;
+pub const findNamed = @import("name.zig").find;
 pub const transform = @import("transform.zig");
 pub const Transform = transform.Transform;
 pub const mesh = @import("mesh.zig");
@@ -40,12 +41,19 @@ pub const EntityRef = refs.EntityRef;
 pub const AssetRef = refs.AssetRef;
 pub const ui = @import("weeoui");
 pub const Event = sdl_adapter.sdl.events.Event;
+pub const input = @import("input.zig");
+pub const Input = input.Input;
+pub const Key = input.Key;
+pub const MouseButton = input.MouseButton;
+pub const Time = @import("time.zig").Time;
 
 test {
     _ = @import("graphics.zig");
     _ = @import("scene_texture.zig");
     _ = @import("notice.zig");
     _ = @import("grid.zig");
+    _ = @import("input.zig");
+    _ = @import("time.zig");
     _ = @import("plugins.zig");
     _ = @import("project.zig");
     _ = @import("preferences.zig");
