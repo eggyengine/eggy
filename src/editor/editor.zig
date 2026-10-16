@@ -648,15 +648,16 @@ pub fn Editor(comptime project: type) type {
             self.workspace.playing = true;
         }
 
-        /// Stop: the game starts over on the scene kept by Play. Entities are made anew, so the
-        /// selection goes.
+        /// Stop: the game starts over on the scene kept by Play. Entities are made anew; the
+        /// selection follows its entity there.
         fn stopPlaying(self: *Self) void {
             self.workspace.playing = false;
             self.workspace.paused = false;
             if (!self.play_mode.playing()) return;
             const game = if (self.game) |*loaded| loaded else return;
+            const place = self.entity_editor.selectionPlace(&self.app, game);
             self.play_mode.stop(&self.app, game, self.plugin_switches.off());
-            self.entity_editor.selected = null;
+            self.entity_editor.reselect(&self.app, game, place);
         }
 
         /// Keep the selected entity's Transform as it is in play, for when play stops (Ctrl+Shift+K).
@@ -846,8 +847,10 @@ pub fn Editor(comptime project: type) type {
                     defer self.gpa.free(source);
                     var scene = try eggy.scene.Scene.parse(self.gpa, source);
                     defer scene.deinit();
+                    // The world is made anew: the selection follows its entity's place.
+                    const place = self.entity_editor.selectionPlace(&self.app, game);
                     game.restart(&self.app, &scene, self.plugin_switches.off());
-                    self.entity_editor.selected = null;
+                    self.entity_editor.reselect(&self.app, game, place);
                     self.history.setBaseline(try self.gpa.dupe(u8, text));
                 },
                 .rename => |change| {
@@ -1473,8 +1476,9 @@ pub fn Editor(comptime project: type) type {
             try preferences.writeRegistry(self.gpa, self.preference_folders, game.plugin_keys, game.preference_manifests, self.plugin_switches.off());
             var scene = try eggy.scene.Scene.capture(self.gpa, &self.app.world, game.sceneAccess(), self.entity_editor.roots(&self.app.world));
             defer scene.deinit();
+            const place = self.entity_editor.selectionPlace(&self.app, game);
             game.restart(&self.app, &scene, self.plugin_switches.off());
-            self.entity_editor.selected = null;
+            self.entity_editor.reselect(&self.app, game, place);
             // What a plugin's `init` does to the world comes with the switch, not as a step of its own.
             if (self.sceneText()) |text| self.history.setBaseline(text);
             std.log.info("turned {s} {s}", .{ key, if (on) "on" else "off" });

@@ -259,6 +259,28 @@ pub const EntityEditor = struct {
         return true;
     }
 
+    /// Where the selected entity is among the world's entities in scene order (as
+    /// `Scene.capture` lists them), so `reselect` can find it once the world is made anew from
+    /// a scene; null with nothing selected, or no game library.
+    pub fn selectionPlace(self: *EntityEditor, app: *eggy.App, game: ?*const HotGame) ?usize {
+        const entity = self.selected orelse return null;
+        const loaded = game orelse return null;
+        var scene = eggy.scene.Scene.capture(self.gpa, &app.world, loaded.sceneAccess(), self.roots(&app.world)) catch return null;
+        defer scene.deinit();
+        for (scene.sources, 0..) |source, at| if (source.eql(entity)) return at;
+        return null;
+    }
+
+    /// Select the entity at `place` (from `selectionPlace`) in the world as it is now.
+    pub fn reselect(self: *EntityEditor, app: *eggy.App, game: ?*const HotGame, place: ?usize) void {
+        self.selected = null;
+        const at = place orelse return;
+        const loaded = game orelse return;
+        var scene = eggy.scene.Scene.capture(self.gpa, &app.world, loaded.sceneAccess(), self.roots(&app.world)) catch return;
+        defer scene.deinit();
+        if (at < scene.sources.len) self.selected = scene.sources[at];
+    }
+
     /// Drop the selection once its entity is gone.
     pub fn forgetDead(self: *EntityEditor, app: *eggy.App) void {
         if (self.selected) |entity| if (!app.world.isAlive(entity)) {
