@@ -26,7 +26,8 @@ pub fn addExport(b: *std.Build, engine: *std.Build, target: std.Build.ResolvedTa
     // one is asked for, so the game runs on other machines too.
     const asked = if (target.query.isNativeOs() and target.query.isNativeAbi() and target.query.cpu_arch == null) "native" else target.query.zigTriple(b.allocator) catch @panic("OOM");
     const nested = b.addSystemCommand(runner.argv(b));
-    nested.addArgs(&.{ "runtime", "-Doptimize=ReleaseFast", b.fmt("-Dtarget={s}", .{asked}), b.fmt("-Dscene={s}", .{start}), "--color", "off", "--summary", "all" });
+    // No summary: whatever it writes is shown, so only its errors should be.
+    nested.addArgs(&.{ "runtime", "-Doptimize=ReleaseFast", b.fmt("-Dtarget={s}", .{asked}), b.fmt("-Dscene={s}", .{start}), "--color", "off", "--summary", "none" });
     nested.addArg(switch (target.query.cpu_model) {
         .explicit => |model| b.fmt("-Dcpu={s}", .{model.name}),
         else => "-Dcpu=baseline",
