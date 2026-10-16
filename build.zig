@@ -32,6 +32,11 @@ pub fn build(b: *std.Build) void {
         .game = b.createModule(.{ .root_source_file = empty_game, .target = target, .optimize = optimize }),
     }, "eggy_runtime");
 
+    // `zig build docs`: the `eggy` module's API reference, Zig's own docs, into `<prefix>/api`.
+    // The docs site publishes it beside the guides.
+    const docs_object = b.addObject(.{ .name = "eggy", .root_module = engine.eggy });
+    b.step("docs", "Build the eggy module's API reference into api/").dependOn(&b.addInstallDirectory(.{ .source_dir = docs_object.getEmittedDocs(), .install_dir = .prefix, .install_subdir = "api" }).step);
+
     // Tests. The runtime's and editor's mostly check that they compile: running them needs a GPU.
     const test_step = b.step("test", "Run every test");
     const core_tests = addCoreTests(b, engine);

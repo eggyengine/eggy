@@ -30,6 +30,8 @@ export default {
       logo: { alt: 'Eggy', src: 'img/icon.svg' },
       items: [
         { to: '/', label: 'Docs', position: 'left' },
+        // `zig build docs --prefix docs/static` makes it; the docs workflow does before building.
+        { to: 'pathname:///api/', label: 'API', position: 'left' },
         { href: 'https://eggyengine.github.io/weeoui/', label: 'Weeoui', position: 'left' },
         { href: 'https://github.com/eggyengine/eggy', label: 'GitHub', position: 'right' },
       ],

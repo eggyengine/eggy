@@ -42,6 +42,13 @@ jobs:
           node-version: 22
           cache: npm
           cache-dependency-path: docs/package-lock.json
+      # The eggy module's API reference (Zig's own docs), published at /api/ beside the guides.
+      - if: github.event_name != 'delete'
+        uses: mlugg/setup-zig@v2
+        with:
+          version: 0.16.0
+      - if: github.event_name != 'delete'
+        run: zig build docs --prefix docs/static
       - if: github.event_name != 'delete'
         run: npm ci
         working-directory: docs

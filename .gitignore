@@ -1,3 +1,6 @@
 .zig-cache/
 zig-out/
 zig-pkg/
+
+# The API reference `zig build docs --prefix docs/static` makes.
+docs/static/api/
