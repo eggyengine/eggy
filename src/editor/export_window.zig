@@ -171,6 +171,7 @@ pub const ExportWindow = struct {
         if (context.buttonVariant("Choose another scene", .link)) self.scene_chosen = false;
         var labels: [platforms.len][]const u8 = undefined;
         for (&labels, platforms) |*label, platform| label.* = platform.label;
+        context.label("Runs on", .{});
         _ = context.select("Runs on", &labels, &self.platform);
         context.muted(platforms[self.platform].note);
         if (context.button("Export")) self.start();

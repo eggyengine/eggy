@@ -51,7 +51,7 @@ pub const ProjectSettingsWindow = struct {
             errdefer gpa.destroy(self);
             const dir = try gpa.dupe(u8, project_dir);
             errdefer gpa.free(dir);
-            const window = try ToolWindow.open(gpa, graphics, font, "Project Settings", .{ 560, 560 }, .{ .resizable = true });
+            const window = try ToolWindow.open(gpa, graphics, font, "Project Settings", .{ 560, 640 }, .{ .resizable = true });
             self.* = .{ .gpa = gpa, .window = window, .project_dir = dir, .name_arena = .init(gpa), .scenes_arena = .init(gpa) };
             break :made self;
         };
@@ -143,18 +143,25 @@ pub const ProjectSettingsWindow = struct {
         context.muted("Saved in eggy.zon as you change them, and Edit > Undo takes them back.");
 
         context.heading(4, "Game");
+        context.label("Title", .{});
         _ = context.textInput("Title", &self.title, "What players see");
+        context.label("Version", .{});
         _ = context.textInput("Version", &self.version, "0.0.1");
+        context.label("Default scene", .{});
         _ = context.select("Default scene", self.scenes, &self.scene);
         context.muted("Where the built game starts, and exports unless you pick another.");
 
         context.heading(4, "Executable");
         context.muted("What the game's executable says about itself: on Windows, in its Properties.");
+        context.label("Company", .{});
         _ = context.textInput("Company", &self.company, "");
+        context.label("Description", .{});
         _ = context.textInput("Description", &self.description, "");
+        context.label("Copyright", .{});
         _ = context.textInput("Copyright", &self.copyright, "");
 
         // The project's own, a row each: name, value, and a button taking it away.
+        if (self.extra.items.len > 0) context.label("More entries", .{});
         var removed: ?usize = null;
         const arena = context.builder().allocator;
         for (self.extra.items, 0..) |*entry, i| {
