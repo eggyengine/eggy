@@ -1,7 +1,8 @@
 //! Play mode: the game runs (its `update` hooks, the world's systems, input events) only while
 //! playing and not paused; otherwise only its editor tools do (`editorUpdate`), so nothing
-//! changes by itself. Play keeps the scene as it was, and Stop starts the game over on it:
-//! whatever happened while playing, every value goes back. Three presses of Escape in a row
+//! changes by itself. Play keeps the scene as it was and starts the game over on it, as it starts
+//! when shipped; Stop starts it over again, keeping none of what play made (not even what the
+//! plugins' `init` spawned): whatever happened while playing, every value and entity goes back. Three presses of Escape in a row
 //! (`escape_presses` within `escape_window_ms`) stop it too. Ctrl+Shift+K keeps the selected
 //! entity's `Transform` as it is while playing (`keepTransform`): Stop puts the scene back with
 //! that one change.
@@ -47,10 +48,15 @@ pub const PlayMode = struct {
     }
 
     /// Start playing: keep the scene as it is now, from its top-level entities `roots` in order,
-    /// for `stop`.
-    pub fn play(self: *PlayMode, gpa: std.mem.Allocator, app: *eggy.App, game: *const HotGame, roots: []const eggy.ecs.EntityId) !void {
+    /// for `stop`, and start the game over on it, as the shipped game starts (its plugins'
+    /// `init` running, keeping what they spawn).
+    pub fn play(self: *PlayMode, gpa: std.mem.Allocator, app: *eggy.App, game: *HotGame, roots: []const eggy.ecs.EntityId, off: []const []const u8) !void {
         if (self.before != null) return;
         self.before = try eggy.scene.Scene.capture(gpa, &app.world, game.sceneAccess(), roots);
+        // Its entities are made anew: the scene's sources follow them, for `keepTransform`.
+        const made = game.restartMaking(app, &self.before.?, off, .keep);
+        defer gpa.free(made);
+        if (made.len == self.before.?.sources.len) @memcpy(@constCast(self.before.?.sources), made);
     }
 
     /// Keep `entity`'s `Transform` as it is now in the scene that `stop` puts back. Returns
@@ -96,7 +102,7 @@ pub const PlayMode = struct {
         self.paused = false;
         self.escapes = 0;
         defer scene.deinit();
-        game.restart(app, &scene, off);
+        game.restart(app, &scene, off, .discard);
     }
 };
 

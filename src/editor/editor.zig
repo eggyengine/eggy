@@ -274,7 +274,7 @@ pub fn Editor(comptime project: type) type {
                     open_scene = .{ .gpa = gpa, .project_dir = opened.dir };
                     open_scene.?.reopen(&app.world, loaded.sceneAccess());
                 }
-                loaded.start(&app, plugin_switches.off());
+                loaded.start(&app, plugin_switches.off(), .discard);
             }
             const upgrades = Upgrades.init(gpa, if (opened_project) |opened| opened.dir else null, @import("build_options").source_dir);
             // Model and image files, imported from the project as the scene first shows each.
@@ -670,11 +670,14 @@ pub fn Editor(comptime project: type) type {
                 self.workspace.simulating = false;
                 return std.log.err("play: the game's library isn't loaded", .{});
             };
-            self.play_mode.play(self.gpa, &self.app, game, self.entity_editor.roots(&self.app.world)) catch |err| {
+            // The game starts over on the scene, as it does when shipped: the selection follows.
+            const place = self.entity_editor.selectionPlace(&self.app, game);
+            self.play_mode.play(self.gpa, &self.app, game, self.entity_editor.roots(&self.app.world), self.plugin_switches.off()) catch |err| {
                 self.workspace.playing = false;
                 self.workspace.simulating = false;
                 return std.log.err("cannot start playing: {t}", .{err});
             };
+            self.entity_editor.reselect(&self.app, game, place);
             self.workspace.playing = true;
         }
 
@@ -880,7 +883,7 @@ pub fn Editor(comptime project: type) type {
                     defer scene.deinit();
                     // The world is made anew: the selection follows its entity's place.
                     const place = self.entity_editor.selectionPlace(&self.app, game);
-                    game.restart(&self.app, &scene, self.plugin_switches.off());
+                    game.restart(&self.app, &scene, self.plugin_switches.off(), .discard);
                     self.entity_editor.reselect(&self.app, game, place);
                     self.history.setBaseline(try self.gpa.dupe(u8, text));
                 },
@@ -941,7 +944,7 @@ pub fn Editor(comptime project: type) type {
                     defer self.gpa.free(source);
                     var world = try eggy.scene.Scene.parse(self.gpa, source);
                     defer world.deinit();
-                    game.restart(&self.app, &world, self.plugin_switches.off());
+                    game.restart(&self.app, &world, self.plugin_switches.off(), .discard);
                     try scene.reopenAs(if (back) change.from else change.to, if (back) change.from_saved else change.to_saved);
                     self.entity_editor.selected = null;
                     self.history.setBaseline(try self.gpa.dupe(u8, text));
@@ -1501,7 +1504,7 @@ pub fn Editor(comptime project: type) type {
             } else |err| std.log.err("cannot put the scene back: {t}", .{err});
             self.workspace.setPluginPanels(game.panels);
             preferences.writeRegistry(self.gpa, self.preference_folders, game.plugin_keys, game.preference_manifests, self.plugin_switches.off()) catch |err| std.log.warn("cannot update .eggy/plugins.zon: {t}", .{err});
-            game.start(&self.app, self.plugin_switches.off());
+            game.start(&self.app, self.plugin_switches.off(), .discard);
         }
 
         /// Keep the Assets panel's view as the user's preference, for every project.
@@ -1531,7 +1534,7 @@ pub fn Editor(comptime project: type) type {
             var scene = try eggy.scene.Scene.capture(self.gpa, &self.app.world, game.sceneAccess(), self.entity_editor.roots(&self.app.world));
             defer scene.deinit();
             const place = self.entity_editor.selectionPlace(&self.app, game);
-            game.restart(&self.app, &scene, self.plugin_switches.off());
+            game.restart(&self.app, &scene, self.plugin_switches.off(), .discard);
             self.entity_editor.reselect(&self.app, game, place);
             // What a plugin's `init` does to the world comes with the switch, not as a step of its own.
             if (self.sceneText()) |text| self.history.setBaseline(text);

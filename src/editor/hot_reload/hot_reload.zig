@@ -45,11 +45,22 @@ pub const HotGame = struct {
         return self;
     }
 
+    /// What becomes of the entities the plugins' `init` hooks spawn: kept, as when the game
+    /// plays (as it does when it ships, starting on its scene), or dropped, as while editing,
+    /// where the world is the scene and nothing else, so they don't pile up in it each time the
+    /// plugins start again.
+    pub const Spawned = enum { keep, discard };
+
     /// Start the game and its plugins, but those keyed in `off`, on `app`, whose world may
-    /// already hold a scene, and run the world's Init stages. If a plugin fails to start
-    /// (logged), the game stays stopped until the next swap.
-    pub fn start(self: *HotGame, app: *eggy.App, off: []const []const u8) void {
+    /// already hold a scene, and run the world's Init stages; what they spawn goes as `spawned`
+    /// says. If a plugin fails to start (logged), the game stays stopped until the next swap.
+    pub fn start(self: *HotGame, app: *eggy.App, off: []const []const u8, spawned: Spawned) void {
         if (self.library == null or self.state != null) return;
+        // The entities there before, to tell those the plugins made.
+        const before = app.world.slots.items.len;
+        var generations: std.ArrayList(?u32) = .empty;
+        defer generations.deinit(self.gpa);
+        if (spawned == .discard) for (app.world.slots.items) |slot| generations.append(self.gpa, if (slot.alive) slot.generation else null) catch {};
         const enabled = self.gpa.alloc(bool, self.plugin_keys.len) catch return log.err("the game didn't start: out of memory", .{});
         defer self.gpa.free(enabled);
         // The game is always on; a plugin unless `off` names it.
@@ -61,6 +72,15 @@ pub const HotGame = struct {
         }
         self.state = self.game.start(&host, &self.gpa, app, enabled.ptr);
         if (self.state == null) log.err("the game didn't start: see the errors above. It starts again when its code is rebuilt.", .{});
+        if (spawned == .keep or generations.items.len != before) return;
+        var dropped: usize = 0;
+        for (app.world.slots.items, 0..) |slot, i| {
+            if (!slot.alive) continue;
+            if (i < before) if (generations.items[i]) |generation| if (generation == slot.generation) continue;
+            app.world.despawn(eggy.ecs.EntityId.init(@intCast(i), slot.generation));
+            dropped += 1;
+        }
+        if (dropped > 0) log.debug("left out {d} entities the plugins spawned as they started: the scene is what was saved", .{dropped});
     }
 
     /// Stop the game, empty the world, and unload the library.
@@ -95,16 +115,27 @@ pub const HotGame = struct {
 
     /// Start the game over on `scene` without reloading it: stop its plugins, empty the world,
     /// put `scene` in, and start them again (with the world's Init stages), but those keyed in
-    /// `off`. Stopping play does this, so nothing that happened while playing stays.
-    pub fn restart(self: *HotGame, app: *eggy.App, scene: *const eggy.scene.Scene, off: []const []const u8) void {
-        if (self.library == null) return;
+    /// `off`, what they spawn going as `spawned` says. Play does this, keeping what they spawn,
+    /// as the shipped game starts; Stop does it dropping that, so the world is the scene as it
+    /// was before Play, its entity count included.
+    pub fn restart(self: *HotGame, app: *eggy.App, scene: *const eggy.scene.Scene, off: []const []const u8, spawned: Spawned) void {
+        const made = self.restartMaking(app, scene, off, spawned);
+        self.gpa.free(made);
+    }
+
+    /// `restart`, returning the entities made from `scene`, in its order (caller-owned; empty
+    /// when it couldn't be put back).
+    pub fn restartMaking(self: *HotGame, app: *eggy.App, scene: *const eggy.scene.Scene, off: []const []const u8, spawned: Spawned) []eggy.ecs.EntityId {
+        if (self.library == null) return &.{};
         if (self.state) |state| self.game.stop(state);
         self.state = null;
         app.resetWorld();
-        if (scene.instantiate(self.gpa, &app.world, self.sceneAccess(), null)) |made| {
-            self.gpa.free(made.entities);
-        } else |err| log.err("cannot put the scene back: {t}", .{err});
-        self.start(app, off);
+        const made: []eggy.ecs.EntityId = if (scene.instantiate(self.gpa, &app.world, self.sceneAccess(), null)) |result| result.entities else |err| blk: {
+            log.err("cannot put the scene back: {t}", .{err});
+            break :blk &.{};
+        };
+        self.start(app, off, spawned);
+        return made;
     }
 
     pub fn event(self: *HotGame, app: *eggy.App, curr_event: eggy.Event) void {

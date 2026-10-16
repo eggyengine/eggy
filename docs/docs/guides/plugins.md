@@ -258,7 +258,7 @@ Entities can be deleted in the editor at any time, so check `app.world.isAlive(e
 
 ### Playing
 
-In the editor the game doesn't run on its own: its `update` hooks, the world's systems and input events only run while it plays (the play button on the title bar). While it doesn't, plugins' `editorUpdate` hooks run instead, for tools that work on the scene. Pressing play keeps the scene as it is; stopping starts the game over on it, so whatever happened while playing, the scene's values go back. To keep where something ended up, select it and press **Ctrl+Shift+K** while playing: after Stop it keeps that `Transform` (and Edit > Undo takes it back).
+In the editor the game doesn't run on its own: its `update` hooks, the world's systems and input events only run while it plays (the play button on the title bar). While it doesn't, plugins' `editorUpdate` hooks run instead, for tools that work on the scene. Pressing play keeps the scene as it is and starts the game on it as it starts when shipped: the scene first, then your plugins' `init`, keeping what it spawns. Stopping puts the scene back exactly as it was, so whatever happened while playing (entities spawned included) goes. While editing, the world is the scene alone: entities your plugins' `init` spawns show only while playing, so they never end up saved into the scene. To keep where something ended up, select it and press **Ctrl+Shift+K** while playing: after Stop it keeps that `Transform` (and Edit > Undo takes it back).
 
 ### Scenes
 
