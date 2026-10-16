@@ -49,11 +49,25 @@ jobs:
           version: 0.16.0
       # Zig 0.16.0 writes fetched zip archives to $ZIG_GLOBAL_CACHE_DIR/tmp and
       # does not create that directory (https://codeberg.org/ziglang/zig/issues/31964).
-      # setup-zig points the global cache at $GITHUB_WORKSPACE/.zig-cache.
+      # Its HTTP client also drops some GitHub release downloads (HttpConnectionClosing).
+      # A retry continues from the packages already in the cache.
       - if: github.event_name != 'delete'
         run: |
           mkdir -p "${ZIG_GLOBAL_CACHE_DIR:?}/tmp"
-          zig build docs --prefix docs/static
+          log=$(mktemp)
+          for attempt in 1 2 3; do
+            set +e
+            zig build docs --prefix docs/static 2>&1 | tee "$log"
+            status=${PIPESTATUS[0]}
+            set -e
+            if [ "$status" -eq 0 ]; then exit 0; fi
+            if [ "$attempt" -lt 3 ] && grep -q -e 'HttpConnectionClosing' -e 'ConnectionResetByPeer' -e 'ConnectionTimedOut' -e 'TemporaryNameServerFailure' "$log"; then
+              echo "fetch failed (attempt $attempt); retrying"
+              sleep $((attempt * 5))
+              continue
+            fi
+            exit "$status"
+          done
       - if: github.event_name != 'delete'
         run: npm ci
         working-directory: docs
