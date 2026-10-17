@@ -64,6 +64,35 @@ absolute paths, backslashes, paths longer than 256 bytes, and files of the wrong
 An empty path is an unset reference. Constructing a reference does not load the file or
 mean that its kind has a playback/rendering implementation.
 
+## Read resources and instantiate scenes
+
+The executable installs its providers before your plugin's `init`. The editor reads the
+project's files; a packaged runtime resolves the same references through its manifest.
+
+```zig
+const notes = eggy.AssetRef(.text).init("resources/notes.txt");
+const text = try app.resources().read(gpa, notes);
+defer gpa.free(text);
+
+var image = try app.resources().loadImage(gpa, texture);
+defer image.deinit(gpa);
+
+const root = try app.scenes().instantiate(
+    .init("resources/scene/rat.scene.zon"),
+    .{ .parent = parent },
+);
+```
+
+`loadModel` likewise returns caller-owned CPU data, not a borrowed GPU cache entry.
+Loading failures return errors; importer diagnostics supply more detail. Web resource
+reads are unsupported until a browser resource provider is implemented.
+
+Instantiation creates a scene-instance root and its immediate entities before returning.
+The world owns them. Nested instances populate at the normal scene-sync point. Scene
+components or fields that no longer exist are logged and skipped, as when opening a
+scene in the editor. A failed read or allocation removes entities created by that call.
+Borrow service views only for the operation: do not store them across world resets.
+
 ## Describe a reversible value
 
 `eggy.Action(T)` contains `before` and `after`. `value(.undo)` and `value(.redo)` select

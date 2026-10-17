@@ -11,6 +11,21 @@ pub const ProjectAssets = struct {
     /// The project's folder; the files' paths are relative to it.
     project_dir: []const u8,
 
+    /// Read project-relative files while keeping no open directory or transient I/O pointer.
+    pub fn files(self: *ProjectAssets) eggy.scene_instances.Files {
+        return .{ .context = self, .read = readFile };
+    }
+
+    fn readFile(context: *anyopaque, gpa: std.mem.Allocator, path: []const u8) ![:0]u8 {
+        try eggy.refs.validatePath(path);
+        const self: *ProjectAssets = @ptrCast(@alignCast(context));
+        var threaded: std.Io.Threaded = .init_single_threaded;
+        const io = threaded.io();
+        var dir = try std.Io.Dir.cwd().openDir(io, self.project_dir, .{});
+        defer dir.close(io);
+        return dir.readFileAllocOptions(io, path, gpa, .limited(64 << 20), .of(u8), 0);
+    }
+
     /// A loader for `eggy.model_cache.ModelCache`; `self` must outlive it.
     pub fn models(self: *ProjectAssets) eggy.model_cache.Loader {
         return .{ .context = self, .load = loadModel };

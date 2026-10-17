@@ -107,6 +107,7 @@ fn start(editor: *const api.Host, gpa_ptr: *const anyopaque, app_ptr: *anyopaque
     const gpa: *const std.mem.Allocator = @ptrCast(@alignCast(gpa_ptr));
     const state = gpa.create(State) catch return null;
     const app = appOf(app_ptr);
+    app.scene_access = access;
     const plugins = Plugins.init(gpa.*, app, enabled[0..plugin_keys.len].*) catch |err| {
         std.log.err("the game failed to start: {t}", .{err});
         gpa.destroy(state);

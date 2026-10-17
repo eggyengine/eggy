@@ -274,7 +274,6 @@ pub fn Editor(comptime project: type) type {
                     open_scene = .{ .gpa = gpa, .project_dir = opened.dir };
                     open_scene.?.reopen(&app.world, loaded.sceneAccess());
                 }
-                loaded.start(&app, plugin_switches.off(), .discard);
             }
             const upgrades = Upgrades.init(gpa, if (opened_project) |opened| opened.dir else null, @import("build_options").source_dir);
             // Model and image files, imported from the project as the scene first shows each.
@@ -283,9 +282,11 @@ pub fn Editor(comptime project: type) type {
                 loaders.* = .{ .project_dir = opened.dir };
                 app.graphics.models.loader = loaders.models();
                 app.graphics.textures.loader = loaders.textures();
+                app.resource_files = loaders.files();
                 break :blk loaders;
             } else null;
             errdefer if (project_assets) |loaders| gpa.destroy(loaders);
+            if (game) |*loaded| loaded.start(&app, plugin_switches.off(), .discard);
             var self = Self{ .gpa = gpa, .game = game, .game_modified = modifiedAt(library_path), .app = app, .ui = context, .mono = mono, .console_ui = console_ui, .hierarchy_ui = hierarchy_ui, .assets_ui = assets_ui, .assets_panel = .init(gpa), .asset_icons = asset_icons, .entity_editor = .init(gpa), .console = console, .plugin_pages = plugin_pages, .workspace = workspace, .frame = frame, .scene = scene, .camera_preview = camera_preview, .drawables = drawables, .overlay = overlay, .project = opened_project, .editor_modified = if (opened_project) |opened| editorModified(gpa, opened) else null, .upgrades = upgrades, .preference_folders = preference_folders, .open_scene = open_scene, .history = .{ .gpa = gpa }, .plugin_switches = plugin_switches, .project_assets = project_assets };
             self.built_sources = self.sourcesNow();
             self.syncDescriptors();
@@ -1650,7 +1651,7 @@ pub fn Editor(comptime project: type) type {
             var files = std.Io.Dir.cwd().openDir(io, opened.dir, .{}) catch return;
             defer files.close(io);
             var folder = eggy.scene_instances.FolderFiles{ .io = io, .dir = files };
-            self.entity_editor.instances.sync(folder.files(), &self.app.world, game.sceneAccess(), self.openScenePath());
+            self.app.sceneInstances().sync(folder.files(), &self.app.world, game.sceneAccess(), self.openScenePath());
         }
 
         /// The project's files changed: the Assets panel lists them again, descriptors keep up,
@@ -1658,7 +1659,7 @@ pub fn Editor(comptime project: type) type {
         fn filesChanged(self: *Self) void {
             self.assets_panel.refreshSoon();
             self.syncDescriptors();
-            self.entity_editor.instances.remakeAll();
+            self.app.sceneInstances().remakeAll();
         }
 
         /// Give every file in the project's `resources/` a descriptor, and drop those whose file

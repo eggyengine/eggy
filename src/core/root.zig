@@ -48,8 +48,12 @@ pub const MouseButton = input.MouseButton;
 pub const Time = @import("time.zig").Time;
 pub const Action = @import("action.zig").Action;
 pub const Direction = @import("action.zig").Direction;
+pub const resources = @import("resources/resources.zig");
+pub const scenes = @import("scenes/scenes.zig");
 
 test {
+    _ = resources;
+    _ = scenes;
     _ = @import("action.zig");
     _ = @import("graphics.zig");
     _ = @import("scene_texture.zig");

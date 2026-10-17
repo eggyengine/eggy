@@ -8,6 +8,10 @@ const clutch = @import("clutch");
 const preferences_zig = @import("preferences.zig");
 const Input = @import("input.zig").Input;
 const Time = @import("time.zig").Time;
+const Resources = @import("resources/resources.zig").Resources;
+const Scenes = @import("scenes/scenes.zig").Scenes;
+const SceneInstances = @import("scene_instances.zig").SceneInstances;
+const scene = @import("scene.zig");
 
 const web = builtin.os.tag == .emscripten;
 const width = 900;
@@ -28,6 +32,11 @@ pub const App = struct {
     input: Input = .{},
     /// How long the last frame took, and how long the game has run (see `eggy.Time`).
     time: Time = .{},
+    /// Installed by the executable before plugin initialization.
+    resource_files: ?@import("scene_instances.zig").Files = null,
+    /// Typed registry installed by the game library, never the editor host.
+    scene_access: ?scene.Access = null,
+    instances: ?SceneInstances = null,
 
     pub fn init(gpa: std.mem.Allocator, title: [:0]const u8) !App {
         const init_flags = sdl3.InitFlags{ .video = true };
@@ -52,6 +61,7 @@ pub const App = struct {
     /// Run the world's PreDeinit, Deinit and PostDeinit stages, then free everything.
     pub fn deinit(self: *App) void {
         self.stopWorld();
+        if (self.instances) |*instances| instances.deinit();
         self.world.deinit();
         self.preference_values.deinit();
         self.graphics.deinit();
@@ -67,12 +77,31 @@ pub const App = struct {
         return self.preference_values.get(T);
     }
 
+    /// Borrow this executable's resource providers. Loaded CPU data belongs to the caller.
+    pub fn resources(self: *const App) Resources {
+        return .{ .files = self.resource_files, .models = self.graphics.models.loader, .images = self.graphics.textures.loader };
+    }
+
+    /// Borrow the current world's scene service; do not retain across reset/reload.
+    pub fn scenes(self: *App) Scenes {
+        return .{ .world = &self.world, .instances = self.sceneInstances(), .files = self.resource_files, .access = self.scene_access };
+    }
+
+    /// The instance registry shared by author calls and the executable's scene-sync point.
+    pub fn sceneInstances(self: *App) *SceneInstances {
+        if (self.instances == null) self.instances = .init(self.world.allocator);
+        return &self.instances.?;
+    }
+
     /// Start over with an empty world: run the old one's PreDeinit, Deinit and PostDeinit
     /// stages and free it. The editor does this before swapping in a rebuilt game, while the old
     /// game's code, which the world's schedules and storages point into, is still loaded. Run
     /// `startWorld` once the new game's plugins have registered their schedules.
     pub fn resetWorld(self: *App) void {
         self.stopWorld();
+        if (self.instances) |*instances| instances.deinit();
+        self.instances = null;
+        self.scene_access = null;
         const allocator = self.world.allocator;
         self.world.deinit();
         self.world = .init(allocator);

@@ -24,7 +24,6 @@ pub fn Runtime(comptime project: type) type {
         /// What packaging put beside the game (null where there is none: the web), and the
         /// entities each scene instance made from it.
         data: ?*packaged_assets.Data,
-        instances: eggy.SceneInstances,
 
         const Self = @This();
 
@@ -56,7 +55,9 @@ pub fn Runtime(comptime project: type) type {
             if (data) |packaged| {
                 app.graphics.models.loader = packaged.models();
                 app.graphics.textures.loader = packaged.textures();
+                app.resource_files = packaged.copies();
             }
+            app.scene_access = eggy.scene.registryAccess(Plugins.Components);
             // The project's preferences, baked in by `addGame`, before the plugins start.
             if (@hasDecl(project, "preference_files")) for (project.preference_files) |file| {
                 app.preference_values.read(.project, file.key, file.zon) catch |err| std.log.warn("the preferences for {s} don't parse ({t}): they are ignored", .{ file.key, err });
@@ -81,7 +82,6 @@ pub fn Runtime(comptime project: type) type {
                 .app = app,
                 .fps_capper = .{ .mode = .{ .limited = fps } },
                 .data = data,
-                .instances = .init(gpa),
             };
         }
 
@@ -98,14 +98,13 @@ pub fn Runtime(comptime project: type) type {
         }
 
         pub fn deinit(self: *Self) void {
-            self.instances.deinit();
-            if (self.data) |packaged| packaged.close();
             if (self.notice) |*notice| {
                 self.app.graphics.queue.waitIdle() catch {};
                 notice.deinit();
             }
             self.plugins.deinit();
             self.app.deinit();
+            if (self.data) |packaged| packaged.close();
             self.gpa.free(self.drawables);
         }
 
@@ -114,7 +113,7 @@ pub fn Runtime(comptime project: type) type {
             // The browser already paces frames to the display.
             if (!web) _ = self.fps_capper.delay();
             // Scene instances' entities, from their files, for any made or changed.
-            if (self.data) |packaged| self.instances.sync(packaged.copies(), &self.app.world, eggy.scene.registryAccess(Plugins.Components), null);
+            if (self.data) |packaged| self.app.sceneInstances().sync(packaged.copies(), &self.app.world, eggy.scene.registryAccess(Plugins.Components), null);
             self.app.time.tick(sdl3.timer.getNanosecondsSinceInit());
             try self.plugins.update(&self.app);
             try self.app.updateWorld();

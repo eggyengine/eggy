@@ -218,6 +218,8 @@ pub const Scene = struct {
     pub fn instantiate(self: *const Scene, gpa: std.mem.Allocator, world: *ecs.World, access: Access, parent: ?ecs.EntityId) !Instantiated {
         const made = try gpa.alloc(ecs.EntityId, self.entities.len);
         errdefer gpa.free(made);
+        var spawned: usize = 0;
+        errdefer for (made[0..spawned]) |entity| world.despawn(entity);
         var skipped: usize = 0;
         const types = access.types();
         // References to the scene's own entities, set once every entity exists.
@@ -226,6 +228,7 @@ pub const Scene = struct {
         defer deferred.deinit(gpa);
         for (self.entities, made) |saved, *entity| {
             entity.* = try world.spawn(.{});
+            spawned += 1;
             if (saved.name.len > 0) access.setName(world, entity.*, saved.name);
             for (saved.components) |component| {
                 const index = findType(types, component.type, component.owner) orelse {
@@ -273,7 +276,7 @@ pub const Scene = struct {
         }
         for (self.entities, made) |saved, entity| {
             const up = if (saved.parent) |index| (if (index < made.len) made[index] else null) else parent;
-            if (up) |parent_entity| world.setParent(entity, parent_entity) catch {};
+            if (up) |parent_entity| try world.setParent(entity, parent_entity);
         }
         return .{ .entities = made, .skipped = skipped };
     }

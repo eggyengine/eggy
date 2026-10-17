@@ -11,6 +11,8 @@ test "the game's library loads, runs, swaps for a fresh copy, and unloads cleanl
     defer gpa.free(path);
     var app: eggy.App = undefined;
     app.world = .init(gpa);
+    app.instances = null;
+    app.scene_access = null;
     defer app.world.deinit();
     app.preference_values = .init(gpa);
     defer app.preference_values.deinit();
