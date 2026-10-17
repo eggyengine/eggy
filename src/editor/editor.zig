@@ -151,7 +151,7 @@ pub fn Editor(comptime project: type) type {
         picking_to_link: bool = false,
         /// Whether the editor's windows are hidden, as they are while a new project is created.
         hidden: bool = false,
-        /// The project this editor opened (`--project <dir>`), from its `eggy.zon`.
+        /// The explicit or discovered project this editor opened, from its `eggy.zon`.
         project: ?workspace_zig.Project = null,
         /// The open project's model and image files, imported for the scene's caches.
         project_assets: ?*ProjectAssets = null,
@@ -466,7 +466,9 @@ pub fn Editor(comptime project: type) type {
                 page_ui.time_ms = sdl3.timer.getMillisecondsSinceInit();
                 switch (index) {
                     panels.inspector_page => self.buildInspector(),
-                    panels.console_page => self.console.build(page_ui),
+                    panels.console_page => {
+                        if (self.console.build(page_ui, if (self.project) |opened| opened.dir else null)) |source| self.openDiagnostic(source);
+                    },
                     panels.hierarchy_page => self.entity_editor.buildHierarchy(page_ui, &self.app, self.gamePtr()),
                     panels.assets_page => {
                         // The view is a preference, so it is the same in the next editor.
@@ -785,6 +787,20 @@ pub fn Editor(comptime project: type) type {
                     // A file shows as its folder.
                     const folder = std.fs.path.join(self.gpa, &.{ opened.dir, if (std.mem.lastIndexOfScalar(u8, path, '/')) |slash| path[0..slash] else "" }) catch return;
                     defer self.gpa.free(folder);
+        fn openDiagnostic(self: *Self, source: @import("diagnostic.zig").Location) void {
+            const opened = self.project orelse return;
+            const file = std.fs.path.resolve(self.gpa, &.{ opened.dir, source.path }) catch |err| {
+                std.log.err("cannot resolve source {s}: {t}", .{ source.path, err });
+                return self.workspace.toast("Couldn't open the source: see the Console");
+            };
+            defer self.gpa.free(file);
+            const choice = preferences.editor(&self.app.preference_values).code_editor;
+            code_editor.openAt(self.gpa, choice, opened.dir, file, source.line, source.column) catch |err| {
+                std.log.err("cannot open {s}:{d}:{d} in {t}: {t}. Pick another code editor in Edit > Preferences.", .{ source.path, source.line, source.column, choice, err });
+                self.workspace.toast("Couldn't open the source: see the Console");
+            };
+        }
+
                     file_manager.showFolder(self.gpa, folder) catch |err| std.log.err("cannot show {s}: {t}", .{ path, err });
                 },
                 .copy_path => |path| {
@@ -1423,12 +1439,10 @@ pub fn Editor(comptime project: type) type {
             try self.game_input.route(&self.app, game, value, rect, .{ @floatFromInt(width), @floatFromInt(height) }, self.play_mode.running());
         }
 
-        /// The project named by `--project <dir>` in `args`, if any, read from its `eggy.zon`
-        /// (caller-owned; see `freeProject`), after titling `window` after it.
+        /// Open the explicit project, else discover this editor's matching source project.
+        /// Caller-owned (see `freeProject`); titles `window` after the project's `eggy.zon`.
         fn openProject(gpa: std.mem.Allocator, window: sdl3.video.Window, args: []const [*:0]const u8) !?workspace_zig.Project {
-            const dir = for (args, 0..) |arg, i| {
-                if (std.mem.eql(u8, std.mem.span(arg), "--project") and i + 1 < args.len) break std.mem.span(args[i + 1]);
-            } else return null;
+            const discovery = @import("projects/discovery.zig");
             var threaded: std.Io.Threaded = .init_single_threaded;
             const io = threaded.io();
             var project_root = std.Io.Dir.cwd().openDir(io, dir, .{}) catch |err| {
@@ -1521,6 +1535,14 @@ pub fn Editor(comptime project: type) type {
             try self.startBuild(.{ .link = self.upgrades.developer_dir.? });
         }
 
+            const dir = if (try discovery.explicitDirectory(args)) |requested|
+                try std.Io.Dir.cwd().realPathFileAlloc(io, requested, gpa)
+            else
+                (discovery.find(gpa, io, project.name, try sdl3.filesystem.getBasePath(), ".") catch |err| {
+                    std.log.err("cannot discover project {s}: {t}", .{ project.name, err });
+                    return err;
+                }) orelse return null;
+            defer gpa.free(dir);
         /// Start `action`'s job on the open project as `rebuild`, and the Build progress window
         /// that follows it.
         pub fn startBuild(self: *Self, action: job_zig.Action) !void {
@@ -2189,3 +2211,6 @@ test "the editor compiles for a project" {
     };
     std.testing.refAllDecls(Editor(project));
 }
+    _ = @import("projects/build_output.zig");
+    _ = @import("projects/discovery.zig");
+    _ = @import("diagnostic.zig");

@@ -238,6 +238,7 @@ fn addProject(b: *std.Build, engine: *std.Build, emscripten: Emscripten, target:
         },
     });
     const editor_app = addDesktopApp(b, target, editor_module, b.fmt("{s}_editor", .{options.name}));
+    editor_app.run.setCwd(b.path("."));
     const resources = installEditorResources(b, engine);
     // Beside the editor on every platform, where it looks for it.
     const install_library = b.addInstallArtifact(game_library, .{ .dest_dir = .{ .override = .bin }, .implib_dir = .disabled, .pdb_dir = .disabled });

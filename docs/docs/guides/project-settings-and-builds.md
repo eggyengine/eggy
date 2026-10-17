@@ -30,6 +30,13 @@ A game package has `src/main.zig` with `pub const Game`; a reusable plugin/libra
 same configuration, including executable metadata and the startup scene.
 The runtime is named after the game and the editor is `<name>_editor`.
 
+Opening `<name>_editor` directly finds the matching project above the executable, including
+the usual `zig-out/bin/` layout. It checks `eggy.zon`'s name and requires `build.zig` and
+`build.zig.zon`, so a copied editor without its source project stays standalone.
+If none is found there, it checks the launch directory and its parents; `zig build run`
+launches from the project's root, including with a custom install prefix.
+Use `--project <directory>` to choose a project explicitly instead.
+
 Developer input overrides live beside this file in `controls.zon`. **Edit > Input Mappings**
 edits them; runtime builds embed them. They are not player preferences.
 See [Input mappings](input-mappings.md).
@@ -80,3 +87,27 @@ complete it synchronously. Errors and progress use the Console and Build window.
 Scene/file tools and undo groups are covered in [Editor tools](editor-tools.md).
 Logging uses `std.log.scoped`, which the editor routes to its Console; no separate logger
 is needed.
+
+## Console messages
+
+Use **Errors**, **Warnings**, **Info**, and **Debug** to choose which levels are visible;
+they can be combined, or leave only **Errors** enabled. The text filter searches the
+message and its details. Debug messages start hidden unless enabled in Preferences.
+
+The Console keeps its dark terminal background, monospace text, and severity colours.
+Click a message line to open its selectable, copyable details; click it again to
+close them. Build errors keep their source excerpt, notes, and reference trace together,
+even with **Info** disabled. The Console omits Zig's build-step tree, failed command lines,
+and redundant build summaries. The Build window still provides the raw output.
+
+Source links open the file at its line and column in your chosen code editor
+(**Edit > Preferences > Code editor**). When a compiler error points into Eggy but includes
+a declaration in your project, the link prefers that declaration. Old `editorUi` and
+`editorPanelUi` signatures are reported with the project declaration and the expected
+signature, while retaining the compiler's original diagnostic in the details.
+The system-default editor opens the file but may not jump to the source position.
+
+**Hide message** dismisses the open message without deleting it; **Restore hidden** brings
+dismissed messages back through the current filters. **Clear** deletes the log.
+**Copy shown** copies the filtered messages with their details; **Copy message** copies
+the open message, or the selected text in its details.
