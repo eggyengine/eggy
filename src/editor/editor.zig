@@ -19,7 +19,7 @@ const Upgrades = @import("projects/upgrades.zig").Upgrades;
 const file_manager = @import("file_manager.zig");
 const BuildWindow = @import("build_window.zig").BuildWindow;
 const ExportWindow = @import("export_window.zig").ExportWindow;
-const ProjectSettingsWindow = @import("project_settings.zig").ProjectSettingsWindow;
+const ProjectSettings = @import("project_settings.zig").ProjectSettings;
 const DevtoolsWindow = @import("devtools_window.zig").DevtoolsWindow;
 const AboutWindow = @import("about_window.zig").AboutWindow;
 const window_placement = @import("window_placement.zig");
@@ -54,6 +54,8 @@ const GameInput = @import("game_input.zig").State;
 const InputSettings = @import("input_settings.zig").InputSettings;
 const InputMappingsWindow = @import("input_mappings.zig").InputMappingsWindow;
 const input_map_asset = @import("input_map_asset/input_map_asset.zig");
+/// The Preferences section File > Project Settings opens.
+const project_section = "Project";
 
 /// The editor for `project`, which declares `name` and `game_library` (the game library's
 /// `file_name`, beside the editor). The game and its plugins run as they do in the runtime,
@@ -106,7 +108,8 @@ pub fn Editor(comptime project: type) type {
         /// File > Export, while open.
         export_window: ?*ExportWindow = null,
         /// File > Project Settings, while open.
-        settings_window: ?*ProjectSettingsWindow = null,
+        /// The Preferences window's Project section, while that window is open on a project.
+        project_settings: ?*ProjectSettings = null,
         /// The Inspector's UI (the game's and plugins' `editorUi`), and the font every page shares.
         ui: ui.Context,
         /// JetBrains Mono, in `ui`'s font's atlas, for terminal output. On the heap, as views keep it.
@@ -323,7 +326,7 @@ pub fn Editor(comptime project: type) type {
             if (self.about_window) |window| window.close(&self.app.graphics);
             if (self.preferences_window) |window| window.close(&self.app.graphics);
             if (self.export_window) |window| window.close(&self.app.graphics);
-            if (self.settings_window) |window| window.close(&self.app.graphics);
+            if (self.project_settings) |settings| settings.close();
             if (self.save_prompt) |prompt| prompt.close(&self.app.graphics);
             // The dock as this user left it, for the next editor.
             layout_file.save(self.gpa, self.preference_folders.global, &self.workspace.dock, self.workspace.seen_plugin_panels.items);
@@ -524,15 +527,11 @@ pub fn Editor(comptime project: type) type {
             if (self.preferences_window) |window| {
                 const flipped = try window.update(&self.app.graphics, &self.ui, try self.preferenceSections(frame_arena.allocator()), &self.app.preference_values, self.preference_folders, &self.history);
                 if (flipped) |plugin| self.flipPlugin(plugin);
-            }
-            // File > Project Settings, if open: what it changes is a step to undo.
-            if (self.settings_window) |window| {
-                const result = try window.update(&self.app.graphics, &self.ui);
-                if (result.change) |change| self.history.recordProjectSettings(change.before, change.after, self.workspace.time_ms);
-                if (!result.open) {
-                    window.close(&self.app.graphics);
-                    self.settings_window = null;
-                }
+                // Its Project section writes eggy.zon as it changes: a step to undo.
+                if (self.project_settings) |settings| if (settings.save() catch |err| blk: {
+                    std.log.err("cannot write {s}: {t}", .{ eggy.project.file_name, err });
+                    break :blk null;
+                }) |change| self.history.recordProjectSettings(change.before, change.after, self.workspace.time_ms);
             }
             // File > Export, if open.
             if (self.export_window) |window| {
@@ -540,7 +539,7 @@ pub fn Editor(comptime project: type) type {
                 // Choosing the scene it starts in keeps it as the default: a step to undo.
                 if (result.change) |change| {
                     self.history.recordProjectSettings(change.before, change.after, self.workspace.time_ms);
-                    if (self.settings_window) |settings| settings.reload() catch {};
+                    if (self.project_settings) |settings| settings.reload() catch {};
                 }
                 if (!result.open) {
                     window.close(&self.app.graphics);
@@ -1064,7 +1063,7 @@ pub fn Editor(comptime project: type) type {
                 },
                 .project_settings => |change| {
                     try files.writeFile(io, .{ .sub_path = eggy.project.file_name, .data = change.value(direction) });
-                    if (self.settings_window) |window| try window.reload();
+                    if (self.project_settings) |settings| try settings.reload();
                 },
                 .input_bindings => |change| {
                     const settings = self.input_settings orelse return error.NoProject;
@@ -1138,14 +1137,35 @@ pub fn Editor(comptime project: type) type {
             self.workspace.scene_unsaved = false;
         }
 
-        /// The Preferences window's sections: the editor's, then (with a project) each plugin's that
-        /// has any, the game's titled after the project. In `arena`.
+        /// Open Edit > Preferences, with the open project's `eggy.zon` for its Project section.
+        fn openPreferences(self: *Self) void {
+            if (self.preferences_window != null) return;
+            self.preferences_window = preferences.PreferencesWindow.open(self.gpa, &self.app.graphics, self.ui.font) catch |err| {
+                std.log.err("cannot open Preferences: {t}", .{err});
+                return;
+            };
+            if (self.project) |opened| self.project_settings = ProjectSettings.open(self.gpa, opened.dir) catch |err| blk: {
+                std.log.err("cannot read {s}: {t}", .{ eggy.project.file_name, err });
+                break :blk null;
+            };
+        }
+
+        fn closePreferences(self: *Self) void {
+            if (self.preferences_window) |window| window.close(&self.app.graphics);
+            self.preferences_window = null;
+            if (self.project_settings) |settings| settings.close();
+            self.project_settings = null;
+        }
+
+        /// The Preferences window's sections: the editor's, then (with a project) its eggy.zon,
+        /// each plugin's that has any, the game's titled after the project. In `arena`.
         fn preferenceSections(self: *const Self, arena: std.mem.Allocator) ![]const preferences.Section {
             var sections: std.ArrayList(preferences.Section) = .empty;
             try sections.append(arena, .{ .title = "Editor", .subtitle = "How the editor looks and behaves.", .content = .{ .preferences = preferences.editor_manifest } });
             // Plugins' switches and preferences are the project's: without one, there is nowhere to
             // keep them.
             if (self.project == null) return sections.items;
+            if (self.project_settings) |settings| try sections.append(arena, .{ .title = project_section, .subtitle = "This project's title, version and how its game starts.", .content = .{ .project = settings } });
             const game = if (self.game) |*loaded| loaded else return sections.items;
             // Every plugin but the game, which can't be turned off.
             const plugins = try arena.alloc(preferences.Plugin, game.plugin_keys.len -| 1);
@@ -1320,14 +1340,11 @@ pub fn Editor(comptime project: type) type {
             // Edit > Preferences' window takes its own events; closing it, or Escape, closes it.
             if (self.preferences_window) |window| {
                 if (window.closeRequested(curr_event)) {
-                    window.close(&self.app.graphics);
-                    self.preferences_window = null;
+                    self.closePreferences();
                     return .run;
                 }
                 if (window.handle(curr_event)) return self.toolWindowTook(curr_event);
             }
-            // File > Project Settings' window takes its own events.
-            if (self.settings_window) |window| if (window.handle(curr_event)) return self.toolWindowTook(curr_event);
             // File > Export's window takes its own events.
             if (self.export_window) |window| if (window.handle(curr_event)) return self.toolWindowTook(curr_event);
             // Help > DevTools' window takes its own events; while inspecting, the main window's
@@ -1465,11 +1482,14 @@ pub fn Editor(comptime project: type) type {
                     };
                 },
                 .save => self.saveScene(),
-                .project_settings => if (self.settings_window == null) if (self.project) |opened| {
-                    self.settings_window = ProjectSettingsWindow.open(self.gpa, &self.app.graphics, self.ui.font, opened.dir) catch |err| blk: {
-                        std.log.err("cannot open Project Settings: {t}", .{err});
-                        break :blk null;
-                    };
+                // Project Settings are the Preferences window's Project section.
+                .project_settings => if (self.project != null) {
+                    self.openPreferences();
+                    if (self.preferences_window) |window| {
+                        var arena = std.heap.ArenaAllocator.init(self.gpa);
+                        defer arena.deinit();
+                        window.show(try self.preferenceSections(arena.allocator()), project_section);
+                    }
                 },
                 .export_game => if (self.export_window == null) if (self.project) |opened| {
                     self.export_window = ExportWindow.open(self.gpa, &self.app.graphics, self.ui.font, self.mono, opened.dir) catch |err| blk: {
@@ -1479,12 +1499,7 @@ pub fn Editor(comptime project: type) type {
                 },
                 .undo => self.undoOrRedo(.undo),
                 .redo => self.undoOrRedo(.redo),
-                .preferences => if (self.preferences_window == null) {
-                    self.preferences_window = preferences.PreferencesWindow.open(self.gpa, &self.app.graphics, self.ui.font) catch |err| blk: {
-                        std.log.err("cannot open Preferences: {t}", .{err});
-                        break :blk null;
-                    };
-                },
+                .preferences => self.openPreferences(),
                 .input_mappings => if (self.input_mappings_window == null) {
                     self.input_mappings_window = try InputMappingsWindow.open(self.gpa, &self.app.graphics, self.ui.font);
                 },

@@ -26,8 +26,9 @@ A game package has `src/main.zig` with `pub const Game`; a reusable plugin/libra
 }
 ```
 
-`name` is the package/build name. Players see `title`. File > Project Settings edits the
-same configuration, including executable metadata and the startup scene.
+`name` is the package/build name. Players see `title`. The Project section of Edit > Preferences (File > Project
+Settings opens it) edits the same configuration, including executable metadata and the
+startup scene.
 The runtime is named after the game and the editor is `<name>_editor`.
 
 Opening `<name>_editor` directly finds the matching project above the executable, including

@@ -66,7 +66,7 @@ pub const Outcome = union(enum) {
     save,
     /// File > Export: open the Export window.
     export_game,
-    /// File > Project Settings: open the Project Settings window.
+    /// File > Project Settings: open Preferences on its Project section.
     project_settings,
     /// Edit > Undo (Ctrl+Z) and Redo (Ctrl+Shift+Z, Ctrl+Y).
     undo,

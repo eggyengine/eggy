@@ -1,5 +1,6 @@
-//! Edit > Preferences: a section for the editor's preferences and, with a project open, one with
-//! a switch for each of its plugins and one for each plugin's preferences, each field with the
+//! Edit > Preferences: a section for the editor's preferences and, with a project open, one for
+//! its `eggy.zon` (`project_settings.zig`), one with a switch for each of its plugins and one for
+//! each plugin's preferences, each field with the
 //! control its kind calls for. The editor's apply to every
 //! project (the global layer) or to this one (its `.eggy/`), which overrides the global value; a
 //! plugin's apply to the project only. Reset drops a scope's value. Every change is saved as it
@@ -15,6 +16,7 @@ const ToolWindow = @import("../tool_window.zig").ToolWindow;
 const files = @import("preferences.zig");
 const History = @import("../history.zig").History;
 const page_style = @import("../page_style.zig");
+const ProjectSettings = @import("../project_settings.zig").ProjectSettings;
 const restyle = page_style.restyle;
 const smallText = page_style.smallText;
 const noteText = page_style.noteText;
@@ -29,6 +31,8 @@ pub const Section = struct {
         preferences: prefs.Manifest,
         /// The project's plugins, each with its switch.
         plugins: []const Plugin,
+        /// The project's `eggy.zon`, which the caller saves after each frame.
+        project: *ProjectSettings,
     },
 };
 
@@ -71,6 +75,14 @@ pub const PreferencesWindow = struct {
         errdefer gpa.destroy(self);
         self.* = .{ .gpa = gpa, .window = try ToolWindow.open(gpa, graphics, font, "Preferences", .{ 620, 520 }, .{ .resizable = true }) };
         return self;
+    }
+
+    /// Show the section titled `title`, if `sections` has one.
+    pub fn show(self: *PreferencesWindow, sections: []const Section, title: []const u8) void {
+        for (sections, 0..) |section, i| if (std.mem.eql(u8, section.title, title)) {
+            self.section = i;
+            self.synced = null;
+        };
     }
 
     pub fn close(self: *PreferencesWindow, graphics: *eggy.Graphics) void {
@@ -167,6 +179,11 @@ pub const PreferencesWindow = struct {
                 context.end();
                 restyle(context, .{ .direction = .row, .gap = 16, .align_items = .center });
                 return self.pluginCards(context, plugins);
+            },
+            .project => |settings| {
+                context.end();
+                restyle(context, .{ .direction = .row, .gap = 16, .align_items = .center });
+                return settings.build(context);
             },
         };
         const is_editor = std.mem.eql(u8, manifest.key, files.editor_key);
