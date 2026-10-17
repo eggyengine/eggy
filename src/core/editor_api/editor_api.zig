@@ -73,11 +73,14 @@ pub const Context = struct {
     pub fn changeComponent(self: *Context, entity: ecs.EntityId, change: anytype) !void {
         const T = @TypeOf(change.before);
         comptime {
+            if (@typeInfo(T) != .@"struct") @compileError("component edits require a component struct");
             if (@TypeOf(change) != action.Action(T)) @compileError("changeComponent expects Action(Component)");
             if (!components.editableType(T)) @compileError("history edits require plain component data");
         }
         if (!self.app.world.isAlive(entity)) return error.InvalidEntity;
         const value = self.app.world.get(entity, T) orelse return error.NoComponent;
+        try components.validateSnapshot(T, &change.before);
+        try components.validateSnapshot(T, &change.after);
         if (!try components.valuesEqual(self.app.world.allocator, T, value, &change.before)) return error.StaleAction;
         if (try components.valuesEqual(self.app.world.allocator, T, &change.before, &change.after)) return;
         _ = try self.send(.{ .operation = .begin_edit });

@@ -205,7 +205,7 @@ pub const Scene = struct {
     }
 
     fn captureEntity(arena: std.mem.Allocator, world: *ecs.World, access: Access, entity: ecs.EntityId, parent: ?usize) !Entity {
-        var buffer: [4096]u8 = undefined;
+        var buffer: [components.max_field_bytes]u8 = undefined;
         const name = if (access.name(world, entity, &buffer)) |text| try arena.dupe(u8, text) else "";
         var list: std.ArrayList(Component) = .empty;
         for (access.types(), 0..) |info, component| {
@@ -268,7 +268,7 @@ pub const Scene = struct {
                         try deferred.append(gpa, .{ .entity = entity.*, .component = index, .field = field_index, .place = ref.scene });
                         continue;
                     };
-                    var buffer: [4097]u8 = undefined;
+                    var buffer: [components.max_field_bytes + 1]u8 = undefined;
                     const text = std.fmt.bufPrintZ(&buffer, "{s}", .{field.value}) catch {
                         skipped += 1;
                         continue;

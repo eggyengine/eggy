@@ -18,6 +18,7 @@
 const std = @import("std");
 const ecs = @import("clutch");
 const refs = @import("refs.zig");
+pub const max_field_bytes = 4096;
 
 /// How the Inspector edits a field: references (`refs.zig`) take what is dragged onto them.
 pub const Kind = enum(u8) { bool, int, float, @"enum", other, entity, asset };
@@ -176,11 +177,8 @@ pub fn Registry(comptime types: []const type, comptime owners: []const [:0]const
                 const value = world.get(entity, T) orelse return error.NoComponent;
                 inline for (@typeInfo(T).@"struct".fields, 0..) |struct_field, j| if (j == field) {
                     if (comptime !editableType(struct_field.type)) return error.NotEditable;
-                    var scratch: [16 * 1024]u8 = undefined;
-                    var fba = std.heap.FixedBufferAllocator.init(&scratch);
                     const target = &@field(value.*, struct_field.name);
-                    const stored = try std.zon.parse.fromSliceAlloc(Stored(struct_field.type), fba.allocator(), text, null, .{});
-                    target.* = try restore(struct_field.type, stored);
+                    target.* = try parseFieldValue(struct_field.type, text);
                     world.markChanged(entity, T);
                     return;
                 };
@@ -352,6 +350,34 @@ fn store(comptime T: type, value: *const T) Stored(T) {
         else => comptime unreachable,
     }
     return out;
+}
+
+fn parseFieldValue(comptime T: type, text: [:0]const u8) error{ ParseZon, OutOfMemory }!T {
+    var scratch: [16 * 1024]u8 = undefined;
+    var fba = std.heap.FixedBufferAllocator.init(&scratch);
+    const stored = try std.zon.parse.fromSliceAlloc(Stored(T), fba.allocator(), text, null, .{});
+    return restore(T, stored);
+}
+
+/// Check that every field fits the current scene buffer and can be parsed back before an
+/// editor action changes it. Runtime-only pointer data is rejected by `editableType`.
+pub fn validateSnapshot(comptime T: type, value: *const T) !void {
+    if (T == @import("name.zig").Name) return;
+    // ponytail: fields have a 4 KiB text/16 KiB parse budget, add sized field reads to the ABI before accepting larger snapshots.
+    inline for (std.meta.fields(T)) |field| {
+        var buffer: [max_field_bytes + 1]u8 = undefined;
+        var writer: std.Io.Writer = .fixed(buffer[0..max_field_bytes]);
+        std.zon.stringify.serialize(store(field.type, &@field(value.*, field.name)), .{ .whitespace = false }, &writer) catch return error.ValueTooLarge;
+        buffer[writer.end] = 0;
+        _ = try parseFieldValue(field.type, buffer[0..writer.end :0]);
+    }
+}
+
+test "typed snapshots preflight the actual field size and parse budget" {
+    const Small = struct { value: u32 = 42, texture: refs.AssetRef(.image) = .init("ship.png") };
+    try validateSnapshot(Small, &Small{});
+    const Large = struct { values: [max_field_bytes]u8 = @splat(1) };
+    try std.testing.expectError(error.ValueTooLarge, validateSnapshot(Large, &Large{}));
 }
 
 /// Compare values as scenes store them, excluding unused reference buffers. Allocates
