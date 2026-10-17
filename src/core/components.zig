@@ -263,7 +263,8 @@ fn shortName(comptime T: type) [:0]const u8 {
 
 /// Whether values of `T` are plain data: no pointers, functions or other things ZON can't parse
 /// without allocating.
-fn editableType(comptime T: type) bool {
+/// Whether scene/editor values can be changed without retaining arbitrary owned pointers.
+pub fn editableType(comptime T: type) bool {
     return switch (@typeInfo(T)) {
         .bool, .int, .float, .@"enum" => true,
         .array => |info| editableType(info.child),
@@ -353,7 +354,19 @@ fn store(comptime T: type, value: *const T) Stored(T) {
     return out;
 }
 
-/// `stored` back as a `T`. Fails with `error.ParseZon` for a path too long for an `AssetRef`.
+/// Compare values as scenes store them, excluding unused reference buffers. Allocates
+/// temporary serialization buffers; never compares borrowed addresses.
+pub fn valuesEqual(gpa: std.mem.Allocator, comptime T: type, a: *const T, b: *const T) !bool {
+    var left: std.Io.Writer.Allocating = .init(gpa);
+    defer left.deinit();
+    var right: std.Io.Writer.Allocating = .init(gpa);
+    defer right.deinit();
+    try std.zon.stringify.serialize(store(T, a), .{ .whitespace = false }, &left.writer);
+    try std.zon.stringify.serialize(store(T, b), .{ .whitespace = false }, &right.writer);
+    return std.mem.eql(u8, left.written(), right.written());
+}
+
+/// `stored` back as a `T`. Fails with `error.ParseZon` for an invalid `AssetRef`.
 fn restore(comptime T: type, stored: Stored(T)) error{ParseZon}!T {
     if (comptime refs.refKind(T)) |kind| switch (kind) {
         .entity => return .init(stored),

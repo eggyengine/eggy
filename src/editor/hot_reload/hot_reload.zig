@@ -25,6 +25,7 @@ pub const HotGame = struct {
     state: ?*anyopaque,
     /// The game's panels, copied out of the library, as the editor shows them across swaps.
     panels: []eggy.plugins.EditorPanel,
+    commands: []const eggy.plugins.EditorCommand = &.{},
     /// Each plugin's preferences, copied out of the library into `manifest_arena`.
     preference_manifests: []const eggy.preferences.Manifest = &.{},
     /// The game's and each plugin's key, the game first, copied into `manifest_arena` too.
@@ -108,9 +109,9 @@ pub const HotGame = struct {
     }
 
     /// Run a frame of the plugins' editor tools (not playing), if the game is running.
-    pub fn editorUpdate(self: *HotGame, app: *eggy.App) void {
+    pub fn editorUpdate(self: *HotGame, editor: *eggy.editor.Context) void {
         const state = self.state orelse return;
-        _ = self.game.editor_update(state, app);
+        _ = self.game.editor_update(state, editor);
     }
 
     /// Start the game over on `scene` without reloading it: stop its plugins, empty the world,
@@ -143,14 +144,20 @@ pub const HotGame = struct {
         _ = self.game.event(state, app, &curr_event);
     }
 
-    pub fn editorUi(self: *HotGame, context: *eggy.ui.Context) void {
+    pub fn editorUi(self: *HotGame, editor: *eggy.editor.Context, context: *eggy.ui.Context) void {
         const state = self.state orelse return context.muted("The game isn't running: see the Console. It starts again when its code is rebuilt.");
-        self.game.editor_ui(state, context);
+        self.game.editor_ui(state, editor, context);
     }
 
-    pub fn editorPanelUi(self: *HotGame, panel: usize, context: *eggy.ui.Context) void {
+    pub fn editorPanelUi(self: *HotGame, panel: usize, editor: *eggy.editor.Context, context: *eggy.ui.Context) void {
         const state = self.state orelse return;
-        if (panel < self.panels.len) self.game.editor_panel_ui(state, panel, context);
+        if (panel < self.panels.len) self.game.editor_panel_ui(state, panel, editor, context);
+    }
+
+    pub fn editorCommand(self: *HotGame, command: usize, editor: *eggy.editor.Context) void {
+        const state = self.state orelse return;
+        if (command >= self.commands.len) return;
+        self.game.editor_command(state, command, editor);
     }
 
     /// Copy the library and load the copy.
@@ -184,13 +191,28 @@ pub const HotGame = struct {
         if (game.version != api.version) return error.GameLibraryVersionMismatch;
         const panels = try gpa.alloc(eggy.plugins.EditorPanel, game.panel_count);
         errdefer gpa.free(panels);
-        for (panels, game.panels[0..game.panel_count]) |*panel, source| panel.* = .{ .title = try gpa.dupeZ(u8, std.mem.span(source.title)) };
+        var panel_count: usize = 0;
+        errdefer for (panels[0..panel_count]) |panel| {
+            gpa.free(panel.key);
+            gpa.free(panel.title);
+        };
+        for (panels, game.panels[0..game.panel_count]) |*panel, source| {
+            const key = try gpa.dupeZ(u8, std.mem.span(source.key));
+            errdefer gpa.free(key);
+            panel.* = .{ .key = key, .title = try gpa.dupeZ(u8, std.mem.span(source.title)) };
+            panel_count += 1;
+        }
 
         const manifests = try copyManifests(self.manifest_arena.allocator(), game.preferences[0..game.preference_count]);
         const component_types = try copyComponentTypes(self.manifest_arena.allocator(), game.components[0..game.component_count]);
         const plugin_keys = try self.manifest_arena.allocator().alloc([:0]const u8, game.plugin_count);
         for (plugin_keys, game.plugin_keys[0..game.plugin_count]) |*key, source| key.* = try self.manifest_arena.allocator().dupeZ(u8, std.mem.span(source));
-        self.* = .{ .gpa = gpa, .path = self.path, .copy_path = copy_path, .library = library, .game = game, .state = null, .panels = panels, .loads = self.loads, .preference_manifests = manifests, .component_types = component_types, .plugin_keys = plugin_keys, .manifest_arena = self.manifest_arena };
+        const commands = try self.manifest_arena.allocator().alloc(eggy.plugins.EditorCommand, game.command_count);
+        for (commands, game.commands[0..game.command_count]) |*command, source| command.* = .{
+            .key = try self.manifest_arena.allocator().dupeZ(u8, std.mem.span(source.key)),
+            .title = try self.manifest_arena.allocator().dupeZ(u8, std.mem.span(source.title)),
+        };
+        self.* = .{ .gpa = gpa, .path = self.path, .copy_path = copy_path, .library = library, .game = game, .state = null, .panels = panels, .commands = commands, .loads = self.loads, .preference_manifests = manifests, .component_types = component_types, .plugin_keys = plugin_keys, .manifest_arena = self.manifest_arena };
     }
 
     /// Stop the game, empty the world while its code is still loaded, and unload and delete the copy.
@@ -201,9 +223,13 @@ pub const HotGame = struct {
         app.resetWorld();
         // The types the game registered its preferences under go with its code.
         app.preference_values.forgetTypes();
-        for (self.panels) |panel| self.gpa.free(panel.title);
+        for (self.panels) |panel| {
+            self.gpa.free(panel.key);
+            self.gpa.free(panel.title);
+        }
         self.gpa.free(self.panels);
         self.panels = &.{};
+        self.commands = &.{};
         self.preference_manifests = &.{};
         self.component_types = &.{};
         self.plugin_keys = &.{};

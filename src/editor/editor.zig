@@ -48,6 +48,7 @@ const assets = @import("assets/assets.zig");
 const AssetIcons = @import("assets/icons.zig").Icons;
 const descriptors = @import("assets/descriptors.zig");
 const ProjectAssets = @import("assets/project_assets.zig").ProjectAssets;
+const extensions = @import("extensions/extensions.zig");
 
 /// The editor for `project`, which declares `name` and `game_library` (the game library's
 /// `file_name`, beside the editor). The game and its plugins run as they do in the runtime,
@@ -57,6 +58,7 @@ pub fn Editor(comptime project: type) type {
     return struct {
         gpa: std.mem.Allocator,
         app: eggy.App,
+        extension_state: extensions.State = .{},
         /// The game and its plugins, from their library; null if it couldn't load (logged).
         game: ?HotGame,
         /// When the game's library was built, to tell whether a rebuild changed it.
@@ -266,6 +268,7 @@ pub fn Editor(comptime project: type) type {
             errdefer if (game) |*loaded| loaded.deinit(&app);
             if (game) |loaded| {
                 workspace.setPluginPanels(loaded.panels);
+                workspace.plugin_commands = loaded.commands;
                 preferences.writeRegistry(gpa, preference_folders, loaded.plugin_keys, loaded.preference_manifests, plugin_switches.off()) catch |err| std.log.warn("cannot update .eggy/plugins.zon: {t}", .{err});
             }
             // The project's scene first, so the game's plugins start among its entities.
@@ -294,6 +297,7 @@ pub fn Editor(comptime project: type) type {
         }
 
         pub fn deinit(self: *Self) void {
+            self.extension_state.deinit(self.gpa);
             if (self.game) |*game| game.deinit(&self.app);
             if (self.project_flow) |flow| flow.close(&self.app.graphics);
             if (self.build_window) |window| window.close(&self.app.graphics);
@@ -360,7 +364,10 @@ pub fn Editor(comptime project: type) type {
                     self.app.time.tick(sdl3.timer.getNanosecondsSinceInit());
                     game.update(&self.app);
                     self.app.input.endFrame();
-                } else game.editorUpdate(&self.app);
+                } else {
+                    var editor_context = extensions.context(self);
+                    game.editorUpdate(&editor_context);
+                }
             };
             try self.syncPopOuts();
             self.keepLayout();
@@ -449,7 +456,10 @@ pub fn Editor(comptime project: type) type {
                         if (self.assets_panel.build(page_ui, if (self.project) |opened| opened.dir else null, &self.asset_icons, self.openScenePath())) |action| self.applyAssetAction(action);
                         if (self.assets_panel.view != view_before) self.rememberAssetsView();
                     },
-                    else => if (self.game) |*game| game.editorPanelUi(index - panels.first_plugin_page, page_ui),
+                    else => if (self.game) |*game| {
+                        var editor_context = extensions.context(self);
+                        game.editorPanelUi(index - panels.first_plugin_page, &editor_context, page_ui);
+                    },
                 }
                 // What is being dragged, named beside the pointer in the page it is over.
                 if (self.dragging(frame_arena.allocator())) |dragged| if (self.pageAt(self.workspace.pointer_slot, page_ui.pointer.x, page_ui.pointer.y) == index) {
@@ -751,7 +761,7 @@ pub fn Editor(comptime project: type) type {
 
         /// Open the scene `action` names, or make a new one, as a step to undo: undoing it puts
         /// back the scene open before, as its world was.
-        fn openSceneStep(self: *Self, action: assets.Action) !void {
+        pub fn openSceneStep(self: *Self, action: assets.Action) !void {
             self.stopPlaying();
             const scene = if (self.open_scene) |*open| open else return;
             const game = if (self.game) |*loaded| loaded else return error.NoGameLibrary;
@@ -801,7 +811,7 @@ pub fn Editor(comptime project: type) type {
 
         /// The Assets panel's file changes: new folders, renaming, duplicating, deleting (into
         /// the project's trash). The open scene follows its file.
-        fn changeFiles(self: *Self, project_dir: []const u8, action: assets.Action) !void {
+        pub fn changeFiles(self: *Self, project_dir: []const u8, action: assets.Action) !void {
             var threaded: std.Io.Threaded = .init_single_threaded;
             const io = threaded.io();
             var files = try std.Io.Dir.cwd().openDir(io, project_dir, .{});
@@ -836,15 +846,11 @@ pub fn Editor(comptime project: type) type {
 
         /// The world as a scene file's text (caller-owned); null without a game library.
         fn sceneText(self: *Self) ?[]u8 {
-            const game = if (self.game) |*loaded| loaded else return null;
-            var scene = eggy.scene.Scene.capture(self.gpa, &self.app.world, game.sceneAccess(), self.entity_editor.roots(&self.app.world)) catch return null;
-            defer scene.deinit();
-            var text: std.Io.Writer.Allocating = .init(self.gpa);
-            scene.write(&text.writer) catch {
-                text.deinit();
+            if (self.game == null) return null;
+            return extensions.snapshot(self) catch |err| {
+                std.log.err("cannot capture the editor scene: {t}", .{err});
                 return null;
             };
-            return text.toOwnedSlice() catch null;
         }
 
         /// Whether a text field has the keyboard somewhere: changes made by typing wait for it.
@@ -875,7 +881,7 @@ pub fn Editor(comptime project: type) type {
         }
 
         /// Apply one direction, filling in where files went. History owns group traversal.
-        fn carry(self: *Self, step: *history_zig.Step, direction: eggy.Direction) !void {
+        pub fn carry(self: *Self, step: *history_zig.Step, direction: eggy.Direction) !void {
             const back = direction == .undo;
             const opened = self.project orelse return error.NoProject;
             var threaded: std.Io.Threaded = .init_single_threaded;
@@ -975,6 +981,15 @@ pub fn Editor(comptime project: type) type {
             };
             var message: [96]u8 = undefined;
             self.workspace.toast(std.fmt.bufPrint(&message, "Saved {s}", .{scene.name() orelse "the scene"}) catch "Saved");
+            self.workspace.scene_unsaved = false;
+        }
+
+        /// Checked save entry point used by synchronous editor-extension requests.
+        pub fn saveSceneForExtension(self: *Self) !void {
+            if (self.play_mode.playing()) return error.NotEditing;
+            const scene = if (self.open_scene) |*open| open else return error.NoProject;
+            const game = if (self.game) |*loaded| loaded else return error.NoGameLibrary;
+            try scene.save(&self.app.world, game.sceneAccess(), self.entity_editor.roots(&self.app.world));
             self.workspace.scene_unsaved = false;
         }
 
@@ -1201,6 +1216,10 @@ pub fn Editor(comptime project: type) type {
 
             const outcome: workspace_zig.Outcome = if (weeoui_sdl3.translate(curr_event)) |input| self.workspace.handle(slot, input) else .ignored;
             switch (outcome) {
+                .plugin_command => |command| if (self.game) |*game| {
+                    var editor_context = extensions.context(self);
+                    game.editorCommand(command, &editor_context);
+                },
                 .quit => if (self.mayLeave(.quit)) return .success,
                 .window => |button| if (button != .close or self.mayLeave(.quit)) {
                     if (weeoui_sdl3.windowAction(self.app.window.window, button)) return .success;
@@ -1528,6 +1547,7 @@ pub fn Editor(comptime project: type) type {
                 if (made.skipped > 0) std.log.warn("{d} components or fields didn't carry over the swap (see above)", .{made.skipped});
             } else |err| std.log.err("cannot put the scene back: {t}", .{err});
             self.workspace.setPluginPanels(game.panels);
+            self.workspace.plugin_commands = game.commands;
             preferences.writeRegistry(self.gpa, self.preference_folders, game.plugin_keys, game.preference_manifests, self.plugin_switches.off()) catch |err| std.log.warn("cannot update .eggy/plugins.zon: {t}", .{err});
             game.start(&self.app, self.plugin_switches.off(), .discard);
         }
@@ -1659,7 +1679,7 @@ pub fn Editor(comptime project: type) type {
 
         /// The project's files changed: the Assets panel lists them again, descriptors keep up,
         /// and scene instances are made again from their files.
-        fn filesChanged(self: *Self) void {
+        pub fn filesChanged(self: *Self) void {
             self.assets_panel.refreshSoon();
             self.syncDescriptors();
             self.app.sceneInstances().remakeAll();
@@ -1896,7 +1916,10 @@ pub fn Editor(comptime project: type) type {
         fn buildInspector(self: *Self) void {
             if (self.entity_editor.buildInspector(&self.ui, &self.app, self.gamePtr(), self.dragging(self.ui.builder().allocator), self.plugin_switches.off())) return;
             self.ui.heading(3, project.name);
-            if (self.game) |*game| game.editorUi(&self.ui) else self.ui.muted("The game's library didn't load: see the Console.");
+            if (self.game) |*game| {
+                var editor_context = extensions.context(self);
+                game.editorUi(&editor_context, &self.ui);
+            } else self.ui.muted("The game's library didn't load: see the Console.");
             self.ui.muted("Select an entity in the Hierarchy to see its components.");
         }
 

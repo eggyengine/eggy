@@ -7,7 +7,7 @@ const std = @import("std");
 const eggy = @import("eggy");
 
 /// Bumped whenever these types change, so an editor refuses a library built for another.
-pub const version: u32 = 16;
+pub const version: u32 = 17;
 
 /// The library's one exported function: `fn () callconv(.c) *const Game`.
 pub const entry_symbol = "eggy_game";
@@ -21,8 +21,10 @@ pub const Host = extern struct {
 
 /// A panel the game or a plugin adds to the editor's dock (`eggy.plugins.EditorPanel`).
 pub const Panel = extern struct {
+    key: [*:0]const u8,
     title: [*:0]const u8,
 };
+pub const Command = extern struct { key: [*:0]const u8, title: [*:0]const u8 };
 
 /// A field of a plugin's preferences (`eggy.preferences.Field`).
 pub const PreferenceField = extern struct {
@@ -90,17 +92,20 @@ pub const Game = extern struct {
     /// One frame: the plugins' `update`, then the world's Update stages. False when something
     /// failed this frame (logged, once until it changes); the game carries on regardless.
     update: *const fn (state: *anyopaque, app: *anyopaque) callconv(.c) bool,
-    /// A frame while the game isn't playing: the plugins' `editorUpdate`, not the world's
+    /// A borrowed `*eggy.editor.Context` while the game isn't playing: `editorUpdate`, not the world's
     /// systems. False when it failed this frame (logged, once until it changes).
-    editor_update: *const fn (state: *anyopaque, app: *anyopaque) callconv(.c) bool,
+    editor_update: *const fn (state: *anyopaque, editor: *anyopaque) callconv(.c) bool,
     /// An `*const eggy.Event`; false when a hook failed (and logged why).
     event: *const fn (state: *anyopaque, app: *anyopaque, event: *const anyopaque) callconv(.c) bool,
     /// The Inspector's part: an `*eggy.ui.Context`.
-    editor_ui: *const fn (state: *anyopaque, context: *anyopaque) callconv(.c) void,
+    editor_ui: *const fn (state: *anyopaque, editor: *anyopaque, context: *anyopaque) callconv(.c) void,
     /// Panel `panel` of `panels`, into an `*eggy.ui.Context`.
-    editor_panel_ui: *const fn (state: *anyopaque, panel: usize, context: *anyopaque) callconv(.c) void,
+    editor_panel_ui: *const fn (state: *anyopaque, panel: usize, editor: *anyopaque, context: *anyopaque) callconv(.c) void,
     panels: [*]const Panel,
     panel_count: usize,
+    commands: [*]const Command,
+    command_count: usize,
+    editor_command: *const fn (state: *anyopaque, command: usize, editor: *anyopaque) callconv(.c) void,
     /// Each plugin's preferences, for the Preferences window.
     preferences: [*]const Preferences,
     preference_count: usize,

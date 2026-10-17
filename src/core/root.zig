@@ -63,9 +63,11 @@ pub const storage = @import("storage.zig");
 pub const localization = @import("localization.zig");
 pub const debug_draw = @import("debug_draw.zig");
 pub const profiling = @import("profiling.zig");
+pub const editor = @import("editor_api/editor_api.zig");
 
 test {
     _ = @import("capabilities_test.zig");
+    _ = editor;
     _ = resources;
     _ = scenes;
     _ = @import("action.zig");

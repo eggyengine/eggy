@@ -56,6 +56,7 @@ pub const Command = enum(u32) {
 const window_item_first: u32 = first_id + 0x200;
 /// The "..." menu's rows: `overflow_first` + the folded menu's index in `menu_order`.
 const overflow_first: u32 = first_id + 0x300;
+const plugin_command_first: u32 = first_id + 0x10000;
 
 /// What the File menu can do for the project open in the editor.
 pub const ProjectState = struct {
@@ -79,10 +80,12 @@ pub const Action = union(enum) {
     /// Window > (panel): show it if hidden, else hide it.
     toggle_panel: u32,
     command: Command,
+    plugin_command: usize,
 };
 
 /// The menu bar's state: which menu is open.
 pub const Menubar = struct {
+    plugin_command_count: usize = 0,
     /// Trigger id of the open menu, or 0.
     open: u32 = 0,
     /// The "..." menu's row whose menu is open beside it, or 0.
@@ -91,11 +94,15 @@ pub const Menubar = struct {
     /// The menus as `widgets` draws them: the first `shown` (see `shownMenus`) on the bar and the
     /// rest in the "..." menu. Window lists each panel, the built-in ones then `plugin_panels`,
     /// checked while `layout` shows it.
-    pub fn list(_: *const Menubar, gpa: std.mem.Allocator, layout: *const dock.DockSpace, plugin_panels: []const eggy.plugins.EditorPanel, project: ProjectState, shown: usize) ![]const widgets.MenubarMenu {
+    pub fn list(self: *Menubar, gpa: std.mem.Allocator, layout: *const dock.DockSpace, plugin_panels: []const eggy.plugins.EditorPanel, plugin_commands: []const eggy.plugins.EditorCommand, project: ProjectState, shown: usize) ![]const widgets.MenubarMenu {
+        if (plugin_commands.len > 65536) return error.TooManyEditorCommands;
+        self.plugin_command_count = plugin_commands.len;
+        const command_items = try gpa.alloc(widgets.MenuItem, plugin_commands.len);
+        for (command_items, plugin_commands, 0..) |*item, command, index| item.* = .{ .id = plugin_command_first + @as(u32, @intCast(index)), .label = command.title };
         const built_in = std.enums.values(Panel);
         const window_items = try gpa.alloc(widgets.MenuItem, built_in.len + plugin_panels.len + 2);
         for (window_items[0 .. built_in.len + plugin_panels.len], 0..) |*item, i| {
-            const id: u32 = if (i < built_in.len) @intFromEnum(built_in[i]) else panels.plugin_first + @as(u32, @intCast(i - built_in.len));
+            const id: u32 = if (i < built_in.len) @intFromEnum(built_in[i]) else panels.pluginId(plugin_panels[i - built_in.len], i - built_in.len);
             item.* = .{ .id = window_item_first + id, .label = panels.panelTitle(id, plugin_panels), .kind = .checkbox, .checked = layout.nodeOf(id) != null };
         }
         window_items[window_items.len - 2] = .{ .kind = .separator };
@@ -128,7 +135,7 @@ pub const Menubar = struct {
                 .{ .kind = .separator },
                 .{ .id = @intFromEnum(Command.preferences), .label = "Preferences..." },
             } },
-            .{ .id = @intFromEnum(Menu.view), .label = Menu.view.label(), .items = &.{} },
+            .{ .id = @intFromEnum(Menu.view), .label = Menu.view.label(), .items = command_items },
             .{ .id = @intFromEnum(Menu.window), .label = Menu.window.label(), .items = window_items },
             .{ .id = @intFromEnum(Menu.help), .label = Menu.help.label(), .items = &.{
                 .{ .id = @intFromEnum(Command.devtools), .label = "DevTools", .shortcut = "F12" },
@@ -163,6 +170,7 @@ pub const Menubar = struct {
         }
         self.open = 0;
         self.open_submenu = 0;
+        if (id >= plugin_command_first and id - plugin_command_first < self.plugin_command_count) return .{ .plugin_command = id - plugin_command_first };
         if (id > window_item_first and id < window_item_first + dock.max_panel) return .{ .toggle_panel = id - window_item_first };
         const command = std.enums.fromInt(Command, id) orelse return .handled;
         return .{ .command = command };
@@ -234,6 +242,18 @@ fn drawDots(_: *const anyopaque, c: *ui.Canvas, r: ui.Rect) anyerror!void {
     }
 }
 
+test "plugin View commands dispatch their current index without storing callbacks" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var layout = dock.DockSpace.init();
+    var menubar = Menubar{};
+    const commands = [_]eggy.plugins.EditorCommand{.{ .key = "game/raise", .title = "Raise" }};
+    const list = try menubar.list(arena.allocator(), &layout, &.{}, &commands, .{}, menu_order.len);
+    try std.testing.expectEqualStrings("Raise", list[2].items[0].label);
+    _ = menubar.press(@intFromEnum(Menu.view));
+    try std.testing.expectEqual(Action{ .plugin_command = 0 }, menubar.press(list[2].items[0].id).?);
+}
+
 test "pressing a trigger opens its menu, and an item runs and closes it" {
     var menubar = Menubar{};
     try std.testing.expectEqual(Action.handled, menubar.press(@intFromEnum(Menu.file)).?);
@@ -261,7 +281,7 @@ test "menus that don't fit fold into the \"...\" menu, and its rows open them be
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     var layout = dock.DockSpace.init();
-    const list = try menubar.list(arena.allocator(), &layout, &.{}, .{}, shown);
+    const list = try menubar.list(arena.allocator(), &layout, &.{}, &.{}, .{}, shown);
     try std.testing.expectEqual(@as(usize, 3), list.len);
     try std.testing.expectEqual(@intFromEnum(Menu.more), list[2].id);
     try std.testing.expectEqualStrings("View", list[2].items[0].label);

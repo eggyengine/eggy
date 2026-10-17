@@ -259,7 +259,7 @@ pub const History = struct {
     /// literals; null: not set). Typing into a field changes it on every key, so a change to the
     /// same preference as the last step, within `typing_pause_ms`, joins that step.
     pub fn recordPreference(self: *History, layer: eggy.preferences.Store.Layer, key: []const u8, field: []const u8, before: ?[]const u8, after: ?[]const u8, now_ms: u64) void {
-        if (self.undo_steps.items.len > 0 and self.redo_steps.items.len == 0 and now_ms -| self.preference_at_ms < typing_pause_ms) {
+        if (self.group == null and self.undo_steps.items.len > 0 and self.redo_steps.items.len == 0 and now_ms -| self.preference_at_ms < typing_pause_ms) {
             const last = &self.undo_steps.items[self.undo_steps.items.len - 1];
             if (last.* == .preference and last.preference.layer == layer and std.mem.eql(u8, last.preference.key, key) and std.mem.eql(u8, last.preference.field, field)) {
                 const copy = if (after) |text| self.gpa.dupe(u8, text) catch return else null;
@@ -285,7 +285,7 @@ pub const History = struct {
     /// changes them on every key, so a change within `typing_pause_ms` of the last one, when
     /// that was one too, joins it.
     pub fn recordProjectSettings(self: *History, before: []u8, after: []u8, now_ms: u64) void {
-        if (self.undo_steps.items.len > 0 and self.redo_steps.items.len == 0 and now_ms -| self.preference_at_ms < typing_pause_ms) {
+        if (self.group == null and self.undo_steps.items.len > 0 and self.redo_steps.items.len == 0 and now_ms -| self.preference_at_ms < typing_pause_ms) {
             const last = &self.undo_steps.items[self.undo_steps.items.len - 1];
             if (last.* == .project_settings) {
                 self.gpa.free(last.project_settings.after);

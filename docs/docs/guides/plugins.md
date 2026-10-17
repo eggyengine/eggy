@@ -22,10 +22,13 @@ pub const Plugin = struct {
     pub fn deinit(self: *Plugin) void { ... }
     pub fn event(self: *Plugin, app: *eggy.App, event: eggy.Event) !void { ... }
     pub fn update(self: *Plugin, app: *eggy.App) !void { ... }
-    pub fn editorUi(self: *Plugin, ui: *eggy.ui.Context) void { ... }
+    pub fn editorUpdate(self: *Plugin, editor: *eggy.editor.Context) !void { ... }
+    pub fn editorUi(self: *Plugin, editor: *eggy.editor.Context, ui: *eggy.ui.Context) !void { ... }
 
-    pub const editor_panels = [_]eggy.plugins.EditorPanel{.{ .title = "Stats" }};
-    pub fn editorPanelUi(self: *Plugin, panel: usize, ui: *eggy.ui.Context) void { ... }
+    pub const editor_panels = [_]eggy.plugins.EditorPanel{.{ .key = "stats", .title = "Stats" }};
+    pub fn editorPanelUi(self: *Plugin, panel: usize, editor: *eggy.editor.Context, ui: *eggy.ui.Context) !void { ... }
+    pub const editor_commands = [_]eggy.plugins.EditorCommand{.{ .key = "reset", .title = "Reset" }};
+    pub fn editorCommand(self: *Plugin, command: usize, editor: *eggy.editor.Context) !void { ... }
 };
 ```
 
@@ -38,10 +41,13 @@ pub const Plugin = struct {
 | `editorUpdate` | Once per frame in the editor while not playing, for editor tools. |
 | `editorUi` | Each frame in the editor, to add to the Inspector panel. |
 | `editor_panels`, `editorPanelUi` | In the editor, to add dock panels of your own. See [Editor panels](#editor-panels). |
+| `editor_commands`, `editorCommand` | Commands in the editor's View menu. See [Editor tools](editor-tools.md). |
 | `Preferences` | Settings people change in the editor's Preferences window. See [Preferences](#preferences). |
 | `components` | ECS components the editor's Hierarchy and Inspector show, add and edit. See [Components](#components). |
 
 The editor-only hooks never run in the runtime, so the runtime pays nothing for them.
+They receive a borrowed `eggy.editor.Context`: use `editor.app` for the App and its services
+for selection, undoable edits, project settings, scenes, and files. Do not retain the context.
 
 ### Order
 
@@ -184,11 +190,12 @@ pub const Plugin = struct {
     clicks: u32 = 0,
 
     pub const editor_panels = [_]eggy.plugins.EditorPanel{
-        .{ .title = "Clicker" },
-        .{ .title = "About" },
+        .{ .key = "clicker", .title = "Clicker" },
+        .{ .key = "about", .title = "About" },
     };
 
-    pub fn editorPanelUi(self: *Plugin, panel: usize, ui: *eggy.ui.Context) void {
+    pub fn editorPanelUi(self: *Plugin, panel: usize, editor: *eggy.editor.Context, ui: *eggy.ui.Context) !void {
+        _ = editor;
         switch (panel) {
             0 => {
                 if (ui.button("Click me")) self.clicks += 1;
@@ -205,6 +212,10 @@ Each panel is a page of [Weeoui](https://eggyengine.github.io/weeoui/) UI that y
 New panels open as tabs beside the Inspector. The editor's **Window** menu lists every panel, yours included, so a closed panel can be brought back.
 
 The title appears on the panel's tab, in the Window menu, and on its window when popped out.
+The `key` identifies the panel independently of that title or its declaration order. Give it
+a stable key to preserve its layout when renaming it. A panel without a key uses its title.
+Keys are scoped to the plugin's published name; duplicate keys are compile errors and a
+rare dock-ID hash collision is reported instead of routing one panel to another.
 
 ## Preferences
 

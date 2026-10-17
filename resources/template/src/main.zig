@@ -12,7 +12,8 @@ pub const Game = struct {
     }
 
     /// Adds to the editor's panel. Never called in the runtime.
-    pub fn editorUi(self: *Game, ui: *eggy.ui.Context) void {
+    pub fn editorUi(self: *Game, editor: *eggy.editor.Context, ui: *eggy.ui.Context) !void {
+        _ = editor;
         ui.label("Frames: {d}", .{self.frames});
     }
 };

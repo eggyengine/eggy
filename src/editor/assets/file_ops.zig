@@ -45,6 +45,7 @@ pub fn duplicate(gpa: std.mem.Allocator, io: std.Io, project: std.Io.Dir, path: 
 /// Move `path` into `folder` ("" for the project), keeping its name. Returns the new path;
 /// caller-owned. Fails with `error.PathAlreadyExists` when the folder has one so named.
 pub fn moveInto(gpa: std.mem.Allocator, io: std.Io, project: std.Io.Dir, path: []const u8, folder: []const u8) ![]u8 {
+    try checkDestination(path, folder);
     const target = try join(gpa, folder, std.fs.path.basename(path));
     errdefer gpa.free(target);
     try move(io, project, path, target);
@@ -54,6 +55,7 @@ pub fn moveInto(gpa: std.mem.Allocator, io: std.Io, project: std.Io.Dir, path: [
 /// Copy `path` (a file, or a folder and everything in it) into `folder`, under its own name or,
 /// when that is taken, "<name> 2" and so on. Returns the copy's path; caller-owned.
 pub fn copyInto(gpa: std.mem.Allocator, io: std.Io, project: std.Io.Dir, path: []const u8, folder: []const u8) ![]u8 {
+    try checkDestination(path, folder);
     const target = try freeTarget(gpa, io, project, folder, std.fs.path.basename(path));
     errdefer gpa.free(target);
     try copyTree(gpa, io, project, path, project, target);
@@ -159,6 +161,19 @@ fn extensionStart(name: []const u8) usize {
 fn checkName(name: []const u8) !void {
     if (name.len == 0 or std.mem.eql(u8, name, ".") or std.mem.eql(u8, name, "..")) return error.BadPathName;
     if (std.mem.indexOfAny(u8, name, "/\\") != null) return error.BadPathName;
+}
+
+fn checkDestination(path: []const u8, folder: []const u8) !void {
+    if (path.len == 0 or std.mem.eql(u8, path, folder)) return error.InvalidDestination;
+    if (std.mem.startsWith(u8, folder, path) and folder.len > path.len and folder[path.len] == '/') return error.InvalidDestination;
+}
+
+test "move and copy reject destinations inside their source" {
+    try std.testing.expectError(error.InvalidDestination, checkDestination("art", "art"));
+    try std.testing.expectError(error.InvalidDestination, checkDestination("art", "art/copy"));
+    try std.testing.expectError(error.InvalidDestination, checkDestination("", "art"));
+    try checkDestination("art", "art2");
+    try checkDestination("art", "");
 }
 
 fn join(gpa: std.mem.Allocator, folder: []const u8, name: []const u8) ![]u8 {

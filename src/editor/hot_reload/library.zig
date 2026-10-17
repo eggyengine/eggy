@@ -21,7 +21,12 @@ const State = struct {
 
 const panels = blk: {
     var list: [Plugins.editor_panels.len]api.Panel = undefined;
-    for (&list, Plugins.editor_panels) |*panel, editor_panel| panel.* = .{ .title = editor_panel.title.ptr };
+    for (&list, Plugins.editor_panels) |*panel, editor_panel| panel.* = .{ .key = editor_panel.key.ptr, .title = editor_panel.title.ptr };
+    break :blk list;
+};
+const commands = blk: {
+    var list: [Plugins.editor_commands.len]api.Command = undefined;
+    for (&list, Plugins.editor_commands) |*command, source| command.* = .{ .key = source.key.ptr, .title = source.title.ptr };
     break :blk list;
 };
 
@@ -79,6 +84,9 @@ const game = api.Game{
     .editor_panel_ui = editorPanelUi,
     .panels = &panels,
     .panel_count = panels.len,
+    .commands = &commands,
+    .command_count = commands.len,
+    .editor_command = editorCommand,
     .preferences = &preference_sets,
     .preference_count = preference_sets.len,
     .components = &component_types,
@@ -122,7 +130,7 @@ fn start(editor: *const api.Host, gpa_ptr: *const anyopaque, app_ptr: *anyopaque
 
 /// What can fail each frame, and the error each last failed with: one failing every frame is
 /// logged once, and again only when it fails differently or after it recovers.
-const Hook = enum { update, editor_update, event, world_start, world_update };
+const Hook = enum { update, editor_update, editor_ui, editor_panel_ui, editor_command, event, world_start, world_update };
 var failures: [std.meta.fields(Hook).len]?anyerror = @splat(null);
 
 fn report(hook: Hook, err: anyerror) void {
@@ -132,6 +140,9 @@ fn report(hook: Hook, err: anyerror) void {
     const what = switch (hook) {
         .update => "an update hook",
         .editor_update => "an editorUpdate hook",
+        .editor_ui => "an editorUi hook",
+        .editor_panel_ui => "an editorPanelUi hook",
+        .editor_command => "an editorCommand hook",
         .event => "an event hook",
         .world_start => "a system in the world's Init stages",
         .world_update => "a system in the world's Update stages",
@@ -164,8 +175,8 @@ fn update(state_ptr: *anyopaque, app_ptr: *anyopaque) callconv(.c) bool {
     return ok;
 }
 
-fn editorUpdate(state_ptr: *anyopaque, app_ptr: *anyopaque) callconv(.c) bool {
-    stateOf(state_ptr).plugins.editorUpdate(appOf(app_ptr)) catch |err| {
+fn editorUpdate(state_ptr: *anyopaque, editor_ptr: *anyopaque) callconv(.c) bool {
+    stateOf(state_ptr).plugins.editorUpdate(@ptrCast(@alignCast(editor_ptr))) catch |err| {
         report(.editor_update, err);
         return false;
     };
@@ -183,12 +194,19 @@ fn event(state_ptr: *anyopaque, app_ptr: *anyopaque, event_ptr: *const anyopaque
     return true;
 }
 
-fn editorUi(state_ptr: *anyopaque, context: *anyopaque) callconv(.c) void {
-    stateOf(state_ptr).plugins.editorUi(@ptrCast(@alignCast(context)));
+fn editorUi(state_ptr: *anyopaque, editor_ptr: *anyopaque, context: *anyopaque) callconv(.c) void {
+    stateOf(state_ptr).plugins.editorUi(@ptrCast(@alignCast(editor_ptr)), @ptrCast(@alignCast(context))) catch |err| return report(.editor_ui, err);
+    recovered(.editor_ui);
 }
 
-fn editorPanelUi(state_ptr: *anyopaque, panel: usize, context: *anyopaque) callconv(.c) void {
-    stateOf(state_ptr).plugins.editorPanelUi(panel, @ptrCast(@alignCast(context)));
+fn editorPanelUi(state_ptr: *anyopaque, panel: usize, editor_ptr: *anyopaque, context: *anyopaque) callconv(.c) void {
+    stateOf(state_ptr).plugins.editorPanelUi(panel, @ptrCast(@alignCast(editor_ptr)), @ptrCast(@alignCast(context))) catch |err| return report(.editor_panel_ui, err);
+    recovered(.editor_panel_ui);
+}
+
+fn editorCommand(state_ptr: *anyopaque, command: usize, editor_ptr: *anyopaque) callconv(.c) void {
+    stateOf(state_ptr).plugins.editorCommand(command, @ptrCast(@alignCast(editor_ptr))) catch |err| return report(.editor_command, err);
+    recovered(.editor_command);
 }
 
 fn hasComponent(world: *anyopaque, entity: api.Entity, component: usize) callconv(.c) bool {
