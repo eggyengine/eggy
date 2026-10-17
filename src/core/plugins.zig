@@ -52,7 +52,8 @@
 //!
 //! In the editor, the game and its plugins run from a library that is swapped for a rebuilt one
 //! when their code changes (`src/editor/hot_reload`): every `deinit` runs, the world is emptied,
-//! and every `init` runs again. Errors from hooks stop the game there rather than the editor.
+//! and every `init` runs again. The editor logs hook failures and keeps running; standalone
+//! uncaught hook errors are fatal.
 const std = @import("std");
 const App = @import("app.zig").App;
 const Event = @import("vitellus_sdl3").sdl.events.Event;

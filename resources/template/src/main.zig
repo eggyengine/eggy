@@ -24,6 +24,7 @@ pub const Game = struct {
     /// Builds the game's HUD. Omit this hook to use only your own `draw` renderer.
     pub fn gameUi(self: *Game, app: *eggy.App, ui: *eggy.ui.Context) !void {
         _ = app;
+        ui.theme = .dark;
         ui.label("Frames: {d}", .{self.frames});
         ui.label("Jump presses: {d}", .{self.jumps});
     }

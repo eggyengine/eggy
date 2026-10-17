@@ -272,7 +272,7 @@ fn pluginKey(b: *std.Build, plugin: *std.Build.Module, index: usize) []const u8 
 /// `project_source` (the project module's) with `preference_files` added: each of the project's
 /// `.eggy/plugins/<key>.zon`, embedded, for the runtime to read at start; and, when it has one,
 /// `plugin_registry`: its `.eggy/plugins.zon`, which says which plugins are on (see
-/// `eggy.plugins.registry_file`).
+/// `eggy.plugins.registry_file`). Project-root `controls.zon` supplies input-map overrides.
 fn addPreferenceFiles(b: *std.Build, project_source: []const u8) std.Build.LazyPath {
     const io = b.graph.io;
     const files = b.addWriteFiles();

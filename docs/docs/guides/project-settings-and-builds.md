@@ -30,6 +30,10 @@ A game package has `src/main.zig` with `pub const Game`; a reusable plugin/libra
 same configuration, including executable metadata and the startup scene.
 The runtime is named after the game and the editor is `<name>_editor`.
 
+Developer input overrides live beside this file in `controls.zon`. **Edit > Input Mappings**
+edits them; runtime builds embed them. They are not player preferences.
+See [Input mappings](input-mappings.md).
+
 ## Build and export
 
 | Command | Result |

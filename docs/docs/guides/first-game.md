@@ -158,3 +158,6 @@ When you stop, everything goes back to where the scene has it: play never change
 
 - [Plugins](plugins.md) covers every hook your game can have, panels of its own, and sharing code between games.
 - `zig build run-runtime` in your project runs the game on its own, as players see it.
+- [Code-only games](code-only-games.md) creates the world without scene files.
+- [Input mappings](input-mappings.md) replaces physical-key gameplay logic with named controls.
+- [Error handling](error-handling.md) covers failures in the runtime and editor.

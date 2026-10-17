@@ -62,6 +62,8 @@ See [Game UI](game-ui.md) for styling, fonts, custom renderers, and input captur
 Hooks run in the order the plugins are listed, with the game first. Each frame, the game's `update` runs before its plugins' `update`. `deinit` runs in reverse, so a plugin stops before the plugins it may depend on.
 
 If an `init` fails, the plugins already started are stopped again, and the error ends start-up.
+Standalone uncaught hook errors are fatal; the editor logs game-library hook failures and
+keeps running. See [Error handling](error-handling.md) for recovery and ownership patterns.
 
 ### State
 
