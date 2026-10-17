@@ -63,15 +63,40 @@ transform.translate(.{ step_m, 0, 0 });
 | `elapsed_s` | Sum of counted gameplay deltas, not wall-clock time |
 | `frame` | Number of gameplay frames counted |
 
-A long stall counts for at most 0.1 seconds. This prevents a breakpoint or window drag
-from producing an enormous movement step. Editor Play starts the gameplay clock afresh;
-pausing does not update gameplay systems. UI animation uses its own host-supplied clock.
+A long stall counts for at most 0.1 unscaled seconds, before the gameplay multiplier.
+`try app.time.setScale(0.5)` makes subsequent counted deltas half as large; zero freezes
+the gameplay clock, not the execution of hooks/systems. Negative, NaN, and infinite scales
+are rejected. `unscaled_delta_s` and `unscaled_elapsed_s` ignore the multiplier but still
+use the frame clamp; they are not wall-clock measurements.
+
+Editor Play starts the gameplay clock afresh; pausing does not update gameplay systems.
+UI animation uses its own host-supplied clock.
 
 World systems receive `eggy.ecs.Res(eggy.Input)` and `Res(eggy.Time)`. These are read-only
 pointers, so use `input.pressed(.space)` and `time.delta_s` directly. Hook code should use
 App's fields instead of assuming a world resource exists before the first update.
 
-## Controllers, touch, rebinding, and timers
+## Value timers
+
+```zig
+var delay = try app.time.startTimer(0.5);
+if (try delay.finished(app.time)) doSomething();
+const seconds_left = try delay.remainingSeconds(app.time);
+try app.time.cancelTimer(&delay);
+```
+
+A timer is a small value you keep in game/component state. It allocates nothing and retains
+no callbacks. Query it against the explicit clock; `status` is `.running`, `.finished`, or
+`.cancelled`. Cancellation is idempotent, and a cancelled timer does not report `finished`.
+Zero duration finishes immediately; negative/non-finite durations return `InvalidDuration`.
+
+Timers use scaled gameplay seconds and stop advancing when that clock stops. The
+`timer_support` and `scaling_support` queries are `.available`.
+Resetting the world invalidates old timer values with `StaleTimer`. Do not save absolute
+timer deadlines in scene files: save a duration/remaining time and start a fresh timer after
+loading. See [Timers](timers.md) for a complete example.
+
+## Controllers, touch, and rebinding
 
 These are public contracts, not implemented input backends:
 
@@ -80,10 +105,8 @@ These are public contracts, not implemented input backends:
 | `controllers`, `controllerState`, `rumble` | `eggy.input.controller_support` |
 | `touches` | `eggy.input.touch_support` |
 | `rebind` | `eggy.input.rebinding_support` |
-| `Time.startTimer`, `cancelTimer` | `eggy.time.timer_support` |
-| `Time.setScale` | `eggy.time.scaling_support` |
 
 Each query is `.not_implemented`; each operation returns `error.NotImplemented`.
 Controller/touch enumeration does not return an empty successful list. Rebinding accepts
 a game-owned enum value and a typed `Binding`, not a string action asset.
-No fixed-step or physics scheduler is introduced by these contracts.
+Timers and scaling do not introduce or modify a fixed-step/physics scheduler.

@@ -71,10 +71,6 @@ test "every missing backend operation returns NotImplemented" {
     try expect(error.NotImplemented, input.touches(&touches));
     const Control = enum { jump };
     try expect(error.NotImplemented, input.rebind(Control.jump, .{ .key = .space }));
-    var time = @import("time.zig").Time{};
-    try expect(error.NotImplemented, time.startTimer(1));
-    try expect(error.NotImplemented, time.cancelTimer(@enumFromInt(0)));
-    try expect(error.NotImplemented, time.setScale(0.5));
     const resources = @import("resources/resources.zig").Resources{};
     try expect(error.NotImplemented, resources.readAsync(std.testing.allocator, @import("refs.zig").AssetRef(.text).init("notes.txt")));
     try expect(error.NotImplemented, resources.cancel(@enumFromInt(0)));

@@ -48,7 +48,9 @@ Physical keys do not change with the keyboard layout. Gameplay sees frame edges 
 UI capture cancels gameplay state without manufacturing a release action.
 
 Use `app.time.delta_s` for movement and `elapsed_s` for gameplay time. The first delta is
-zero and a stalled frame counts for at most 0.1 seconds. Editor UI has its own clock.
+zero and a stalled unscaled frame counts for at most 0.1 seconds. Editor UI has its own clock.
+Timers are clock-relative values; [Timers](timers.md) covers queries, cancellation, scaling,
+and reset lifetimes.
 
 ## Reference assets
 
@@ -142,16 +144,17 @@ skeleton or clips. These contracts do not add unsupported components to the Insp
 
 Working low-level graphics (`eggy.vit`), UI (`eggy.ui`), math (`eggy.math`), ECS
 (`eggy.ecs`), scene formats, and asset formats remain available directly. Controllers,
-touch gameplay input, streaming, async resource loading, and advanced timing are not
-implemented; keyboard/mouse polling and existing frame time are not placeholders.
+touch gameplay input, streaming, and async resource loading are not implemented;
+keyboard/mouse polling, value timers, and gameplay time scaling are real implementations.
 Their contracts also fail explicitly: `Input.controllers`, `controllerState`, `rumble`,
-`touches`, `rebind`, `Time.startTimer`, `cancelTimer`, `setScale`,
+`touches`, `rebind`,
 `Resources.readAsync`/`cancel`, and `Scenes.stream`/`replace`. Rebinding takes a value
 of your game's controls enum, not an engine-owned action name.
 
 | Surface | Desktop | Web |
 | --- | --- | --- |
 | Native ECS/math, keyboard/mouse, frame time, static graphics | Implemented | Same core APIs |
+| Value timers and gameplay time scaling | Implemented | Same allocation-free API |
 | Synchronous project/packaged resource and scene providers | Implemented | Default provider unavailable |
 | Weeoui game UI and custom draw hooks | Implemented | Shared runtime API; no editor import |
 | Editor context, panels, commands, actions | Desktop only | Not run or linked |

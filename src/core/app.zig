@@ -140,6 +140,7 @@ pub const App = struct {
         const allocator = self.world.allocator;
         self.world.deinit();
         self.world = .init(allocator);
+        self.time.invalidateTimers();
     }
 
     fn stopWorld(self: *App) void {

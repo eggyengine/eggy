@@ -705,7 +705,7 @@ pub fn Editor(comptime project: type) type {
             // The game starts over on the scene, as it does when shipped, with no keys held and its
             // clock at zero; the selection follows.
             self.app.input = .{};
-            self.app.time = .{};
+            self.app.time.reset();
             const place = self.entity_editor.selectionPlace(&self.app, game);
             self.play_mode.play(self.gpa, &self.app, game, self.entity_editor.roots(&self.app.world), self.plugin_switches.off()) catch |err| {
                 self.workspace.playing = false;
