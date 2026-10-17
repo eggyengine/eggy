@@ -50,8 +50,22 @@ pub const Action = @import("action.zig").Action;
 pub const Direction = @import("action.zig").Direction;
 pub const resources = @import("resources/resources.zig");
 pub const scenes = @import("scenes/scenes.zig");
+pub const Support = @import("support.zig").Support;
+pub const audio = @import("audio.zig");
+pub const animation = @import("animation.zig");
+pub const draw2d = @import("draw2d.zig");
+pub const materials = @import("materials.zig");
+pub const lighting = @import("lighting.zig");
+pub const particles = @import("particles.zig");
+pub const network = @import("network.zig");
+pub const navigation = @import("navigation.zig");
+pub const storage = @import("storage.zig");
+pub const localization = @import("localization.zig");
+pub const debug_draw = @import("debug_draw.zig");
+pub const profiling = @import("profiling.zig");
 
 test {
+    _ = @import("capabilities_test.zig");
     _ = resources;
     _ = scenes;
     _ = @import("action.zig");

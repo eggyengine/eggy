@@ -107,6 +107,35 @@ volume = change.value(.undo);
 This value does not allocate, clone pointers, or own slices. A history owner must copy
 borrowed values before their source expires. Do not store live component pointers in history.
 
+## Capability support
+
+The following namespaces expose contracts but have no backend yet. Their `support` value
+is `.not_implemented`, and every operation returns `error.NotImplemented`. They allocate
+no output devices, threads, sessions, files, fake handles, or successful empty results.
+
+| App service | Requests |
+| --- | --- |
+| `audio` | play, pause/unpause, stop, voice/bus gain, listener placement |
+| `animation` | play, blend, pause, stop, seek a named model clip |
+| `draw2d` | sprites and world-space text |
+| `materials`, `lighting` | material assignment, light descriptions, render effects |
+| `particles` | emission and stopping |
+| `network` | connection, listening, messages, polling, disconnection |
+| `navigation` | paths and destinations; no physics or collision access |
+| `storage` | game-save bytes by slot, separate from preferences |
+| `localization` | locale selection and translated-text lookup |
+| `debug_draw`, `profiling` | debug primitives, samples, and counters |
+
+For example, `eggy.audio.support` reports support independently of an App. A sound reference
+can be stored in a component today, but `try app.audio.play(sound, .{})` returns an error
+until playback exists. Animation references do not imply that `.eggmodel` contains a
+skeleton or clips. These contracts do not add unsupported components to the Inspector.
+
+Working low-level graphics (`eggy.vit`), UI (`eggy.ui`), math (`eggy.math`), ECS
+(`eggy.ecs`), scene formats, and asset formats remain available directly. Controllers,
+touch gameplay input, streaming, async resource loading, and advanced timing are not
+implemented; keyboard/mouse polling and existing frame time are not placeholders.
+
 ## Design references
 
 Eggy's API is its own, built around Zig's ownership and ECS model. The distinction between

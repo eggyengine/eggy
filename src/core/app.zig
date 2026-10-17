@@ -37,6 +37,18 @@ pub const App = struct {
     /// Typed registry installed by the game library, never the editor host.
     scene_access: ?scene.Access = null,
     instances: ?SceneInstances = null,
+    audio: @import("audio.zig").Audio = .{},
+    animation: @import("animation.zig").Animation = .{},
+    draw2d: @import("draw2d.zig").Draw2d = .{},
+    materials: @import("materials.zig").Materials = .{},
+    lighting: @import("lighting.zig").Lighting = .{},
+    particles: @import("particles.zig").Particles = .{},
+    network: @import("network.zig").Network = .{},
+    navigation: @import("navigation.zig").Navigation = .{},
+    storage: @import("storage.zig").Storage = .{},
+    localization: @import("localization.zig").Localization = .{},
+    debug_draw: @import("debug_draw.zig").DebugDraw = .{},
+    profiling: @import("profiling.zig").Profiling = .{},
 
     pub fn init(gpa: std.mem.Allocator, title: [:0]const u8) !App {
         const init_flags = sdl3.InitFlags{ .video = true };
