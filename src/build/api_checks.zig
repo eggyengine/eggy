@@ -12,6 +12,7 @@ pub fn project(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.bu
         .root_source_file = b.addWriteFiles().add("test_project.zig",
             \\pub const plugins = .{ @import("fixture").Game };
             \\pub const plugin_keys = [_][:0]const u8{"game"};
+            \\
         ),
         .target = target,
         .optimize = optimize,

@@ -386,6 +386,7 @@ fn addEngine(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.buil
             \\pub const blit_fragment = @embedFile("scene_blit.frag");
             \\pub const grid_vertex = @embedFile("grid.vert");
             \\pub const grid_fragment = @embedFile("grid.frag");
+            \\
         ),
         .target = target,
         .optimize = optimize,
