@@ -1507,7 +1507,7 @@ pub fn Editor(comptime project: type) type {
             // off a field.
             if (weeoui_sdl3.translate(curr_event)) |input| if (input == .pointer_down) self.unfocusOnPress(slot, input.pointer_down.position, outcome == .ignored);
             // Left presses on the Scene panel select, or take the gizmo; moves drag it.
-            if (outcome == .ignored or curr_event == .mouse_motion) if (self.sceneTarget()) |target| {
+            if (!game_has_scene and (outcome == .ignored or curr_event == .mouse_motion)) if (self.sceneTarget()) |target| {
                 if (self.scene_view.handlePointer(curr_event, self.sceneRect(slot), target)) return .run;
             };
             // The pages get the rest, and every pointer move so their hover state stays current.

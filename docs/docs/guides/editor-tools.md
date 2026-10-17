@@ -11,16 +11,16 @@ hook: do not store it, App pointers, or live component pointers for a later call
 
 ## Scene navigation
 
-The Scene toolbar's touchpad button switches between **Mouse** (the default) and
-**Touchpad** navigation. In Touchpad mode, two-finger scrolling orbits the focus point
+The Scene panel works with a mouse and a touchpad at once, telling them apart by each
+scroll. A mouse wheel zooms; right-drag looks around and flies with WASD, Alt+left-drag
+orbits, and middle-drag pans. On a touchpad, two-finger scrolling orbits the focus point
 on both axes; hold **Shift** to pan, or **Ctrl** to zoom. Native pinch gestures zoom
-where the desktop exposes them through SDL. Fractional scroll motion and momentum are
-preserved. Gestures start only over the Scene, not its floating toolbar or another panel.
+where the desktop exposes them through SDL. Gestures start only over the Scene, not its
+floating toolbar or another panel. SDL does not expose a native twist-rotation event;
+use horizontal two-finger scrolling to rotate around the scene.
 
-Mouse mode keeps wheel zoom, right-drag look and WASD flight, Alt+left-drag orbit,
-and middle-drag pan. Those button/drag controls also work in Touchpad mode.
-SDL does not expose a native twist-rotation event; use horizontal two-finger scrolling
-to rotate around the scene. Desktop-reserved gestures remain controlled by the OS.
+While the game plays, the Scene panel is the game's: the toolbar, gizmo and orientation
+widget are hidden, and an accent border marks it as playing.
 
 ## Edit the selected entity
 
