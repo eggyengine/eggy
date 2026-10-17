@@ -7,7 +7,7 @@ const std = @import("std");
 const eggy = @import("eggy");
 
 /// Bumped whenever these types change, so an editor refuses a library built for another.
-pub const version: u32 = 23;
+pub const version: u32 = 24;
 
 /// The library's one exported function: `fn () callconv(.c) *const Game`.
 pub const entry_symbol = "eggy_game";
@@ -25,6 +25,13 @@ pub const Panel = extern struct {
     title: [*:0]const u8,
 };
 pub const Command = extern struct { key: [*:0]const u8, title: [*:0]const u8 };
+pub const FileType = extern struct {
+    key: [*:0]const u8,
+    title: [*:0]const u8,
+    extension: [*:0]const u8,
+    contents: [*]const u8,
+    contents_len: usize,
+};
 
 /// A field of a plugin's preferences (`eggy.preferences.Field`).
 pub const PreferenceField = extern struct {
@@ -111,6 +118,8 @@ pub const Game = extern struct {
     panel_count: usize,
     commands: [*]const Command,
     command_count: usize,
+    file_types: [*]const FileType,
+    file_type_count: usize,
     editor_command: *const fn (state: *anyopaque, command: usize, editor: *anyopaque) callconv(.c) void,
     /// Each plugin's preferences, for the Preferences window.
     preferences: [*]const Preferences,

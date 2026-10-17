@@ -29,6 +29,17 @@ const commands = blk: {
     for (&list, Plugins.editor_commands) |*command, source| command.* = .{ .key = source.key.ptr, .title = source.title.ptr };
     break :blk list;
 };
+const file_types = blk: {
+    var list: [Plugins.editor_file_types.len]api.FileType = undefined;
+    for (&list, Plugins.editor_file_types) |*file_type, source| file_type.* = .{
+        .key = source.key.ptr,
+        .title = source.title.ptr,
+        .extension = source.extension.ptr,
+        .contents = source.contents.ptr,
+        .contents_len = source.contents.len,
+    };
+    break :blk list;
+};
 
 /// Each plugin's preferences, as C data.
 const preference_sets = blk: {
@@ -91,6 +102,8 @@ const game = api.Game{
     .panel_count = panels.len,
     .commands = &commands,
     .command_count = commands.len,
+    .file_types = &file_types,
+    .file_type_count = file_types.len,
     .editor_command = editorCommand,
     .preferences = &preference_sets,
     .preference_count = preference_sets.len,

@@ -10,10 +10,17 @@ const Player = eggy.input.Map(enum { jump, move }, .{
         .{ .control = .move, .kind = .vector, .bindings = &.{.{ .keys_2d = .{} }} },
     },
 });
+const AssetPlayer = eggy.input.FileMap(enum { jump, move }, .{ .key = "asset-player", .file = "resources/player.inmap.zon" });
 pub const Game = struct {
     entity: eggy.ecs.EntityId,
     pub const components = .{Counter};
-    pub const input_maps = .{Player};
+    pub const input_maps = .{ Player, AssetPlayer };
+    pub const editor_file_types = [_]eggy.plugins.EditorFileType{.{
+        .key = "fixture",
+        .title = "Fixture",
+        .extension = ".fixture",
+        .contents = "ab\x00cd",
+    }};
     pub const editor_commands = [_]eggy.plugins.EditorCommand{
         .{ .key = "increment", .title = "Increment" },
         .{ .key = "read-resource", .title = "Check resource errors" },
@@ -31,6 +38,9 @@ pub const Game = struct {
             var bindings: [1]eggy.input.Binding = undefined;
             if ((try player.getBindings(.jump, &bindings))[0].key != .j) return error.ExpectedProjectBinding;
             if (player.axis(.jump)) |_| return error.ExpectedWrongKind else |err| if (err != error.WrongControlKind) return err;
+            const asset_player = editor.app.input.map(AssetPlayer);
+            if (!try asset_player.pressed(.jump)) return error.ExpectedAssetMappedPress;
+            if ((try asset_player.getBindings(.jump, &bindings))[0].key != .j) return error.ExpectedProjectAssetBinding;
             try player.rebind(.jump, .{ .key = .j });
             try player.setTrigger(.jump, .immediate);
         }

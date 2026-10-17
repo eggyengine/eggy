@@ -2,6 +2,19 @@
 const std = @import("std");
 const t = @import("types.zig");
 
+/// Reference a complete `.inmap.zon` resource while keeping typed control names in game code.
+/// Paths are project-relative resources; the stable key is independent of the file's name.
+pub fn FileMap(comptime Controls: type, comptime options: struct { key: []const u8, file: []const u8 }) type {
+    if (@typeInfo(Controls) != .@"enum") @compileError("input maps use a controls enum");
+    if (options.key.len == 0) @compileError("input maps need a stable key");
+    if (!std.mem.endsWith(u8, options.file, ".inmap.zon")) @compileError("input map files end in .inmap.zon");
+    return struct {
+        pub const Control = Controls;
+        pub const key = options.key;
+        pub const file = options.file;
+    };
+}
+
 pub fn Map(comptime Controls: type, comptime options: struct {
     key: []const u8,
     controls: []const t.ControlBinding(Controls),

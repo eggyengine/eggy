@@ -9,6 +9,17 @@ A resource reference, loaded CPU data, and a GPU cache entry are different thing
 Keeping that distinction explicit makes the same game code usable in the editor and a
 packaged runtime.
 
+## Create files in Assets
+
+Use **New** in the Assets toolbar, or **New >** in the right-click menu. Both offer
+Scene, Input Map, Folder, and text, Zig, ZON, JSON, Markdown, and TOML templates, along with file types
+declared by the game's plugins. New files get unique names and can be undone.
+Right-click a folder to create inside it; right-click a file to create beside it.
+
+Double-click `.inmap.zon` assets to open the [Input Map editor](input-mappings.md).
+Images, models, audio, and fonts are imported from existing files, not created as
+empty placeholders. Plugins can [add their own templates](plugins.md#file-templates).
+
 ## Reference project files
 
 ```zig

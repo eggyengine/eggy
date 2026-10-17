@@ -18,6 +18,50 @@ pub fn createFolder(gpa: std.mem.Allocator, io: std.Io, project: std.Io.Dir, par
     return path;
 }
 
+/// Create a uniquely named file from a New-menu template, without overwriting existing files.
+/// Returns a caller-owned project-relative path.
+pub fn createFile(gpa: std.mem.Allocator, io: std.Io, project: std.Io.Dir, parent: []const u8, file_type: @import("eggy").plugins.EditorFileType) ![]u8 {
+    try @import("eggy").refs.validatePath(parent);
+    try checkName(file_type.title);
+    if (file_type.extension.len < 2 or file_type.extension[0] != '.' or std.mem.indexOfAny(u8, file_type.extension, "/\\\x00") != null) return error.BadPathName;
+    const path = try freeName(gpa, io, project, parent, file_type.title, file_type.extension);
+    errdefer gpa.free(path);
+    try @import("eggy").refs.validatePath(path);
+    if (parent.len != 0) try project.createDirPath(io, parent);
+    var file = try project.createFile(io, path, .{ .exclusive = true });
+    defer file.close(io);
+    errdefer project.deleteFile(io, path) catch |err| std.log.err("cannot remove incomplete file {s}: {t}", .{ path, err });
+    var buffer: [4096]u8 = undefined;
+    var writer = file.writer(io, &buffer);
+    try writer.interface.writeAll(file_type.contents);
+    try writer.interface.flush();
+    return path;
+}
+
+test "file templates create unique complete files and reject path-like names" {
+    const gpa = std.testing.allocator;
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const template = @import("eggy").plugins.EditorFileType{ .key = "game/map", .title = "Player", .extension = ".inmap.zon", .contents = ".{ .controls = .{} }\n" };
+    const first = try createFile(gpa, io, tmp.dir, "resources/input", template);
+    defer gpa.free(first);
+    const second = try createFile(gpa, io, tmp.dir, "resources/input", template);
+    defer gpa.free(second);
+    try std.testing.expectEqualStrings("resources/input/Player.inmap.zon", first);
+    try std.testing.expectEqualStrings("resources/input/Player 2.inmap.zon", second);
+    const contents = try tmp.dir.readFileAlloc(io, first, gpa, .limited(1024));
+    defer gpa.free(contents);
+    try std.testing.expectEqualStrings(template.contents, contents);
+    try std.testing.expectError(error.InvalidPath, createFile(gpa, io, tmp.dir, "../outside", template));
+    var invalid = template;
+    invalid.title = "../file";
+    try std.testing.expectError(error.BadPathName, createFile(gpa, io, tmp.dir, "", invalid));
+    invalid = template;
+    invalid.extension = ".zon/other";
+    try std.testing.expectError(error.BadPathName, createFile(gpa, io, tmp.dir, "", invalid));
+}
+
 /// Rename `path` to `new_name` in the same folder. Returns the new path; caller-owned.
 pub fn rename(gpa: std.mem.Allocator, io: std.Io, project: std.Io.Dir, path: []const u8, new_name: []const u8) ![]u8 {
     try checkName(new_name);
@@ -163,7 +207,7 @@ fn extensionStart(name: []const u8) usize {
 /// A name for a file or folder: not empty, no slashes, not `.` or `..`.
 fn checkName(name: []const u8) !void {
     if (name.len == 0 or std.mem.eql(u8, name, ".") or std.mem.eql(u8, name, "..")) return error.BadPathName;
-    if (std.mem.indexOfAny(u8, name, "/\\") != null) return error.BadPathName;
+    if (std.mem.indexOfAny(u8, name, "/\\\x00") != null) return error.BadPathName;
 }
 
 fn checkDestination(path: []const u8, folder: []const u8) !void {

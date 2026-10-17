@@ -4,12 +4,17 @@
 //!     pub fn init(gpa: std.mem.Allocator, app: *eggy.App) !Self
 //!     pub fn deinit(self: *Self) void
 //!     pub fn event(self: *Self, app: *eggy.App, event: eggy.Event) !void
-//!     pub fn update(self: *Self, app: *eggy.App) !void  // in the editor, only while playing
+//!     pub fn update(self: *Self, app: *eggy.App) !void  // in the editor, playing and not paused
 //!     pub fn gameUi(self: *Self, app: *eggy.App, ui: *eggy.ui.Context) !void
 //!     pub fn draw(self: *Self, app: *eggy.App, draw: eggy.DrawContext) !void
 //!     pub fn uiEvent(self: *Self, app: *eggy.App, event: eggy.Event) !bool  // true consumes input
-//!     pub fn editorUpdate(self: *Self, editor: *eggy.editor.Context) !void  // while not playing
-//!     pub fn editorUi(self: *Self, editor: *eggy.editor.Context, ui: *eggy.ui.Context) !void
+//!     pub fn editorUpdate(self: *Self, editor: *eggy.editor.Context) !void  // editing or paused
+//!     pub fn editorUi(self: *Self, editor: *eggy.editor.Context, ui: *eggy.ui.Context) !void  // project Inspector
+//!
+//! These signatures apply equally to `Game` and `Plugin`; hooks belong inside that type,
+//! not beside it in the module. `init` constructs each instance; editor restarts/reloads can
+//! construct it again. Most hooks run game-first; `deinit` and `uiEvent` run in reverse order.
+//! See `docs/docs/guides/plugins.md` for the hook reference and lifecycle.
 //!
 //! A plugin can also add panels of its own to the editor's dock, each a page of UI it fills
 //! every frame. Declare them, then draw panel `panel` (an index into the declaration):
@@ -35,8 +40,14 @@
 //!
 //! Named input maps register before `init`, under the published plugin key and map key:
 //!
-//!     pub const input_maps = .{PlayerInput}; // an eggy.input.Map
+//!     pub const input_maps = .{PlayerInput}; // an eggy.input.Map or FileMap
 //!     // in a hook: try app.input.map(PlayerInput).pressed(.jump)
+//!
+//! File templates extend both Assets > New menus without a creation hook:
+//!
+//!     pub const editor_file_types = [_]eggy.plugins.EditorFileType{.{
+//!         .key = "material", .title = "Material", .extension = ".material.zon", .contents = ".{}\n",
+//!     }};
 //!
 //! Eggy's own components (`builtin_components`: `Transform`, `Mesh`, which the scene draws, and
 //! `Camera`, which the runtime looks through, and `SceneInstance`, a scene file made under an
@@ -100,8 +111,18 @@ pub const EditorPanel = struct {
 /// A command shown in the editor's View menu. Keys are local to the declaring plugin.
 pub const EditorCommand = struct { key: [:0]const u8, title: [:0]const u8 };
 
+/// A file template offered by Assets > New. Its identity is scoped to the published plugin.
+/// The editor creates a uniquely named file with these bytes and tracks it in undo history.
+pub const EditorFileType = struct {
+    key: [:0]const u8,
+    title: [:0]const u8,
+    extension: [:0]const u8,
+    contents: []const u8 = "",
+};
+
 /// One instance of each type in `types` (a tuple such as `.{ Game, Stats }`). Hooks run in list
-/// order, so the game, listed first, sees each frame before its plugins; `deinit` runs in reverse.
+/// order, so the game, listed first, sees each frame before its plugins; `deinit` and `uiEvent`
+/// run in reverse.
 /// `keys` names each one's preferences (see `preferences.Manifest`), in the same order.
 pub fn Set(comptime types: anytype, comptime keys: []const [:0]const u8) type {
     const list: [types.len]type = types;
@@ -145,6 +166,27 @@ pub fn Set(comptime types: anytype, comptime keys: []const [:0]const u8) type {
                     const identity = std.fmt.comptimePrint("{s}/{s}", .{ key, command.key });
                     for (all) |previous| if (std.mem.eql(u8, previous.key, identity)) @compileError("duplicate editor command key");
                     all = all ++ .{EditorCommand{ .key = identity, .title = command.title }};
+                }
+            };
+            break :blk all;
+        };
+
+        /// File templates copied by the editor before a game library can be unloaded.
+        pub const editor_file_types: []const EditorFileType = blk: {
+            var all: []const EditorFileType = &.{};
+            for (list, keys) |T, key| if (@hasDecl(T, "editor_file_types")) {
+                for (T.editor_file_types) |file_type| {
+                    if (file_type.key.len == 0 or file_type.title.len == 0 or
+                        file_type.extension.len < 2 or file_type.extension[0] != '.' or
+                        std.mem.indexOfScalar(u8, file_type.key, 0) != null or
+                        std.mem.indexOfScalar(u8, file_type.title, 0) != null or
+                        std.mem.indexOfScalar(u8, file_type.extension, 0) != null or
+                        std.mem.indexOfAny(u8, file_type.title, "/\\") != null or
+                        std.mem.indexOfAny(u8, file_type.extension, "/\\") != null)
+                        @compileError("editor file types need a key, title and path-free .extension");
+                    const identity = std.fmt.comptimePrint("{s}/{s}", .{ key, file_type.key });
+                    for (all) |previous| if (std.mem.eql(u8, previous.key, identity)) @compileError("duplicate editor file type key");
+                    all = all ++ .{EditorFileType{ .key = identity, .title = file_type.title, .extension = file_type.extension, .contents = file_type.contents }};
                 }
             };
             break :blk all;
@@ -197,9 +239,13 @@ pub fn Set(comptime types: anytype, comptime keys: []const [:0]const u8) type {
             inline for (list, keys) |T, key| if (@hasDecl(T, "Preferences")) try app.preference_values.register(T.Preferences, key);
             inline for (list, keys, 0..) |T, key, i| if (enabled[i] and @hasDecl(T, "input_maps")) {
                 inline for (T.input_maps) |Mapping| {
-                    try app.input.registerMap(Mapping, comptime std.fmt.comptimePrint("{s}/{s}", .{ key, Mapping.key }));
+                    const owner = comptime std.fmt.comptimePrint("{s}/{s}", .{ key, Mapping.key });
+                    if (@hasDecl(Mapping, "file")) {
+                        try registerFileMap(Mapping, gpa, app, owner);
+                    } else try app.input.registerMap(Mapping, owner);
                 }
             };
+
             var self: Self = undefined;
             self.enabled = enabled;
             inline for (list, 0..) |T, i| if (enabled[i]) {
@@ -243,7 +289,7 @@ pub fn Set(comptime types: anytype, comptime keys: []const [:0]const u8) type {
             return false;
         }
 
-        /// A frame in the editor while the game isn't playing: each plugin's `editorUpdate`.
+        /// A frame in the editor while editing or paused: each plugin's `editorUpdate`.
         pub fn editorUpdate(self: *Self, editor: *EditorContext) !void {
             inline for (list, 0..) |T, i| if (@hasDecl(T, "editorUpdate") and self.enabled[i]) try self.instances[i].editorUpdate(editor);
         }
@@ -279,6 +325,25 @@ pub fn Set(comptime types: anytype, comptime keys: []const [:0]const u8) type {
                 first += count;
             };
             return error.NoEditorCommand;
+        }
+
+        /// Load through the executable's resource bridge, never library-local filesystem I/O.
+        fn registerFileMap(comptime Mapping: type, gpa: std.mem.Allocator, app: *App, owner: []const u8) !void {
+            const source = app.resources().read(gpa, @import("refs.zig").AssetRef(.input_map).init(Mapping.file)) catch |err| {
+                std.log.err("cannot load input map {s} ({s}): {t}", .{ owner, Mapping.file, err });
+                return err;
+            };
+            defer gpa.free(source);
+            var arena = std.heap.ArenaAllocator.init(gpa);
+            defer arena.deinit();
+            const file = @import("input/asset.zig").File.parse(arena.allocator(), source) catch |err| {
+                std.log.err("invalid input map {s} ({s}): {t}", .{ owner, Mapping.file, err });
+                return err;
+            };
+            app.input.registerFileMap(Mapping, owner, file) catch |err| {
+                std.log.err("cannot register input map {s} ({s}): {t}; match the FileMap enum to the file's control names", .{ owner, Mapping.file, err });
+                return err;
+            };
         }
 
         fn start(comptime T: type, gpa: std.mem.Allocator, app: *App) !T {

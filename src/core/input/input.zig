@@ -38,6 +38,8 @@ pub const Trigger = types.Trigger;
 pub const Value = types.Value;
 pub const ControlId = types.ControlId;
 pub const Map = @import("mapping.zig").Map;
+pub const FileMap = @import("mapping.zig").FileMap;
+pub const asset = @import("asset.zig");
 pub const bindings_file = @import("bindings.zig").file_name;
 
 const key_count = types.key_count;
@@ -123,6 +125,20 @@ pub const Input = struct {
 
     pub fn registerMap(self: *Input, comptime Mapping: type, owner: []const u8) !void {
         try self.registerType(Mapping.Control, marker.of(Mapping), owner, Mapping.definitions, Mapping.priority, Mapping.enabled, Mapping.consume);
+    }
+    /// Register validated file defaults through the same host bridge as code-defined maps.
+    /// Every declared enum control must have a matching file entry, with no unknown names.
+    pub fn registerFileMap(self: *Input, comptime Mapping: type, owner: []const u8, file: asset.File) !void {
+        const fields = @typeInfo(Mapping.Control).@"enum".fields;
+        if (file.controls.len != fields.len) return error.InputMapControlsMismatch;
+        var defaults: [fields.len]ControlBinding(Mapping.Control) = undefined;
+        inline for (fields, &defaults) |field, *entry| {
+            const control = for (file.controls) |candidate| {
+                if (std.mem.eql(u8, candidate.name, field.name)) break candidate;
+            } else return error.InputMapControlsMismatch;
+            entry.* = .{ .control = @field(Mapping.Control, field.name), .kind = control.kind, .trigger = control.trigger, .bindings = control.bindings };
+        }
+        try self.registerType(Mapping.Control, marker.of(Mapping), owner, &defaults, file.priority, file.enabled, file.consume);
     }
     fn registerType(self: *Input, comptime Controls: type, type_id: usize, owner: []const u8, defaults: []const ControlBinding(Controls), priority: i32, enabled: bool, consume: bool) !void {
         const fields = @typeInfo(Controls).@"enum".fields;

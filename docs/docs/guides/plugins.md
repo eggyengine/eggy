@@ -108,6 +108,29 @@ A plugin lists the ECS components it brings in `components`. The editor's **Hier
 
 ```zig
 pub const Spin = struct {
+## File templates
+
+Declare `editor_file_types` inside `Game` or `Plugin` to add entries to both Assets
+**New** menus:
+
+```zig
+pub const editor_file_types = [_]eggy.plugins.EditorFileType{.{
+    .key = "material",
+    .title = "Material",
+    .extension = ".material.zon",
+    .contents = ".{ .roughness = 0.5 }\n",
+}};
+```
+
+The editor creates `Material.material.zon` in the chosen folder, adding a number if
+that name already exists. `contents` is the initial file data; omit it for an empty
+file. The title and extension must not contain path separators. Keys are scoped to
+the published plugin, just like editor commands. Templates remain available when a
+plugin is disabled, and creating a file participates in Undo/Redo.
+
+This is a static template declaration, not a hook. Code/text files open in the
+configured code editor; `.inmap.zon` files open in Eggy's Input Map editor.
+
     speed: f32 = 0.001,
     turns: f32 = 0,
 };

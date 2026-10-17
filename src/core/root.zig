@@ -85,6 +85,7 @@ test {
     _ = input;
     _ = input_backend;
     _ = @import("input/bindings.zig");
+    _ = input.asset;
     _ = @import("input/state_test.zig");
     _ = @import("time.zig");
     _ = @import("plugins.zig");

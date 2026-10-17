@@ -26,6 +26,7 @@ pub const HotGame = struct {
     /// The game's panels, copied out of the library, as the editor shows them across swaps.
     panels: []eggy.plugins.EditorPanel,
     commands: []const eggy.plugins.EditorCommand = &.{},
+    file_types: []const eggy.plugins.EditorFileType = &.{},
     /// Each plugin's preferences, copied out of the library into `manifest_arena`.
     preference_manifests: []const eggy.preferences.Manifest = &.{},
     /// The game's and each plugin's key, the game first, copied into `manifest_arena` too.
@@ -235,7 +236,15 @@ pub const HotGame = struct {
             .key = try self.manifest_arena.allocator().dupeZ(u8, std.mem.span(source.key)),
             .title = try self.manifest_arena.allocator().dupeZ(u8, std.mem.span(source.title)),
         };
-        self.* = .{ .gpa = gpa, .path = self.path, .copy_path = copy_path, .library = library, .game = game, .state = null, .panels = panels, .commands = commands, .loads = self.loads, .preference_manifests = manifests, .component_types = component_types, .plugin_keys = plugin_keys, .manifest_arena = self.manifest_arena };
+        const arena = self.manifest_arena.allocator();
+        const file_types = try arena.alloc(eggy.plugins.EditorFileType, game.file_type_count);
+        for (file_types, game.file_types[0..game.file_type_count]) |*file_type, source| file_type.* = .{
+            .key = try arena.dupeZ(u8, std.mem.span(source.key)),
+            .title = try arena.dupeZ(u8, std.mem.span(source.title)),
+            .extension = try arena.dupeZ(u8, std.mem.span(source.extension)),
+            .contents = try arena.dupe(u8, source.contents[0..source.contents_len]),
+        };
+        self.* = .{ .gpa = gpa, .path = self.path, .copy_path = copy_path, .library = library, .game = game, .state = null, .panels = panels, .commands = commands, .file_types = file_types, .loads = self.loads, .preference_manifests = manifests, .component_types = component_types, .plugin_keys = plugin_keys, .manifest_arena = self.manifest_arena };
     }
 
     /// Stop the game, empty the world while its code is still loaded, and unload and delete the copy.
@@ -253,6 +262,7 @@ pub const HotGame = struct {
         self.gpa.free(self.panels);
         self.panels = &.{};
         self.commands = &.{};
+        self.file_types = &.{};
         self.preference_manifests = &.{};
         self.component_types = &.{};
         self.plugin_keys = &.{};

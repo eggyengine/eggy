@@ -95,3 +95,28 @@ pub const Data = struct {
         return format.read(gpa, &reader.interface);
     }
 };
+
+test "packaged input maps are copied resources readable through the runtime bridge" {
+    const gpa = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const entry = manifest.Entry{ .path = "resources/input/player.inmap.zon", .id = 0x2a };
+    try std.testing.expectEqual(manifest.Packaged.copy, manifest.Packaged.of(entry.path));
+    var name: [32]u8 = undefined;
+    try tmp.dir.writeFile(std.testing.io, .{
+        .sub_path = manifest.packagedName(&name, entry),
+        .data = ".{ .controls = .{ .{ .name = \"jump\", .bindings = .{ .{ .key = .space } } } } }",
+    });
+    var data = Data{
+        .gpa = gpa,
+        .dir = tmp.dir,
+        .arena = .init(gpa),
+        .files = .{ .files = &.{entry} },
+    };
+    defer data.arena.deinit();
+    const source = try data.resources().read(gpa, eggy.AssetRef(.input_map).init("resources/input/player.inmap.zon"));
+    defer gpa.free(source);
+    const file = try eggy.input.asset.File.parse(data.arena.allocator(), source);
+    try std.testing.expectEqualStrings("jump", file.controls[0].name);
+    try std.testing.expectEqual(eggy.Key.space, file.controls[0].bindings[0].key);
+}

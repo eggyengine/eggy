@@ -270,7 +270,8 @@ pub const State = struct {
         }
     }
 
-    fn register(self: *State, registration: types.Registration) !void {
+    /// Copy validated map defaults into this host-local resolver, transactionally.
+    pub fn register(self: *State, registration: types.Registration) !void {
         if (self.owners.contains(registration.type_marker)) return error.DuplicateControls;
         var owners = self.owners.valueIterator();
         while (owners.next()) |owner| if (std.mem.eql(u8, owner.key, registration.owner)) return error.DuplicateControls;

@@ -8,7 +8,87 @@ title: Input mappings
 Name what the player does, then read that intent in game code. Raw key/mouse polling
 still works; a map adds device-independent controls, modifiers, and triggers.
 
-## Declare a map
+## Create an input-map asset
+
+In Assets, choose **New > Input Map** (or right-click a folder and choose the same
+submenu). Rename the new file to something like `player.inmap.zon`. Double-click it
+to open the Input Map editor.
+
+Add named controls, choose **button**, **axis**, or **vector**, then add their input
+bindings. Keys and controller buttons can be captured; scales, dead zones, normalized
+movement, and hold/tap/chord triggers use the same controls as Edit > Input Mappings.
+Apply each binding or trigger edit, then press **Save file**. Map priority, startup
+activation, and consumption are editable too.
+
+You can create as many `.inmap.zon` files as you need: player, menus, vehicles, and so
+on. Each file owns its defaults. Editing one does not modify the running game; saved
+defaults load on the next Play or game reload. Saved changes support Undo/Redo.
+Closing an unsaved map asks whether to save or discard it. Revert reads the file
+again, and Save refuses to overwrite changes made outside the editor.
+
+## Use asset maps in a game or plugin
+
+Keep a short typed reference in code; the bindings themselves live in the asset:
+
+```zig
+const eggy = @import("eggy");
+
+const PlayerInput = eggy.input.FileMap(enum { jump, move }, .{
+    .key = "player",
+    .file = "resources/input/player.inmap.zon",
+});
+const MenuInput = eggy.input.FileMap(enum { accept, back }, .{
+    .key = "menu",
+    .file = "resources/input/menu.inmap.zon",
+});
+
+pub const Game = struct {
+    pub const input_maps = .{ PlayerInput, MenuInput };
+
+    pub fn update(_: *@This(), app: *eggy.App) !void {
+        const player = app.input.map(PlayerInput);
+        if (try player.pressed(.jump)) {
+            // Start a jump.
+        }
+        const movement = try player.vector(.move);
+        _ = movement;
+    }
+};
+```
+
+Paths are project-relative and include `resources/`. The enum must name exactly
+the controls in that file; their order does not matter. When adding or renaming a
+control in the editor, update this enum too. A mismatch reports the map and file
+instead of registering a partially working map.
+
+Games and plugins both list maps in `input_maps`. Asset maps and code-defined maps
+can coexist in that tuple. Distinct `.key` values give maps separate identities,
+even if they use the same asset. Files under `resources/` are packaged automatically.
+For a menu context, give its map a higher priority and disable startup activation,
+then enable it when the menu opens, as described below.
+
+The files are ordinary ZON and can also be edited as text:
+
+```zig
+.{
+    .version = 1,
+    .controls = .{
+        .{ .name = "jump", .bindings = .{
+            .{ .key = .space },
+            .{ .controller = .{ .button = .south } },
+        } },
+        .{ .name = "move", .kind = .vector, .bindings = .{
+            .{ .keys_2d = .{} },
+            .{ .controller_stick = .{} },
+        } },
+    },
+}
+```
+
+## Declare a map in code
+
+The original `eggy.input.Map` API remains available when keeping defaults in Zig is
+more convenient:
 
 ```zig
 const eggy = @import("eggy");
@@ -84,7 +164,7 @@ Touch contacts remain a direct snapshot API, not a map binding.
 
 ## Contexts and priority
 
-A map has `priority` (default 0), `enabled` (true), and `consume` (true) code defaults.
+A map has `priority` (default 0), `enabled` (true), and `consume` (true) defaults.
 You can declare a menu map with a higher priority and `enabled = false`, then switch it:
 
 ```zig
@@ -124,12 +204,14 @@ Edges last one gameplay frame, so multiple systems can observe the same edge.
 Open **Edit > Input Mappings**, select a map/control, and add, capture, edit, or remove a
 binding. Keyboard and controller-button capture have an Escape cancel. Scales, dead zones,
 normalization, triggers, startup activation, and priority have explicit Save/Reset controls.
-Reset restores code defaults. Edits participate in the editor's undo/redo history.
+Reset restores the registered map's defaults, from its asset or code. These project
+overrides take precedence over `.inmap.zon` defaults and do not rewrite the asset.
+Edits participate in the editor's undo/redo history.
 
 The project-root `controls.zon` belongs in version control. It is developer-authored
 configuration, **not player preferences or saved-game storage**. The runtime embeds it at
 build time; shipping a changed file beside an already-built executable does not rebind it.
-An absent file means code defaults. Editor refocus rereads it; malformed external edits are
+An absent file means the map's asset/code defaults. Editor refocus rereads it; malformed external edits are
 reported and leave the last working configuration active.
 
 You can author the same file without the editor:

@@ -4,6 +4,24 @@ const eggy = @import("eggy");
 const HotGame = @import("hot_reload.zig").HotGame;
 const history_zig = @import("../history.zig");
 
+const Source = struct {
+    fn read(_: *anyopaque, gpa: std.mem.Allocator, path: []const u8) ![:0]u8 {
+        if (!std.mem.eql(u8, path, "resources/player.inmap.zon")) return error.FileNotFound;
+        return gpa.dupeZ(u8,
+            \\.{ .controls = .{
+            \\    .{ .name = "move", .kind = .vector, .bindings = .{ .{ .keys_2d = .{} } } },
+            \\    .{ .name = "jump", .bindings = .{ .{ .key = .space } } },
+            \\} }
+        );
+    }
+    fn model(_: *anyopaque, _: std.mem.Allocator, _: []const u8) !eggy.assets.Model {
+        return error.NotPackaged;
+    }
+    fn image(_: *anyopaque, _: std.mem.Allocator, _: []const u8) !eggy.assets.Texture {
+        return error.OutOfMemory;
+    }
+};
+
 fn attachInput(app: *eggy.App, gpa: std.mem.Allocator) !*eggy.input_backend.Backend {
     const backend = try gpa.create(eggy.input_backend.Backend);
     backend.* = .{ .gpa = gpa, .state = .init(gpa) };
@@ -25,7 +43,8 @@ test "the game's library loads, runs, swaps for a fresh copy, and unloads cleanl
     app.instances = null;
     app.ui_layer = null;
     app.scene_access = null;
-    app.resource_provider = .{};
+    var resource_context: u8 = 0;
+    app.resource_provider = eggy.resources.Resources.from(&resource_context, Source.read, Source.model, Source.image);
     defer app.world.deinit();
     app.preference_values = .init(gpa);
     defer app.preference_values.deinit();
@@ -34,6 +53,10 @@ test "the game's library loads, runs, swaps for a fresh copy, and unloads cleanl
     game.start(&app, &.{}, .keep);
     game.update(&app);
     try std.testing.expect(game.state != null);
+    try std.testing.expectEqual(@as(usize, 2), backend.state.owners.count());
+    try std.testing.expectEqualStrings("game/fixture", game.file_types[0].key);
+    try std.testing.expectEqualStrings("ab\x00cd", game.file_types[0].contents);
+    try std.testing.expect(@intFromPtr(game.file_types[0].title.ptr) != @intFromPtr(game.game.file_types[0].title));
     const first_copy = try gpa.dupe(u8, game.copy_path);
     defer gpa.free(first_copy);
 
@@ -42,6 +65,8 @@ test "the game's library loads, runs, swaps for a fresh copy, and unloads cleanl
     game.start(&app, &.{}, .keep);
     game.update(&app);
     try std.testing.expect(game.state != null);
+    try std.testing.expectEqualStrings("game/fixture", game.file_types[0].key);
+    try std.testing.expectEqualStrings("ab\x00cd", game.file_types[0].contents);
     try std.testing.expect(!std.mem.eql(u8, first_copy, game.copy_path));
     try std.testing.expectError(error.FileNotFound, std.Io.Dir.cwd().access(io, first_copy, .{}));
 
@@ -123,22 +148,11 @@ test "typed actions and game UI cross the real ABI and undo after library replac
     app.instances = null;
     app.ui_layer = null;
     app.scene_access = null;
-    const Source = struct {
-        fn read(_: *anyopaque, _: std.mem.Allocator, _: []const u8) ![:0]u8 {
-            return error.FileNotFound;
-        }
-        fn model(_: *anyopaque, _: std.mem.Allocator, _: []const u8) !eggy.assets.Model {
-            return error.NotPackaged;
-        }
-        fn image(_: *anyopaque, _: std.mem.Allocator, _: []const u8) !eggy.assets.Texture {
-            return error.OutOfMemory;
-        }
-    };
     var resource_context: u8 = 0;
     app.resource_provider = eggy.resources.Resources.from(&resource_context, Source.read, Source.model, Source.image);
     const backend = try attachInput(&app, gpa);
     defer backend.deinit();
-    try backend.state.readOverrides(".{ .controls = .{ .{ .owner = \"game/player\", .name = \"jump\", .bindings = .{ .{ .key = .j } } } } }");
+    try backend.state.readOverrides(".{ .controls = .{ .{ .owner = \"game/player\", .name = \"jump\", .bindings = .{ .{ .key = .j } } }, .{ .owner = \"game/asset-player\", .name = \"jump\", .bindings = .{ .{ .key = .j } } } } }");
     app.time = .{};
     var game = try HotGame.load(gpa, path);
     defer game.deinit(&app);

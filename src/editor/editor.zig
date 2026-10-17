@@ -53,6 +53,7 @@ const extensions = @import("extensions/extensions.zig");
 const GameInput = @import("game_input.zig").State;
 const InputSettings = @import("input_settings.zig").InputSettings;
 const InputMappingsWindow = @import("input_mappings.zig").InputMappingsWindow;
+const input_map_asset = @import("input_map_asset/input_map_asset.zig");
 
 /// The editor for `project`, which declares `name` and `game_library` (the game library's
 /// `file_name`, beside the editor). The game and its plugins run as they do in the runtime,
@@ -66,6 +67,7 @@ pub fn Editor(comptime project: type) type {
         game_input: GameInput = .{},
         input_settings: ?*InputSettings = null,
         input_mappings_window: ?*InputMappingsWindow = null,
+        input_map_window: ?*input_map_asset.Window = null,
         /// The game and its plugins, from their library; null if it couldn't load (logged).
         game: ?HotGame,
         /// When the game's library was built, to tell whether a rebuild changed it.
@@ -313,6 +315,7 @@ pub fn Editor(comptime project: type) type {
             if (self.game) |*game| game.deinit(&self.app);
             if (self.input_settings) |settings| settings.close();
             if (self.input_mappings_window) |window| window.close(&self.app.graphics);
+            if (self.input_map_window) |window| window.close(&self.app.graphics);
             if (self.project_flow) |flow| flow.close(&self.app.graphics);
             if (self.build_window) |window| window.close(&self.app.graphics);
             if (self.devtools_window) |window| window.close(&self.app.graphics);
@@ -474,6 +477,7 @@ pub fn Editor(comptime project: type) type {
                         // The view is a preference, so it is the same in the next editor.
                         const view_before: assets.View = @enumFromInt(@intFromEnum(preferences.editor(&self.app.preference_values).assets_view));
                         self.assets_panel.view = view_before;
+                        self.assets_panel.file_types = if (self.game) |game| game.file_types else &.{};
                         if (self.assets_panel.build(page_ui, if (self.project) |opened| opened.dir else null, &self.asset_icons, self.openScenePath())) |action| self.applyAssetAction(action);
                         if (self.assets_panel.view != view_before) self.rememberAssetsView();
                     },
@@ -543,6 +547,14 @@ pub fn Editor(comptime project: type) type {
                 }
             }
             if (self.input_mappings_window) |window| try window.update(&self.app.graphics, &self.ui, &self.app.input_backend.?.state);
+            if (self.input_map_window) |window| {
+                const result = try window.update(&self.app.graphics, &self.ui, &self.history);
+                if (result.saved) self.assets_panel.refreshSoon();
+                if (result.close) {
+                    window.close(&self.app.graphics);
+                    self.input_map_window = null;
+                }
+            }
             if (self.input_settings) |settings| try settings.recordPending(&self.history);
             if (self.about_window) |window| if (!try window.update(&self.app.graphics, &self.ui)) {
                 window.close(&self.app.graphics);
@@ -603,6 +615,12 @@ pub fn Editor(comptime project: type) type {
         /// changes, or the person just answered "Save changes?" for it. Otherwise it opens the
         /// prompt (once) and says no; the answer carries `leaving` out (`answerSavePrompt`).
         pub fn mayLeave(self: *Self, leaving: Leaving) bool {
+            if (self.input_map_window) |window| if (window.document.modified()) {
+                window.view.confirm_close = true;
+                window.window.popout.window.window.raise() catch |err| std.log.err("cannot focus the input map: {t}", .{err});
+                self.workspace.toast("Save or discard the input map, then try again");
+                return false;
+            };
             if (self.leave_approved) {
                 self.leave_approved = false;
                 return true;
@@ -769,24 +787,6 @@ pub fn Editor(comptime project: type) type {
             return if (self.open_scene) |*scene| scene.path else null;
         }
 
-        /// Carry out what the Assets panel asked: open or start a scene, or show a file.
-        fn applyAssetAction(self: *Self, action: assets.Action) void {
-            const opened = self.project orelse return;
-            switch (action) {
-                .open_scene, .create_scene => self.openSceneStep(action) catch |err| std.log.err("cannot open the scene: {t}", .{err}),
-                .open_code => |path| {
-                    const file = std.fs.path.join(self.gpa, &.{ opened.dir, path }) catch return;
-                    defer self.gpa.free(file);
-                    const choice = preferences.editor(&self.app.preference_values).code_editor;
-                    code_editor.open(self.gpa, choice, opened.dir, file) catch |err| {
-                        std.log.err("cannot open {s} in {t}: {t}. Pick another code editor in Edit > Preferences.", .{ path, choice, err });
-                        self.workspace.toast("Couldn't open it: see the Console");
-                    };
-                },
-                .reveal => |path| {
-                    // A file shows as its folder.
-                    const folder = std.fs.path.join(self.gpa, &.{ opened.dir, if (std.mem.lastIndexOfScalar(u8, path, '/')) |slash| path[0..slash] else "" }) catch return;
-                    defer self.gpa.free(folder);
         fn openDiagnostic(self: *Self, source: @import("diagnostic.zig").Location) void {
             const opened = self.project orelse return;
             const file = std.fs.path.resolve(self.gpa, &.{ opened.dir, source.path }) catch |err| {
@@ -801,17 +801,65 @@ pub fn Editor(comptime project: type) type {
             };
         }
 
+        /// Carry out what the Assets panel asked: open or start a scene, or show a file.
+        fn applyAssetAction(self: *Self, action: assets.Action) void {
+            const opened = self.project orelse return;
+            switch (action) {
+                .open_scene, .create_scene => self.openSceneStep(action) catch |err| std.log.err("cannot open the scene: {t}", .{err}),
+                .open_input_map => |path| self.openInputMap(path) catch |err| {
+                    std.log.err("cannot open input map {s}: {t}", .{ path, err });
+                    self.workspace.toast("Couldn't open the input map: see the Console");
+                },
+                .open_code => |path| {
+                    const file = std.fs.path.join(self.gpa, &.{ opened.dir, path }) catch return;
+                    defer self.gpa.free(file);
+                    const choice = preferences.editor(&self.app.preference_values).code_editor;
+                    code_editor.open(self.gpa, choice, opened.dir, file) catch |err| {
+                        std.log.err("cannot open {s} in {t}: {t}. Pick another code editor in Edit > Preferences.", .{ path, choice, err });
+                        self.workspace.toast("Couldn't open it: see the Console");
+                    };
+                },
+                .reveal => |path| {
+                    // A file shows as its folder.
+                    const folder = std.fs.path.join(self.gpa, &.{ opened.dir, if (std.mem.lastIndexOfScalar(u8, path, '/')) |slash| path[0..slash] else "" }) catch return;
+                    defer self.gpa.free(folder);
                     file_manager.showFolder(self.gpa, folder) catch |err| std.log.err("cannot show {s}: {t}", .{ path, err });
                 },
                 .copy_path => |path| {
                     @import("terminal_view.zig").copyToClipboard(path);
                     self.workspace.toast("Copied the path");
                 },
-                .create_folder, .rename, .duplicate, .delete, .move_into => self.changeFiles(opened.dir, action) catch |err| {
+                .create_folder, .create_file, .rename, .duplicate, .delete, .move_into => self.changeFiles(opened.dir, action) catch |err| {
                     std.log.err("cannot change the files: {t}", .{err});
                     self.workspace.toast("Couldn't do that: see the Console");
                 },
             }
+        }
+
+        fn openInputMap(self: *Self, path: []const u8) !void {
+            const opened = self.project orelse return error.NoProject;
+            if (self.input_map_window) |window| {
+                if (std.mem.eql(u8, window.path, path)) return window.window.popout.window.window.raise();
+                if (window.document.modified()) {
+                    window.view.confirm_close = true;
+                    try window.window.popout.window.window.raise();
+                    return error.UnsavedInputMap;
+                }
+                window.close(&self.app.graphics);
+                self.input_map_window = null;
+            }
+            self.input_map_window = try input_map_asset.Window.open(self.gpa, &self.app.graphics, self.ui.font, opened.dir, path);
+        }
+
+        fn beforeAssetRemoval(self: *Self, path: []const u8) !void {
+            const window = self.input_map_window orelse return;
+            if (!window.affectedBy(path)) return;
+            if (window.document.modified()) {
+                window.view.confirm_close = true;
+                return error.UnsavedInputMap;
+            }
+            window.close(&self.app.graphics);
+            self.input_map_window = null;
         }
 
         /// Open the scene `action` names, or make a new one, as a step to undo: undoing it puts
@@ -871,13 +919,30 @@ pub fn Editor(comptime project: type) type {
             const io = threaded.io();
             var files = try std.Io.Dir.cwd().openDir(io, project_dir, .{});
             defer files.close(io);
-            defer self.filesChanged();
+            defer {
+                self.assets_panel.refreshSoon();
+                self.syncDescriptors();
+                // Input-map defaults load on the next start, without rebuilding live scene instances.
+                if (action != .create_file or !std.mem.endsWith(u8, action.create_file.file_type.extension, eggy.input.asset.extension))
+                    self.app.sceneInstances().remakeAll();
+            }
             switch (action) {
                 .create_folder => |parent| self.history.record(.{ .create = .{ .path = try file_ops.createFolder(self.gpa, io, files, parent) } }),
+                .create_file => |creation| {
+                    try self.history.reserve();
+                    const path = try file_ops.createFile(self.gpa, io, files, creation.folder, creation.file_type);
+                    self.history.record(.{ .create = .{ .path = path } });
+                    if (std.mem.endsWith(u8, path, eggy.input.asset.extension)) {
+                        if (self.input_map_window == null or !self.input_map_window.?.document.modified()) {
+                            try self.openInputMap(path);
+                        } else self.workspace.toast("Created input map; save or close the open map to edit it");
+                    }
+                },
                 .rename => |change| {
                     const renamed = try file_ops.rename(self.gpa, io, files, change.path, change.name);
                     if (self.open_scene) |*scene| scene.moved(change.path, renamed);
                     self.history.record(.{ .rename = .{ .from = try self.gpa.dupe(u8, change.path), .to = renamed } });
+                    if (self.input_map_window) |window| try window.moved(change.path, renamed);
                 },
                 .duplicate => |path| self.history.record(.{ .create = .{ .path = try file_ops.duplicate(self.gpa, io, files, path) } }),
                 // Dragged onto a folder: moved, or copied with Ctrl held.
@@ -887,8 +952,10 @@ pub fn Editor(comptime project: type) type {
                     const moved = try file_ops.moveInto(self.gpa, io, files, change.path, change.folder);
                     if (self.open_scene) |*scene| scene.moved(change.path, moved);
                     self.history.record(.{ .rename = .{ .from = try self.gpa.dupe(u8, change.path), .to = moved } });
+                    if (self.input_map_window) |window| try window.moved(change.path, moved);
                 },
                 .delete => |path| {
+                    try self.beforeAssetRemoval(path);
                     const trashed = try file_ops.trash(self.gpa, io, files, path);
                     if (self.open_scene) |*scene| scene.deleted(path);
                     self.history.record(.{ .delete = .{ .path = try self.gpa.dupe(u8, path), .trashed = trashed } });
@@ -947,7 +1014,7 @@ pub fn Editor(comptime project: type) type {
             const io = threaded.io();
             var files = try std.Io.Dir.cwd().openDir(io, opened.dir, .{});
             defer files.close(io);
-            defer self.filesChanged();
+            defer if (step.* == .input_map) self.assets_panel.refreshSoon() else self.filesChanged();
             switch (step.*) {
                 .group => unreachable,
                 .scene => |change| {
@@ -968,16 +1035,19 @@ pub fn Editor(comptime project: type) type {
                     const to = if (back) change.from else change.to;
                     try file_ops.move(io, files, from, to);
                     if (self.open_scene) |*scene| scene.moved(from, to);
+                    if (self.input_map_window) |window| try window.moved(from, to);
                 },
                 .delete => |*change| if (back) {
                     try file_ops.restore(io, files, change.trashed, change.path);
                 } else {
+                    try self.beforeAssetRemoval(change.path);
                     const trashed = try file_ops.trash(self.gpa, io, files, change.path);
                     self.gpa.free(change.trashed);
                     change.trashed = trashed;
                     if (self.open_scene) |*scene| scene.deleted(change.path);
                 },
                 .create => |*change| if (back) {
+                    try self.beforeAssetRemoval(change.path);
                     const trashed = try file_ops.trash(self.gpa, io, files, change.path);
                     if (change.trashed) |old| self.gpa.free(old);
                     change.trashed = trashed;
@@ -998,6 +1068,17 @@ pub fn Editor(comptime project: type) type {
                 .input_bindings => |change| {
                     const settings = self.input_settings orelse return error.NoProject;
                     try settings.restore(change.value(direction));
+                },
+                .input_map => |change| {
+                    const expected = if (back) change.text.after else change.text.before;
+                    if (self.input_map_window) |window| {
+                        if (std.mem.eql(u8, window.path, change.path)) {
+                            try window.restore(io, files, expected, change.text.value(direction));
+                            return;
+                        }
+                    }
+                    var restored = try input_map_asset.restoreFile(self.gpa, io, files, change.path, expected, change.text.value(direction));
+                    restored.deinit();
                 },
                 .layout => |change| {
                     const text = change.value(direction);
@@ -1194,7 +1275,16 @@ pub fn Editor(comptime project: type) type {
                 }
                 if (window.handle(curr_event)) return self.toolWindowTook(curr_event);
             }
+            if (self.input_map_window) |window| {
+                if (window.closeRequested(curr_event)) {
+                    window.close(&self.app.graphics);
+                    self.input_map_window = null;
+                    return .run;
+                }
+                if (window.handle(curr_event)) return self.toolWindowTook(curr_event);
+            }
             if (curr_event == .window_focus_lost) {
+                self.scene_view.camera.cancelNavigation();
                 self.game_input = .{};
                 self.app.input.releaseAll();
                 if (self.app.ui_layer) |layer| layer.cancel();
@@ -1284,7 +1374,6 @@ pub fn Editor(comptime project: type) type {
             // The Scene panel's camera takes presses, drags and wheels over it; F frames the
             // selection, and Delete deletes it.
             if (!game_has_scene) if (self.scene_view.handleFirst(curr_event, self.sceneRectFor(slot, curr_event))) {
-                self.scene_view.camera.cancelNavigation();
                 if (curr_event == .mouse_button_down) self.unfocusOnPress(slot, .{ .x = curr_event.mouse_button_down.x, .y = curr_event.mouse_button_down.y }, false);
                 return .run;
             };
@@ -1446,6 +1535,14 @@ pub fn Editor(comptime project: type) type {
             const discovery = @import("projects/discovery.zig");
             var threaded: std.Io.Threaded = .init_single_threaded;
             const io = threaded.io();
+            const dir = if (try discovery.explicitDirectory(args)) |requested|
+                try std.Io.Dir.cwd().realPathFileAlloc(io, requested, gpa)
+            else
+                (discovery.find(gpa, io, project.name, try sdl3.filesystem.getBasePath(), ".") catch |err| {
+                    std.log.err("cannot discover project {s}: {t}", .{ project.name, err });
+                    return err;
+                }) orelse return null;
+            defer gpa.free(dir);
             var project_root = std.Io.Dir.cwd().openDir(io, dir, .{}) catch |err| {
                 std.log.err("cannot open project {s}: {t}", .{ dir, err });
                 return err;
@@ -1536,14 +1633,6 @@ pub fn Editor(comptime project: type) type {
             try self.startBuild(.{ .link = self.upgrades.developer_dir.? });
         }
 
-            const dir = if (try discovery.explicitDirectory(args)) |requested|
-                try std.Io.Dir.cwd().realPathFileAlloc(io, requested, gpa)
-            else
-                (discovery.find(gpa, io, project.name, try sdl3.filesystem.getBasePath(), ".") catch |err| {
-                    std.log.err("cannot discover project {s}: {t}", .{ project.name, err });
-                    return err;
-                }) orelse return null;
-            defer gpa.free(dir);
         /// Start `action`'s job on the open project as `rebuild`, and the Build progress window
         /// that follows it.
         pub fn startBuild(self: *Self, action: job_zig.Action) !void {
@@ -2097,6 +2186,10 @@ pub fn Editor(comptime project: type) type {
                 .mouse_button_down, .mouse_button_up => |button| .{ .x = button.x, .y = button.y },
                 .mouse_motion => |motion| .{ .x = motion.x, .y = motion.y },
                 .mouse_wheel => |wheel| .{ .x = wheel.x, .y = wheel.y },
+                .pinch_begin, .pinch_update, .pinch_end => blk: {
+                    const mouse = sdl3.mouse.getState();
+                    break :blk .{ .x = mouse[1], .y = mouse[2] };
+                },
                 .finger_down, .finger_up, .finger_motion, .finger_canceled => |finger| blk: {
                     const window = sdl3.video.Window.fromId(finger.window_id orelse break :blk null) catch break :blk null;
                     const width, const height = window.getSize() catch break :blk null;
@@ -2154,6 +2247,8 @@ pub fn Editor(comptime project: type) type {
 
 test {
     _ = @import("input_mappings.zig");
+    _ = @import("input_map_asset/input_map_asset.zig");
+    _ = @import("assets/creation.zig");
     _ = @import("input_settings.zig");
     _ = @import("game_input.zig");
     _ = extensions;
@@ -2163,6 +2258,8 @@ test {
     _ = @import("play_button.zig");
     _ = @import("projects/template.zig");
     _ = @import("projects/job.zig");
+    _ = @import("projects/build_output.zig");
+    _ = @import("projects/discovery.zig");
     _ = @import("projects/wizard.zig");
     _ = @import("projects/flow.zig");
     _ = @import("projects/engine.zig");
@@ -2186,10 +2283,6 @@ test {
     _ = @import("scene_view/scene_view.zig");
     _ = @import("save_prompt.zig");
     _ = @import("assets/assets.zig");
-                .pinch_begin, .pinch_update, .pinch_end => blk: {
-                    const mouse = sdl3.mouse.getState();
-                    break :blk .{ .x = mouse[1], .y = mouse[2] };
-                },
     _ = @import("assets/listing.zig");
     _ = @import("assets/icons.zig");
     _ = @import("assets/file_ops.zig");
@@ -2205,6 +2298,7 @@ test {
     _ = @import("terminal_view.zig");
     _ = @import("console_log.zig");
     _ = @import("console.zig");
+    _ = @import("diagnostic.zig");
 }
 
 test "the editor compiles for a project" {
@@ -2216,6 +2310,3 @@ test "the editor compiles for a project" {
     };
     std.testing.refAllDecls(Editor(project));
 }
-    _ = @import("projects/build_output.zig");
-    _ = @import("projects/discovery.zig");
-    _ = @import("diagnostic.zig");

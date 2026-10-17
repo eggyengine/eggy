@@ -6,7 +6,8 @@ pub const Persistence = struct {
     context: *anyopaque,
     save: *const fn (*anyopaque, []const u8) anyerror!void,
 };
-const SavedBinding = union(enum) {
+/// The portable ZON form excludes physical controller IDs, which cannot survive a run.
+pub const SavedBinding = union(enum) {
     key: types.Key,
     mouse: types.MouseButton,
     controller: struct { button: types.ControllerButton },
@@ -16,6 +17,43 @@ const SavedBinding = union(enum) {
     controller_stick: struct { stick: types.Stick = .left, dead_zone: f32 = 0.15, scale: [2]f32 = .{ 1, 1 } },
     mouse_delta: @FieldType(types.Binding, "mouse_delta"),
     mouse_wheel: @FieldType(types.Binding, "mouse_wheel"),
+
+    pub fn binding(self: SavedBinding) types.Binding {
+        return switch (self) {
+            .key => |key| .{ .key = key },
+            .mouse => |button| .{ .mouse = button },
+            .controller => |controller| .{ .controller = .{ .button = controller.button } },
+            .key_axis => |value| .{ .key_axis = value },
+            .keys_2d => |value| .{ .keys_2d = value },
+            .controller_axis => |value| .{ .controller_axis = .{ .axis = value.axis, .dead_zone = value.dead_zone, .scale = value.scale } },
+            .controller_stick => |value| .{ .controller_stick = .{ .stick = value.stick, .dead_zone = value.dead_zone, .scale = value.scale } },
+            .mouse_delta => |value| .{ .mouse_delta = value },
+            .mouse_wheel => |value| .{ .mouse_wheel = value },
+        };
+    }
+
+    pub fn from(binding_value: types.Binding) !SavedBinding {
+        return switch (binding_value) {
+            .key => |key| .{ .key = key },
+            .mouse => |button| .{ .mouse = button },
+            .controller => |controller| blk: {
+                if (controller.device != null) return error.TransientControllerBinding;
+                break :blk .{ .controller = .{ .button = controller.button } };
+            },
+            .key_axis => |value| .{ .key_axis = value },
+            .keys_2d => |value| .{ .keys_2d = value },
+            .controller_axis => |value| blk: {
+                if (value.device != null) return error.TransientControllerBinding;
+                break :blk .{ .controller_axis = .{ .axis = value.axis, .dead_zone = value.dead_zone, .scale = value.scale } };
+            },
+            .controller_stick => |value| blk: {
+                if (value.device != null) return error.TransientControllerBinding;
+                break :blk .{ .controller_stick = .{ .stick = value.stick, .dead_zone = value.dead_zone, .scale = value.scale } };
+            },
+            .mouse_delta => |value| .{ .mouse_delta = value },
+            .mouse_wheel => |value| .{ .mouse_wheel = value },
+        };
+    }
 };
 pub const SavedControl = struct { owner: []const u8, name: []const u8, bindings: []const SavedBinding, trigger: ?types.Trigger = null };
 const SavedMap = struct { owner: []const u8, priority: i32 = 0, enabled: bool = true };
@@ -195,17 +233,7 @@ pub const Overrides = struct {
         for (saved.controls) |control| {
             const mappings = try self.gpa.alloc(types.Binding, control.bindings.len);
             defer self.gpa.free(mappings);
-            for (mappings, control.bindings) |*mapping, saved_binding| mapping.* = switch (saved_binding) {
-                .key => |key| .{ .key = key },
-                .mouse => |button| .{ .mouse = button },
-                .controller => |controller| .{ .controller = .{ .button = controller.button } },
-                .key_axis => |value| .{ .key_axis = value },
-                .keys_2d => |value| .{ .keys_2d = value },
-                .controller_axis => |value| .{ .controller_axis = .{ .axis = value.axis, .dead_zone = value.dead_zone, .scale = value.scale } },
-                .controller_stick => |value| .{ .controller_stick = .{ .stick = value.stick, .dead_zone = value.dead_zone, .scale = value.scale } },
-                .mouse_delta => |value| .{ .mouse_delta = value },
-                .mouse_wheel => |value| .{ .mouse_wheel = value },
-            };
+            for (mappings, control.bindings) |*mapping, saved_binding| mapping.* = saved_binding.binding();
             try validate(mappings, true);
             const key = try stableKey(self.gpa, control.owner, control.name);
             defer self.gpa.free(key);
@@ -225,26 +253,7 @@ fn writeControl(writer: *std.Io.Writer, owner: []const u8, name: []const u8, map
     try std.zon.stringify.serialize(name, .{ .whitespace = false }, writer);
     try writer.writeAll(", .bindings = .{");
     for (mappings) |mapping| {
-        const saved: SavedBinding = switch (mapping) {
-            .key => |key| .{ .key = key },
-            .mouse => |button| .{ .mouse = button },
-            .controller => |controller| blk: {
-                if (controller.device != null) return error.TransientControllerBinding;
-                break :blk .{ .controller = .{ .button = controller.button } };
-            },
-            .key_axis => |value| .{ .key_axis = value },
-            .keys_2d => |value| .{ .keys_2d = value },
-            .controller_axis => |value| blk: {
-                if (value.device != null) return error.TransientControllerBinding;
-                break :blk .{ .controller_axis = .{ .axis = value.axis, .dead_zone = value.dead_zone, .scale = value.scale } };
-            },
-            .controller_stick => |value| blk: {
-                if (value.device != null) return error.TransientControllerBinding;
-                break :blk .{ .controller_stick = .{ .stick = value.stick, .dead_zone = value.dead_zone, .scale = value.scale } };
-            },
-            .mouse_delta => |value| .{ .mouse_delta = value },
-            .mouse_wheel => |value| .{ .mouse_wheel = value },
-        };
+        const saved = try SavedBinding.from(mapping);
         try std.zon.stringify.serialize(saved, .{ .whitespace = false }, writer);
         try writer.writeByte(',');
     }

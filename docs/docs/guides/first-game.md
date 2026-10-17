@@ -42,7 +42,7 @@ When it is done, the project's own editor opens:
 
 ## Make a scene
 
-A scene is a file holding entities. Press **New scene** in Assets: the editor makes `untitled.scene.zon` and opens it. Save it with **Ctrl+S** whenever you change it; the status bar marks it with `*` while it has unsaved changes.
+A scene is a file holding entities. Choose **New > Scene** in Assets: the editor makes `untitled.scene.zon` and opens it. Save it with **Ctrl+S** whenever you change it; the status bar marks it with `*` while it has unsaved changes.
 
 ## Add the player
 

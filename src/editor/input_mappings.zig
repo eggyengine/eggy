@@ -19,6 +19,7 @@ const vector_sources = [_][]const u8{ "Four keys", "Controller stick", "Mouse mo
 
 /// Pure UI state; the SDL window is owned separately so the editor can exercise this in tests.
 pub const View = struct {
+    source: enum { registered, asset } = .registered,
     scroll: ui.Layout.ScrollState = .{},
     map_index: usize = 0,
     control_index: usize = 0,
@@ -89,19 +90,22 @@ pub const View = struct {
 
     pub fn build(self: *View, context: *ui.Context, state: *State) !void {
         const arena = context.builder().allocator;
-        context.heading(2, "Input mappings");
-        context.muted("Code reads named controls. Project edits are baked into shipped games.");
-        if (state.persistence == null) context.muted("No project is open: edits here are session-only.");
+        if (self.source == .registered) {
+            context.heading(2, "Input mappings");
+            context.muted("Code reads named controls. Project edits are baked into shipped games.");
+            if (state.persistence == null) context.muted("No project is open: edits here are session-only.");
+        } else context.muted("Apply binding/trigger edits below, then Save file to write the asset.");
         if (self.last_error) |err| context.label("Could not apply edit: {s}", .{@errorName(err)});
         if (self.capture != null) context.muted("Press the desired input. Escape cancels capture.");
+        // Dropdown text remains in the previous-frame tree when a map is replaced.
         const map_labels = try arena.alloc([]const u8, state.owners.count());
         var maps = state.owners.valueIterator();
-        for (map_labels) |*label| label.* = maps.next().?.key;
+        for (map_labels) |*label| label.* = try arena.dupe(u8, maps.next().?.key);
         if (map_labels.len == 0) {
             context.muted("No maps registered. Declare input_maps on your game or plugin.");
             return;
         }
-        if (context.select("Map", map_labels, &self.map_index)) {
+        if (self.source == .registered and context.select("Map", map_labels, &self.map_index)) {
             self.control_index = 0;
             self.binding_index = 0;
             self.loaded = null;
@@ -120,7 +124,7 @@ pub const View = struct {
         _ = context.checkbox("Enabled at startup", &self.map_enabled);
         _ = context.textInput("Map priority", &self.priority, "Higher maps own shared inputs");
         context.begin(.row);
-        if (context.button("Save map defaults")) {
+        if (context.button(if (self.source == .asset) "Apply map settings" else "Save map defaults")) {
             const priority = std.fmt.parseInt(i32, self.priority.text(), 10) catch {
                 self.last_error = error.InvalidPriority;
                 context.end();
@@ -130,7 +134,7 @@ pub const View = struct {
                 self.last_error = null;
             } else |err| self.last_error = err;
         }
-        if (context.button("Reset map defaults")) {
+        if (self.source == .registered and context.button("Reset map defaults")) {
             if (state.setMapDefaults(map_id, null)) |_| {
                 self.last_error = null;
             } else |err| self.last_error = err;
@@ -138,7 +142,7 @@ pub const View = struct {
         context.end();
         context.muted("Runtime switching is temporary; these defaults ship with the game.");
         var labels: std.ArrayList([]const u8) = .empty;
-        for (state.controls.values()) |control| if (control.map_id == map_id) try labels.append(arena, control.name);
+        for (state.controls.values()) |control| if (control.map_id == map_id) try labels.append(arena, try arena.dupe(u8, control.name));
         if (context.select("Control", labels.items, &self.control_index)) {
             self.binding_index = 0;
             self.loaded = null;
@@ -187,7 +191,7 @@ pub const View = struct {
         }
         if (self.draft) |*draft| {
             try self.editBinding(context, draft);
-            if (context.button("Save binding")) {
+            if (context.button(if (self.source == .asset) "Apply binding" else "Save binding")) {
                 if (self.saveBinding(state, id, mappings)) |_| {
                     self.last_error = null;
                     self.loaded = null;
@@ -210,7 +214,7 @@ pub const View = struct {
             _ = context.select("Trigger", &trigger_names, &self.trigger_index);
             if (self.trigger_index == 1 or self.trigger_index == 2) _ = context.textInput("Seconds", &self.duration, "Nonnegative counted input seconds");
             if (self.trigger_index == 3) _ = context.select("Chord control", labels.items, &self.chord_index);
-            if (context.button("Save trigger")) {
+            if (context.button(if (self.source == .asset) "Apply trigger" else "Save trigger")) {
                 const rule: t.Trigger = switch (self.trigger_index) {
                     1 => .{ .hold = std.fmt.parseFloat(f32, self.duration.text()) catch {
                         self.last_error = error.InvalidTrigger;
@@ -229,7 +233,7 @@ pub const View = struct {
                 } else |err| self.last_error = err;
             }
         }
-        if (context.button("Reset control to code defaults")) {
+        if (self.source == .registered and context.button("Reset control to map defaults")) {
             if (state.resetMappings(id)) |_| {
                 self.loaded = null;
                 self.last_error = null;
