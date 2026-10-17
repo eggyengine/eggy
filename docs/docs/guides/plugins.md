@@ -11,59 +11,95 @@ Plugins are compiled into your game. Eggy finds each hook with `@hasDecl`, so a 
 
 ## Hooks
 
+`Game` and `Plugin` support the same optional functions below. These are hooks, not
+Zig overloads or inherited methods: Eggy calls a public function when your type declares
+its name. Leave out any hook you do not need.
+
+Declare hooks **inside** `pub const Game` in `src/main.zig`, or `pub const Plugin` in
+`src/root.zig`, not as functions beside the type. `Self` below means the enclosing type,
+so the signatures work unchanged if you rename `Plugin` to `Game`.
+
+This is a signature reference; replace `{ ... }` with your implementation:
+
 ```zig
 const std = @import("std");
 const eggy = @import("eggy");
 
 pub const Plugin = struct {
+    const Self = @This();
+
     frames: u64 = 0,
 
-    pub fn init(gpa: std.mem.Allocator, app: *eggy.App) !Plugin { ... }
-    pub fn deinit(self: *Plugin) void { ... }
-    pub fn event(self: *Plugin, app: *eggy.App, event: eggy.Event) !void { ... }
-    pub fn update(self: *Plugin, app: *eggy.App) !void { ... }
-    pub fn gameUi(self: *Plugin, app: *eggy.App, ui: *eggy.ui.Context) !void { ... }
-    pub fn draw(self: *Plugin, app: *eggy.App, target: eggy.DrawContext) !void { ... }
-    pub fn uiEvent(self: *Plugin, app: *eggy.App, event: eggy.Event) !bool { ... }
-    pub fn editorUpdate(self: *Plugin, editor: *eggy.editor.Context) !void { ... }
-    pub fn editorUi(self: *Plugin, editor: *eggy.editor.Context, ui: *eggy.ui.Context) !void { ... }
+    pub fn init(gpa: std.mem.Allocator, app: *eggy.App) !Self { ... }
+    pub fn deinit(self: *Self) void { ... }
+    pub fn event(self: *Self, app: *eggy.App, event: eggy.Event) !void { ... }
+    pub fn update(self: *Self, app: *eggy.App) !void { ... }
+    pub fn gameUi(self: *Self, app: *eggy.App, ui: *eggy.ui.Context) !void { ... }
+    pub fn draw(self: *Self, app: *eggy.App, target: eggy.DrawContext) !void { ... }
+    pub fn uiEvent(self: *Self, app: *eggy.App, event: eggy.Event) !bool { ... }
+    pub fn editorUpdate(self: *Self, editor: *eggy.editor.Context) !void { ... }
+    pub fn editorUi(self: *Self, editor: *eggy.editor.Context, ui: *eggy.ui.Context) !void { ... }
 
     pub const editor_panels = [_]eggy.plugins.EditorPanel{.{ .key = "stats", .title = "Stats" }};
-    pub fn editorPanelUi(self: *Plugin, panel: usize, editor: *eggy.editor.Context, ui: *eggy.ui.Context) !void { ... }
+    pub fn editorPanelUi(self: *Self, panel: usize, editor: *eggy.editor.Context, ui: *eggy.ui.Context) !void { ... }
     pub const editor_commands = [_]eggy.plugins.EditorCommand{.{ .key = "reset", .title = "Reset" }};
-    pub fn editorCommand(self: *Plugin, command: usize, editor: *eggy.editor.Context) !void { ... }
+    pub fn editorCommand(self: *Self, command: usize, editor: *eggy.editor.Context) !void { ... }
 };
 ```
 
 | Hook | When it runs |
 | --- | --- |
-| `init` | Once, at start-up. Without it, the plugin starts as `.{}`. |
-| `deinit` | Once, at shutdown. |
-| `event` | Gameplay input not consumed by UI, plus platform/window events. |
-| `update` | Once per frame, before the frame is drawn. In the editor, only while playing. |
+| `init` | Each time the instance starts, after scene loading, preference registration and input-map registration. Return the instance; without this hook it starts as `.{}`, so its fields need defaults. Register ECS systems and acquire owned resources here. |
+| `deinit` | Before a started instance is discarded, including shutdown and editor restarts/reloads. Release what that instance owns; Eggy owns the App and world. |
+| `event` | Gameplay input not consumed by UI, plus platform/window events. In the editor, gameplay events run only while playing and not paused. Use [typed input maps](input-mappings.md) in `update` for per-frame actions. |
+| `update` | Each running frame, before ECS Update systems and rendering. In the editor, only while playing and not paused. Use `app.time.delta_s` for frame-independent movement. |
 | `gameUi` | Build Weeoui game content after scene/custom drawing; also in editor Play, including pause. |
-| `draw` | Record custom rendering into an engine-owned target, outside a render pass. |
-| `uiEvent` | Custom UI input before gameplay; return true to consume it. |
-| `editorUpdate` | Once per frame in the editor while not playing, for editor tools. |
-| `editorUi` | Each frame in the editor, to add to the Inspector panel. |
-| `editor_panels`, `editorPanelUi` | In the editor, to add dock panels of your own. See [Editor panels](#editor-panels). |
-| `editor_commands`, `editorCommand` | Commands in the editor's View menu. See [Editor tools](editor-tools.md). |
-| `Preferences` | Settings people change in the editor's Preferences window. See [Preferences](#preferences). |
-| `components` | ECS components the editor's Hierarchy and Inspector show, add and edit. See [Components](#components). |
-| `input_maps` | Typed input maps, registered before `init` for enabled plugins. See [Input mappings](input-mappings.md). |
+| `draw` | After the scene and before `gameUi`, including editor Play while paused. Record custom rendering into the supplied engine-owned target, outside a render pass; Eggy submits the frame. |
+| `uiEvent` | Input not already consumed by the built-in game UI, before gameplay. Return `true` to consume it, or `false` to let it through. In editor Play this also runs while paused, so UI stays interactive. |
+| `editorUpdate` | Each editor frame when gameplay is not running: while editing or paused. Use it for editor tools, not gameplay simulation. |
+| `editorUi` | Build the project's Inspector content when the Inspector is not showing a selected entity. For a separate dock tab, use `editorPanelUi` instead. |
+| `editorPanelUi` | Build the declared editor panel. `panel` is its zero-based index in this type's `editor_panels`, not a global panel ID. See [Editor panels](#editor-panels). |
+| `editorCommand` | When someone invokes a declared View-menu command. `command` is its zero-based index in this type's `editor_commands`. See [Editor tools](editor-tools.md#add-commands). |
+
+`init` is a constructor, so it has no `self` parameter. Other hooks receive a mutable
+pointer to the current instance. Keep the parameter order and return types shown above:
+`deinit` returns `void`, `uiEvent` returns `!bool`, and the other instance hooks return
+`!void`, even if your implementation currently cannot fail. Use `_` for unused parameters.
 
 The editor-only hooks never run in the runtime, so the runtime pays nothing for them.
 They receive a borrowed `eggy.editor.Context`: use `editor.app` for the App and its services
 for selection, undoable edits, project settings, scenes, and files. Do not retain the context.
+The `ui` and draw contexts are borrowed too; use them only during their hook.
+Editor updates and game rendering are suspended while the Build window is up.
 See [Game UI](game-ui.md) for styling, fonts, custom renderers, and input capture.
+
+### Optional declarations
+
+These describe what the game or plugin provides; they are not functions to override.
+
+| Declaration | What it adds |
+| --- | --- |
+| `pub const components = .{ Health, Spin };` | ECS component types for scene serialization and the Inspector. See [Components](#components). |
+| `pub const input_maps = .{PlayerInput};` | Typed input maps registered before `init` for enabled plugins. See [Input mappings](input-mappings.md). |
+| `pub const Preferences = struct { volume: f32 = 0.8 };` | Settings read with `app.preferences(Preferences)`. See [Preferences](#preferences). |
+| `pub const editor_panels = [_]eggy.plugins.EditorPanel{...};` | Dock-panel metadata, paired with `editorPanelUi`. |
+| `pub const editor_commands = [_]eggy.plugins.EditorCommand{...};` | View-menu command metadata, paired with `editorCommand`. |
+| `pub const editor_file_types = [_]eggy.plugins.EditorFileType{...};` | Templates added to both Assets New menus. See [File templates](#file-templates). |
+
+Disabling a plugin skips its instance and hooks, but its component types and preferences
+remain known so scenes and settings retain their values. The game itself is always enabled.
 
 ### Order
 
-Hooks run in the order the plugins are listed, with the game first. Each frame, the game's `update` runs before its plugins' `update`. `deinit` runs in reverse, so a plugin stops before the plugins it may depend on.
+Hooks normally run in the order the plugins are listed, with the game first. Each frame,
+the game's `update` runs before its plugins' `update`. `deinit` runs in reverse, so a
+plugin stops before the plugins it may depend on. `uiEvent` also runs in reverse visual
+order, and stops as soon as a hook returns `true`.
 
 If an `init` fails, the plugins already started are stopped again, and the error ends start-up.
 Standalone uncaught hook errors are fatal; the editor logs game-library hook failures and
-keeps running. See [Error handling](error-handling.md) for recovery and ownership patterns.
+keeps running. An error stops that hook's current dispatch, so later plugins in that dispatch
+are skipped. See [Error handling](error-handling.md) for recovery and ownership patterns.
 
 ### State
 
@@ -71,6 +107,29 @@ A plugin keeps its state in its own fields. Eggy stores plugins by value and may
 
 - don't keep pointers to `self` (in callbacks, say);
 - use the `app` each hook is given rather than storing it.
+
+## File templates
+
+Declare `editor_file_types` inside `Game` or `Plugin` to add entries to both Assets
+**New** menus:
+
+```zig
+pub const editor_file_types = [_]eggy.plugins.EditorFileType{.{
+    .key = "material",
+    .title = "Material",
+    .extension = ".material.zon",
+    .contents = ".{ .roughness = 0.5 }\n",
+}};
+```
+
+The editor creates `Material.material.zon` in the chosen folder, adding a number if
+that name already exists. `contents` is the initial file data; omit it for an empty
+file. The title and extension must not contain path separators. Keys are scoped to
+the published plugin, just like editor commands. Templates remain available when a
+plugin is disabled, and creating a file participates in Undo/Redo.
+
+This is a static template declaration, not a hook. Code/text files open in the
+configured code editor; `.inmap.zon` files open in Eggy's Input Map editor.
 
 ## The app
 
@@ -108,29 +167,6 @@ A plugin lists the ECS components it brings in `components`. The editor's **Hier
 
 ```zig
 pub const Spin = struct {
-## File templates
-
-Declare `editor_file_types` inside `Game` or `Plugin` to add entries to both Assets
-**New** menus:
-
-```zig
-pub const editor_file_types = [_]eggy.plugins.EditorFileType{.{
-    .key = "material",
-    .title = "Material",
-    .extension = ".material.zon",
-    .contents = ".{ .roughness = 0.5 }\n",
-}};
-```
-
-The editor creates `Material.material.zon` in the chosen folder, adding a number if
-that name already exists. `contents` is the initial file data; omit it for an empty
-file. The title and extension must not contain path separators. Keys are scoped to
-the published plugin, just like editor commands. Templates remain available when a
-plugin is disabled, and creating a file participates in Undo/Redo.
-
-This is a static template declaration, not a hook. Code/text files open in the
-configured code editor; `.inmap.zon` files open in Eggy's Input Map editor.
-
     speed: f32 = 0.001,
     turns: f32 = 0,
 };

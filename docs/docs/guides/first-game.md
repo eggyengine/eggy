@@ -74,7 +74,9 @@ Save the scene. Press **Play** at the top of the window to see the game through 
 
 ## Make the player move
 
-Your game is the `Game` type in your project's `src/main.zig`. Open the file in your code editor and replace it with this:
+Your game is the `Game` type in your project's `src/main.zig`. `update` is one of the
+[optional game and plugin hooks](plugins.md#hooks); that reference lists every signature
+and when it runs. Open the file in your code editor and replace it with this:
 
 ```zig
 //! cube_runner: the game. A cube you drive with WASD, turned by the mouse, with the camera
