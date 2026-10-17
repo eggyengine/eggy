@@ -106,6 +106,10 @@ volume = change.value(.undo);
 
 This value does not allocate, clone pointers, or own slices. A history owner must copy
 borrowed values before their source expires. Do not store live component pointers in history.
+Eggy's editor uses the same value type for scene, layout, and project-setting snapshots.
+Undo/redo moves an entry only after it applies successfully. Groups reverse in order and
+roll earlier children back if a later child fails; an unsuccessful rollback requires explicit
+recovery instead of pretending the history cursor is correct.
 
 ## Capability support
 

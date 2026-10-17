@@ -854,7 +854,7 @@ pub fn Editor(comptime project: type) type {
         }
 
         /// Edit > Undo or Redo: carry the step back (`.undo`) or out again (`.redo`).
-        fn undoOrRedo(self: *Self, direction: enum { undo, redo }) void {
+        fn undoOrRedo(self: *Self, direction: eggy.Direction) void {
             // Steps are the scene's, not a play's: stop first.
             self.stopPlaying();
             // A change not recorded yet (typing just now) becomes a step first.
@@ -862,19 +862,21 @@ pub fn Editor(comptime project: type) type {
                 if (self.sceneText()) |text| self.history.watch(text, std.math.maxInt(u64), false);
                 self.watchLayout();
             }
-            const step = (if (direction == .undo) self.history.undo() else self.history.redo()) orelse {
+            const step = self.history.peek(direction) orelse {
                 return self.workspace.toast(if (direction == .undo) "Nothing to undo" else "Nothing to redo");
             };
-            self.carry(step, direction == .undo) catch |err| {
-                std.log.err("cannot {s} {s}: {t}", .{ @tagName(direction), step.describe(), err });
+            const description = step.describe();
+            _ = self.history.apply(direction, self, carry) catch |err| {
+                std.log.err("cannot {s} {s}: {t}", .{ @tagName(direction), description, err });
                 return self.workspace.toast("Couldn't do that: see the Console");
             };
             var message: [64]u8 = undefined;
-            self.workspace.toast(std.fmt.bufPrint(&message, "{s} {s}", .{ if (direction == .undo) "Undid" else "Redid", step.describe() }) catch "Done");
+            self.workspace.toast(std.fmt.bufPrint(&message, "{s} {s}", .{ if (direction == .undo) "Undid" else "Redid", description }) catch "Done");
         }
 
-        /// Carry `step` back (`back`) or out again, filling in where files went.
-        fn carry(self: *Self, step: *history_zig.Step, back: bool) !void {
+        /// Apply one direction, filling in where files went. History owns group traversal.
+        fn carry(self: *Self, step: *history_zig.Step, direction: eggy.Direction) !void {
+            const back = direction == .undo;
             const opened = self.project orelse return error.NoProject;
             var threaded: std.Io.Threaded = .init_single_threaded;
             const io = threaded.io();
@@ -882,9 +884,10 @@ pub fn Editor(comptime project: type) type {
             defer files.close(io);
             defer self.filesChanged();
             switch (step.*) {
+                .group => unreachable,
                 .scene => |change| {
                     const game = if (self.game) |*loaded| loaded else return error.NoGame;
-                    const text = if (back) change.before else change.after;
+                    const text = change.value(direction);
                     const source = try self.gpa.dupeZ(u8, text);
                     defer self.gpa.free(source);
                     var scene = try eggy.scene.Scene.parse(self.gpa, source);
@@ -924,11 +927,11 @@ pub fn Editor(comptime project: type) type {
                     try preferences.save(self.gpa, &self.app.preference_values, self.preference_folders, change.layer, change.key);
                 },
                 .project_settings => |change| {
-                    try files.writeFile(io, .{ .sub_path = eggy.project.file_name, .data = if (back) change.before else change.after });
+                    try files.writeFile(io, .{ .sub_path = eggy.project.file_name, .data = change.value(direction) });
                     if (self.settings_window) |window| try window.reload();
                 },
                 .layout => |change| {
-                    const text = if (back) change.before else change.after;
+                    const text = change.value(direction);
                     if (!layout_file.restore(self.gpa, text, &self.workspace.dock)) return error.ParseZon;
                     if (self.layout_step) |old| self.gpa.free(old);
                     self.layout_step = try self.gpa.dupe(u8, text);
