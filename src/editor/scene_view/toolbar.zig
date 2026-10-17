@@ -1,7 +1,7 @@
 //! The Scene panel's floating toolbar: icon buttons for the gizmo (Move, Rotate, Scale,
 //! Universal), whether it works in the world's axes or the entity's own, snapping, and looking
-//! through the game's camera. Dragged by its grip it moves anywhere inside the panel, and its
-//! last button folds it down to the grip.
+//! through the game's camera. Drag its grip to move it inside the panel; its last button folds it
+//! down to the grip.
 const std = @import("std");
 const ui = @import("eggy").ui;
 const L = ui.Layout;

@@ -27,8 +27,12 @@ pub const Panel = enum(u32) {
     }
 };
 
-/// Plugin panel i (of `Set.editor_panels`) has dock id `plugin_first + i`.
+/// Beginning of the plugin panel ID range. Keyed panels keep their ID across reorder/reload.
 pub const plugin_first: u32 = 100;
+pub fn pluginId(panel: EditorPanel, index: usize) u32 {
+    if (panel.key.len == 0) return plugin_first + @as(u32, @intCast(index));
+    return 128 + @as(u32, @intCast(std.hash.Wyhash.hash(0, panel.key) % (ui.dock.max_panel - 128)));
+}
 /// Pages: the Inspector (`inspector_page`), the Console (`console_page`), the Hierarchy
 /// (`hierarchy_page`), Assets (`assets_page`), then the plugin panels (`first_plugin_page + i`).
 pub const max_pages = 32;
@@ -39,18 +43,21 @@ pub const assets_page = 3;
 pub const first_plugin_page = 4;
 
 /// Page index of dock panel `id`, if it is a page.
-pub fn pageOf(id: u32) ?usize {
+pub fn pageOf(id: u32, plugin_panels: []const EditorPanel) ?usize {
     if (id == @intFromEnum(Panel.inspector)) return inspector_page;
     if (id == @intFromEnum(Panel.console)) return console_page;
     if (id == @intFromEnum(Panel.hierarchy)) return hierarchy_page;
     if (id == @intFromEnum(Panel.assets)) return assets_page;
-    if (id >= plugin_first and id < plugin_first + max_pages - first_plugin_page) return first_plugin_page + (id - plugin_first);
+    for (plugin_panels, 0..) |panel, index| if (pluginId(panel, index) == id) return first_plugin_page + index;
     return null;
 }
 
 /// Title of dock panel `id`, built in or from `plugin_panels`.
 pub fn panelTitle(id: u32, plugin_panels: []const EditorPanel) [:0]const u8 {
-    if (id >= plugin_first) return if (id - plugin_first < plugin_panels.len) plugin_panels[id - plugin_first].title else "Panel";
+    if (id >= plugin_first) {
+        for (plugin_panels, 0..) |panel, index| if (pluginId(panel, index) == id) return panel.title;
+        return "Panel";
+    }
     return (std.enums.fromInt(Panel, id) orelse return "Panel").title();
 }
 
@@ -80,7 +87,7 @@ pub const Provider = struct {
 
     pub fn content(self: Provider, b: L.Builder, panel: u32, rect: ui.Rect) !*L.Element {
         const placed = self.placements;
-        if (pageOf(panel)) |page| {
+        if (pageOf(panel, self.plugin_panels)) |page| {
             placed.pages[page] = .{ .slot = self.slot, .rect = rect };
             return b.node(0, .{ .width = rect.w, .height = rect.h }, marker(&placed.page_marks[page]), &.{});
         }
@@ -115,13 +122,13 @@ fn placeholder(b: L.Builder, message: []const u8) !*L.Element {
 }
 
 test "pages are the Inspector, the Console, the Hierarchy, Assets and the plugin panels, in that order" {
-    try std.testing.expectEqual(@as(?usize, 0), pageOf(@intFromEnum(Panel.inspector)));
-    try std.testing.expectEqual(@as(?usize, 1), pageOf(@intFromEnum(Panel.console)));
-    try std.testing.expectEqual(@as(?usize, 2), pageOf(@intFromEnum(Panel.hierarchy)));
-    try std.testing.expectEqual(@as(?usize, 3), pageOf(@intFromEnum(Panel.assets)));
-    try std.testing.expectEqual(@as(?usize, 5), pageOf(plugin_first + 1));
-    try std.testing.expectEqual(@as(?usize, null), pageOf(@intFromEnum(Panel.scene)));
     const plugin_panels = [_]EditorPanel{ .{ .title = "Stats" }, .{ .title = "Level" } };
+    try std.testing.expectEqual(@as(?usize, 0), pageOf(@intFromEnum(Panel.inspector), &plugin_panels));
+    try std.testing.expectEqual(@as(?usize, 1), pageOf(@intFromEnum(Panel.console), &plugin_panels));
+    try std.testing.expectEqual(@as(?usize, 2), pageOf(@intFromEnum(Panel.hierarchy), &plugin_panels));
+    try std.testing.expectEqual(@as(?usize, 3), pageOf(@intFromEnum(Panel.assets), &plugin_panels));
+    try std.testing.expectEqual(@as(?usize, 5), pageOf(plugin_first + 1, &plugin_panels));
+    try std.testing.expectEqual(@as(?usize, null), pageOf(@intFromEnum(Panel.scene), &plugin_panels));
     try std.testing.expectEqualStrings("Level", panelTitle(plugin_first + 1, &plugin_panels));
     try std.testing.expectEqualStrings("Console", panelTitle(@intFromEnum(Panel.console), &plugin_panels));
 }

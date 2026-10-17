@@ -4,6 +4,8 @@
 const std = @import("std");
 
 pub const file_name = "eggy.zon";
+/// Developer input overrides, versioned with the project and baked into exported games.
+pub const controls_file = "controls.zon";
 
 /// Where a project keeps the files its game uses, relative to the project.
 pub const resources_dir = "resources";

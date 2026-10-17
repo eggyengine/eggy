@@ -62,6 +62,21 @@ pub const Access = struct {
     }
 };
 
+test "captured scenes own component metadata independently of their registry" {
+    const Value = struct { count: u32 = 1 };
+    const Registry = components.Registry(&.{Value}, &.{"game"});
+    var world = ecs.World.init(std.testing.allocator);
+    defer world.deinit();
+    _ = try world.spawn(.{Value{}});
+    var captured = try Scene.capture(std.testing.allocator, &world, registryAccess(Registry), null);
+    defer captured.deinit();
+    const saved = captured.entities[0].components[0];
+    try std.testing.expect(saved.type.ptr != Registry.infos[0].name.ptr);
+    try std.testing.expect(saved.owner.ptr != Registry.infos[0].owner.ptr);
+    try std.testing.expect(saved.fields[0].name.ptr != Registry.infos[0].fields[0].name.ptr);
+    try std.testing.expectEqualStrings("count", saved.fields[0].name);
+}
+
 /// `Access` straight through `Registry` (a `components.Registry`), for code that has the types.
 pub fn registryAccess(comptime Registry: type) Access {
     const Through = struct {
@@ -190,7 +205,7 @@ pub const Scene = struct {
     }
 
     fn captureEntity(arena: std.mem.Allocator, world: *ecs.World, access: Access, entity: ecs.EntityId, parent: ?usize) !Entity {
-        var buffer: [4096]u8 = undefined;
+        var buffer: [components.max_field_bytes]u8 = undefined;
         const name = if (access.name(world, entity, &buffer)) |text| try arena.dupe(u8, text) else "";
         var list: std.ArrayList(Component) = .empty;
         for (access.types(), 0..) |info, component| {
@@ -201,9 +216,10 @@ pub const Scene = struct {
                     log.warn("{s}.{s} of an entity can't be saved", .{ info.name, field.name });
                     continue;
                 };
-                try fields.append(arena, .{ .name = field.name, .value = try arena.dupe(u8, value) });
+                try fields.append(arena, .{ .name = try arena.dupe(u8, field.name), .value = try arena.dupe(u8, value) });
             }
-            try list.append(arena, .{ .type = info.name, .owner = info.owner, .fields = fields.items });
+            // A captured scene outlives the registry/library it came from during hot reload.
+            try list.append(arena, .{ .type = try arena.dupe(u8, info.name), .owner = try arena.dupe(u8, info.owner), .fields = fields.items });
         }
         return .{ .name = name, .parent = parent, .components = list.items };
     }
@@ -218,6 +234,8 @@ pub const Scene = struct {
     pub fn instantiate(self: *const Scene, gpa: std.mem.Allocator, world: *ecs.World, access: Access, parent: ?ecs.EntityId) !Instantiated {
         const made = try gpa.alloc(ecs.EntityId, self.entities.len);
         errdefer gpa.free(made);
+        var spawned: usize = 0;
+        errdefer for (made[0..spawned]) |entity| world.despawn(entity);
         var skipped: usize = 0;
         const types = access.types();
         // References to the scene's own entities, set once every entity exists.
@@ -226,6 +244,7 @@ pub const Scene = struct {
         defer deferred.deinit(gpa);
         for (self.entities, made) |saved, *entity| {
             entity.* = try world.spawn(.{});
+            spawned += 1;
             if (saved.name.len > 0) access.setName(world, entity.*, saved.name);
             for (saved.components) |component| {
                 const index = findType(types, component.type, component.owner) orelse {
@@ -249,7 +268,7 @@ pub const Scene = struct {
                         try deferred.append(gpa, .{ .entity = entity.*, .component = index, .field = field_index, .place = ref.scene });
                         continue;
                     };
-                    var buffer: [4097]u8 = undefined;
+                    var buffer: [components.max_field_bytes + 1]u8 = undefined;
                     const text = std.fmt.bufPrintZ(&buffer, "{s}", .{field.value}) catch {
                         skipped += 1;
                         continue;
@@ -273,7 +292,7 @@ pub const Scene = struct {
         }
         for (self.entities, made) |saved, entity| {
             const up = if (saved.parent) |index| (if (index < made.len) made[index] else null) else parent;
-            if (up) |parent_entity| world.setParent(entity, parent_entity) catch {};
+            if (up) |parent_entity| try world.setParent(entity, parent_entity);
         }
         return .{ .entities = made, .skipped = skipped };
     }

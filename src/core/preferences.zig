@@ -46,14 +46,7 @@ pub fn manifest(comptime T: type, comptime key: [:0]const u8) Manifest {
 
 /// A number only `T` has in this program, for `Store.register`. (`@typeName` won't do: it names
 /// types after their file, so every plugin package's `root.zig` would collide.)
-fn typeMarker(comptime T: type) usize {
-    const Marker = struct {
-        const Of = T;
-        var byte: u8 = 0;
-    };
-    _ = Marker.Of;
-    return @intFromPtr(&Marker.byte);
-}
+const typeMarker = @import("type_marker.zig").of;
 
 fn fieldsOf(comptime T: type) []const Field {
     const struct_fields = @typeInfo(T).@"struct".fields;

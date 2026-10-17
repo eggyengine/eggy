@@ -11,10 +11,12 @@ pub const Kind = enum {
     image,
     audio,
     file,
+    input_map,
 
     /// What a file is, by its name.
     pub fn ofFile(name: []const u8) Kind {
         if (std.mem.endsWith(u8, name, ".scene.zon")) return .scene;
+        if (std.mem.endsWith(u8, name, ".inmap.zon")) return .input_map;
         const extension = std.fs.path.extension(name);
         const kinds = [_]struct { []const []const u8, Kind }{
             .{ &.{".zig"}, .code },
@@ -93,6 +95,7 @@ pub fn parentOf(path: []const u8) []const u8 {
 
 test "files are told apart by their names" {
     try std.testing.expectEqual(Kind.scene, Kind.ofFile("main.scene.zon"));
+    try std.testing.expectEqual(Kind.input_map, Kind.ofFile("player.inmap.zon"));
     try std.testing.expectEqual(Kind.text, Kind.ofFile("build.zig.zon"));
     try std.testing.expectEqual(Kind.code, Kind.ofFile("root.zig"));
     try std.testing.expectEqual(Kind.image, Kind.ofFile("Icon.PNG"));

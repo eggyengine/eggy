@@ -18,6 +18,50 @@ pub fn createFolder(gpa: std.mem.Allocator, io: std.Io, project: std.Io.Dir, par
     return path;
 }
 
+/// Create a uniquely named file from a New-menu template, without overwriting existing files.
+/// Returns a caller-owned project-relative path.
+pub fn createFile(gpa: std.mem.Allocator, io: std.Io, project: std.Io.Dir, parent: []const u8, file_type: @import("eggy").plugins.EditorFileType) ![]u8 {
+    try @import("eggy").refs.validatePath(parent);
+    try checkName(file_type.title);
+    if (file_type.extension.len < 2 or file_type.extension[0] != '.' or std.mem.indexOfAny(u8, file_type.extension, "/\\\x00") != null) return error.BadPathName;
+    const path = try freeName(gpa, io, project, parent, file_type.title, file_type.extension);
+    errdefer gpa.free(path);
+    try @import("eggy").refs.validatePath(path);
+    if (parent.len != 0) try project.createDirPath(io, parent);
+    var file = try project.createFile(io, path, .{ .exclusive = true });
+    defer file.close(io);
+    errdefer project.deleteFile(io, path) catch |err| std.log.err("cannot remove incomplete file {s}: {t}", .{ path, err });
+    var buffer: [4096]u8 = undefined;
+    var writer = file.writer(io, &buffer);
+    try writer.interface.writeAll(file_type.contents);
+    try writer.interface.flush();
+    return path;
+}
+
+test "file templates create unique complete files and reject path-like names" {
+    const gpa = std.testing.allocator;
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const template = @import("eggy").plugins.EditorFileType{ .key = "game/map", .title = "Player", .extension = ".inmap.zon", .contents = ".{ .controls = .{} }\n" };
+    const first = try createFile(gpa, io, tmp.dir, "resources/input", template);
+    defer gpa.free(first);
+    const second = try createFile(gpa, io, tmp.dir, "resources/input", template);
+    defer gpa.free(second);
+    try std.testing.expectEqualStrings("resources/input/Player.inmap.zon", first);
+    try std.testing.expectEqualStrings("resources/input/Player 2.inmap.zon", second);
+    const contents = try tmp.dir.readFileAlloc(io, first, gpa, .limited(1024));
+    defer gpa.free(contents);
+    try std.testing.expectEqualStrings(template.contents, contents);
+    try std.testing.expectError(error.InvalidPath, createFile(gpa, io, tmp.dir, "../outside", template));
+    var invalid = template;
+    invalid.title = "../file";
+    try std.testing.expectError(error.BadPathName, createFile(gpa, io, tmp.dir, "", invalid));
+    invalid = template;
+    invalid.extension = ".zon/other";
+    try std.testing.expectError(error.BadPathName, createFile(gpa, io, tmp.dir, "", invalid));
+}
+
 /// Rename `path` to `new_name` in the same folder. Returns the new path; caller-owned.
 pub fn rename(gpa: std.mem.Allocator, io: std.Io, project: std.Io.Dir, path: []const u8, new_name: []const u8) ![]u8 {
     try checkName(new_name);
@@ -45,6 +89,7 @@ pub fn duplicate(gpa: std.mem.Allocator, io: std.Io, project: std.Io.Dir, path: 
 /// Move `path` into `folder` ("" for the project), keeping its name. Returns the new path;
 /// caller-owned. Fails with `error.PathAlreadyExists` when the folder has one so named.
 pub fn moveInto(gpa: std.mem.Allocator, io: std.Io, project: std.Io.Dir, path: []const u8, folder: []const u8) ![]u8 {
+    try checkDestination(path, folder);
     const target = try join(gpa, folder, std.fs.path.basename(path));
     errdefer gpa.free(target);
     try move(io, project, path, target);
@@ -54,6 +99,7 @@ pub fn moveInto(gpa: std.mem.Allocator, io: std.Io, project: std.Io.Dir, path: [
 /// Copy `path` (a file, or a folder and everything in it) into `folder`, under its own name or,
 /// when that is taken, "<name> 2" and so on. Returns the copy's path; caller-owned.
 pub fn copyInto(gpa: std.mem.Allocator, io: std.Io, project: std.Io.Dir, path: []const u8, folder: []const u8) ![]u8 {
+    try checkDestination(path, folder);
     const target = try freeTarget(gpa, io, project, folder, std.fs.path.basename(path));
     errdefer gpa.free(target);
     try copyTree(gpa, io, project, path, project, target);
@@ -107,13 +153,16 @@ pub fn restore(io: std.Io, project: std.Io.Dir, from: []const u8, to: []const u8
 }
 
 /// Move the descriptor of the file moved from `from` to `to` along with it, if it has one. A
-/// descriptor left behind is found and removed later, so a failure here only loses its id.
+/// descriptor left behind is found and removed later; report the possible loss of its id.
 fn carryDescriptor(io: std.Io, project: std.Io.Dir, from: []const u8, to: []const u8) void {
     var from_buffer: [std.fs.max_path_bytes]u8 = undefined;
     var to_buffer: [std.fs.max_path_bytes]u8 = undefined;
     const from_descriptor = descriptor.pathOf(&from_buffer, from) catch return;
     const to_descriptor = descriptor.pathOf(&to_buffer, to) catch return;
-    project.rename(from_descriptor, project, to_descriptor, io) catch {};
+    project.rename(from_descriptor, project, to_descriptor, io) catch |err| switch (err) {
+        error.FileNotFound => {},
+        else => std.log.warn("moved {s}, but its descriptor could not follow ({t}); its asset id may change", .{ from, err }),
+    };
 }
 
 /// `name` in `folder`, or `name 2`, `name 3` and so on, whichever is free, with `extension`.
@@ -158,7 +207,20 @@ fn extensionStart(name: []const u8) usize {
 /// A name for a file or folder: not empty, no slashes, not `.` or `..`.
 fn checkName(name: []const u8) !void {
     if (name.len == 0 or std.mem.eql(u8, name, ".") or std.mem.eql(u8, name, "..")) return error.BadPathName;
-    if (std.mem.indexOfAny(u8, name, "/\\") != null) return error.BadPathName;
+    if (std.mem.indexOfAny(u8, name, "/\\\x00") != null) return error.BadPathName;
+}
+
+fn checkDestination(path: []const u8, folder: []const u8) !void {
+    if (path.len == 0 or std.mem.eql(u8, path, folder)) return error.InvalidDestination;
+    if (std.mem.startsWith(u8, folder, path) and folder.len > path.len and folder[path.len] == '/') return error.InvalidDestination;
+}
+
+test "move and copy reject destinations inside their source" {
+    try std.testing.expectError(error.InvalidDestination, checkDestination("art", "art"));
+    try std.testing.expectError(error.InvalidDestination, checkDestination("art", "art/copy"));
+    try std.testing.expectError(error.InvalidDestination, checkDestination("", "art"));
+    try checkDestination("art", "art2");
+    try checkDestination("art", "");
 }
 
 fn join(gpa: std.mem.Allocator, folder: []const u8, name: []const u8) ![]u8 {

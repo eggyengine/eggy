@@ -6,8 +6,14 @@ const sdl3 = sdl_adapter.sdl;
 const Graphics = @import("graphics.zig").Graphics;
 const clutch = @import("clutch");
 const preferences_zig = @import("preferences.zig");
-const Input = @import("input.zig").Input;
+const Input = @import("input/input.zig").Input;
+const InputBackend = @import("input/backend.zig").Backend;
 const Time = @import("time.zig").Time;
+const Resources = @import("resources/resources.zig").Resources;
+const Scenes = @import("scenes/scenes.zig").Scenes;
+const SceneInstances = @import("scene_instances.zig").SceneInstances;
+const scene = @import("scene.zig");
+const Overlay = @import("game_ui/game_ui.zig").Overlay;
 
 const web = builtin.os.tag == .emscripten;
 const width = 900;
@@ -16,6 +22,9 @@ const height = 675;
 /// Owns SDL, one window, the `Graphics` that draws into it, and the game's ECS `world`.
 pub const App = struct {
     window: sdl_adapter.Sdl3Window,
+    /// What Zig 0.16 hands `main` (`std.process.Init`): the command line, the environment
+    /// (`environ_map`), the process arena, allocator and `Io`. Valid for the whole run.
+    process_init: *const std.process.Init,
     init_flags: sdl3.InitFlags,
     graphics: Graphics,
     /// Entities, components, resources and schedules. Plugins register schedules in `init`;
@@ -26,11 +35,31 @@ pub const App = struct {
     preference_values: preferences_zig.Store,
     /// The keyboard and mouse as they are this frame (see `eggy.Input`).
     input: Input = .{},
+    input_backend: ?*InputBackend = null,
     /// How long the last frame took, and how long the game has run (see `eggy.Time`).
     time: Time = .{},
+    /// Installed by the executable before plugin initialization.
+    resource_provider: Resources = .{},
+    /// Typed registry installed by the game library, never the editor host.
+    scene_access: ?scene.Access = null,
+    instances: ?SceneInstances = null,
+    ui_layer: ?*Overlay = null,
+    audio: @import("audio.zig").Audio = .{},
+    animation: @import("animation.zig").Animation = .{},
+    draw2d: @import("draw2d.zig").Draw2d = .{},
+    materials: @import("materials.zig").Materials = .{},
+    lighting: @import("lighting.zig").Lighting = .{},
+    particles: @import("particles.zig").Particles = .{},
+    network: @import("network.zig").Network = .{},
+    navigation: @import("navigation.zig").Navigation = .{},
+    storage: @import("storage.zig").Storage = .{},
+    localization: @import("localization.zig").Localization = .{},
+    debug_draw: @import("debug_draw.zig").DebugDraw = .{},
+    profiling: @import("profiling.zig").Profiling = .{},
 
-    pub fn init(gpa: std.mem.Allocator, title: [:0]const u8) !App {
-        const init_flags = sdl3.InitFlags{ .video = true };
+    pub fn init(process_init: *const std.process.Init, title: [:0]const u8) !App {
+        const gpa = process_init.gpa;
+        const init_flags = sdl3.InitFlags{ .video = true, .gamepad = true };
         try sdl3.init(init_flags);
         errdefer sdl3.quit(init_flags);
 
@@ -42,17 +71,22 @@ pub const App = struct {
             .hidden = builtin.os.tag == .windows,
         }));
         errdefer window.deinit();
+        const input_backend = try InputBackend.init(gpa);
+        errdefer input_backend.deinit();
         var graphics = try Graphics.init(gpa, window);
         errdefer graphics.deinit();
         if (builtin.os.tag == .windows) try window.window.show();
 
-        return .{ .window = window, .init_flags = init_flags, .graphics = graphics, .world = .init(gpa), .preference_values = .init(gpa) };
+        return .{ .window = window, .process_init = process_init, .init_flags = init_flags, .graphics = graphics, .world = .init(gpa), .preference_values = .init(gpa), .input_backend = input_backend, .input = .{ .backend = input_backend.state.interface() } };
     }
 
     /// Run the world's PreDeinit, Deinit and PostDeinit stages, then free everything.
     pub fn deinit(self: *App) void {
         self.stopWorld();
+        self.clearGameUi();
+        if (self.instances) |*instances| instances.deinit();
         self.world.deinit();
+        if (self.input_backend) |backend| backend.deinit();
         self.preference_values.deinit();
         self.graphics.deinit();
         self.window.deinit();
@@ -67,15 +101,57 @@ pub const App = struct {
         return self.preference_values.get(T);
     }
 
+    /// Borrow this executable's resource providers. Loaded CPU data belongs to the caller.
+    pub fn resources(self: *const App) Resources {
+        return self.resource_provider;
+    }
+
+    /// Borrow the current world's scene service; do not retain across reset/reload.
+    pub fn scenes(self: *App) Scenes {
+        return .{ .world = &self.world, .instances = self.sceneInstances(), .resources = self.resources(), .access = self.scene_access };
+    }
+
+    /// The instance registry shared by author calls and the executable's scene-sync point.
+    pub fn sceneInstances(self: *App) *SceneInstances {
+        if (self.instances == null) self.instances = .init(self.world.allocator);
+        return &self.instances.?;
+    }
+
+    /// Lazily create the default game UI. Customize its context theme/widgets, or use
+    /// `setFont` to copy a font. Custom-renderer-only games need never create this service.
+    pub fn gameUi(self: *App) !*Overlay {
+        if (self.ui_layer) |layer| return layer;
+        const layer = try self.world.allocator.create(Overlay);
+        errdefer self.world.allocator.destroy(layer);
+        layer.* = try Overlay.init(self.world.allocator, self.graphics.device, self.graphics.queue, self.graphics.color_format);
+        self.ui_layer = layer;
+        return layer;
+    }
+
+    fn clearGameUi(self: *App) void {
+        if (self.ui_layer) |layer| {
+            layer.deinit();
+            self.world.allocator.destroy(layer);
+            self.ui_layer = null;
+        }
+    }
+
     /// Start over with an empty world: run the old one's PreDeinit, Deinit and PostDeinit
     /// stages and free it. The editor does this before swapping in a rebuilt game, while the old
     /// game's code, which the world's schedules and storages point into, is still loaded. Run
     /// `startWorld` once the new game's plugins have registered their schedules.
     pub fn resetWorld(self: *App) void {
         self.stopWorld();
+        self.clearGameUi();
+        if (self.instances) |*instances| instances.deinit();
+        self.instances = null;
+        self.scene_access = null;
         const allocator = self.world.allocator;
         self.world.deinit();
         self.world = .init(allocator);
+        self.time.invalidateTimers();
+        self.input.cancel();
+        if (self.input_backend) |backend| backend.state.resetRun();
     }
 
     fn stopWorld(self: *App) void {
@@ -98,6 +174,15 @@ pub const App = struct {
         try self.world.insertResource(self.time);
         inline for (.{ .PreUpdate, .Update, .PostUpdate }) |stage| try self.world.runStage(stage);
         self.world.tick();
+    }
+
+    /// Host device bookkeeping, before UI/gameplay routing. Never call SDL from the game DLL.
+    pub fn deviceEvent(self: *App, value: sdl3.events.Event) !void {
+        if (self.input_backend) |backend| try backend.event(value);
+    }
+    /// Advance input triggers once before game hooks/systems, independent of gameplay scaling.
+    pub fn advanceInput(self: *App) !void {
+        if (self.input_backend) |backend| try backend.state.advance(self.time.unscaled_delta_s);
     }
 
     /// Window lifecycle every program shares: quit requests and closing the main window end the

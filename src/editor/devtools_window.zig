@@ -6,7 +6,7 @@ const sdl3 = eggy.sdl_adapter.sdl;
 const ui = eggy.ui;
 const weeoui_sdl3 = @import("weeoui_sdl3");
 const ToolWindow = @import("tool_window.zig").ToolWindow;
-const hit_test = @import("hit_test.zig");
+const hit_test = eggy.ui_hit_test;
 
 const tools_shown = [_]ui.devtools.Tool{ .elements, .performance };
 const tool_labels = [_][]const u8{ "Elements", "Performance" };

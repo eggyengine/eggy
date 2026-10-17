@@ -19,8 +19,9 @@ const Upgrades = @import("projects/upgrades.zig").Upgrades;
 const file_manager = @import("file_manager.zig");
 const BuildWindow = @import("build_window.zig").BuildWindow;
 const ExportWindow = @import("export_window.zig").ExportWindow;
-const ProjectSettingsWindow = @import("project_settings.zig").ProjectSettingsWindow;
+const ProjectSettings = @import("project_settings.zig").ProjectSettings;
 const DevtoolsWindow = @import("devtools_window.zig").DevtoolsWindow;
+const AboutWindow = @import("about_window.zig").AboutWindow;
 const window_placement = @import("window_placement.zig");
 const source_stamp = @import("projects/source_stamp.zig");
 const Console = @import("console.zig").Console;
@@ -42,12 +43,19 @@ const save_prompt_zig = @import("save_prompt.zig");
 const page_style = @import("page_style.zig");
 const file_ops = @import("assets/file_ops.zig");
 const code_editor = @import("code_editor.zig");
-const hit_test = @import("hit_test.zig");
+const hit_test = eggy.ui_hit_test;
 const scene_view = @import("scene_view/scene_view.zig");
 const assets = @import("assets/assets.zig");
 const AssetIcons = @import("assets/icons.zig").Icons;
 const descriptors = @import("assets/descriptors.zig");
 const ProjectAssets = @import("assets/project_assets.zig").ProjectAssets;
+const extensions = @import("extensions/extensions.zig");
+const GameInput = @import("game_input.zig").State;
+const InputSettings = @import("input_settings.zig").InputSettings;
+const InputMappingsWindow = @import("input_mappings.zig").InputMappingsWindow;
+const input_map_asset = @import("input_map_asset/input_map_asset.zig");
+/// The Preferences section File > Project Settings opens.
+const project_section = "Project";
 
 /// The editor for `project`, which declares `name` and `game_library` (the game library's
 /// `file_name`, beside the editor). The game and its plugins run as they do in the runtime,
@@ -57,6 +65,11 @@ pub fn Editor(comptime project: type) type {
     return struct {
         gpa: std.mem.Allocator,
         app: eggy.App,
+        extension_state: extensions.State = .{},
+        game_input: GameInput = .{},
+        input_settings: ?*InputSettings = null,
+        input_mappings_window: ?*InputMappingsWindow = null,
+        input_map_window: ?*input_map_asset.Window = null,
         /// The game and its plugins, from their library; null if it couldn't load (logged).
         game: ?HotGame,
         /// When the game's library was built, to tell whether a rebuild changed it.
@@ -95,7 +108,8 @@ pub fn Editor(comptime project: type) type {
         /// File > Export, while open.
         export_window: ?*ExportWindow = null,
         /// File > Project Settings, while open.
-        settings_window: ?*ProjectSettingsWindow = null,
+        /// The Preferences window's Project section, while that window is open on a project.
+        project_settings: ?*ProjectSettings = null,
         /// The Inspector's UI (the game's and plugins' `editorUi`), and the font every page shares.
         ui: ui.Context,
         /// JetBrains Mono, in `ui`'s font's atlas, for terminal output. On the heap, as views keep it.
@@ -142,7 +156,7 @@ pub fn Editor(comptime project: type) type {
         picking_to_link: bool = false,
         /// Whether the editor's windows are hidden, as they are while a new project is created.
         hidden: bool = false,
-        /// The project this editor opened (`--project <dir>`), from its `eggy.zon`.
+        /// The explicit or discovered project this editor opened, from its `eggy.zon`.
         project: ?workspace_zig.Project = null,
         /// The open project's model and image files, imported for the scene's caches.
         project_assets: ?*ProjectAssets = null,
@@ -154,6 +168,7 @@ pub fn Editor(comptime project: type) type {
         built_sources: source_stamp.Stamp = .{},
         /// Help > DevTools' window, while open.
         devtools_window: ?*DevtoolsWindow = null,
+        about_window: ?*AboutWindow = null,
         /// When the last frame started, for DevTools' Performance.
         frame_start_ns: u64 = 0,
         /// Whether to open the project's editor once `rebuild` is done, changed or not (Reload).
@@ -180,8 +195,9 @@ pub fn Editor(comptime project: type) type {
         /// What would lose the scene's unsaved changes, and so asks first (see `mayLeave`).
         const Leaving = enum { quit, reload, new_project, open_project, open_project_linked };
 
-        pub fn init(gpa: std.mem.Allocator, args: []const [*:0]const u8) !Self {
-            var app = try eggy.App.init(gpa, title);
+        pub fn init(process_init: *const std.process.Init, args: []const [*:0]const u8) !Self {
+            const gpa = process_init.gpa;
+            var app = try eggy.App.init(process_init, title);
             errdefer app.deinit();
             const opened_project = try openProject(gpa, app.window.window, args);
             errdefer if (opened_project) |opened| freeProject(gpa, opened);
@@ -266,6 +282,7 @@ pub fn Editor(comptime project: type) type {
             errdefer if (game) |*loaded| loaded.deinit(&app);
             if (game) |loaded| {
                 workspace.setPluginPanels(loaded.panels);
+                workspace.plugin_commands = loaded.commands;
                 preferences.writeRegistry(gpa, preference_folders, loaded.plugin_keys, loaded.preference_manifests, plugin_switches.off()) catch |err| std.log.warn("cannot update .eggy/plugins.zon: {t}", .{err});
             }
             // The project's scene first, so the game's plugins start among its entities.
@@ -274,7 +291,6 @@ pub fn Editor(comptime project: type) type {
                     open_scene = .{ .gpa = gpa, .project_dir = opened.dir };
                     open_scene.?.reopen(&app.world, loaded.sceneAccess());
                 }
-                loaded.start(&app, plugin_switches.off(), .discard);
             }
             const upgrades = Upgrades.init(gpa, if (opened_project) |opened| opened.dir else null, @import("build_options").source_dir);
             // Model and image files, imported from the project as the scene first shows each.
@@ -283,23 +299,34 @@ pub fn Editor(comptime project: type) type {
                 loaders.* = .{ .project_dir = opened.dir };
                 app.graphics.models.loader = loaders.models();
                 app.graphics.textures.loader = loaders.textures();
+                app.resource_provider = loaders.resources();
                 break :blk loaders;
             } else null;
             errdefer if (project_assets) |loaders| gpa.destroy(loaders);
+            const input_settings = if (opened_project) |opened| try InputSettings.open(gpa, &app.input_backend.?.state, opened.dir) else null;
+            errdefer if (input_settings) |settings| settings.close();
+            if (game) |*loaded| loaded.start(&app, plugin_switches.off(), .discard);
             var self = Self{ .gpa = gpa, .game = game, .game_modified = modifiedAt(library_path), .app = app, .ui = context, .mono = mono, .console_ui = console_ui, .hierarchy_ui = hierarchy_ui, .assets_ui = assets_ui, .assets_panel = .init(gpa), .asset_icons = asset_icons, .entity_editor = .init(gpa), .console = console, .plugin_pages = plugin_pages, .workspace = workspace, .frame = frame, .scene = scene, .camera_preview = camera_preview, .drawables = drawables, .overlay = overlay, .project = opened_project, .editor_modified = if (opened_project) |opened| editorModified(gpa, opened) else null, .upgrades = upgrades, .preference_folders = preference_folders, .open_scene = open_scene, .history = .{ .gpa = gpa }, .plugin_switches = plugin_switches, .project_assets = project_assets };
+            self.input_settings = input_settings;
             self.built_sources = self.sourcesNow();
             self.syncDescriptors();
             return self;
         }
 
         pub fn deinit(self: *Self) void {
+            self.game_input.deinit(self.gpa);
+            self.extension_state.deinit(self.gpa);
             if (self.game) |*game| game.deinit(&self.app);
+            if (self.input_settings) |settings| settings.close();
+            if (self.input_mappings_window) |window| window.close(&self.app.graphics);
+            if (self.input_map_window) |window| window.close(&self.app.graphics);
             if (self.project_flow) |flow| flow.close(&self.app.graphics);
             if (self.build_window) |window| window.close(&self.app.graphics);
             if (self.devtools_window) |window| window.close(&self.app.graphics);
+            if (self.about_window) |window| window.close(&self.app.graphics);
             if (self.preferences_window) |window| window.close(&self.app.graphics);
             if (self.export_window) |window| window.close(&self.app.graphics);
-            if (self.settings_window) |window| window.close(&self.app.graphics);
+            if (self.project_settings) |settings| settings.close();
             if (self.save_prompt) |prompt| prompt.close(&self.app.graphics);
             // The dock as this user left it, for the next editor.
             layout_file.save(self.gpa, self.preference_folders.global, &self.workspace.dock, self.workspace.seen_plugin_panels.items);
@@ -357,9 +384,13 @@ pub fn Editor(comptime project: type) type {
             if (self.build_window == null) if (self.game) |*game| {
                 if (self.play_mode.running()) {
                     self.app.time.tick(sdl3.timer.getNanosecondsSinceInit());
+                    try self.app.advanceInput();
                     game.update(&self.app);
                     self.app.input.endFrame();
-                } else game.editorUpdate(&self.app);
+                } else {
+                    var editor_context = extensions.context(self);
+                    game.editorUpdate(&editor_context);
+                }
             };
             try self.syncPopOuts();
             self.keepLayout();
@@ -374,6 +405,9 @@ pub fn Editor(comptime project: type) type {
             const look: scene_view.SceneView.Look = if (!self.play_mode.playing()) .editing else if (self.workspace.simulating) .simulating else .playing;
             self.scene_view.update(self.sceneTarget(), if (self.workspace.placed.scene) |placed| placed.rect else null, look);
             self.workspace.scene_overlay = self.scene_view.overlay();
+            if (self.play_mode.playing() and !self.workspace.simulating) if (self.game) |game| {
+                if (game.hasGameUi() or game.hasDraw()) self.workspace.scene_overlay.no_camera = false;
+            };
 
             // Lay out every window, then tell the OS where the main title bar is.
             const flags = self.app.window.window.getFlags();
@@ -439,16 +473,22 @@ pub fn Editor(comptime project: type) type {
                 page_ui.time_ms = sdl3.timer.getMillisecondsSinceInit();
                 switch (index) {
                     panels.inspector_page => self.buildInspector(),
-                    panels.console_page => self.console.build(page_ui),
+                    panels.console_page => {
+                        if (self.console.build(page_ui, if (self.project) |opened| opened.dir else null)) |source| self.openDiagnostic(source);
+                    },
                     panels.hierarchy_page => self.entity_editor.buildHierarchy(page_ui, &self.app, self.gamePtr()),
                     panels.assets_page => {
                         // The view is a preference, so it is the same in the next editor.
                         const view_before: assets.View = @enumFromInt(@intFromEnum(preferences.editor(&self.app.preference_values).assets_view));
                         self.assets_panel.view = view_before;
+                        self.assets_panel.file_types = if (self.game) |game| game.file_types else &.{};
                         if (self.assets_panel.build(page_ui, if (self.project) |opened| opened.dir else null, &self.asset_icons, self.openScenePath())) |action| self.applyAssetAction(action);
                         if (self.assets_panel.view != view_before) self.rememberAssetsView();
                     },
-                    else => if (self.game) |*game| game.editorPanelUi(index - panels.first_plugin_page, page_ui),
+                    else => if (self.game) |*game| {
+                        var editor_context = extensions.context(self);
+                        game.editorPanelUi(index - panels.first_plugin_page, &editor_context, page_ui);
+                    },
                 }
                 // What is being dragged, named beside the pointer in the page it is over.
                 if (self.dragging(frame_arena.allocator())) |dragged| if (self.pageAt(self.workspace.pointer_slot, page_ui.pointer.x, page_ui.pointer.y) == index) {
@@ -457,8 +497,6 @@ pub fn Editor(comptime project: type) type {
                 vertices.* = try page_ui.render();
                 syncClipboard(page_ui);
             }
-            self.syncTextInput();
-
             // Draw each window.
             try self.present(main_slot, &self.app.graphics.surface, &self.overlay, viewport, pages);
             for (&self.popouts, 0..) |*popout, i| if (popout.*) |*open| {
@@ -466,6 +504,7 @@ pub fn Editor(comptime project: type) type {
                 try open.surface.syncSize(self.app.graphics.queue, open.window);
                 try self.present(workspace_zig.windowSlot(i), &open.surface, &open.overlay, area, pages);
             };
+            self.syncTextInput();
             // A folder chosen in File > Open Project's picker: open it, linking it first for Open
             // Project with Developer Eggy once that is confirmed.
             if (self.picked_project.swap(null, .acq_rel)) |path| {
@@ -488,15 +527,11 @@ pub fn Editor(comptime project: type) type {
             if (self.preferences_window) |window| {
                 const flipped = try window.update(&self.app.graphics, &self.ui, try self.preferenceSections(frame_arena.allocator()), &self.app.preference_values, self.preference_folders, &self.history);
                 if (flipped) |plugin| self.flipPlugin(plugin);
-            }
-            // File > Project Settings, if open: what it changes is a step to undo.
-            if (self.settings_window) |window| {
-                const result = try window.update(&self.app.graphics, &self.ui);
-                if (result.change) |change| self.history.recordProjectSettings(change.before, change.after, self.workspace.time_ms);
-                if (!result.open) {
-                    window.close(&self.app.graphics);
-                    self.settings_window = null;
-                }
+                // Its Project section writes eggy.zon as it changes: a step to undo.
+                if (self.project_settings) |settings| if (settings.save() catch |err| blk: {
+                    std.log.err("cannot write {s}: {t}", .{ eggy.project.file_name, err });
+                    break :blk null;
+                }) |change| self.history.recordProjectSettings(change.before, change.after, self.workspace.time_ms);
             }
             // File > Export, if open.
             if (self.export_window) |window| {
@@ -504,19 +539,46 @@ pub fn Editor(comptime project: type) type {
                 // Choosing the scene it starts in keeps it as the default: a step to undo.
                 if (result.change) |change| {
                     self.history.recordProjectSettings(change.before, change.after, self.workspace.time_ms);
-                    if (self.settings_window) |settings| settings.reload() catch {};
+                    if (self.project_settings) |settings| settings.reload() catch {};
                 }
                 if (!result.open) {
                     window.close(&self.app.graphics);
                     self.export_window = null;
                 }
             }
+            if (self.input_mappings_window) |window| try window.update(&self.app.graphics, &self.ui, &self.app.input_backend.?.state);
+            if (self.input_map_window) |window| {
+                const result = try window.update(&self.app.graphics, &self.ui, &self.history);
+                if (result.saved) self.assets_panel.refreshSoon();
+                if (result.close) {
+                    window.close(&self.app.graphics);
+                    self.input_map_window = null;
+                }
+            }
+            if (self.input_settings) |settings| try settings.recordPending(&self.history);
+            if (self.about_window) |window| if (!try window.update(&self.app.graphics, &self.ui)) {
+                window.close(&self.app.graphics);
+                self.about_window = null;
+            };
             // The Build progress window, if open.
             if (self.build_window) |window| if (try self.updateBuildWindow(window, frame_arena.allocator())) return .success;
 
             const pointer = self.workspace.pointer;
             const hovered = self.pageAt(self.workspace.pointer_slot, pointer.x, pointer.y);
-            weeoui_sdl3.setCursor(self.workspace.dock.cursor() orelse if (hovered) |index| self.page(index).cursor else .default);
+            const over_game = self.play_mode.playing() and !self.workspace.simulating and (self.game_input.pointer_in_scene or self.game_input.buttons != 0);
+            const game_cursor: ?ui.Cursor = if (over_game) if (self.app.ui_layer) |layer| layer.context.cursor else null else null;
+            const dock_cursor = self.workspace.dock.cursor();
+            if (!over_game or self.app.ui_layer != null or dock_cursor != null) {
+                weeoui_sdl3.setCursor(dock_cursor orelse game_cursor orelse if (hovered) |index| self.page(index).cursor else .default);
+            }
+            if (self.extension_state.takeRequest()) |request| {
+                if (extensions.processRequest(self, request)) |exit| {
+                    if (exit) return .success;
+                } else |err| {
+                    std.log.err("queued editor request failed: {t}", .{err});
+                    self.workspace.toast("Couldn't perform the request: see the Console");
+                }
+            }
             return .run;
         }
 
@@ -534,7 +596,7 @@ pub fn Editor(comptime project: type) type {
             return .run;
         }
 
-        fn pickedProject(self: ?*Self, files: ?[]const [*:0]const u8, _: ?usize, failed: bool) void {
+        pub fn pickedProject(self: ?*Self, files: ?[]const [*:0]const u8, _: ?usize, failed: bool) void {
             const chosen = files orelse return;
             if (failed or chosen.len == 0) return;
             const copy = std.heap.c_allocator.dupeZ(u8, std.mem.span(chosen[0])) catch return;
@@ -552,7 +614,13 @@ pub fn Editor(comptime project: type) type {
         /// Whether the editor may go ahead with `leaving`: yes when the scene has no unsaved
         /// changes, or the person just answered "Save changes?" for it. Otherwise it opens the
         /// prompt (once) and says no; the answer carries `leaving` out (`answerSavePrompt`).
-        fn mayLeave(self: *Self, leaving: Leaving) bool {
+        pub fn mayLeave(self: *Self, leaving: Leaving) bool {
+            if (self.input_map_window) |window| if (window.document.modified()) {
+                window.view.confirm_close = true;
+                window.window.popout.window.window.raise() catch |err| std.log.err("cannot focus the input map: {t}", .{err});
+                self.workspace.toast("Save or discard the input map, then try again");
+                return false;
+            };
             if (self.leave_approved) {
                 self.leave_approved = false;
                 return true;
@@ -676,8 +744,8 @@ pub fn Editor(comptime project: type) type {
             };
             // The game starts over on the scene, as it does when shipped, with no keys held and its
             // clock at zero; the selection follows.
-            self.app.input = .{};
-            self.app.time = .{};
+            self.app.input.cancel();
+            self.app.time.reset();
             const place = self.entity_editor.selectionPlace(&self.app, game);
             self.play_mode.play(self.gpa, &self.app, game, self.entity_editor.roots(&self.app.world), self.plugin_switches.off()) catch |err| {
                 self.workspace.playing = false;
@@ -686,11 +754,13 @@ pub fn Editor(comptime project: type) type {
             };
             self.entity_editor.reselect(&self.app, game, place);
             self.workspace.playing = true;
+            self.game_input = .{ .focused = true };
         }
 
         /// Stop: the game starts over on the scene kept by Play. Entities are made anew; the
         /// selection follows its entity there.
         fn stopPlaying(self: *Self) void {
+            self.game_input.cancel(&self.app);
             self.workspace.playing = false;
             self.workspace.simulating = false;
             self.workspace.paused = false;
@@ -717,11 +787,29 @@ pub fn Editor(comptime project: type) type {
             return if (self.open_scene) |*scene| scene.path else null;
         }
 
+        fn openDiagnostic(self: *Self, source: @import("diagnostic.zig").Location) void {
+            const opened = self.project orelse return;
+            const file = std.fs.path.resolve(self.gpa, &.{ opened.dir, source.path }) catch |err| {
+                std.log.err("cannot resolve source {s}: {t}", .{ source.path, err });
+                return self.workspace.toast("Couldn't open the source: see the Console");
+            };
+            defer self.gpa.free(file);
+            const choice = preferences.editor(&self.app.preference_values).code_editor;
+            code_editor.openAt(self.gpa, choice, opened.dir, file, source.line, source.column) catch |err| {
+                std.log.err("cannot open {s}:{d}:{d} in {t}: {t}. Pick another code editor in Edit > Preferences.", .{ source.path, source.line, source.column, choice, err });
+                self.workspace.toast("Couldn't open the source: see the Console");
+            };
+        }
+
         /// Carry out what the Assets panel asked: open or start a scene, or show a file.
         fn applyAssetAction(self: *Self, action: assets.Action) void {
             const opened = self.project orelse return;
             switch (action) {
                 .open_scene, .create_scene => self.openSceneStep(action) catch |err| std.log.err("cannot open the scene: {t}", .{err}),
+                .open_input_map => |path| self.openInputMap(path) catch |err| {
+                    std.log.err("cannot open input map {s}: {t}", .{ path, err });
+                    self.workspace.toast("Couldn't open the input map: see the Console");
+                },
                 .open_code => |path| {
                     const file = std.fs.path.join(self.gpa, &.{ opened.dir, path }) catch return;
                     defer self.gpa.free(file);
@@ -741,16 +829,42 @@ pub fn Editor(comptime project: type) type {
                     @import("terminal_view.zig").copyToClipboard(path);
                     self.workspace.toast("Copied the path");
                 },
-                .create_folder, .rename, .duplicate, .delete, .move_into => self.changeFiles(opened.dir, action) catch |err| {
+                .create_folder, .create_file, .rename, .duplicate, .delete, .move_into => self.changeFiles(opened.dir, action) catch |err| {
                     std.log.err("cannot change the files: {t}", .{err});
                     self.workspace.toast("Couldn't do that: see the Console");
                 },
             }
         }
 
+        fn openInputMap(self: *Self, path: []const u8) !void {
+            const opened = self.project orelse return error.NoProject;
+            if (self.input_map_window) |window| {
+                if (std.mem.eql(u8, window.path, path)) return window.window.popout.window.window.raise();
+                if (window.document.modified()) {
+                    window.view.confirm_close = true;
+                    try window.window.popout.window.window.raise();
+                    return error.UnsavedInputMap;
+                }
+                window.close(&self.app.graphics);
+                self.input_map_window = null;
+            }
+            self.input_map_window = try input_map_asset.Window.open(self.gpa, &self.app.graphics, self.ui.font, opened.dir, path);
+        }
+
+        fn beforeAssetRemoval(self: *Self, path: []const u8) !void {
+            const window = self.input_map_window orelse return;
+            if (!window.affectedBy(path)) return;
+            if (window.document.modified()) {
+                window.view.confirm_close = true;
+                return error.UnsavedInputMap;
+            }
+            window.close(&self.app.graphics);
+            self.input_map_window = null;
+        }
+
         /// Open the scene `action` names, or make a new one, as a step to undo: undoing it puts
         /// back the scene open before, as its world was.
-        fn openSceneStep(self: *Self, action: assets.Action) !void {
+        pub fn openSceneStep(self: *Self, action: assets.Action) !void {
             self.stopPlaying();
             const scene = if (self.open_scene) |*open| open else return;
             const game = if (self.game) |*loaded| loaded else return error.NoGameLibrary;
@@ -800,18 +914,35 @@ pub fn Editor(comptime project: type) type {
 
         /// The Assets panel's file changes: new folders, renaming, duplicating, deleting (into
         /// the project's trash). The open scene follows its file.
-        fn changeFiles(self: *Self, project_dir: []const u8, action: assets.Action) !void {
+        pub fn changeFiles(self: *Self, project_dir: []const u8, action: assets.Action) !void {
             var threaded: std.Io.Threaded = .init_single_threaded;
             const io = threaded.io();
             var files = try std.Io.Dir.cwd().openDir(io, project_dir, .{});
             defer files.close(io);
-            defer self.filesChanged();
+            defer {
+                self.assets_panel.refreshSoon();
+                self.syncDescriptors();
+                // Input-map defaults load on the next start, without rebuilding live scene instances.
+                if (action != .create_file or !std.mem.endsWith(u8, action.create_file.file_type.extension, eggy.input.asset.extension))
+                    self.app.sceneInstances().remakeAll();
+            }
             switch (action) {
                 .create_folder => |parent| self.history.record(.{ .create = .{ .path = try file_ops.createFolder(self.gpa, io, files, parent) } }),
+                .create_file => |creation| {
+                    try self.history.reserve();
+                    const path = try file_ops.createFile(self.gpa, io, files, creation.folder, creation.file_type);
+                    self.history.record(.{ .create = .{ .path = path } });
+                    if (std.mem.endsWith(u8, path, eggy.input.asset.extension)) {
+                        if (self.input_map_window == null or !self.input_map_window.?.document.modified()) {
+                            try self.openInputMap(path);
+                        } else self.workspace.toast("Created input map; save or close the open map to edit it");
+                    }
+                },
                 .rename => |change| {
                     const renamed = try file_ops.rename(self.gpa, io, files, change.path, change.name);
                     if (self.open_scene) |*scene| scene.moved(change.path, renamed);
                     self.history.record(.{ .rename = .{ .from = try self.gpa.dupe(u8, change.path), .to = renamed } });
+                    if (self.input_map_window) |window| try window.moved(change.path, renamed);
                 },
                 .duplicate => |path| self.history.record(.{ .create = .{ .path = try file_ops.duplicate(self.gpa, io, files, path) } }),
                 // Dragged onto a folder: moved, or copied with Ctrl held.
@@ -821,8 +952,10 @@ pub fn Editor(comptime project: type) type {
                     const moved = try file_ops.moveInto(self.gpa, io, files, change.path, change.folder);
                     if (self.open_scene) |*scene| scene.moved(change.path, moved);
                     self.history.record(.{ .rename = .{ .from = try self.gpa.dupe(u8, change.path), .to = moved } });
+                    if (self.input_map_window) |window| try window.moved(change.path, moved);
                 },
                 .delete => |path| {
+                    try self.beforeAssetRemoval(path);
                     const trashed = try file_ops.trash(self.gpa, io, files, path);
                     if (self.open_scene) |*scene| scene.deleted(path);
                     self.history.record(.{ .delete = .{ .path = try self.gpa.dupe(u8, path), .trashed = trashed } });
@@ -835,15 +968,11 @@ pub fn Editor(comptime project: type) type {
 
         /// The world as a scene file's text (caller-owned); null without a game library.
         fn sceneText(self: *Self) ?[]u8 {
-            const game = if (self.game) |*loaded| loaded else return null;
-            var scene = eggy.scene.Scene.capture(self.gpa, &self.app.world, game.sceneAccess(), self.entity_editor.roots(&self.app.world)) catch return null;
-            defer scene.deinit();
-            var text: std.Io.Writer.Allocating = .init(self.gpa);
-            scene.write(&text.writer) catch {
-                text.deinit();
+            if (self.game == null) return null;
+            return extensions.snapshot(self) catch |err| {
+                std.log.err("cannot capture the editor scene: {t}", .{err});
                 return null;
             };
-            return text.toOwnedSlice() catch null;
         }
 
         /// Whether a text field has the keyboard somewhere: changes made by typing wait for it.
@@ -853,7 +982,11 @@ pub fn Editor(comptime project: type) type {
         }
 
         /// Edit > Undo or Redo: carry the step back (`.undo`) or out again (`.redo`).
-        fn undoOrRedo(self: *Self, direction: enum { undo, redo }) void {
+        fn undoOrRedo(self: *Self, direction: eggy.Direction) void {
+            if (self.input_settings) |settings| settings.recordPending(&self.history) catch |err| {
+                std.log.err("cannot record input mappings before undo: {t}", .{err});
+                return self.workspace.toast("Couldn't record input mappings: see the Console");
+            };
             // Steps are the scene's, not a play's: stop first.
             self.stopPlaying();
             // A change not recorded yet (typing just now) becomes a step first.
@@ -861,29 +994,32 @@ pub fn Editor(comptime project: type) type {
                 if (self.sceneText()) |text| self.history.watch(text, std.math.maxInt(u64), false);
                 self.watchLayout();
             }
-            const step = (if (direction == .undo) self.history.undo() else self.history.redo()) orelse {
+            const step = self.history.peek(direction) orelse {
                 return self.workspace.toast(if (direction == .undo) "Nothing to undo" else "Nothing to redo");
             };
-            self.carry(step, direction == .undo) catch |err| {
-                std.log.err("cannot {s} {s}: {t}", .{ @tagName(direction), step.describe(), err });
+            const description = step.describe();
+            _ = self.history.apply(direction, self, carry) catch |err| {
+                std.log.err("cannot {s} {s}: {t}", .{ @tagName(direction), description, err });
                 return self.workspace.toast("Couldn't do that: see the Console");
             };
             var message: [64]u8 = undefined;
-            self.workspace.toast(std.fmt.bufPrint(&message, "{s} {s}", .{ if (direction == .undo) "Undid" else "Redid", step.describe() }) catch "Done");
+            self.workspace.toast(std.fmt.bufPrint(&message, "{s} {s}", .{ if (direction == .undo) "Undid" else "Redid", description }) catch "Done");
         }
 
-        /// Carry `step` back (`back`) or out again, filling in where files went.
-        fn carry(self: *Self, step: *history_zig.Step, back: bool) !void {
+        /// Apply one direction, filling in where files went. History owns group traversal.
+        pub fn carry(self: *Self, step: *history_zig.Step, direction: eggy.Direction) !void {
+            const back = direction == .undo;
             const opened = self.project orelse return error.NoProject;
             var threaded: std.Io.Threaded = .init_single_threaded;
             const io = threaded.io();
             var files = try std.Io.Dir.cwd().openDir(io, opened.dir, .{});
             defer files.close(io);
-            defer self.filesChanged();
+            defer if (step.* == .input_map) self.assets_panel.refreshSoon() else self.filesChanged();
             switch (step.*) {
+                .group => unreachable,
                 .scene => |change| {
                     const game = if (self.game) |*loaded| loaded else return error.NoGame;
-                    const text = if (back) change.before else change.after;
+                    const text = change.value(direction);
                     const source = try self.gpa.dupeZ(u8, text);
                     defer self.gpa.free(source);
                     var scene = try eggy.scene.Scene.parse(self.gpa, source);
@@ -899,16 +1035,19 @@ pub fn Editor(comptime project: type) type {
                     const to = if (back) change.from else change.to;
                     try file_ops.move(io, files, from, to);
                     if (self.open_scene) |*scene| scene.moved(from, to);
+                    if (self.input_map_window) |window| try window.moved(from, to);
                 },
                 .delete => |*change| if (back) {
                     try file_ops.restore(io, files, change.trashed, change.path);
                 } else {
+                    try self.beforeAssetRemoval(change.path);
                     const trashed = try file_ops.trash(self.gpa, io, files, change.path);
                     self.gpa.free(change.trashed);
                     change.trashed = trashed;
                     if (self.open_scene) |*scene| scene.deleted(change.path);
                 },
                 .create => |*change| if (back) {
+                    try self.beforeAssetRemoval(change.path);
                     const trashed = try file_ops.trash(self.gpa, io, files, change.path);
                     if (change.trashed) |old| self.gpa.free(old);
                     change.trashed = trashed;
@@ -923,11 +1062,26 @@ pub fn Editor(comptime project: type) type {
                     try preferences.save(self.gpa, &self.app.preference_values, self.preference_folders, change.layer, change.key);
                 },
                 .project_settings => |change| {
-                    try files.writeFile(io, .{ .sub_path = eggy.project.file_name, .data = if (back) change.before else change.after });
-                    if (self.settings_window) |window| try window.reload();
+                    try files.writeFile(io, .{ .sub_path = eggy.project.file_name, .data = change.value(direction) });
+                    if (self.project_settings) |settings| try settings.reload();
+                },
+                .input_bindings => |change| {
+                    const settings = self.input_settings orelse return error.NoProject;
+                    try settings.restore(change.value(direction));
+                },
+                .input_map => |change| {
+                    const expected = if (back) change.text.after else change.text.before;
+                    if (self.input_map_window) |window| {
+                        if (std.mem.eql(u8, window.path, change.path)) {
+                            try window.restore(io, files, expected, change.text.value(direction));
+                            return;
+                        }
+                    }
+                    var restored = try input_map_asset.restoreFile(self.gpa, io, files, change.path, expected, change.text.value(direction));
+                    restored.deinit();
                 },
                 .layout => |change| {
-                    const text = if (back) change.before else change.after;
+                    const text = change.value(direction);
                     if (!layout_file.restore(self.gpa, text, &self.workspace.dock)) return error.ParseZon;
                     if (self.layout_step) |old| self.gpa.free(old);
                     self.layout_step = try self.gpa.dupe(u8, text);
@@ -974,14 +1128,44 @@ pub fn Editor(comptime project: type) type {
             self.workspace.scene_unsaved = false;
         }
 
-        /// The Preferences window's sections: the editor's, then (with a project) each plugin's that
-        /// has any, the game's titled after the project. In `arena`.
+        /// Checked save entry point used by synchronous editor-extension requests.
+        pub fn saveSceneForExtension(self: *Self) !void {
+            if (self.play_mode.playing()) return error.NotEditing;
+            const scene = if (self.open_scene) |*open| open else return error.NoProject;
+            const game = if (self.game) |*loaded| loaded else return error.NoGameLibrary;
+            try scene.save(&self.app.world, game.sceneAccess(), self.entity_editor.roots(&self.app.world));
+            self.workspace.scene_unsaved = false;
+        }
+
+        /// Open Edit > Preferences, with the open project's `eggy.zon` for its Project section.
+        fn openPreferences(self: *Self) void {
+            if (self.preferences_window != null) return;
+            self.preferences_window = preferences.PreferencesWindow.open(self.gpa, &self.app.graphics, self.ui.font) catch |err| {
+                std.log.err("cannot open Preferences: {t}", .{err});
+                return;
+            };
+            if (self.project) |opened| self.project_settings = ProjectSettings.open(self.gpa, opened.dir) catch |err| blk: {
+                std.log.err("cannot read {s}: {t}", .{ eggy.project.file_name, err });
+                break :blk null;
+            };
+        }
+
+        fn closePreferences(self: *Self) void {
+            if (self.preferences_window) |window| window.close(&self.app.graphics);
+            self.preferences_window = null;
+            if (self.project_settings) |settings| settings.close();
+            self.project_settings = null;
+        }
+
+        /// The Preferences window's sections: the editor's, then (with a project) its eggy.zon,
+        /// each plugin's that has any, the game's titled after the project. In `arena`.
         fn preferenceSections(self: *const Self, arena: std.mem.Allocator) ![]const preferences.Section {
             var sections: std.ArrayList(preferences.Section) = .empty;
             try sections.append(arena, .{ .title = "Editor", .subtitle = "How the editor looks and behaves.", .content = .{ .preferences = preferences.editor_manifest } });
             // Plugins' switches and preferences are the project's: without one, there is nowhere to
             // keep them.
             if (self.project == null) return sections.items;
+            if (self.project_settings) |settings| try sections.append(arena, .{ .title = project_section, .subtitle = "This project's title, version and how its game starts.", .content = .{ .project = settings } });
             const game = if (self.game) |*loaded| loaded else return sections.items;
             // Every plugin but the game, which can't be turned off.
             const plugins = try arena.alloc(preferences.Plugin, game.plugin_keys.len -| 1);
@@ -1030,15 +1214,38 @@ pub fn Editor(comptime project: type) type {
 
             // Render the scene offscreen at the Scene panel's pixel size.
             const frame = try surface.beginFrame();
-            const scene_px = if (self.workspace.placed.scene) |placed| if (placed.slot == slot) self.toPixels(placed.rect) else null else null;
+            const scene_px = if (self.workspace.placed.scene) |placed| if (placed.slot == slot) eggy.game_ui.pixelRect(placed.rect, viewport, frame.extent) else null else null;
             // Nothing at all without a camera to see it through.
-            const preview_px = if (scene_px != null and self.scene_view.preview != null) self.toPixels(scene_view.previewRect(self.workspace.placed.scene.?.rect)) else null;
+            const preview_px = if (scene_px != null and self.scene_view.preview != null) eggy.game_ui.pixelRect(scene_view.previewRect(self.workspace.placed.scene.?.rect), viewport, frame.extent) else null;
             if (scene_px) |rect| {
                 const gathered = if (self.game) |*game| game.gatherMeshes(&self.app, self.drawables) else self.drawables[0..0];
                 const meshes = if (self.scene_view.no_camera) gathered[0..0] else gathered;
                 self.scene_view.drawn = meshes;
                 // The ground grid only through the panel's own camera, not the game's.
                 try self.scene.render(&self.app.graphics, frame.cmd, pixelSize(rect), meshes, self.scene_view.view, self.entity_editor.selected, !self.scene_view.throughGameCamera());
+                if (self.build_window == null and self.play_mode.playing() and !self.workspace.simulating) if (self.game) |*game| {
+                    if (game.hasDraw() or game.hasGameUi()) {
+                        const logical = self.workspace.placed.scene.?.rect;
+                        const draw_context = eggy.DrawContext{
+                            .cmd = frame.cmd,
+                            .target = try self.scene.beginOverlay(frame.cmd),
+                            .extent_px = pixelSize(rect),
+                            .viewport = .{ .x = 0, .y = 0, .w = logical.w, .h = logical.h },
+                            .color_format = self.app.graphics.color_format,
+                            .frame_owner = surface,
+                            .frame_slot = surface.slot,
+                        };
+                        game.draw(&self.app, draw_context);
+                        if (game.hasGameUi()) {
+                            const layer = try self.app.gameUi();
+                            layer.begin(draw_context, sdl3.timer.getMillisecondsSinceInit());
+                            game.gameUi(&self.app, &layer.context);
+                            if (try layer.render(draw_context)) self.app.input.cancel();
+                            try layer.syncClipboard();
+                        }
+                        try self.scene.endOverlay(frame.cmd);
+                    }
+                };
                 // The selected camera's view, unoutlined. Rendering sorts `meshes`, which is no matter.
                 if (preview_px) |inset| try self.camera_preview.render(&self.app.graphics, frame.cmd, pixelSize(inset), meshes, self.scene_view.preview.?, null, false);
             }
@@ -1072,6 +1279,38 @@ pub fn Editor(comptime project: type) type {
         }
 
         pub fn event(self: *Self, curr_event: sdl3.events.Event) !sdl3.AppResult {
+            try self.app.deviceEvent(curr_event);
+            if (self.about_window) |window| {
+                if (window.closeRequested(curr_event)) {
+                    window.close(&self.app.graphics);
+                    self.about_window = null;
+                    return .run;
+                }
+                if (window.handle(curr_event)) return self.toolWindowTook(curr_event);
+            }
+            if (self.input_mappings_window) |window| {
+                if (window.closeRequested(curr_event)) {
+                    window.close(&self.app.graphics);
+                    self.input_mappings_window = null;
+                    return .run;
+                }
+                if (window.handle(curr_event)) return self.toolWindowTook(curr_event);
+            }
+            if (self.input_map_window) |window| {
+                if (window.closeRequested(curr_event)) {
+                    window.close(&self.app.graphics);
+                    self.input_map_window = null;
+                    return .run;
+                }
+                if (window.handle(curr_event)) return self.toolWindowTook(curr_event);
+            }
+            if (curr_event == .window_focus_lost) {
+                self.scene_view.camera.cancelNavigation();
+                self.game_input = .{};
+                self.app.input.releaseAll();
+                if (self.app.ui_layer) |layer| layer.cancel();
+            }
+            if (self.save_prompt != null or self.project_flow != null or self.build_window != null) self.game_input.cancel(&self.app);
             // "Save changes?" takes its own events, and the editor no input meanwhile.
             if (self.save_prompt) |prompt| {
                 if (prompt.keyAnswer(curr_event)) |answer| return if (try self.answerSavePrompt(answer)) .success else .run;
@@ -1101,14 +1340,11 @@ pub fn Editor(comptime project: type) type {
             // Edit > Preferences' window takes its own events; closing it, or Escape, closes it.
             if (self.preferences_window) |window| {
                 if (window.closeRequested(curr_event)) {
-                    window.close(&self.app.graphics);
-                    self.preferences_window = null;
+                    self.closePreferences();
                     return .run;
                 }
                 if (window.handle(curr_event)) return self.toolWindowTook(curr_event);
             }
-            // File > Project Settings' window takes its own events.
-            if (self.settings_window) |window| if (window.handle(curr_event)) return self.toolWindowTook(curr_event);
             // File > Export's window takes its own events.
             if (self.export_window) |window| if (window.handle(curr_event)) return self.toolWindowTook(curr_event);
             // Help > DevTools' window takes its own events; while inspecting, the main window's
@@ -1125,7 +1361,10 @@ pub fn Editor(comptime project: type) type {
                     else => {},
                 };
             }
-            const slot = self.slotOf(curr_event);
+            const slot = if (eggy.game_ui.isControllerInput(curr_event) and self.game_input.focused and self.workspace.placed.scene != null)
+                self.workspace.placed.scene.?.slot
+            else
+                self.slotOf(curr_event);
 
             // F2 renames what is selected in the Hierarchy or Assets (Weeoui's keys don't include it).
             if (curr_event == .key_down) if (curr_event.key_down.key) |key| if (key == .func2) {
@@ -1136,13 +1375,19 @@ pub fn Editor(comptime project: type) type {
 
             // While the game plays, the Scene panel is the game's: the mouse over it goes to it.
             const game_has_scene = self.play_mode.playing() and !self.workspace.simulating;
-            if (game_has_scene and self.overScene(slot, curr_event)) {
-                if (self.play_mode.running()) if (self.game) |*game| {
-                    self.app.input.handle(curr_event);
-                    game.event(&self.app, curr_event);
-                };
-                return .run;
+            if (game_has_scene) if (self.sceneRect(slot)) |rect| {
+                if (self.overScene(slot, curr_event) or (self.game_input.buttons != 0 and !eggy.game_ui.isTouchInput(curr_event) and pointerOf(curr_event) != null) or self.game_input.ownsTouch(curr_event)) {
+                    if (self.game) |*game| try self.routeGameInput(game, curr_event, slot, rect);
+                    return .run;
+                }
+            };
+            if (curr_event == .mouse_button_down) {
+                self.game_input.cancel(&self.app);
             }
+            if (curr_event == .mouse_motion) if (self.app.ui_layer) |layer| {
+                layer.pointer_active = false;
+            };
+            if (curr_event == .mouse_motion or curr_event == .window_mouse_leave) self.game_input.pointer_in_scene = false;
 
             // The Scene panel's camera takes presses, drags and wheels over it; F frames the
             // selection, and Delete deletes it.
@@ -1197,6 +1442,10 @@ pub fn Editor(comptime project: type) type {
 
             const outcome: workspace_zig.Outcome = if (weeoui_sdl3.translate(curr_event)) |input| self.workspace.handle(slot, input) else .ignored;
             switch (outcome) {
+                .plugin_command => |command| if (self.game) |*game| {
+                    var editor_context = extensions.context(self);
+                    game.editorCommand(command, &editor_context);
+                },
                 .quit => if (self.mayLeave(.quit)) return .success,
                 .window => |button| if (button != .close or self.mayLeave(.quit)) {
                     if (weeoui_sdl3.windowAction(self.app.window.window, button)) return .success;
@@ -1204,7 +1453,10 @@ pub fn Editor(comptime project: type) type {
                 .play => |playing| if (playing) self.startPlaying() else self.stopPlaying(),
                 .simulate => self.startPlaying(),
                 .scene_button => |button| self.scene_view.press(button),
-                .pause => |paused| self.play_mode.paused = paused,
+                .pause => |paused| {
+                    self.play_mode.paused = paused;
+                    self.app.input.cancel();
+                },
                 .new_project => if (self.project_flow == null and self.mayLeave(.new_project)) {
                     layout_file.save(self.gpa, self.preference_folders.global, &self.workspace.dock, self.workspace.seen_plugin_panels.items);
                     self.project_flow = try ProjectFlow.create(self.gpa, &self.app.graphics, self.ui.font, self.mono);
@@ -1223,12 +1475,21 @@ pub fn Editor(comptime project: type) type {
                 },
                 .upgrade_editor => if (self.upgrades.can_upgrade) try self.upgradeEditor() else self.upgrades.logUnavailable(.upgrade),
                 .toggle_devtools => self.toggleDevtools(),
-                .save => self.saveScene(),
-                .project_settings => if (self.settings_window == null) if (self.project) |opened| {
-                    self.settings_window = ProjectSettingsWindow.open(self.gpa, &self.app.graphics, self.ui.font, opened.dir) catch |err| blk: {
-                        std.log.err("cannot open Project Settings: {t}", .{err});
+                .about => if (self.about_window == null) {
+                    self.about_window = AboutWindow.open(self.gpa, &self.app.graphics, self.ui.font) catch |err| blk: {
+                        std.log.err("cannot open About Eggy: {t}", .{err});
                         break :blk null;
                     };
+                },
+                .save => self.saveScene(),
+                // Project Settings are the Preferences window's Project section.
+                .project_settings => if (self.project != null) {
+                    self.openPreferences();
+                    if (self.preferences_window) |window| {
+                        var arena = std.heap.ArenaAllocator.init(self.gpa);
+                        defer arena.deinit();
+                        window.show(try self.preferenceSections(arena.allocator()), project_section);
+                    }
                 },
                 .export_game => if (self.export_window == null) if (self.project) |opened| {
                     self.export_window = ExportWindow.open(self.gpa, &self.app.graphics, self.ui.font, self.mono, opened.dir) catch |err| blk: {
@@ -1238,11 +1499,9 @@ pub fn Editor(comptime project: type) type {
                 },
                 .undo => self.undoOrRedo(.undo),
                 .redo => self.undoOrRedo(.redo),
-                .preferences => if (self.preferences_window == null) {
-                    self.preferences_window = preferences.PreferencesWindow.open(self.gpa, &self.app.graphics, self.ui.font) catch |err| blk: {
-                        std.log.err("cannot open Preferences: {t}", .{err});
-                        break :blk null;
-                    };
+                .preferences => self.openPreferences(),
+                .input_mappings => if (self.input_mappings_window == null) {
+                    self.input_mappings_window = try InputMappingsWindow.open(self.gpa, &self.app.graphics, self.ui.font);
                 },
                 .link_developer => if (self.upgrades.can_link) try self.linkDeveloper() else self.upgrades.logUnavailable(.link),
                 else => {},
@@ -1251,6 +1510,7 @@ pub fn Editor(comptime project: type) type {
             if (curr_event == .window_focus_gained and self.cameBack()) {
                 // Another editor may have unpacked a newer Eggy meanwhile.
                 self.upgrades.refresh();
+                if (self.input_settings) |settings| settings.reload() catch |err| std.log.err("cannot reload controls.zon: {t}; keeping active mappings", .{err});
                 // Files may have changed outside: models and images import again, and descriptors catch up.
                 self.app.graphics.forgetAssets();
                 self.filesChanged();
@@ -1262,14 +1522,15 @@ pub fn Editor(comptime project: type) type {
             // off a field.
             if (weeoui_sdl3.translate(curr_event)) |input| if (input == .pointer_down) self.unfocusOnPress(slot, input.pointer_down.position, outcome == .ignored);
             // Left presses on the Scene panel select, or take the gizmo; moves drag it.
-            if (outcome == .ignored or curr_event == .mouse_motion) if (self.sceneTarget()) |target| {
+            if (!game_has_scene and (outcome == .ignored or curr_event == .mouse_motion)) if (self.sceneTarget()) |target| {
                 if (self.scene_view.handlePointer(curr_event, self.sceneRect(slot), target)) return .run;
             };
             // The pages get the rest, and every pointer move so their hover state stays current.
-            if (outcome == .ignored or curr_event == .mouse_motion) self.routeToPages(slot, curr_event);
-            // Input reaches the game only while it plays.
-            if (self.play_mode.running()) if (self.game) |*game| {
-                self.app.input.handle(curr_event);
+            const game_keyboard = game_has_scene and self.game_input.focused and self.sceneRect(slot) != null and eggy.game_ui.isInput(curr_event) and pointerOf(curr_event) == null and outcome == .ignored;
+            if (game_keyboard) {
+                if (self.game) |*game| try self.routeGameInput(game, curr_event, slot, self.sceneRect(slot).?);
+            } else if (outcome == .ignored or curr_event == .mouse_motion) self.routeToPages(slot, curr_event);
+            if (self.play_mode.running() and !eggy.game_ui.isInput(curr_event)) if (self.game) |*game| {
                 game.event(&self.app, curr_event);
             };
             // Quitting from the system (or closing the window) asks about unsaved changes too.
@@ -1278,14 +1539,26 @@ pub fn Editor(comptime project: type) type {
             return self.app.event(curr_event);
         }
 
-        /// The project named by `--project <dir>` in `args`, if any, read from its `eggy.zon`
-        /// (caller-owned; see `freeProject`), after titling `window` after it.
+        fn routeGameInput(self: *Self, game: *HotGame, value: eggy.Event, slot: Slot, rect: ui.Rect) !void {
+            const window = self.windowOf(slot) orelse return;
+            const width, const height = try window.getSize();
+            try self.game_input.route(&self.app, game, value, rect, .{ @floatFromInt(width), @floatFromInt(height) }, self.play_mode.running());
+        }
+
+        /// Open the explicit project, else discover this editor's matching source project.
+        /// Caller-owned (see `freeProject`); titles `window` after the project's `eggy.zon`.
         fn openProject(gpa: std.mem.Allocator, window: sdl3.video.Window, args: []const [*:0]const u8) !?workspace_zig.Project {
-            const dir = for (args, 0..) |arg, i| {
-                if (std.mem.eql(u8, std.mem.span(arg), "--project") and i + 1 < args.len) break std.mem.span(args[i + 1]);
-            } else return null;
+            const discovery = @import("projects/discovery.zig");
             var threaded: std.Io.Threaded = .init_single_threaded;
             const io = threaded.io();
+            const dir = if (try discovery.explicitDirectory(args)) |requested|
+                try std.Io.Dir.cwd().realPathFileAlloc(io, requested, gpa)
+            else
+                (discovery.find(gpa, io, project.name, try sdl3.filesystem.getBasePath(), ".") catch |err| {
+                    std.log.err("cannot discover project {s}: {t}", .{ project.name, err });
+                    return err;
+                }) orelse return null;
+            defer gpa.free(dir);
             var project_root = std.Io.Dir.cwd().openDir(io, dir, .{}) catch |err| {
                 std.log.err("cannot open project {s}: {t}", .{ dir, err });
                 return err;
@@ -1378,7 +1651,7 @@ pub fn Editor(comptime project: type) type {
 
         /// Start `action`'s job on the open project as `rebuild`, and the Build progress window
         /// that follows it.
-        fn startBuild(self: *Self, action: job_zig.Action) !void {
+        pub fn startBuild(self: *Self, action: job_zig.Action) !void {
             const opened = self.project orelse return;
             const folders = try job_zig.editorFolders(self.gpa);
             defer self.gpa.free(folders.resources_dir);
@@ -1434,7 +1707,7 @@ pub fn Editor(comptime project: type) type {
         }
 
         /// Whether `rebuild` is still under way.
-        fn buildRunning(self: *Self) bool {
+        pub fn buildRunning(self: *Self) bool {
             const job = self.rebuild orelse return false;
             var arena = std.heap.ArenaAllocator.init(self.gpa);
             defer arena.deinit();
@@ -1443,7 +1716,7 @@ pub fn Editor(comptime project: type) type {
         }
 
         /// Stop `rebuild` (the build is killed) and forget it.
-        fn cancelBuild(self: *Self) void {
+        pub fn cancelBuild(self: *Self) void {
             self.reload_when_built = false;
             const job = self.rebuild orelse return;
             job.deinit();
@@ -1453,7 +1726,7 @@ pub fn Editor(comptime project: type) type {
         /// The title bar's Reload: open the rebuilt editor if a rebuild made one; otherwise
         /// rebuild (in the Build progress window) and open the result, changed or not. Returns
         /// whether the editor should quit, as the new one is open.
-        fn forceReload(self: *Self) !bool {
+        pub fn forceReload(self: *Self) !bool {
             if (self.workspace.build_state == .ready) if (self.rebuild) |job| return try self.launchRebuilt(job);
             if (self.buildRunning()) {
                 self.reload_when_built = true;
@@ -1524,6 +1797,7 @@ pub fn Editor(comptime project: type) type {
                 if (made.skipped > 0) std.log.warn("{d} components or fields didn't carry over the swap (see above)", .{made.skipped});
             } else |err| std.log.err("cannot put the scene back: {t}", .{err});
             self.workspace.setPluginPanels(game.panels);
+            self.workspace.plugin_commands = game.commands;
             preferences.writeRegistry(self.gpa, self.preference_folders, game.plugin_keys, game.preference_manifests, self.plugin_switches.off()) catch |err| std.log.warn("cannot update .eggy/plugins.zon: {t}", .{err});
             game.start(&self.app, self.plugin_switches.off(), .discard);
         }
@@ -1565,6 +1839,7 @@ pub fn Editor(comptime project: type) type {
         /// One of the editor's own windows (Preferences, DevTools, Build, a project's) took
         /// `curr_event`: a press there takes the keyboard off every page's field.
         fn toolWindowTook(self: *Self, curr_event: sdl3.events.Event) sdl3.AppResult {
+            self.game_input.cancel(&self.app);
             if (curr_event == .mouse_button_down) for (0..self.pageCount()) |index| {
                 self.page(index).focus = 0;
             };
@@ -1643,22 +1918,17 @@ pub fn Editor(comptime project: type) type {
 
         /// Bring each scene instance's entities up to date with its file (see `SceneInstances`).
         fn syncSceneInstances(self: *Self) void {
-            const opened = self.project orelse return;
+            const provider = self.project_assets orelse return;
             const game = if (self.game) |*loaded| loaded else return;
-            var threaded: std.Io.Threaded = .init_single_threaded;
-            const io = threaded.io();
-            var files = std.Io.Dir.cwd().openDir(io, opened.dir, .{}) catch return;
-            defer files.close(io);
-            var folder = eggy.scene_instances.FolderFiles{ .io = io, .dir = files };
-            self.entity_editor.instances.sync(folder.files(), &self.app.world, game.sceneAccess(), self.openScenePath());
+            self.app.sceneInstances().sync(provider.files(), &self.app.world, game.sceneAccess(), self.openScenePath());
         }
 
         /// The project's files changed: the Assets panel lists them again, descriptors keep up,
         /// and scene instances are made again from their files.
-        fn filesChanged(self: *Self) void {
+        pub fn filesChanged(self: *Self) void {
             self.assets_panel.refreshSoon();
             self.syncDescriptors();
-            self.entity_editor.instances.remakeAll();
+            self.app.sceneInstances().remakeAll();
         }
 
         /// Give every file in the project's `resources/` a descriptor, and drop those whose file
@@ -1775,6 +2045,11 @@ pub fn Editor(comptime project: type) type {
         /// SDL's own state is checked each frame, as Weeoui's Inspector handling switches it too.
         fn syncTextInput(self: *Self) void {
             var wanted: ?Slot = null;
+            if (self.play_mode.playing() and self.game_input.focused) if (self.app.ui_layer) |layer| {
+                if (layer.context.wants_text) if (self.workspace.placed.scene) |scene| {
+                    wanted = scene.slot;
+                };
+            };
             for (0..self.pageCount()) |index| {
                 const placed = self.workspace.placed.pages[index] orelse continue;
                 if (self.page(index).wants_text) wanted = placed.slot;
@@ -1880,6 +2155,9 @@ pub fn Editor(comptime project: type) type {
                         const window_id: ?sdl3.video.WindowId = payload.window_id;
                         break :blk window_id orelse return main_slot;
                     }
+                    if (@typeInfo(T) == .@"struct" and @hasField(T, "id")) {
+                        if (@TypeOf(payload.id) == ?sdl3.video.WindowId) break :blk payload.id orelse return main_slot;
+                    }
                     return main_slot;
                 },
             };
@@ -1892,7 +2170,10 @@ pub fn Editor(comptime project: type) type {
         fn buildInspector(self: *Self) void {
             if (self.entity_editor.buildInspector(&self.ui, &self.app, self.gamePtr(), self.dragging(self.ui.builder().allocator), self.plugin_switches.off())) return;
             self.ui.heading(3, project.name);
-            if (self.game) |*game| game.editorUi(&self.ui) else self.ui.muted("The game's library didn't load: see the Console.");
+            if (self.game) |*game| {
+                var editor_context = extensions.context(self);
+                game.editorUi(&editor_context, &self.ui);
+            } else self.ui.muted("The game's library didn't load: see the Console.");
             self.ui.muted("Select an entity in the Hierarchy to see its components.");
         }
 
@@ -1909,7 +2190,7 @@ pub fn Editor(comptime project: type) type {
         /// press or wheel on a workspace control floating over it, which takes it instead.
         fn sceneRectFor(self: *const Self, slot: Slot, curr_event: sdl3.events.Event) ?ui.Rect {
             const on_control = switch (curr_event) {
-                .mouse_button_down, .mouse_wheel => if (pointerOf(curr_event)) |at| self.workspace.hasControlAt(slot, at.x, at.y) else false,
+                .mouse_button_down, .mouse_wheel, .pinch_begin => if (pointerOf(curr_event)) |at| self.workspace.hasControlAt(slot, at.x, at.y) else false,
                 else => false,
             };
             return if (on_control) null else self.sceneRect(slot);
@@ -1921,6 +2202,15 @@ pub fn Editor(comptime project: type) type {
                 .mouse_button_down, .mouse_button_up => |button| .{ .x = button.x, .y = button.y },
                 .mouse_motion => |motion| .{ .x = motion.x, .y = motion.y },
                 .mouse_wheel => |wheel| .{ .x = wheel.x, .y = wheel.y },
+                .pinch_begin, .pinch_update, .pinch_end => blk: {
+                    const mouse = sdl3.mouse.getState();
+                    break :blk .{ .x = mouse[1], .y = mouse[2] };
+                },
+                .finger_down, .finger_up, .finger_motion, .finger_canceled => |finger| blk: {
+                    const window = sdl3.video.Window.fromId(finger.window_id orelse break :blk null) catch break :blk null;
+                    const width, const height = window.getSize() catch break :blk null;
+                    break :blk .{ .x = finger.x * @as(f32, @floatFromInt(width)), .y = finger.y * @as(f32, @floatFromInt(height)) };
+                },
                 else => null,
             };
         }
@@ -1972,12 +2262,20 @@ pub fn Editor(comptime project: type) type {
 }
 
 test {
+    _ = @import("input_mappings.zig");
+    _ = @import("input_map_asset/input_map_asset.zig");
+    _ = @import("assets/creation.zig");
+    _ = @import("input_settings.zig");
+    _ = @import("game_input.zig");
+    _ = extensions;
     _ = @import("workspace.zig");
     _ = @import("menus.zig");
     _ = @import("panels.zig");
     _ = @import("play_button.zig");
     _ = @import("projects/template.zig");
     _ = @import("projects/job.zig");
+    _ = @import("projects/build_output.zig");
+    _ = @import("projects/discovery.zig");
     _ = @import("projects/wizard.zig");
     _ = @import("projects/flow.zig");
     _ = @import("projects/engine.zig");
@@ -1987,7 +2285,8 @@ test {
     _ = @import("export_window.zig");
     _ = @import("project_settings.zig");
     _ = @import("devtools_window.zig");
-    _ = @import("hit_test.zig");
+    _ = @import("about_window.zig");
+    _ = eggy.ui_hit_test;
     _ = @import("scene_file.zig");
     _ = @import("layout_file.zig");
     _ = @import("play_mode.zig");
@@ -2015,6 +2314,7 @@ test {
     _ = @import("terminal_view.zig");
     _ = @import("console_log.zig");
     _ = @import("console.zig");
+    _ = @import("diagnostic.zig");
 }
 
 test "the editor compiles for a project" {

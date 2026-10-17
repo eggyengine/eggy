@@ -15,7 +15,7 @@ const play_button = @import("play_button.zig");
 const pause_button = @import("pause_button.zig");
 const simulate_button = @import("simulate_button.zig");
 const scene_view = @import("scene_view/scene_view.zig");
-const hit_test = @import("hit_test.zig");
+const hit_test = eggy.ui_hit_test;
 const reload_button = @import("reload_button.zig");
 const Panel = panels.Panel;
 /// Eggy's version, from its `build.zig.zon`.
@@ -57,13 +57,16 @@ pub const Outcome = union(enum) {
     open_project_linked,
     /// Help > DevTools (F12): open or close the DevTools window.
     toggle_devtools,
+    /// Help > About Eggy.
+    about,
     /// Edit > Preferences: open the Preferences window.
     preferences,
+    input_mappings,
     /// File > Save (Ctrl+S): save the scene.
     save,
     /// File > Export: open the Export window.
     export_game,
-    /// File > Project Settings: open the Project Settings window.
+    /// File > Project Settings: open Preferences on its Project section.
     project_settings,
     /// Edit > Undo (Ctrl+Z) and Redo (Ctrl+Shift+Z, Ctrl+Y).
     undo,
@@ -77,6 +80,8 @@ pub const Outcome = union(enum) {
     link_developer,
     /// The title bar's Reload: open the rebuilt editor, rebuilding it first if need be.
     reload,
+    plugin_command: usize,
+    build_project,
 };
 
 /// The project the editor has open, for the status bar.
@@ -188,9 +193,10 @@ pub const Workspace = struct {
     /// Each window's tree from the last `build`; lives in `arena` until the next one.
     roots: [slot_count]?*L.Element = @splat(null),
     /// The panels plugins add (`eggy.plugins.Set.editor_panels`); panel i has dock id
-    /// `panels.plugin_first + i`.
+    /// `panels.pluginId` of its stable key.
     plugin_panels: []const eggy.plugins.EditorPanel,
-    /// The plugin panels (by title, owned) this user has had, kept with the layout: only one not
+    plugin_commands: []const eggy.plugins.EditorCommand = &.{},
+    /// The plugin panels (by stable key, owned) this user has had, kept with the layout: only one not
     /// among them docks by itself, so a panel closed stays closed.
     seen_plugin_panels: std.ArrayList([]u8) = .empty,
     /// Where the Scene and pages are, for the editor to draw into.
@@ -221,22 +227,64 @@ pub const Workspace = struct {
     pub fn setPluginPanels(self: *Workspace, plugin_panels: []const eggy.plugins.EditorPanel) void {
         const max_plugin_panels = panels.max_pages - panels.first_plugin_page;
         const shown = plugin_panels[0..@min(plugin_panels.len, max_plugin_panels)];
-        const old_len = self.plugin_panels.len;
-        // Panels it no longer has go, wherever they are (a restored layout may hold any).
-        for (shown.len..max_plugin_panels) |i| self.dock.remove(panels.plugin_first + @as(u32, @intCast(i)));
+        for (shown, 0..) |panel, i| for (shown[0..i], 0..) |previous, j| {
+            if (panels.pluginId(panel, i) == panels.pluginId(previous, j)) {
+                std.log.err("editor panel keys {s} and {s} collide; choose distinct keys", .{ panel.key, previous.key });
+                self.plugin_panels = &.{};
+                return;
+            }
+        };
+        // Carry the old index-based layout forward once, including closed-panel identities.
+        if (self.plugin_panels.len == 0) for (shown, 0..) |panel, i| {
+            const old = panels.plugin_first + @as(u32, @intCast(i));
+            const new = panels.pluginId(panel, i);
+            for (&self.dock.nodes) |*node| {
+                if (node.kind != .tabs) continue;
+                for (node.panels[0..node.count]) |*id| if (id.* == old) {
+                    id.* = new;
+                };
+            }
+            for (&self.dock.homes) |*home| {
+                if (home.panel == old) home.panel = new;
+                for (home.neighbours[0..home.count]) |*id| if (id.* == old) {
+                    id.* = new;
+                };
+            }
+        };
+        for (self.dock.nodes) |node| {
+            if (node.kind != .tabs) continue;
+            for (node.panels[0..node.count]) |id| {
+                if (id < panels.plugin_first) continue;
+                const present = for (shown, 0..) |panel, index| {
+                    if (panels.pluginId(panel, index) == id) break true;
+                } else false;
+                if (!present) self.dock.remove(id);
+            }
+        }
         self.plugin_panels = shown;
         // New ones dock beside the Inspector, unless a restored layout already placed them or
         // this user has had them before (and closed them, if they aren't there).
         var added = false;
-        if (shown.len > old_len) for (old_len..shown.len) |i| {
-            const id = panels.plugin_first + @as(u32, @intCast(i));
-            if (self.dock.nodeOf(id) != null or self.seenPanel(shown[i].title)) continue;
+        for (shown, 0..) |panel, i| {
+            const id = panels.pluginId(panel, i);
+            const key = if (panel.key.len != 0) panel.key else panel.title;
+            const known = self.seenPanel(key) or self.seenPanel(panel.title);
             const gpa = self.arena.child_allocator;
-            const title = gpa.dupe(u8, shown[i].title) catch continue;
-            self.seen_plugin_panels.append(gpa, title) catch gpa.free(title);
+            if (!self.seenPanel(key)) {
+                const title = gpa.dupe(u8, key) catch |err| {
+                    std.log.err("cannot keep editor panel identity: {t}", .{err});
+                    continue;
+                };
+                self.seen_plugin_panels.append(gpa, title) catch |err| {
+                    gpa.free(title);
+                    std.log.err("cannot keep editor panel identity: {t}", .{err});
+                    continue;
+                };
+            }
+            if (self.dock.nodeOf(id) != null or known) continue;
             self.dock.add(id, @intFromEnum(Panel.inspector), .center) catch |err| std.log.warn("cannot dock the game's panel {s}: {t}", .{ shown[i].title, err });
             added = true;
-        };
+        }
         if (added) _ = self.dock.activate(dock.first_id + @intFromEnum(Panel.inspector));
     }
 
@@ -258,7 +306,7 @@ pub const Workspace = struct {
         try self.dock.add(@intFromEnum(Panel.console), @intFromEnum(Panel.scene), .bottom);
         self.splitRatio(.console, 0.7);
         try self.dock.add(@intFromEnum(Panel.assets), @intFromEnum(Panel.console), .center);
-        for (0..self.plugin_panels.len) |i| try self.dock.add(panels.plugin_first + @as(u32, @intCast(i)), @intFromEnum(Panel.inspector), .center);
+        for (self.plugin_panels, 0..) |panel, i| try self.dock.add(panels.pluginId(panel, i), @intFromEnum(Panel.inspector), .center);
         // The Inspector's and the Console's tabs in front.
         _ = self.dock.activate(dock.first_id + @intFromEnum(Panel.inspector));
         _ = self.dock.activate(dock.first_id + @intFromEnum(Panel.console));
@@ -298,7 +346,7 @@ pub const Workspace = struct {
             if (button != null) menu_room -= 32;
         };
         const project_state = menus.ProjectState{ .open = self.project != null, .can_upgrade = self.can_upgrade, .can_link = self.can_link, .developer_known = self.developer_known, .shift_held = self.shift_held };
-        const menu_list = try self.menubar.list(b.allocator, &self.dock, self.plugin_panels, project_state, menus.shownMenus(font, menu_room));
+        const menu_list = try self.menubar.list(b.allocator, &self.dock, self.plugin_panels, self.plugin_commands, project_state, menus.shownMenus(font, menu_room));
         const menubar = if (self.custom_frame)
             try widgets.titlebarMenubar(b, menu_list, self.menubar.open, hot, self.menubar.open_submenu)
         else
@@ -625,6 +673,7 @@ pub const Workspace = struct {
     /// Carry out what a menu press asked for.
     fn run(self: *Workspace, action: menus.Action) Outcome {
         switch (action) {
+            .plugin_command => |command| return .{ .plugin_command = command },
             .handled => {},
             .toggle_panel => |panel| self.togglePanel(panel),
             .command => |command| switch (command) {
@@ -637,14 +686,14 @@ pub const Workspace = struct {
                 .link_developer => return .link_developer,
                 .devtools => return .toggle_devtools,
                 .preferences => return .preferences,
+                .input_mappings => return .input_mappings,
                 .save => return .save,
                 .export_game => return .export_game,
                 .project_settings => return .project_settings,
                 .undo => return .undo,
                 .redo => return .redo,
                 .reset_layout => self.resetLayout() catch |err| std.log.warn("cannot reset the layout: {t}", .{err}),
-                // ponytail: a stub until there is an About window.
-                .about => std.log.info("about: not implemented yet", .{}),
+                .about => return .about,
             },
         }
         return .handled;
@@ -669,6 +718,28 @@ pub const Workspace = struct {
 };
 
 const test_plugin_panels = [_]eggy.plugins.EditorPanel{.{ .title = "Stats" }};
+
+test "keyed panels retain dock positions through title changes and reordering" {
+    const before = [_]eggy.plugins.EditorPanel{
+        .{ .key = "game/stats", .title = "Stats" },
+        .{ .key = "game/tools", .title = "Tools" },
+    };
+    var workspace = try Workspace.init(std.testing.allocator, .default(.linux), &.{});
+    defer workspace.deinit();
+    workspace.setPluginPanels(&before);
+    const stats_id = panels.pluginId(before[0], 0);
+    const node = workspace.dock.nodeOf(stats_id);
+    const after = [_]eggy.plugins.EditorPanel{
+        .{ .key = "game/tools", .title = "Tools" },
+        .{ .key = "game/stats", .title = "Statistics" },
+    };
+    workspace.setPluginPanels(&after);
+    try std.testing.expectEqual(node, workspace.dock.nodeOf(stats_id));
+    try std.testing.expectEqual(@as(?usize, panels.first_plugin_page + 1), panels.pageOf(stats_id, &after));
+    workspace.dock.remove(stats_id);
+    workspace.setPluginPanels(&after);
+    try std.testing.expect(workspace.dock.nodeOf(stats_id) == null);
+}
 
 fn testWorkspace() !Workspace {
     return Workspace.init(std.testing.allocator, titlebar.Layout.default(.linux), &test_plugin_panels);

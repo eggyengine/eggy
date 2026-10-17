@@ -13,6 +13,76 @@ const text_size: f32 = 12;
 const line_height = text_size * 1.5;
 const padding: f32 = 10;
 
+/// A clickable terminal line, sharing the output view's monospace face and severity colours.
+/// Its text and paint state live for the builder's frame; long lines wrap at whole characters.
+pub fn messageLine(b: ui.Layout.Builder, mono: *const ui.Font, id: u32, text: []const u8, selected: bool) !*ui.Layout.Element {
+    const state = try b.allocator.create(MessageLine);
+    state.* = .{ .mono = mono, .id = id, .text = text, .selected = selected };
+    const element = try b.node(id, .{}, .{ .custom = .{ .context = state, .measure = MessageLine.measure, .draw = MessageLine.draw } }, &.{});
+    element.accessibility = .{ .role = if (id == 0) .label else .button, .label = text, .expanded = if (id == 0) null else selected };
+    if (id != 0) element.cursor = .pointer;
+    return element;
+}
+
+/// A continuous terminal background for independently clickable message lines.
+pub fn messageList(b: ui.Layout.Builder, width: f32, height: f32, scroll: *ui.Layout.ScrollState, lines: []const *ui.Layout.Element) !*ui.Layout.Element {
+    const element = try b.node(0, .{
+        .width = width,
+        .height = height,
+        .padding = .{ .top = padding, .bottom = padding },
+        .overflow = .scroll,
+    }, .{ .custom = .{ .context = &background, .draw = drawBackground } }, lines);
+    element.scroll = scroll;
+    scroll.overlay_bar = true;
+    element.accessibility = .{ .role = .log, .label = "Console messages", .live = .polite };
+    return element;
+}
+
+const MessageLine = struct {
+    mono: *const ui.Font,
+    id: u32,
+    text: []const u8,
+    selected: bool,
+
+    fn columns(self: *const MessageLine, width: f32) usize {
+        return @max(1, @as(usize, @intFromFloat(@max(0, width - 2 * padding) / self.mono.measure("M", text_size))));
+    }
+
+    fn measure(context: *const anyopaque, width: f32, _: *const ui.Font) f32 {
+        const self: *const MessageLine = @ptrCast(@alignCast(context));
+        const count = self.columns(width);
+        const rows = @max(1, (columnsIn(self.text) + count - 1) / count);
+        return @as(f32, @floatFromInt(rows)) * line_height;
+    }
+
+    fn draw(context: *const anyopaque, c: *ui.Canvas, r: ui.Rect) anyerror!void {
+        const self: *const MessageLine = @ptrCast(@alignCast(context));
+        const previous_clip = c.clip;
+        const previous_font = c.font;
+        c.clip = if (previous_clip) |clip| clip.intersection(r) else r;
+        c.font = self.mono;
+        defer {
+            c.clip = previous_clip;
+            c.font = previous_font;
+        }
+        if (self.selected or (self.id != 0 and c.hot_id == self.id)) try c.rectAlpha(r, c.theme.primary, if (self.selected) 0.2 else 0.1);
+        const count = self.columns(r.w);
+        const char_width = self.mono.measure("M", text_size);
+        var start: usize = 0;
+        var y = r.y;
+        while (start < self.text.len) {
+            const end = advanceColumns(self.text, start, self.text.len, count);
+            try drawLineRow(c, self.text, start, end, .{ .x = r.x + padding, .y = y, .w = @max(0, r.w - 2 * padding), .h = line_height }, char_width);
+            start = end;
+            y += line_height;
+        }
+    }
+};
+
+fn drawBackground(_: *const anyopaque, c: *ui.Canvas, r: ui.Rect) anyerror!void {
+    try c.roundRect(r, background, c.theme.radiusMd());
+}
+
 pub const TerminalView = struct {
     gpa: std.mem.Allocator,
     /// The monospace face, sharing the UI font's atlas (see `ui.Font.initCompanion`).
@@ -265,14 +335,7 @@ pub const TerminalView = struct {
             // The row's text, a coloured span at a time (see `lineSpans`).
             const line_start = lineStart(self.text.items, row.start);
             const line_end = std.mem.indexOfScalarPos(u8, self.text.items, line_start, '\n') orelse self.text.items.len;
-            var spans_buffer: [max_spans]Span = undefined;
-            for (lineSpans(self.text.items[line_start..line_end], c.theme, &spans_buffer)) |span| {
-                const from_byte = @max(row.start, line_start + span.start);
-                const to_byte = @min(row.end, line_start + span.end);
-                if (to_byte <= from_byte) continue;
-                const x = inner.x + @as(f32, @floatFromInt(columnsIn(self.text.items[row.start..from_byte]))) * char_width;
-                try c.textIn(.{ .x = x, .y = y, .w = inner.x + inner.w - x, .h = line_height }, self.text.items[from_byte..to_byte], text_size, span.color, .start);
-            }
+            try drawLineRow(c, self.text.items[line_start..line_end], row.start - line_start, row.end - line_start, .{ .x = inner.x, .y = y, .w = inner.w, .h = line_height }, char_width);
         }
 
         // A thin scrollbar when there's more than fits.
@@ -287,6 +350,17 @@ pub const TerminalView = struct {
         }
     }
 };
+
+fn drawLineRow(c: *ui.Canvas, line: []const u8, start: usize, end: usize, r: ui.Rect, char_width: f32) !void {
+    var spans_buffer: [max_spans]Span = undefined;
+    for (lineSpans(line, c.theme, &spans_buffer)) |span| {
+        const from = @max(start, span.start);
+        const to = @min(end, span.end);
+        if (to <= from) continue;
+        const x = r.x + @as(f32, @floatFromInt(columnsIn(line[start..from]))) * char_width;
+        try c.textIn(.{ .x = x, .y = r.y, .w = r.x + r.w - x, .h = r.h }, line[from..to], text_size, span.color, .start);
+    }
+}
 
 /// A run of a line drawn in one colour: bytes `start..end` of the line.
 const Span = struct { start: usize, end: usize, color: ui.Color };

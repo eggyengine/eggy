@@ -12,8 +12,8 @@ const log = std.log.scoped(.models);
 /// How a model file (by its path in the project) becomes triangles.
 pub const Loader = struct {
     context: *anyopaque,
-    /// The model at `path`, allocated with `gpa`; null when it can't be loaded (having said why).
-    load: *const fn (context: *anyopaque, gpa: std.mem.Allocator, path: []const u8) ?assets.Model,
+    /// Host-local loader; author code uses `Resources`' C-safe provider bridge.
+    load: *const fn (context: *anyopaque, gpa: std.mem.Allocator, path: []const u8) anyerror!assets.Model,
 };
 
 /// A model's triangles on the GPU, in parts each painted with its own texture (or not).
@@ -102,7 +102,10 @@ pub const ModelCache = struct {
     /// Load the model at `path` and put it, and its textures, on the GPU.
     fn upload(self: *ModelCache, path: []const u8, textures: *TextureCache) ?Gpu {
         const loader = self.loader orelse return null;
-        var model = loader.load(loader.context, self.gpa, path) orelse return null;
+        var model = loader.load(loader.context, self.gpa, path) catch |err| {
+            log.err("cannot load model {s}: {t}", .{ path, err });
+            return null;
+        };
         defer model.deinit(self.gpa);
         if (model.indices.len == 0) {
             log.warn("{s} has no triangles", .{path});

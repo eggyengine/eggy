@@ -24,7 +24,6 @@ pub fn Runtime(comptime project: type) type {
         /// What packaging put beside the game (null where there is none: the web), and the
         /// entities each scene instance made from it.
         data: ?*packaged_assets.Data,
-        instances: eggy.SceneInstances,
 
         const Self = @This();
 
@@ -41,12 +40,14 @@ pub fn Runtime(comptime project: type) type {
             }
         }
 
-        pub fn init(gpa: std.mem.Allocator, args: []const [*:0]const u8) !Self {
+        pub fn init(process_init: *const std.process.Init, args: []const [*:0]const u8) !Self {
             _ = args;
+            const gpa = process_init.gpa;
             // Used, so a release build's linker keeps the metadata's section.
             if (@hasDecl(project, "metadata_text")) std.mem.doNotOptimizeAway(&project.metadata_text);
-            var app = try eggy.App.init(gpa, project.name);
+            var app = try eggy.App.init(process_init, project.name);
             errdefer app.deinit();
+            if (@hasDecl(project, "input_bindings")) try app.input_backend.?.state.readOverrides(project.input_bindings);
             // Model and image files, and scenes, as packaging made them.
             const data: ?*packaged_assets.Data = if (web) null else packaged_assets.Data.open(gpa) catch |err| blk: {
                 std.log.warn("the game's data folder can't be read ({t}): it starts with no scene, models or textures", .{err});
@@ -56,7 +57,9 @@ pub fn Runtime(comptime project: type) type {
             if (data) |packaged| {
                 app.graphics.models.loader = packaged.models();
                 app.graphics.textures.loader = packaged.textures();
+                app.resource_provider = packaged.resources();
             }
+            app.scene_access = eggy.scene.registryAccess(Plugins.Components);
             // The project's preferences, baked in by `addGame`, before the plugins start.
             if (@hasDecl(project, "preference_files")) for (project.preference_files) |file| {
                 app.preference_values.read(.project, file.key, file.zon) catch |err| std.log.warn("the preferences for {s} don't parse ({t}): they are ignored", .{ file.key, err });
@@ -81,7 +84,6 @@ pub fn Runtime(comptime project: type) type {
                 .app = app,
                 .fps_capper = .{ .mode = .{ .limited = fps } },
                 .data = data,
-                .instances = .init(gpa),
             };
         }
 
@@ -98,14 +100,13 @@ pub fn Runtime(comptime project: type) type {
         }
 
         pub fn deinit(self: *Self) void {
-            self.instances.deinit();
-            if (self.data) |packaged| packaged.close();
             if (self.notice) |*notice| {
                 self.app.graphics.queue.waitIdle() catch {};
                 notice.deinit();
             }
             self.plugins.deinit();
             self.app.deinit();
+            if (self.data) |packaged| packaged.close();
             self.gpa.free(self.drawables);
         }
 
@@ -114,8 +115,9 @@ pub fn Runtime(comptime project: type) type {
             // The browser already paces frames to the display.
             if (!web) _ = self.fps_capper.delay();
             // Scene instances' entities, from their files, for any made or changed.
-            if (self.data) |packaged| self.instances.sync(packaged.copies(), &self.app.world, eggy.scene.registryAccess(Plugins.Components), null);
+            if (self.data) |packaged| self.app.sceneInstances().sync(packaged.copies(), &self.app.world, eggy.scene.registryAccess(Plugins.Components), null);
             self.app.time.tick(sdl3.timer.getNanosecondsSinceInit());
+            try self.app.advanceInput();
             try self.plugins.update(&self.app);
             try self.app.updateWorld();
             self.app.input.endFrame();
@@ -124,18 +126,54 @@ pub fn Runtime(comptime project: type) type {
             if (eggy.camera.find(&self.app.world)) |view| {
                 const drawn = eggy.mesh.gather(&self.app.world, self.drawables);
                 try self.app.graphics.drawScene(frame, self.drawables[0..drawn], view);
-            } else {
+            } else if (!self.plugins.hasGameUi() and !self.plugins.hasDraw()) {
                 if (self.notice == null) self.notice = try eggy.Notice.init(self.gpa, &self.app.graphics);
                 try self.notice.?.draw(frame, "No camera available");
+            }
+            const logical_width, const logical_height = try self.app.window.window.getSize();
+            if (logical_width > 0 and logical_height > 0) {
+                const draw = eggy.DrawContext{
+                    .cmd = frame.cmd,
+                    .target = frame.target,
+                    .extent_px = frame.extent,
+                    .viewport = .{ .x = 0, .y = 0, .w = @floatFromInt(logical_width), .h = @floatFromInt(logical_height) },
+                    .color_format = self.app.graphics.color_format,
+                    .frame_owner = &self.app.graphics.surface,
+                    .frame_slot = self.app.graphics.surface.slot,
+                };
+                try self.plugins.draw(&self.app, draw);
+                if (self.plugins.hasGameUi()) {
+                    const layer = try self.app.gameUi();
+                    layer.begin(draw, sdl3.timer.getMillisecondsSinceInit());
+                    try self.plugins.gameUi(&self.app, &layer.context);
+                    if (try layer.render(draw)) self.app.input.cancel();
+                    try layer.syncClipboard();
+                    const window = self.app.window.window;
+                    if (sdl3.keyboard.textInputActive(window) != layer.context.wants_text) {
+                        if (layer.context.wants_text) try sdl3.keyboard.startTextInput(window) else try sdl3.keyboard.stopTextInput(window);
+                    }
+                }
             }
             try self.app.graphics.endFrame(frame);
             return .run;
         }
 
         pub fn event(self: *Self, curr_event: sdl3.events.Event) !sdl3.AppResult {
-            self.app.input.handle(curr_event);
+            try self.app.deviceEvent(curr_event);
+            const lifecycle = try self.app.event(curr_event);
+            if (lifecycle != .run) return lifecycle;
+            if (eggy.game_ui.syntheticTouchMouse(curr_event)) return .run;
+            const width, const height = try self.app.window.window.getSize();
+            self.app.input.viewport_points = .{ @floatFromInt(width), @floatFromInt(height) };
+            if (eggy.game_ui.isTouchInput(curr_event) and (width == 0 or height == 0)) return .run;
+            const consumed = if (self.app.ui_layer) |layer| layer.handle(curr_event, false) else false;
+            if (eggy.game_ui.isInput(curr_event) and (consumed or try self.plugins.uiEvent(&self.app, curr_event))) {
+                self.app.input.suppress(curr_event);
+                return .run;
+            }
+            try self.app.input.handle(curr_event);
             try self.plugins.event(&self.app, curr_event);
-            return self.app.event(curr_event);
+            return .run;
         }
     };
 }

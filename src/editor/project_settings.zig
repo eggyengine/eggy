@@ -1,28 +1,29 @@
-//! File > Project Settings: the open project's `eggy.zon`, edited in a window of its own: its
-//! title and version, the scene the built game starts in (the default scene, which exports start
-//! in unless told otherwise), and what the game's executable says about itself (company,
-//! description, copyright and any more of the project's own, by name). Every change is written
-//! as it is made, and handed back to the editor as a step to undo.
+//! The Preferences window's Project section: the open project's `eggy.zon`: its title and
+//! version, the scene the built game starts in (the default scene, which exports start in unless
+//! told otherwise), and what the game's executable says about itself (company, description,
+//! copyright and any more of the project's own, by name). Every change is written as it is made,
+//! and handed back to the editor as a step to undo.
 const std = @import("std");
 const eggy = @import("eggy");
-const sdl3 = eggy.sdl_adapter.sdl;
 const ui = eggy.ui;
-const weeoui_sdl3 = @import("weeoui_sdl3");
-const ToolWindow = @import("tool_window.zig").ToolWindow;
 const listing = @import("assets/listing.zig");
-const log = std.log.scoped(.project_settings);
+const page_style = @import("page_style.zig");
+const restyle = page_style.restyle;
+const smallText = page_style.smallText;
 
 const ShortEdit = ui.TextEdit(64);
 const LongEdit = ui.TextEdit(256);
 /// The most entries of the project's own it holds.
 const max_extra = 32;
+const control_width: f32 = 240;
 
 /// `eggy.zon` changed from `before` to `after` (both its text, owned by `gpa`).
 pub const Change = struct { before: []u8, after: []u8 };
 
-pub const ProjectSettingsWindow = struct {
+/// The form for one project's `eggy.zon`. On the heap while the Preferences window shows it, as
+/// its fields' text lives here.
+pub const ProjectSettings = struct {
     gpa: std.mem.Allocator,
-    window: ToolWindow,
     /// The project's folder, owned.
     project_dir: []u8,
     /// What doesn't change here: the package name (in `name_arena`).
@@ -40,31 +41,23 @@ pub const ProjectSettingsWindow = struct {
     scenes: []const []const u8 = &.{},
     scenes_arena: std.heap.ArenaAllocator,
     scene: usize = 0,
-    /// Whether the window asked to close.
-    closing: bool = false,
 
-    /// Open the window on the project in `project_dir`. On the heap, as its page keeps a pointer
-    /// to it.
-    pub fn open(gpa: std.mem.Allocator, graphics: *eggy.Graphics, font: *ui.Font, project_dir: []const u8) !*ProjectSettingsWindow {
-        const self = made: {
-            const self = try gpa.create(ProjectSettingsWindow);
-            errdefer gpa.destroy(self);
-            const dir = try gpa.dupe(u8, project_dir);
-            errdefer gpa.free(dir);
-            const window = try ToolWindow.open(gpa, graphics, font, "Project Settings", .{ 560, 640 }, .{ .resizable = true });
-            self.* = .{ .gpa = gpa, .window = window, .project_dir = dir, .name_arena = .init(gpa), .scenes_arena = .init(gpa) };
-            break :made self;
-        };
+    /// Read the project in `project_dir`'s `eggy.zon` into a new form.
+    pub fn open(gpa: std.mem.Allocator, project_dir: []const u8) !*ProjectSettings {
+        const self = try gpa.create(ProjectSettings);
+        errdefer gpa.destroy(self);
+        const dir = try gpa.dupe(u8, project_dir);
+        errdefer gpa.free(dir);
+        self.* = .{ .gpa = gpa, .project_dir = dir, .name_arena = .init(gpa), .scenes_arena = .init(gpa) };
         // From here `close` frees all of it.
         self.reload() catch |err| {
-            self.close(graphics);
+            self.close();
             return err;
         };
         return self;
     }
 
-    pub fn close(self: *ProjectSettingsWindow, graphics: *eggy.Graphics) void {
-        self.window.close(graphics);
+    pub fn close(self: *ProjectSettings) void {
         self.gpa.free(self.project_dir);
         self.gpa.free(self.written);
         self.extra.deinit(self.gpa);
@@ -75,7 +68,7 @@ pub const ProjectSettingsWindow = struct {
 
     /// Read `eggy.zon` and the project's scenes again into the fields: they changed elsewhere
     /// (undo, say).
-    pub fn reload(self: *ProjectSettingsWindow) !void {
+    pub fn reload(self: *ProjectSettings) !void {
         var threaded: std.Io.Threaded = .init_single_threaded;
         const io = threaded.io();
         var project = try std.Io.Dir.cwd().openDir(io, self.project_dir, .{});
@@ -109,67 +102,50 @@ pub const ProjectSettingsWindow = struct {
         };
     }
 
-    /// Handle `curr_event` if it is for this window; returns whether it was. Closing it, or
-    /// Escape, asks to close it.
-    pub fn handle(self: *ProjectSettingsWindow, curr_event: sdl3.events.Event) bool {
-        if (!self.window.owns(curr_event)) return false;
-        if (curr_event == .window_close_requested) self.closing = true;
-        if (weeoui_sdl3.translate(curr_event)) |input| if (input == .key_down and input.key_down.key == .escape) {
-            self.closing = true;
-        };
-        self.window.handle(curr_event);
-        return true;
-    }
+    /// The section's cards, in the Preferences window's style: a card per setting, its name and
+    /// note on the left and its control on the right.
+    pub fn build(self: *ProjectSettings, context: *ui.Context) void {
+        context.muted("Saved in eggy.zon as you change them; Edit > Undo takes them back.");
+        smallText(context, 12);
 
-    /// Draw a frame. Returns what changed in `eggy.zon` this frame, which it wrote, for the
-    /// editor to record (the caller owns it), and whether the window should stay open.
-    pub fn update(self: *ProjectSettingsWindow, graphics: *eggy.Graphics, style: *const ui.Context) !struct { change: ?Change, open: bool } {
-        const Page = struct {
-            window: *ProjectSettingsWindow,
-            pub fn build(page: *@This(), context: *ui.Context) void {
-                page.window.build(context);
-            }
-        };
-        var page = Page{ .window = self };
-        try self.window.present(graphics, style, &page);
-        return .{ .change = self.save() catch |err| blk: {
-            log.err("cannot write {s}: {t}", .{ eggy.project.file_name, err });
-            break :blk null;
-        }, .open = !self.closing };
-    }
-
-    fn build(self: *ProjectSettingsWindow, context: *ui.Context) void {
-        context.heading(3, "Project Settings");
-        context.muted("Saved in eggy.zon as you change them, and Edit > Undo takes them back.");
-
-        context.heading(4, "Game");
-        context.label("Title", .{});
-        _ = context.textInput("Title", &self.title, "What players see");
-        context.label("Version", .{});
-        _ = context.textInput("Version", &self.version, "0.0.1");
-        context.label("Default scene", .{});
-        _ = context.select("Default scene", self.scenes, &self.scene);
-        context.muted("Where the built game starts, and exports unless you pick another.");
+        beginCard(context, "Title", "What players see in the window's title and the executable's name for itself.");
+        _ = context.textInput("##title", &self.title, "My Game");
+        endCard(context);
+        beginCard(context, "Version", "The game's version, shown in its executable.");
+        _ = context.textInput("##version", &self.version, "0.0.1");
+        endCard(context);
+        beginCard(context, "Default scene", "Where the built game starts, and exports unless you pick another.");
+        _ = context.select("##default scene", self.scenes, &self.scene);
+        endCard(context);
 
         context.heading(4, "Executable");
         context.muted("What the game's executable says about itself: on Windows, in its Properties.");
-        context.label("Company", .{});
-        _ = context.textInput("Company", &self.company, "");
-        context.label("Description", .{});
-        _ = context.textInput("Description", &self.description, "");
-        context.label("Copyright", .{});
-        _ = context.textInput("Copyright", &self.copyright, "");
+        smallText(context, 12);
+        beginCard(context, "Company", "");
+        _ = context.textInput("##company", &self.company, "");
+        endCard(context);
+        beginCard(context, "Description", "");
+        _ = context.textInput("##description", &self.description, "");
+        endCard(context);
+        beginCard(context, "Copyright", "");
+        _ = context.textInput("##copyright", &self.copyright, "");
+        endCard(context);
 
-        // The project's own, a row each: name, value, and a button taking it away.
-        if (self.extra.items.len > 0) context.label("More entries", .{});
+        // The project's own, a card each: name, value, and a button taking it away.
         var removed: ?usize = null;
         const arena = context.builder().allocator;
         for (self.extra.items, 0..) |*entry, i| {
+            context.begin(.card);
             context.begin(.row);
             _ = context.textInput(std.fmt.allocPrint(arena, "##extra name {d}", .{i}) catch return, &entry.name, "Name");
+            restyle(context, .{ .width = 160 });
             _ = context.textInput(std.fmt.allocPrint(arena, "##extra value {d}", .{i}) catch return, &entry.value, "Value");
+            restyle(context, .{ .grow = 1 });
             if (context.buttonVariant(std.fmt.allocPrint(arena, "Remove##extra {d}", .{i}) catch return, .ghost)) removed = i;
             context.end();
+            restyle(context, .{ .direction = .row, .gap = 8, .align_items = .center });
+            context.end();
+            restyle(context, .{ .padding = .{ .left = 16, .right = 16, .top = 10, .bottom = 10 } });
         }
         if (removed) |i| _ = self.extra.orderedRemove(i);
         if (self.extra.items.len < max_extra and context.buttonVariant("Add an entry", .outline)) {
@@ -178,7 +154,7 @@ pub const ProjectSettingsWindow = struct {
     }
 
     /// Write `eggy.zon` from the fields if they changed it; what changed, caller-owned.
-    fn save(self: *ProjectSettingsWindow) !?Change {
+    pub fn save(self: *ProjectSettings) !?Change {
         var arena_state = std.heap.ArenaAllocator.init(self.gpa);
         defer arena_state.deinit();
         const arena = arena_state.allocator();
@@ -209,6 +185,31 @@ pub const ProjectSettingsWindow = struct {
         return .{ .before = before, .after = after };
     }
 };
+
+/// Open a setting's card: its name and `note` on the left; its control follows, then `endCard`.
+fn beginCard(context: *ui.Context, title: []const u8, note: []const u8) void {
+    context.begin(.card);
+    context.begin(.row);
+    context.begin(.column);
+    context.text(title);
+    if (note.len > 0) {
+        context.muted(note);
+        smallText(context, 13);
+    }
+    context.end();
+    restyle(context, .{ .grow = 1, .gap = 4 });
+    context.begin(.column);
+}
+
+/// Close the card `beginCard` opened, with its control right-aligned.
+fn endCard(context: *ui.Context) void {
+    context.end();
+    restyle(context, .{ .width = control_width, .align_items = .end });
+    context.end();
+    restyle(context, .{ .direction = .row, .gap = 20, .align_items = .center });
+    context.end();
+    restyle(context, .{ .padding = .{ .left = 16, .right = 16, .top = 12, .bottom = 12 } });
+}
 
 /// Make `scene` the default scene in the `eggy.zon` of the project in `project_dir`; what changed
 /// (caller-owned), or null when it already was.
@@ -244,4 +245,27 @@ test "the default scene is written into eggy.zon, and an unchanged one is no cha
     defer gpa.free(change.after);
     try std.testing.expect(std.mem.indexOf(u8, change.after, "sewer.scene.zon") != null);
     try std.testing.expect(try setDefaultScene(gpa, dir, "resources/scene/sewer.scene.zon") == null);
+}
+
+test "the Project section lays out every eggy.zon field in cards and writes a change once" {
+    const gpa = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = eggy.project.file_name, .data = ".{ .name = \"rats\", .title = \"Rats\" }\n" });
+    const dir = try tmp.dir.realPathFileAlloc(std.testing.io, ".", gpa);
+    defer gpa.free(dir);
+    const settings = try ProjectSettings.open(gpa, dir);
+    defer settings.close();
+    var context = try ui.Context.init(gpa);
+    defer context.deinit();
+    context.density = .compact;
+    context.newFrame(.{ .x = 0, .y = 0, .w = 440, .h = 600 });
+    settings.build(&context);
+    try std.testing.expect((try context.render()).len > 0);
+    try settings.title.set("Sewer Rats");
+    const change = (try settings.save()).?;
+    defer gpa.free(change.before);
+    defer gpa.free(change.after);
+    try std.testing.expect(std.mem.indexOf(u8, change.after, "Sewer Rats") != null);
+    try std.testing.expect(try settings.save() == null);
 }

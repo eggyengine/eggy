@@ -5,16 +5,22 @@ const std = @import("std");
 const vit = @import("vitellus");
 const sdl3 = @import("vitellus_sdl3").sdl;
 const fatal_dialog = @import("fatal_dialog");
+const process_init = @import("process_init.zig");
 
 const web = builtin.os.tag == .emscripten;
 
 /// The `init`, `iterate`, `event` and `quit` callbacks for `AppState`, which provides
-/// `init(gpa, args) !AppState` (args: the command line, program first), `iterate(*AppState) !AppResult`, `event(*AppState, Event) !AppResult`
+/// `init(process, args) !AppState` (process: Zig's `std.process.Init`, valid for the whole run;
+/// args: the command line, program first), `iterate(*AppState) !AppResult`, `event(*AppState, Event) !AppResult`
 /// and `deinit(*AppState)`. Re-export them from the executable's root file.
 pub fn Callbacks(comptime AppState: type) type {
     return struct {
         pub fn init(init_data: sdl3.Init) !struct { AppState, sdl3.AppResult } {
-            return .{ AppState.init(init_data.gpa, init_data.args) catch |err| {
+            const process = process_init.fromSdl(init_data) catch |err| {
+                reportError("init", err);
+                return err;
+            };
+            return .{ AppState.init(process, init_data.args) catch |err| {
                 reportError("init", err);
                 return err;
             }, .run };
