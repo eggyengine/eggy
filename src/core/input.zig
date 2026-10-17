@@ -17,6 +17,9 @@ pub const Key = sdl3.Scancode;
 
 pub const MouseButton = enum { left, middle, right, x1, x2 };
 
+/// Four physical keys describing a two-dimensional direction.
+pub const DirectionKeys = struct { left: Key = .a, right: Key = .d, down: Key = .s, up: Key = .w };
+
 const key_count = 512;
 const KeySet = std.StaticBitSet(key_count);
 
@@ -53,6 +56,16 @@ pub const Input = struct {
     /// movement from two keys, as `axis(.a, .d)` for left and right.
     pub fn axis(self: *const Input, negative: Key, positive: Key) f32 {
         return @as(f32, @floatFromInt(@intFromBool(self.held(positive)))) - @as(f32, @floatFromInt(@intFromBool(self.held(negative))));
+    }
+
+    /// Horizontal and vertical axes, each -1, 0 or 1. Diagonals are not normalized.
+    pub fn direction(self: *const Input, keys: DirectionKeys) [2]f32 {
+        return .{ self.axis(keys.left, keys.right), self.axis(keys.down, keys.up) };
+    }
+
+    /// Forget gameplay state when UI takes capture, without synthesizing release actions.
+    pub fn cancel(self: *Input) void {
+        self.* = .{ .mouse_position = self.mouse_position };
     }
 
     pub fn mouseHeld(self: *const Input, button: MouseButton) bool {
@@ -139,9 +152,12 @@ test "a key held for frames is pressed once, and an axis reads two keys" {
     input.handle(.{ .key_down = .{ .common = undefined, .id = null, .scancode = .w, .key = null, .mod = .{}, .raw = 0, .down = true, .repeat = false } });
     try std.testing.expect(input.pressed(.w) and input.held(.w));
     try std.testing.expectEqual(@as(f32, 1), input.axis(.s, .w));
+    try std.testing.expectEqual([2]f32{ 0, 1 }, input.direction(.{}));
     input.endFrame();
     try std.testing.expect(!input.pressed(.w) and input.held(.w));
     input.releaseAll();
     try std.testing.expect(input.released(.w) and !input.held(.w));
     try std.testing.expectEqual(@as(f32, 0), input.axis(.s, .w));
+    input.cancel();
+    try std.testing.expect(!input.released(.w));
 }

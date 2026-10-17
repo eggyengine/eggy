@@ -46,8 +46,11 @@ pub const Input = input.Input;
 pub const Key = input.Key;
 pub const MouseButton = input.MouseButton;
 pub const Time = @import("time.zig").Time;
+pub const Action = @import("action.zig").Action;
+pub const Direction = @import("action.zig").Direction;
 
 test {
+    _ = @import("action.zig");
     _ = @import("graphics.zig");
     _ = @import("scene_texture.zig");
     _ = @import("notice.zig");

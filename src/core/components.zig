@@ -358,8 +358,7 @@ fn restore(comptime T: type, stored: Stored(T)) error{ParseZon}!T {
     if (comptime refs.refKind(T)) |kind| switch (kind) {
         .entity => return .init(stored),
         .asset => {
-            if (stored.len > refs.max_path_len) return error.ParseZon;
-            return .init(stored);
+            return T.parse(stored) catch return error.ParseZon;
         },
     };
     if (comptime !holdsRef(T)) return stored;
