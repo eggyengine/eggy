@@ -4,6 +4,11 @@ const eggy = @import("eggy");
 const ui = eggy.ui;
 const sdl = eggy.sdl_adapter.sdl;
 const ToolWindow = @import("tool_window.zig").ToolWindow;
+const page_style = @import("page_style.zig");
+const restyle = page_style.restyle;
+const beginSection = page_style.beginSection;
+const endSection = page_style.endSection;
+const endRow = page_style.endRow;
 const State = eggy.input_backend.State;
 const t = eggy.input;
 
@@ -94,9 +99,9 @@ pub const View = struct {
             context.heading(2, "Input mappings");
             context.muted("Code reads named controls. Project edits are baked into shipped games.");
             if (state.persistence == null) context.muted("No project is open: edits here are session-only.");
-        } else context.muted("Apply binding/trigger edits below, then Save file to write the asset.");
-        if (self.last_error) |err| context.label("Could not apply edit: {s}", .{@errorName(err)});
-        if (self.capture != null) context.muted("Press the desired input. Escape cancels capture.");
+        }
+        if (self.last_error) |err| context.alert("Could not apply edit", @errorName(err), true);
+        if (self.capture != null) context.alert("Press the input to bind", "Escape cancels.", false);
         // Dropdown text remains in the previous-frame tree when a map is replaced.
         const map_labels = try arena.alloc([]const u8, state.owners.count());
         var maps = state.owners.valueIterator();
@@ -105,13 +110,58 @@ pub const View = struct {
             context.muted("No maps registered. Declare input_maps on your game or plugin.");
             return;
         }
+
+        // The map: which one, and how it starts.
+        beginSection(context, "Map");
         if (self.source == .registered and context.select("Map", map_labels, &self.map_index)) {
             self.control_index = 0;
             self.binding_index = 0;
             self.loaded = null;
         }
-        const first = self.selected(state) orelse return;
-        const map_id = state.controls.values()[first].map_id;
+        const map_id: ?usize = if (self.selected(state)) |first| state.controls.values()[first].map_id else null;
+        if (map_id) |id| try self.mapDefaults(context, state, id);
+        endSection(context);
+        const shown_map = map_id orelse return;
+
+        // The control: which one, and what it reads as.
+        var labels: std.ArrayList([]const u8) = .empty;
+        for (state.controls.values()) |control| if (control.map_id == shown_map) try labels.append(arena, try arena.dupe(u8, control.name));
+        beginSection(context, "Control");
+        context.begin(.row);
+        if (context.select("Control", labels.items, &self.control_index)) {
+            self.binding_index = 0;
+            self.loaded = null;
+        }
+        restyle(context, .{ .grow = 1 });
+        const index = self.selected(state);
+        if (index) |i| context.badge(@tagName(state.controls.values()[i].kind), .secondary);
+        endRow(context);
+        if (index) |i| if (self.source == .registered and context.buttonVariant("Reset control to map defaults", .link)) {
+            if (state.resetMappings(state.controls.keys()[i])) |_| {
+                self.loaded = null;
+                self.last_error = null;
+            } else |err| self.last_error = err;
+        };
+        endSection(context);
+        const shown = index orelse return;
+        const control = state.controls.values()[shown];
+        const id = state.controls.keys()[shown];
+        const mappings = state.overrides.get(control.key) orelse control.defaults;
+        try self.load(state, control, id, mappings, labels.items);
+
+        beginSection(context, "Bindings");
+        const reselected = try self.bindings(context, state, control, id, mappings);
+        endSection(context);
+        if (reselected) return;
+        if (control.kind == .button) {
+            beginSection(context, "Trigger");
+            self.trigger(context, state, id, mappings, labels.items);
+            endSection(context);
+        }
+    }
+
+    /// The map's startup state and priority, saved together.
+    fn mapDefaults(self: *View, context: *ui.Context, state: *State, map_id: usize) !void {
         const map = state.owners.get(map_id).?;
         const defaults = state.overrides.maps.get(map.key) orelse map.defaults;
         if (self.loaded_map != map_id or self.map_revision != state.configuration_revision) {
@@ -121,131 +171,135 @@ pub const View = struct {
             var buffer: [32]u8 = undefined;
             try self.priority.set(try std.fmt.bufPrint(&buffer, "{d}", .{defaults.priority}));
         }
+        context.begin(.row);
         _ = context.checkbox("Enabled at startup", &self.map_enabled);
         _ = context.textInput("Map priority", &self.priority, "Higher maps own shared inputs");
+        endRow(context);
+        context.muted("Runtime switching is temporary; these defaults ship with the game.");
         context.begin(.row);
-        if (context.button(if (self.source == .asset) "Apply map settings" else "Save map defaults")) {
-            const priority = std.fmt.parseInt(i32, self.priority.text(), 10) catch {
-                self.last_error = error.InvalidPriority;
-                context.end();
-                return;
-            };
-            if (state.setMapDefaults(map_id, .{ .enabled = self.map_enabled, .priority = priority })) |_| {
-                self.last_error = null;
-            } else |err| self.last_error = err;
+        if (context.buttonVariant(if (self.source == .asset) "Apply map settings" else "Save map defaults", .secondary)) {
+            if (std.fmt.parseInt(i32, self.priority.text(), 10)) |priority| {
+                if (state.setMapDefaults(map_id, .{ .enabled = self.map_enabled, .priority = priority })) |_| {
+                    self.last_error = null;
+                } else |err| self.last_error = err;
+            } else |_| self.last_error = error.InvalidPriority;
         }
-        if (self.source == .registered and context.button("Reset map defaults")) {
+        if (self.source == .registered and context.buttonVariant("Reset map defaults", .ghost)) {
             if (state.setMapDefaults(map_id, null)) |_| {
                 self.last_error = null;
             } else |err| self.last_error = err;
         }
-        context.end();
-        context.muted("Runtime switching is temporary; these defaults ship with the game.");
-        var labels: std.ArrayList([]const u8) = .empty;
-        for (state.controls.values()) |control| if (control.map_id == map_id) try labels.append(arena, try arena.dupe(u8, control.name));
-        if (context.select("Control", labels.items, &self.control_index)) {
-            self.binding_index = 0;
-            self.loaded = null;
-        }
-        const index = self.selected(state) orelse return;
-        const control = state.controls.values()[index];
-        const id = state.controls.keys()[index];
-        const mappings = state.overrides.get(control.key) orelse control.defaults;
-        if (self.loaded == null or !std.meta.eql(self.loaded.?, id) or self.loaded_revision != state.configuration_revision or self.loaded_binding != self.binding_index) {
-            self.loaded = id;
-            self.loaded_revision = state.configuration_revision;
-            self.binding_index = if (mappings.len == 0) 0 else @min(self.binding_index, mappings.len - 1);
-            self.loaded_binding = self.binding_index;
-            self.is_new = false;
-            self.draft = null;
-            if (mappings.len != 0) try self.setDraft(mappings[self.binding_index]);
-            const rule = state.overrides.getTrigger(control.key) orelse control.trigger;
-            self.trigger_index = @intFromEnum(std.meta.activeTag(rule));
-            var buffer: [64]u8 = undefined;
-            try self.duration.set(try std.fmt.bufPrint(&buffer, "{d}", .{switch (rule) {
-                .hold, .tap => |seconds| seconds,
-                else => @as(f32, 0.25),
-            }}));
-            self.chord_index = 0;
-            if (rule == .chord) for (labels.items, 0..) |label, i| if (std.mem.eql(u8, label, rule.chord)) {
-                self.chord_index = i;
-            };
-        }
-        context.label("Value: {t}", .{control.kind});
+        endRow(context);
+    }
+
+    /// Read the control's bindings and trigger into the drafts when it, or the configuration,
+    /// changed since last frame.
+    fn load(self: *View, state: *State, control: anytype, id: eggy.input.ControlId, mappings: []const t.Binding, labels: []const []const u8) !void {
+        if (self.loaded != null and std.meta.eql(self.loaded.?, id) and self.loaded_revision == state.configuration_revision and self.loaded_binding == self.binding_index) return;
+        self.loaded = id;
+        self.loaded_revision = state.configuration_revision;
+        self.binding_index = if (mappings.len == 0) 0 else @min(self.binding_index, mappings.len - 1);
+        self.loaded_binding = self.binding_index;
+        self.is_new = false;
+        self.draft = null;
+        if (mappings.len != 0) try self.setDraft(mappings[self.binding_index]);
+        const rule = state.overrides.getTrigger(control.key) orelse control.trigger;
+        self.trigger_index = @intFromEnum(std.meta.activeTag(rule));
+        var buffer: [64]u8 = undefined;
+        try self.duration.set(try std.fmt.bufPrint(&buffer, "{d}", .{switch (rule) {
+            .hold, .tap => |seconds| seconds,
+            else => @as(f32, 0.25),
+        }}));
+        self.chord_index = 0;
+        if (rule == .chord) for (labels, 0..) |label, i| if (std.mem.eql(u8, label, rule.chord)) {
+            self.chord_index = i;
+        };
+    }
+
+    /// The control's bindings: pick one to edit, or add one from a source. Returns whether a
+    /// different binding was picked, which loads next frame.
+    fn bindings(self: *View, context: *ui.Context, state: *State, control: anytype, id: eggy.input.ControlId, mappings: []const t.Binding) !bool {
+        const arena = context.builder().allocator;
         const binding_labels = try arena.alloc([]const u8, mappings.len);
         for (mappings, binding_labels, 0..) |binding, *label, i| label.* = try std.fmt.allocPrint(arena, "{d}: {s}", .{ i + 1, @tagName(binding) });
         if (binding_labels.len != 0 and context.select("Binding", binding_labels, &self.binding_index)) {
             self.loaded = null;
-            return;
+            return true;
         }
+        if (binding_labels.len == 0) context.muted("No bindings yet: add one below.");
         const sources: []const []const u8 = switch (control.kind) {
             .button => &button_sources,
             .axis => &axis_sources,
             .vector => &vector_sources,
         };
         self.source_index = @min(self.source_index, sources.len - 1);
+        context.begin(.row);
         _ = context.select("New binding source", sources, &self.source_index);
-        if (context.button("Add binding")) {
+        restyle(context, .{ .grow = 1 });
+        if (context.buttonVariant("Add binding", .outline)) {
             self.is_new = true;
             try self.setDraft(defaultBinding(control.kind, self.source_index));
         }
-        if (self.draft) |*draft| {
-            try self.editBinding(context, draft);
-            if (context.button(if (self.source == .asset) "Apply binding" else "Save binding")) {
-                if (self.saveBinding(state, id, mappings)) |_| {
-                    self.last_error = null;
-                    self.loaded = null;
-                } else |err| self.last_error = err;
-            }
-            if (!self.is_new and context.button("Remove binding")) {
-                const next = try arena.alloc(t.Binding, mappings.len - 1);
-                var at: usize = 0;
-                for (mappings, 0..) |binding, i| if (i != self.binding_index) {
-                    next[at] = binding;
-                    at += 1;
-                };
-                if (state.setMappings(id, next, state.overrides.getTrigger(control.key))) |_| {
-                    self.loaded = null;
-                    self.last_error = null;
-                } else |err| self.last_error = err;
-            }
+        endRow(context);
+        const draft = if (self.draft) |*draft| draft else return false;
+        context.separator();
+        context.muted(if (self.is_new) "New binding" else "Selected binding");
+        try self.editBinding(context, draft);
+        context.begin(.row);
+        if (context.buttonVariant(if (self.source == .asset) "Apply binding" else "Save binding", .secondary)) {
+            if (self.saveBinding(state, id, mappings)) |_| {
+                self.last_error = null;
+                self.loaded = null;
+            } else |err| self.last_error = err;
         }
-        if (control.kind == .button) {
-            _ = context.select("Trigger", &trigger_names, &self.trigger_index);
-            if (self.trigger_index == 1 or self.trigger_index == 2) _ = context.textInput("Seconds", &self.duration, "Nonnegative counted input seconds");
-            if (self.trigger_index == 3) _ = context.select("Chord control", labels.items, &self.chord_index);
-            if (context.button(if (self.source == .asset) "Apply trigger" else "Save trigger")) {
-                const rule: t.Trigger = switch (self.trigger_index) {
-                    1 => .{ .hold = std.fmt.parseFloat(f32, self.duration.text()) catch {
-                        self.last_error = error.InvalidTrigger;
-                        return;
-                    } },
-                    2 => .{ .tap = std.fmt.parseFloat(f32, self.duration.text()) catch {
-                        self.last_error = error.InvalidTrigger;
-                        return;
-                    } },
-                    3 => .{ .chord = labels.items[@min(self.chord_index, labels.items.len - 1)] },
-                    else => .immediate,
-                };
-                if (state.setMappings(id, mappings, rule)) |_| {
-                    self.loaded = null;
-                    self.last_error = null;
-                } else |err| self.last_error = err;
-            }
-        }
-        if (self.source == .registered and context.button("Reset control to map defaults")) {
-            if (state.resetMappings(id)) |_| {
+        if (!self.is_new and context.buttonVariant("Remove binding", .ghost)) {
+            const next = try arena.alloc(t.Binding, mappings.len - 1);
+            var at: usize = 0;
+            for (mappings, 0..) |binding, i| if (i != self.binding_index) {
+                next[at] = binding;
+                at += 1;
+            };
+            if (state.setMappings(id, next, state.overrides.getTrigger(control.key))) |_| {
                 self.loaded = null;
                 self.last_error = null;
             } else |err| self.last_error = err;
         }
+        endRow(context);
+        return false;
     }
+
+    /// A button control's trigger rule: immediate, held, tapped or chorded with another control.
+    fn trigger(self: *View, context: *ui.Context, state: *State, id: eggy.input.ControlId, mappings: []const t.Binding, labels: []const []const u8) void {
+        context.begin(.row);
+        _ = context.select("Trigger", &trigger_names, &self.trigger_index);
+        if (self.trigger_index == 1 or self.trigger_index == 2) _ = context.textInput("Seconds", &self.duration, "Nonnegative counted input seconds");
+        if (self.trigger_index == 3) _ = context.select("Chord control", labels, &self.chord_index);
+        endRow(context);
+        if (!context.buttonVariant(if (self.source == .asset) "Apply trigger" else "Save trigger", .secondary)) return;
+        const seconds = std.fmt.parseFloat(f32, self.duration.text()) catch null;
+        const rule: t.Trigger = switch (self.trigger_index) {
+            1 => .{ .hold = seconds orelse return self.fail(error.InvalidTrigger) },
+            2 => .{ .tap = seconds orelse return self.fail(error.InvalidTrigger) },
+            3 => .{ .chord = labels[@min(self.chord_index, labels.len - 1)] },
+            else => .immediate,
+        };
+        if (state.setMappings(id, mappings, rule)) |_| {
+            self.loaded = null;
+            self.last_error = null;
+        } else |err| self.last_error = err;
+    }
+
+    fn fail(self: *View, err: anyerror) void {
+        self.last_error = err;
+    }
+
     fn captureKey(self: *View, context: *ui.Context, label: []const u8, key: t.Key, target: Capture) void {
-        const text = std.fmt.allocPrint(context.builder().allocator, "{s}: {t} (capture)", .{ label, key }) catch |err| {
+        const capturing = self.capture == target;
+        const text = (if (capturing) std.fmt.allocPrint(context.builder().allocator, "{s}: press a key...", .{label}) else std.fmt.allocPrint(context.builder().allocator, "{s}: {t}", .{ label, key })) catch |err| {
             context.err = err;
             return;
         };
-        if (context.button(text)) self.capture = target;
+        if (context.buttonVariant(text, if (capturing) .default else .outline)) self.capture = target;
     }
     fn editBinding(self: *View, context: *ui.Context, draft: *t.Binding) !void {
         switch (draft.*) {
@@ -257,18 +311,22 @@ pub const View = struct {
             .controller => |*controller| {
                 var selected_index: usize = @intFromEnum(controller.button);
                 if (context.select("Controller button", button_names, &selected_index)) controller.button = @enumFromInt(selected_index);
-                if (context.button("Capture controller button")) self.capture = .controller;
+                if (context.buttonVariant(if (self.capture == .controller) "Press a controller button..." else "Capture controller button", .outline)) self.capture = .controller;
             },
             .key_axis => |axis| {
+                context.beginGrid(2);
                 self.captureKey(context, "Negative key", axis.negative, .negative);
                 self.captureKey(context, "Positive key", axis.positive, .positive);
+                context.end();
                 _ = context.textInput("Axis scale", &self.numbers[0], "1 or -1");
             },
             .keys_2d => |*keys| {
+                context.beginGrid(2);
                 self.captureKey(context, "Left key", keys.keys.left, .left);
                 self.captureKey(context, "Right key", keys.keys.right, .right);
                 self.captureKey(context, "Up key", keys.keys.up, .up);
                 self.captureKey(context, "Down key", keys.keys.down, .down);
+                context.end();
                 _ = context.checkbox("Normalize diagonal movement", &keys.normalize);
                 self.vectorNumbers(context);
             },
@@ -291,8 +349,10 @@ pub const View = struct {
         }
     }
     fn vectorNumbers(self: *View, context: *ui.Context) void {
+        context.begin(.row);
         _ = context.textInput("X scale", &self.numbers[0], "1");
         _ = context.textInput("Y scale", &self.numbers[1], "1 or -1");
+        endRow(context);
     }
     fn parseNumber(self: *const View, index: usize) !f32 {
         return std.fmt.parseFloat(f32, self.numbers[index].text());

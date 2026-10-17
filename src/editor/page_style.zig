@@ -85,3 +85,22 @@ pub fn dragChip(context: *ui.Context, text: []const u8) void {
     chip.overlay = .{ .point = .init(@max(viewport.x, @min(context.pointer.x + 16, viewport.x + viewport.w - width)), @min(context.pointer.y + 18, viewport.y + viewport.h - 20)) };
     context.element(chip);
 }
+
+/// Open a titled card grouping a few controls; close it with `endSection`. Code between the two
+/// must not return early, or the page's containers go unbalanced.
+pub fn beginSection(context: *ui.Context, title: []const u8) void {
+    context.begin(.card);
+    context.heading(4, title);
+}
+
+/// Close the card `beginSection` opened, padded like the Preferences window's.
+pub fn endSection(context: *ui.Context) void {
+    context.end();
+    restyle(context, .{ .gap = 8, .padding = .{ .left = 16, .right = 16, .top = 12, .bottom = 12 } });
+}
+
+/// End a row of controls begun with `context.begin(.row)`, spaced and centred on one line.
+pub fn endRow(context: *ui.Context) void {
+    context.end();
+    restyle(context, .{ .direction = .row, .gap = 8, .align_items = .center });
+}

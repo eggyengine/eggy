@@ -5,6 +5,11 @@ const ui = eggy.ui;
 const ToolWindow = @import("../tool_window.zig").ToolWindow;
 const MappingsView = @import("../input_mappings.zig").View;
 const history_zig = @import("../history.zig");
+const page_style = @import("../page_style.zig");
+const restyle = page_style.restyle;
+const beginSection = page_style.beginSection;
+const endSection = page_style.endSection;
+const endRow = page_style.endRow;
 pub const Document = @import("document.zig").Document;
 
 const kinds = std.meta.fieldNames(eggy.input.Kind);
@@ -29,71 +34,103 @@ pub const View = struct {
     }
 
     pub fn build(self: *View, context: *ui.Context, document: *Document, path: []const u8) !Action {
-        context.heading(2, "Input Map");
-        context.muted(try context.builder().allocator.dupe(u8, path));
-        if (!std.mem.startsWith(u8, path, "resources/")) context.muted("Move this file under resources/ to include it in runtime builds.");
-        if (document.modified()) context.muted("Unsaved changes");
-        if (self.last_error) |err| context.label("Input map: {t}. The file was not overwritten.", .{err});
-        if (self.confirm_close) {
-            context.muted("Save this input map before closing?");
-            if (context.button("Save and close")) return .save_close;
-            if (context.button("Discard changes and close")) return .discard_close;
-            if (context.button("Keep editing")) return .cancel_close;
-            return .none;
-        }
+        // The file: its path and state, and saving it.
         context.begin(.row);
-        var action: Action = .none;
-        if (context.button("Save file")) action = .save;
-        if (context.button("Revert file (discard edits)")) action = .revert;
+        context.begin(.column);
+        context.heading(3, "Input Map");
+        context.muted(try context.builder().allocator.dupe(u8, path));
+        page_style.smallText(context, 12);
         context.end();
+        restyle(context, .{ .grow = 1, .gap = 2 });
+        if (document.modified()) context.badge("Unsaved", .outline);
+        var action: Action = .none;
+        if (!self.confirm_close) {
+            if (context.buttonVariant("Revert", .ghost)) action = .revert;
+            if (context.buttonVariant("Save", .default)) action = .save;
+        }
+        endRow(context);
+        if (!std.mem.startsWith(u8, path, "resources/")) context.alert("Not in resources/", "Move this file under resources/ to include it in runtime builds.", false);
+        if (self.last_error) |err| context.alert("The file was not overwritten", @errorName(err), true);
+        if (self.confirm_close) {
+            context.alert("Unsaved changes", "Save this input map before closing?", false);
+            context.begin(.row);
+            if (context.buttonVariant("Save and close", .default)) action = .save_close;
+            if (context.buttonVariant("Discard and close", .destructive)) action = .discard_close;
+            if (context.buttonVariant("Keep editing", .ghost)) action = .cancel_close;
+            endRow(context);
+            return action;
+        }
         if (action != .none) return action;
-        context.muted("Saved defaults load on the next Play or game reload.");
+
+        beginSection(context, "Map");
         var consume = document.state.owners.get(1).?.consume;
         if (context.checkbox("Consume overlapping lower-priority input", &consume)) document.setConsume(consume);
+        context.muted("Saved defaults load on the next Play or game reload.");
+        page_style.smallText(context, 12);
+        endSection(context);
+
+        // Controls: add one, then rename, retype or remove the selected one.
+        beginSection(context, "Controls");
+        context.begin(.row);
         _ = context.textInput("New control name", &self.new_name, "jump, move, look...");
+        restyle(context, .{ .grow = 1 });
         _ = context.select("New control value", kinds, &self.new_kind);
-        if (context.button("Add control")) {
-            document.addControl(self.new_name.text(), @enumFromInt(self.new_kind)) catch |err| {
-                self.last_error = err;
-                return .none;
-            };
-            try self.new_name.set("");
-            self.resetMappings(document.state.controls.count() - 1);
-        }
-        if (document.state.controls.count() != 0) {
-            const index = @min(self.mappings.control_index, document.state.controls.count() - 1);
-            const control = document.state.controls.values()[index];
-            if (self.loaded_control != index) {
-                try self.control_name.set(control.name);
-                self.control_kind = @intFromEnum(control.kind);
-                self.loaded_control = index;
-            }
-            _ = context.textInput("Selected control name", &self.control_name, "Keep the FileMap enum in step with these names");
-            if (context.button("Rename selected control")) {
-                document.renameControl(index, self.control_name.text()) catch |err| {
-                    self.last_error = err;
-                    return .none;
-                };
-                self.resetMappings(index);
-            }
-            _ = context.select("Selected control value", kinds, &self.control_kind);
-            if (context.button("Change value type (clears bindings and trigger)")) {
-                document.setKind(index, @enumFromInt(self.control_kind)) catch |err| {
-                    self.last_error = err;
-                    return .none;
-                };
-                self.resetMappings(index);
-            }
-            if (context.button("Remove selected control")) {
-                document.removeControl(index) catch |err| {
-                    self.last_error = err;
-                    return .none;
-                };
-                self.resetMappings(0);
-            }
-        } else context.muted("Add a control, then assign its bindings below.");
+        const add = context.buttonVariant("Add control", .outline);
+        endRow(context);
+        if (add) self.addControl(document);
+        if (document.state.controls.count() != 0) try self.editSelected(context, document) else context.muted("Add a control, then assign its bindings below.");
+        endSection(context);
         try self.mappings.build(context, &document.state);
         return .none;
+    }
+
+    /// Add the control the new-control row describes; a refusal shows as `last_error`.
+    fn addControl(self: *View, document: *Document) void {
+        document.addControl(self.new_name.text(), @enumFromInt(self.new_kind)) catch |err| {
+            self.last_error = err;
+            return;
+        };
+        self.new_name.set("") catch {};
+        self.resetMappings(document.state.controls.count() - 1);
+    }
+
+    /// The selected control's name and value type, and removing it; the document's refusals
+    /// show as `last_error`.
+    fn editSelected(self: *View, context: *ui.Context, document: *Document) !void {
+        const index = @min(self.mappings.control_index, document.state.controls.count() - 1);
+        const control = document.state.controls.values()[index];
+        if (self.loaded_control != index) {
+            try self.control_name.set(control.name);
+            self.control_kind = @intFromEnum(control.kind);
+            self.loaded_control = index;
+        }
+        context.separator();
+        context.begin(.row);
+        _ = context.textInput("Selected control name", &self.control_name, "Keep the FileMap enum in step with these names");
+        restyle(context, .{ .grow = 1 });
+        const rename = context.buttonVariant("Rename", .outline);
+        endRow(context);
+        context.begin(.row);
+        _ = context.select("Selected control value", kinds, &self.control_kind);
+        restyle(context, .{ .grow = 1 });
+        const retype = context.buttonVariant("Change type", .outline);
+        const remove = context.buttonVariant("Remove", .destructive);
+        endRow(context);
+        context.muted("Changing the type clears the control's bindings and trigger.");
+        page_style.smallText(context, 12);
+        const edited = if (rename)
+            document.renameControl(index, self.control_name.text())
+        else if (retype)
+            document.setKind(index, @enumFromInt(self.control_kind))
+        else if (remove)
+            document.removeControl(index)
+        else
+            return;
+        edited catch |err| {
+            self.last_error = err;
+            return;
+        };
+        self.resetMappings(if (remove) 0 else index);
     }
 };
 

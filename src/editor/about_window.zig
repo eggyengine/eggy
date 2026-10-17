@@ -1,9 +1,12 @@
-//! Help > About Eggy, with a small hatch hidden in the illustrated egg.
+//! Help > About Eggy: the version, links and credits, with a small hatch hidden in the illustrated egg.
 const std = @import("std");
 const builtin = @import("builtin");
 const eggy = @import("eggy");
 const ui = eggy.ui;
 const ToolWindow = @import("tool_window.zig").ToolWindow;
+const page_style = @import("page_style.zig");
+const restyle = page_style.restyle;
+const smallText = page_style.smallText;
 
 const hatch_taps = 7;
 const egg_id = "about-egg";
@@ -12,6 +15,8 @@ const View = struct {
     taps: u8 = 0,
     hatched_at_ms: ?u64 = null,
     closed: bool = false,
+    /// A link pressed this frame, for the window to open.
+    open_url: ?[:0]const u8 = null,
 
     fn tap(self: *View, now_ms: u64) void {
         if (self.hatched_at_ms != null) return;
@@ -36,19 +41,30 @@ const View = struct {
         };
         egg.cursor = .pointer;
         egg.accessibility = .{ .role = .button, .label = "Eggy egg" };
+        // Everything centred under the egg: name and version, what it is, where to find it.
+        context.begin(.column);
         context.element(egg);
         context.heading(1, "Eggy");
-        context.label("Version {s}", .{@import("build_options").version});
-        context.muted("A game engine for making games in Zig.");
-        context.label("Zig {s} | {s}-{s}", .{ builtin.zig_version_string, @tagName(builtin.cpu.arch), @tagName(builtin.os.tag) });
-        context.muted("Built with SDL3, Vitellus, Weeoui and Clutch.");
-        context.muted("eggyengine.github.io/eggy");
-        context.muted("github.com/eggyengine/eggy");
-        if (self.hatched_at_ms != null) {
-            context.label("Chirp! Your next game starts with a little idea.", .{});
-        } else context.muted("Made from scratch. Handle with care.");
+        context.badge(std.fmt.allocPrint(context.builder().allocator, "Version {s}", .{@import("build_options").version}) catch "Version", .secondary);
+        context.muted(if (self.hatched_at_ms != null) "Chirp! Your next game starts with a little idea." else "A game engine for making games in Zig.");
+        context.begin(.row);
+        for (links) |link| if (context.buttonVariant(link.label, .link)) {
+            self.open_url = link.url;
+        };
+        context.end();
+        restyle(context, .{ .direction = .row, .gap = 4 });
+        context.muted(std.fmt.allocPrint(context.builder().allocator, "Zig {s} · {s}-{s} · SDL3, Vitellus, Weeoui, Clutch", .{ builtin.zig_version_string, @tagName(builtin.cpu.arch), @tagName(builtin.os.tag) }) catch "");
+        smallText(context, 12);
+        context.text("Made with ❤️ by the eggyengine team");
         if (context.button("Close")) self.closed = true;
+        context.end();
+        restyle(context, .{ .width = context.contentWidth(), .align_items = .center, .gap = 10 });
     }
+};
+
+const links = [_]struct { label: []const u8, url: [:0]const u8 }{
+    .{ .label = "Documentation", .url = "https://eggyengine.github.io/eggy" },
+    .{ .label = "GitHub", .url = "https://github.com/eggyengine/eggy" },
 };
 
 const Glyph = struct { cracks: u8, hatch: f32 };
@@ -116,6 +132,8 @@ pub const AboutWindow = struct {
     }
     pub fn update(self: *AboutWindow, graphics: *eggy.Graphics, style: *const ui.Context) !bool {
         try self.window.present(graphics, style, &self.view);
+        if (self.view.open_url) |url| eggy.sdl_adapter.sdl.openURL(url) catch |err| std.log.err("cannot open {s}: {t}", .{ url, err });
+        self.view.open_url = null;
         return !self.view.closed;
     }
 };

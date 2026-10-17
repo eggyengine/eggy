@@ -4,6 +4,7 @@ const ui = @import("eggy").ui;
 const console_log = @import("console_log.zig");
 const terminal_view = @import("terminal_view.zig");
 const diagnostic = @import("diagnostic.zig");
+const restyle = @import("page_style.zig").restyle;
 
 const Filtered = struct { log: u64, levels: [4]bool, query_hash: u64, hidden: u64 };
 
@@ -44,41 +45,49 @@ pub const Console = struct {
 
     fn buildPage(self: *Console, context: *ui.Context, project_dir: ?[]const u8) !?diagnostic.Location {
         self.terminal.area = null;
+        const arena = context.builder().allocator;
+        // The filter across the top, with Clear beside it.
         context.begin(.row);
         _ = context.textInput("Filter", &self.query, "Filter messages");
+        restyle(context, .{ .grow = 1 });
         if (context.buttonVariant("Clear", .outline)) {
             console_log.clear();
             self.hidden.clearRetainingCapacity();
             self.hidden_version +%= 1;
             self.selected = null;
         }
-        if (self.hidden.count() > 0 and context.buttonVariant("Restore hidden", .ghost)) {
-            self.hidden.clearRetainingCapacity();
-            self.hidden_version +%= 1;
-        }
         context.end();
+        restyle(context, .{ .direction = .row, .gap = 8, .align_items = .center });
+
+        // Filtering whole entries keeps source context visible even when Info is switched off.
+        try self.refresh();
+        // Levels on the left; what is shown, and the way back to hidden messages, on the right.
         context.begin(.row);
         _ = context.checkbox("Errors", &self.levels[@intFromEnum(std.log.Level.err)]);
         _ = context.checkbox("Warnings", &self.levels[@intFromEnum(std.log.Level.warn)]);
         _ = context.checkbox("Info", &self.levels[@intFromEnum(std.log.Level.info)]);
         _ = context.checkbox("Debug", &self.levels[@intFromEnum(std.log.Level.debug)]);
-        context.end();
-
-        // Filtering whole entries keeps source context visible even when Info is switched off.
-        try self.refresh();
         context.begin(.row);
-        context.muted(try std.fmt.allocPrint(context.builder().allocator, "{d} of {d} messages ({d} hidden)", .{ self.counts.shown, self.counts.total, self.hidden.count() }));
+        context.end();
+        restyle(context, .{ .grow = 1 });
+        context.muted(try std.fmt.allocPrint(arena, "{d} of {d}", .{ self.counts.shown, self.counts.total }));
+        if (self.hidden.count() > 0 and context.buttonVariant(try std.fmt.allocPrint(arena, "Show {d} hidden", .{self.hidden.count()}), .ghost)) {
+            self.hidden.clearRetainingCapacity();
+            self.hidden_version +%= 1;
+            try self.refresh();
+        }
         if (context.buttonVariant("Copy shown", .ghost)) terminal_view.copyToClipboard(self.shown.text.items);
         context.end();
+        restyle(context, .{ .direction = .row, .gap = 12, .align_items = .center });
 
-        const available = @max(120, context.viewport.h - 190);
+        const available = @max(120, context.viewport.h - 158);
         const detail_height = @min(220, available * 0.5);
         try self.messageRows(context, if (self.selected != null) @max(60, available - detail_height - 44) else available);
         var source: ?diagnostic.Location = null;
         if (self.selectedEntry()) |entry| {
             context.begin(.row);
             if (project_dir) |dir| if (diagnostic.projectSource(self.shown.text.items[entry.start..entry.end], dir)) |at| {
-                const label = try std.fmt.allocPrint(context.builder().allocator, "Open {s}:{d}:{d}", .{ at.path, at.line, at.column });
+                const label = try std.fmt.allocPrint(arena, "Open {s}:{d}:{d}", .{ at.path, at.line, at.column });
                 if (context.buttonVariant(label, .ghost)) source = at;
             };
             if (context.buttonVariant("Copy message", .ghost)) terminal_view.copyToClipboard(self.terminal.selectedText() orelse self.shown.text.items[entry.start..entry.end]);
@@ -212,7 +221,7 @@ test "console summaries expand, link to project source, hide and restore through
     _ = console.build(&context, "/game");
     _ = try context.render();
     try std.testing.expectEqual(@as(usize, 0), console.counts.shown);
-    const restore_id = Find.labelled(context.last_root.?, "Restore hidden").?.id;
+    const restore_id = Find.labelled(context.last_root.?, "Show 1 hidden").?.id;
     context.newFrame(viewport);
     context.a11y_clicked = restore_id;
     _ = console.build(&context, "/game");
