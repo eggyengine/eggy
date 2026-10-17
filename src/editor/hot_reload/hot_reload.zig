@@ -108,6 +108,14 @@ pub const HotGame = struct {
         _ = self.game.update(state, app);
     }
 
+    pub fn hasGameUi(self: *const HotGame) bool {
+        return self.game.has_game_ui(self.state orelse return false);
+    }
+
+    pub fn hasDraw(self: *const HotGame) bool {
+        return self.game.has_draw(self.state orelse return false);
+    }
+
     pub fn gameUi(self: *HotGame, app: *eggy.App, context: *eggy.ui.Context) void {
         const state = self.state orelse return;
         _ = self.game.game_ui(state, app, context);

@@ -190,7 +190,8 @@ pub fn captures(context: *const ui.Context, event: sdl.events.Event) bool {
 }
 
 fn pointerCaptured(context: *const ui.Context, x: f32, y: f32) bool {
-    if (context.open_popup != 0 or context.active != 0 or context.press != null or context.scroll_drag != null) return true;
+    if (context.open_popup != 0 or context.active != 0 or context.scroll_drag != null) return true;
+    if (context.press) |press| if (press.widget != 0) return true;
     const root = context.last_root orelse return false;
     return hit_test.controlAt(root, x, y) != 0;
 }
@@ -243,6 +244,13 @@ test "labels do not capture gameplay, buttons and focus do" {
     context.newFrame(.{ .x = 0, .y = 0, .w = 400, .h = 300 });
     context.label("HUD", .{});
     _ = try context.render();
+    const down = sdl.events.Event{ .mouse_button_down = .{ .common = undefined, .button = .left, .down = true, .clicks = 1, .x = 200, .y = 200 } };
+    try std.testing.expect(!captures(&context, down));
+    context.handle(adapter.translate(down).?);
+    var up = down.mouse_button_down;
+    up.down = false;
+    try std.testing.expect(!captures(&context, .{ .mouse_button_up = up }));
+    context.handle(adapter.translate(.{ .mouse_button_up = up }).?);
     const key = sdl.events.Event{ .key_down = .{ .common = undefined, .id = null, .scancode = .space, .key = .space, .mod = .{}, .raw = 0, .down = true, .repeat = false } };
     try std.testing.expect(!captures(&context, key));
     context.newFrame(.{ .x = 0, .y = 0, .w = 400, .h = 300 });

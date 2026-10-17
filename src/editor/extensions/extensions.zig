@@ -4,15 +4,65 @@ const eggy = @import("eggy");
 const api = eggy.editor;
 const settings = @import("../project_settings.zig");
 const file_ops = @import("../assets/file_ops.zig");
+const workspace = @import("../workspace.zig");
+const ProjectFlow = @import("../projects/flow.zig").ProjectFlow;
+const ExportWindow = @import("../export_window.zig").ExportWindow;
+const layout_file = @import("../layout_file.zig");
+const sdl = eggy.sdl_adapter.sdl;
 
 /// Owns snapshots only; it never retains game-library callbacks or component pointers.
 pub const State = struct {
     before: ?[]u8 = null,
+    pending: ?api.Operation = null,
     pub fn deinit(self: *State, gpa: std.mem.Allocator) void {
         if (self.before) |before| gpa.free(before);
         self.* = .{};
     }
+
+    /// Take a lifecycle request only after game-library hooks have returned.
+    pub fn takeRequest(self: *State) ?workspace.Outcome {
+        const request = self.pending orelse return null;
+        self.pending = null;
+        return switch (request) {
+            .request_build => .build_project,
+            .request_reload => .reload,
+            .show_export => .export_game,
+            .show_new_project => .new_project,
+            .show_open_project => .open_project,
+            else => unreachable,
+        };
+    }
 };
+
+/// Start existing desktop workflows only after the requesting library hook has unwound.
+/// True means the editor's reload workflow launched its replacement.
+pub fn processRequest(host: anytype, request: workspace.Outcome) !bool {
+    switch (request) {
+        .build_project => {
+            if (host.project == null) return error.NoProject;
+            if (host.buildRunning()) return error.EditorBusy;
+            host.cancelBuild();
+            try host.startBuild(.rebuild);
+        },
+        .reload => return host.forceReload(),
+        .export_game => {
+            const project = host.project orelse return error.NoProject;
+            if (host.export_window != null) return error.EditorBusy;
+            host.export_window = try ExportWindow.open(host.gpa, &host.app.graphics, host.ui.font, host.mono, project.dir);
+        },
+        .new_project => {
+            if (!host.mayLeave(.new_project)) return false;
+            layout_file.save(host.gpa, host.preference_folders.global, &host.workspace.dock, host.workspace.seen_plugin_panels.items);
+            host.project_flow = try ProjectFlow.create(host.gpa, &host.app.graphics, host.ui.font, host.mono);
+        },
+        .open_project => if (host.mayLeave(.open_project)) {
+            host.picking_to_link = false;
+            sdl.dialog.showOpenFolder(@TypeOf(host.*), @TypeOf(host.*).pickedProject, host, host.app.window.window, null, false);
+        },
+        else => return error.InvalidEditorRequest,
+    }
+    return false;
+}
 
 /// Construct a hook-local view after the concrete editor has reached its final address.
 pub fn context(editor: anytype) api.Context {
@@ -41,6 +91,12 @@ fn apply(host: anytype, request: api.Request, response: *api.Response) !void {
     const text = request.text[0..request.text_len];
     const extra = request.extra[0..request.extra_len];
     switch (request.operation) {
+        .request_build, .request_reload, .show_export, .show_new_project, .show_open_project => {
+            if (host.extension_state.pending != null or host.extension_state.before != null or host.history.group != null or host.build_window != null or host.project_flow != null) return error.EditorBusy;
+            if (request.operation != .show_new_project and request.operation != .show_open_project and host.project == null) return error.NoProject;
+            host.extension_state.pending = request.operation;
+            return;
+        },
         .selection => {
             host.entity_editor.forgetDead(&host.app);
             if (host.entity_editor.selected) |entity| {
@@ -75,11 +131,12 @@ fn apply(host: anytype, request: api.Request, response: *api.Response) !void {
     switch (request.operation) {
         .begin_edit => {
             if (host.project == null) return error.NoProject;
-            if (host.extension_state.before != null) return error.EditorBusy;
+            if (host.extension_state.before != null or host.extension_state.pending != null) return error.EditorBusy;
             try host.history.reserve();
             const before = try snapshot(host);
             errdefer host.gpa.free(before);
             host.history.watch(try host.gpa.dupe(u8, before), std.math.maxInt(u64), false);
+            try host.history.reserve();
             host.extension_state.before = before;
         },
         .commit_edit => {
@@ -148,8 +205,16 @@ fn apply(host: anytype, request: api.Request, response: *api.Response) !void {
             try host.history.reserve();
             if (try settings.setDefaultScene(host.gpa, project.dir, text)) |change| host.history.recordProjectSettings(change.before, change.after, host.workspace.time_ms);
         },
-        .selection, .select, .project_settings => unreachable,
+        .selection, .select, .project_settings, .request_build, .request_reload, .show_export, .show_new_project, .show_open_project => unreachable,
     }
+}
+
+test "deferred workflow requests are taken once without retaining callbacks" {
+    var state = State{ .pending = .request_reload };
+    try std.testing.expectEqual(workspace.Outcome.reload, state.takeRequest().?);
+    try std.testing.expect(state.takeRequest() == null);
+    state.pending = .request_build;
+    try std.testing.expectEqual(workspace.Outcome.build_project, state.takeRequest().?);
 }
 
 /// Scene text for history, captured through the current library's typed registry.

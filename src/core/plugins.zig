@@ -107,14 +107,14 @@ pub fn Set(comptime types: anytype, comptime keys: []const [:0]const u8) type {
         enabled: [list.len]bool,
 
         const Self = @This();
-        pub const has_game_ui = blk: {
-            for (list) |T| if (@hasDecl(T, "gameUi")) break :blk true;
-            break :blk false;
-        };
-        pub const has_draw = blk: {
-            for (list) |T| if (@hasDecl(T, "draw")) break :blk true;
-            break :blk false;
-        };
+        pub fn hasGameUi(self: *const Self) bool {
+            inline for (list, 0..) |T, i| if (@hasDecl(T, "gameUi") and self.enabled[i]) return true;
+            return false;
+        }
+        pub fn hasDraw(self: *const Self) bool {
+            inline for (list, 0..) |T, i| if (@hasDecl(T, "draw") and self.enabled[i]) return true;
+            return false;
+        }
 
         /// Every plugin's `editor_panels`, in plugin order.
         pub const editor_panels: []const EditorPanel = blk: {
@@ -300,6 +300,18 @@ test "plugins start in order, stop in reverse, and skip hooks they don't declare
                 pub const editor_commands = [_]EditorCommand{ .{ .key = "raise", .title = "Raise" }, .{ .key = "lower", .title = "Lower" } };
                 pub fn editorCommand(self: *@This(), command: usize, _: *EditorContext) !void {
                     self.last = command;
+                }
+
+                test "disabled UI plugins do not opt a game into overlay rendering" {
+                    const Widget = struct {
+                        pub fn gameUi(_: *@This(), _: *App, _: *ui.Context) !void {}
+                        pub fn draw(_: *@This(), _: *App, _: DrawContext) !void {}
+                    };
+                    const Plugins = Set(.{ struct {}, Widget }, &.{ "game", "widgets" });
+                    var plugins = try Plugins.init(std.testing.allocator, undefined, .{ true, true });
+                    try std.testing.expect(plugins.hasGameUi() and plugins.hasDraw());
+                    plugins.enabled[1] = false;
+                    try std.testing.expect(!plugins.hasGameUi() and !plugins.hasDraw());
                 }
             };
             const Plugins = Set(.{Game}, &.{"game"});

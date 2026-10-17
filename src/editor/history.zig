@@ -246,7 +246,10 @@ pub const History = struct {
         const group = if (self.group) |*group| group else return error.NoActionGroup;
         while (group.steps.items.len != 0) {
             const step = &group.steps.items[group.steps.items.len - 1];
-            try invoke(step, .undo, context, applyStep);
+            invoke(step, .undo, context, applyStep) catch |err| {
+                if (err == error.HistoryNeedsRecovery) self.recovery_required = true;
+                return err;
+            };
             step.deinit(self.gpa);
             group.steps.items.len -= 1;
         }

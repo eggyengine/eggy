@@ -6,6 +6,7 @@ const sdl = eggy.sdl_adapter.sdl;
 pub const State = struct {
     focused: bool = false,
     buttons: u32 = 0,
+    pointer_in_scene: bool = false,
 
     pub fn cancel(self: *State, app: *eggy.App) void {
         self.* = .{};
@@ -17,6 +18,13 @@ pub const State = struct {
     /// Pointer ownership survives leaving the viewport until its buttons are released.
     pub fn route(self: *State, app: *eggy.App, game: anytype, event: eggy.Event, viewport: eggy.ui.Rect, running: bool) void {
         const local = eggy.game_ui.localEvent(event, viewport);
+        const at: ?[2]f32 = switch (local) {
+            .mouse_motion => |e| .{ e.x, e.y },
+            .mouse_button_down, .mouse_button_up => |e| .{ e.x, e.y },
+            .mouse_wheel => |e| .{ e.x, e.y },
+            else => null,
+        };
+        if (at) |position| self.pointer_in_scene = position[0] >= 0 and position[1] >= 0 and position[0] < viewport.w and position[1] < viewport.h;
         switch (local) {
             .mouse_button_down => |button| {
                 self.focused = true;

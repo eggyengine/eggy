@@ -123,7 +123,7 @@ pub fn Runtime(comptime project: type) type {
             if (eggy.camera.find(&self.app.world)) |view| {
                 const drawn = eggy.mesh.gather(&self.app.world, self.drawables);
                 try self.app.graphics.drawScene(frame, self.drawables[0..drawn], view);
-            } else if (!Plugins.has_game_ui and !Plugins.has_draw) {
+            } else if (!self.plugins.hasGameUi() and !self.plugins.hasDraw()) {
                 if (self.notice == null) self.notice = try eggy.Notice.init(self.gpa, &self.app.graphics);
                 try self.notice.?.draw(frame, "No camera available");
             }
@@ -139,7 +139,7 @@ pub fn Runtime(comptime project: type) type {
                     .frame_slot = self.app.graphics.surface.slot,
                 };
                 try self.plugins.draw(&self.app, draw);
-                if (Plugins.has_game_ui) {
+                if (self.plugins.hasGameUi()) {
                     const layer = try self.app.gameUi();
                     layer.begin(draw, sdl3.timer.getMillisecondsSinceInit());
                     try self.plugins.gameUi(&self.app, &layer.context);

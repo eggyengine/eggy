@@ -7,7 +7,7 @@ const std = @import("std");
 const eggy = @import("eggy");
 
 /// Bumped whenever these types change, so an editor refuses a library built for another.
-pub const version: u32 = 19;
+pub const version: u32 = 21;
 
 /// The library's one exported function: `fn () callconv(.c) *const Game`.
 pub const entry_symbol = "eggy_game";
@@ -92,8 +92,8 @@ pub const Game = extern struct {
     /// One frame: the plugins' `update`, then the world's Update stages. False when something
     /// failed this frame (logged, once until it changes); the game carries on regardless.
     update: *const fn (state: *anyopaque, app: *anyopaque) callconv(.c) bool,
-    has_game_ui: bool,
-    has_draw: bool,
+    has_game_ui: *const fn (state: *anyopaque) callconv(.c) bool,
+    has_draw: *const fn (state: *anyopaque) callconv(.c) bool,
     game_ui: *const fn (state: *anyopaque, app: *anyopaque, context: *anyopaque) callconv(.c) bool,
     draw: *const fn (state: *anyopaque, app: *anyopaque, context: *const anyopaque) callconv(.c) bool,
     /// 0 ignored, 1 consumed, -1 failed (logged; consume rather than leaking input).

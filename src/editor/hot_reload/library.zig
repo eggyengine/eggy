@@ -78,8 +78,8 @@ const game = api.Game{
     .plugin_count = plugin_keys.len,
     .stop = stop,
     .update = update,
-    .has_game_ui = Plugins.has_game_ui,
-    .has_draw = Plugins.has_draw,
+    .has_game_ui = hasGameUi,
+    .has_draw = hasDraw,
     .game_ui = gameUi,
     .draw = draw,
     .ui_event = uiEvent,
@@ -190,6 +190,14 @@ fn editorUpdate(state_ptr: *anyopaque, editor_ptr: *anyopaque) callconv(.c) bool
     };
     recovered(.editor_update);
     return true;
+}
+
+fn hasGameUi(state: *anyopaque) callconv(.c) bool {
+    return stateOf(state).plugins.hasGameUi();
+}
+
+fn hasDraw(state: *anyopaque) callconv(.c) bool {
+    return stateOf(state).plugins.hasDraw();
 }
 
 fn gameUi(state_ptr: *anyopaque, app_ptr: *anyopaque, context: *anyopaque) callconv(.c) bool {

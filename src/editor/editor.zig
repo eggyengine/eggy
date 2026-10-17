@@ -385,7 +385,7 @@ pub fn Editor(comptime project: type) type {
             self.scene_view.update(self.sceneTarget(), if (self.workspace.placed.scene) |placed| placed.rect else null, look);
             self.workspace.scene_overlay = self.scene_view.overlay();
             if (self.play_mode.playing() and !self.workspace.simulating) if (self.game) |game| {
-                if (game.game.has_game_ui or game.game.has_draw) self.workspace.scene_overlay.no_camera = false;
+                if (game.hasGameUi() or game.hasDraw()) self.workspace.scene_overlay.no_camera = false;
             };
 
             // Lay out every window, then tell the OS where the main title bar is.
@@ -531,7 +531,20 @@ pub fn Editor(comptime project: type) type {
 
             const pointer = self.workspace.pointer;
             const hovered = self.pageAt(self.workspace.pointer_slot, pointer.x, pointer.y);
-            weeoui_sdl3.setCursor(self.workspace.dock.cursor() orelse if (hovered) |index| self.page(index).cursor else .default);
+            const over_game = self.play_mode.playing() and !self.workspace.simulating and (self.game_input.pointer_in_scene or self.game_input.buttons != 0);
+            const game_cursor: ?ui.Cursor = if (over_game) if (self.app.ui_layer) |layer| layer.context.cursor else null else null;
+            const dock_cursor = self.workspace.dock.cursor();
+            if (!over_game or self.app.ui_layer != null or dock_cursor != null) {
+                weeoui_sdl3.setCursor(dock_cursor orelse game_cursor orelse if (hovered) |index| self.page(index).cursor else .default);
+            }
+            if (self.extension_state.takeRequest()) |request| {
+                if (extensions.processRequest(self, request)) |exit| {
+                    if (exit) return .success;
+                } else |err| {
+                    std.log.err("queued editor request failed: {t}", .{err});
+                    self.workspace.toast("Couldn't perform the request: see the Console");
+                }
+            }
             return .run;
         }
 
@@ -549,7 +562,7 @@ pub fn Editor(comptime project: type) type {
             return .run;
         }
 
-        fn pickedProject(self: ?*Self, files: ?[]const [*:0]const u8, _: ?usize, failed: bool) void {
+        pub fn pickedProject(self: ?*Self, files: ?[]const [*:0]const u8, _: ?usize, failed: bool) void {
             const chosen = files orelse return;
             if (failed or chosen.len == 0) return;
             const copy = std.heap.c_allocator.dupeZ(u8, std.mem.span(chosen[0])) catch return;
@@ -567,7 +580,7 @@ pub fn Editor(comptime project: type) type {
         /// Whether the editor may go ahead with `leaving`: yes when the scene has no unsaved
         /// changes, or the person just answered "Save changes?" for it. Otherwise it opens the
         /// prompt (once) and says no; the answer carries `leaving` out (`answerSavePrompt`).
-        fn mayLeave(self: *Self, leaving: Leaving) bool {
+        pub fn mayLeave(self: *Self, leaving: Leaving) bool {
             if (self.leave_approved) {
                 self.leave_approved = false;
                 return true;
@@ -1065,7 +1078,7 @@ pub fn Editor(comptime project: type) type {
                 // The ground grid only through the panel's own camera, not the game's.
                 try self.scene.render(&self.app.graphics, frame.cmd, pixelSize(rect), meshes, self.scene_view.view, self.entity_editor.selected, !self.scene_view.throughGameCamera());
                 if (self.build_window == null and self.play_mode.playing() and !self.workspace.simulating) if (self.game) |*game| {
-                    if (game.game.has_draw or game.game.has_game_ui) {
+                    if (game.hasDraw() or game.hasGameUi()) {
                         const logical = self.workspace.placed.scene.?.rect;
                         const draw_context = eggy.DrawContext{
                             .cmd = frame.cmd,
@@ -1077,7 +1090,7 @@ pub fn Editor(comptime project: type) type {
                             .frame_slot = surface.slot,
                         };
                         game.draw(&self.app, draw_context);
-                        if (game.game.has_game_ui) {
+                        if (game.hasGameUi()) {
                             const layer = try self.app.gameUi();
                             layer.begin(draw_context, sdl3.timer.getMillisecondsSinceInit());
                             game.gameUi(&self.app, &layer.context);
@@ -1202,6 +1215,7 @@ pub fn Editor(comptime project: type) type {
             if (curr_event == .mouse_motion) if (self.app.ui_layer) |layer| {
                 layer.pointer_active = false;
             };
+            if (curr_event == .mouse_motion or curr_event == .window_mouse_leave) self.game_input.pointer_in_scene = false;
 
             // The Scene panel's camera takes presses, drags and wheels over it; F frames the
             // selection, and Delete deletes it.
@@ -1445,7 +1459,7 @@ pub fn Editor(comptime project: type) type {
 
         /// Start `action`'s job on the open project as `rebuild`, and the Build progress window
         /// that follows it.
-        fn startBuild(self: *Self, action: job_zig.Action) !void {
+        pub fn startBuild(self: *Self, action: job_zig.Action) !void {
             const opened = self.project orelse return;
             const folders = try job_zig.editorFolders(self.gpa);
             defer self.gpa.free(folders.resources_dir);
@@ -1501,7 +1515,7 @@ pub fn Editor(comptime project: type) type {
         }
 
         /// Whether `rebuild` is still under way.
-        fn buildRunning(self: *Self) bool {
+        pub fn buildRunning(self: *Self) bool {
             const job = self.rebuild orelse return false;
             var arena = std.heap.ArenaAllocator.init(self.gpa);
             defer arena.deinit();
@@ -1510,7 +1524,7 @@ pub fn Editor(comptime project: type) type {
         }
 
         /// Stop `rebuild` (the build is killed) and forget it.
-        fn cancelBuild(self: *Self) void {
+        pub fn cancelBuild(self: *Self) void {
             self.reload_when_built = false;
             const job = self.rebuild orelse return;
             job.deinit();
@@ -1520,7 +1534,7 @@ pub fn Editor(comptime project: type) type {
         /// The title bar's Reload: open the rebuilt editor if a rebuild made one; otherwise
         /// rebuild (in the Build progress window) and open the result, changed or not. Returns
         /// whether the editor should quit, as the new one is open.
-        fn forceReload(self: *Self) !bool {
+        pub fn forceReload(self: *Self) !bool {
             if (self.workspace.build_state == .ready) if (self.rebuild) |job| return try self.launchRebuilt(job);
             if (self.buildRunning()) {
                 self.reload_when_built = true;
@@ -2048,6 +2062,7 @@ pub fn Editor(comptime project: type) type {
 
 test {
     _ = @import("game_input.zig");
+    _ = extensions;
     _ = @import("workspace.zig");
     _ = @import("menus.zig");
     _ = @import("panels.zig");

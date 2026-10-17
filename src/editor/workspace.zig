@@ -78,6 +78,7 @@ pub const Outcome = union(enum) {
     /// The title bar's Reload: open the rebuilt editor, rebuilding it first if need be.
     reload,
     plugin_command: usize,
+    build_project,
 };
 
 /// The project the editor has open, for the status bar.

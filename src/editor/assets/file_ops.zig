@@ -109,13 +109,16 @@ pub fn restore(io: std.Io, project: std.Io.Dir, from: []const u8, to: []const u8
 }
 
 /// Move the descriptor of the file moved from `from` to `to` along with it, if it has one. A
-/// descriptor left behind is found and removed later, so a failure here only loses its id.
+/// descriptor left behind is found and removed later; report the possible loss of its id.
 fn carryDescriptor(io: std.Io, project: std.Io.Dir, from: []const u8, to: []const u8) void {
     var from_buffer: [std.fs.max_path_bytes]u8 = undefined;
     var to_buffer: [std.fs.max_path_bytes]u8 = undefined;
     const from_descriptor = descriptor.pathOf(&from_buffer, from) catch return;
     const to_descriptor = descriptor.pathOf(&to_buffer, to) catch return;
-    project.rename(from_descriptor, project, to_descriptor, io) catch {};
+    project.rename(from_descriptor, project, to_descriptor, io) catch |err| switch (err) {
+        error.FileNotFound => {},
+        else => std.log.warn("moved {s}, but its descriptor could not follow ({t}); its asset id may change", .{ from, err }),
+    };
 }
 
 /// `name` in `folder`, or `name 2`, `name 3` and so on, whichever is free, with `extension`.

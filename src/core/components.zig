@@ -357,6 +357,7 @@ fn store(comptime T: type, value: *const T) Stored(T) {
 /// Compare values as scenes store them, excluding unused reference buffers. Allocates
 /// temporary serialization buffers; never compares borrowed addresses.
 pub fn valuesEqual(gpa: std.mem.Allocator, comptime T: type, a: *const T, b: *const T) !bool {
+    if (T == @import("name.zig").Name) return std.mem.eql(u8, a.text(), b.text());
     var left: std.Io.Writer.Allocating = .init(gpa);
     defer left.deinit();
     var right: std.Io.Writer.Allocating = .init(gpa);

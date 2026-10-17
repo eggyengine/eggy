@@ -28,6 +28,11 @@ pub const Operation = enum(u32) {
     import_file,
     project_settings,
     default_scene,
+    request_build,
+    request_reload,
+    show_export,
+    show_new_project,
+    show_open_project,
 };
 pub const Entity = extern struct { id: u32 = 0, generation: u32 = 0 };
 /// Strings are borrowed for this synchronous request only.
@@ -126,6 +131,24 @@ pub const Context = struct {
     }
     pub fn setDefaultScene(self: *Context, path: []const u8) !void {
         try self.textRequest(.default_scene, path, "");
+    }
+
+    /// Queue a project build after this hook unwinds. Progress/failures use the Build window.
+    pub fn requestBuild(self: *Context) !void {
+        _ = try self.send(.{ .operation = .request_build });
+    }
+    /// Queue the editor's existing rebuild/reload workflow, including unsaved-change prompts.
+    pub fn requestReload(self: *Context) !void {
+        _ = try self.send(.{ .operation = .request_reload });
+    }
+    pub fn showExport(self: *Context) !void {
+        _ = try self.send(.{ .operation = .show_export });
+    }
+    pub fn showNewProject(self: *Context) !void {
+        _ = try self.send(.{ .operation = .show_new_project });
+    }
+    pub fn showOpenProject(self: *Context) !void {
+        _ = try self.send(.{ .operation = .show_open_project });
     }
 
     /// Parse settings into a caller-owned arena; all returned strings live in `arena`.
