@@ -34,6 +34,7 @@ pub const Step = union(enum) {
     preference: struct { layer: eggy.preferences.Store.Layer, key: []u8, field: []u8, before: ?[]u8, after: ?[]u8 },
     /// The project's settings (`eggy.zon`) went from `before` to `after` (its text).
     project_settings: Texts,
+    input_bindings: Texts,
     /// The dock's panels were rearranged from `before` to `after` (layout snapshots).
     layout: Texts,
     /// Another scene was opened, or a new one made (`created`; undone, its file waits in
@@ -74,7 +75,7 @@ pub const Step = union(enum) {
                 if (step.trashed) |trashed| gpa.free(trashed);
             },
             .plugin => |step| gpa.free(step.key),
-            .layout, .project_settings => |step| {
+            .layout, .project_settings, .input_bindings => |step| {
                 gpa.free(step.before);
                 gpa.free(step.after);
             },
@@ -105,6 +106,7 @@ pub const Step = union(enum) {
             .preference => "a preference",
             .layout => "a layout change",
             .project_settings => "a project setting",
+            .input_bindings => "input mappings",
             .open_scene => |step| if (step.created) "a new scene" else "opening a scene",
             .plugin => |step| if (step.on) "turning a plugin on" else "turning a plugin off",
         };

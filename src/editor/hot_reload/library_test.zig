@@ -4,6 +4,14 @@ const eggy = @import("eggy");
 const HotGame = @import("hot_reload.zig").HotGame;
 const history_zig = @import("../history.zig");
 
+fn attachInput(app: *eggy.App, gpa: std.mem.Allocator) !*eggy.input_backend.Backend {
+    const backend = try gpa.create(eggy.input_backend.Backend);
+    backend.* = .{ .gpa = gpa, .state = .init(gpa) };
+    app.input_backend = backend;
+    app.input = .{ .backend = backend.state.interface() };
+    return backend;
+}
+
 test "the game's library loads, runs, swaps for a fresh copy, and unloads cleanly" {
     const gpa = std.testing.allocator;
     const io = std.testing.io;
@@ -11,7 +19,8 @@ test "the game's library loads, runs, swaps for a fresh copy, and unloads cleanl
     defer gpa.free(path);
     var app: eggy.App = undefined;
     app.world = .init(gpa);
-    app.input = .{};
+    const backend = try attachInput(&app, gpa);
+    defer backend.deinit();
     app.time = .{};
     app.instances = null;
     app.ui_layer = null;
@@ -127,7 +136,9 @@ test "typed actions and game UI cross the real ABI and undo after library replac
     };
     var resource_context: u8 = 0;
     app.resource_provider = eggy.resources.Resources.from(&resource_context, Source.read, Source.model, Source.image);
-    app.input = .{};
+    const backend = try attachInput(&app, gpa);
+    defer backend.deinit();
+    try backend.state.readOverrides(".{ .controls = .{ .{ .owner = \"game/player\", .name = \"jump\", .bindings = .{ .{ .key = .j } } } } }");
     app.time = .{};
     var game = try HotGame.load(gpa, path);
     defer game.deinit(&app);
@@ -139,6 +150,10 @@ test "typed actions and game UI cross the real ABI and undo after library replac
     game.editorCommand(1, &editor);
     try host.expectCounter("2");
     try std.testing.expectEqual(@as(usize, 1), host.history.undo_steps.items.len);
+    const press = eggy.Event{ .key_down = .{ .common = undefined, .id = null, .scancode = .j, .key = null, .mod = .{}, .raw = 0, .down = true, .repeat = false } };
+    try app.input.handle(press);
+    game.editorCommand(2, &editor);
+    try host.expectCounter("3");
     {
         var ui = try eggy.ui.Context.init(gpa);
         defer ui.deinit();
@@ -155,9 +170,12 @@ test "typed actions and game UI cross the real ABI and undo after library replac
     const restored = try kept.instantiate(gpa, &app.world, game.sceneAccess(), null);
     gpa.free(restored.entities);
     game.start(&app, &.{}, .keep);
-    try host.expectCounter("2");
+    try host.expectCounter("3");
     try std.testing.expect(try host.history.apply(.undo, &host, ActionHost.apply));
-    try host.expectCounter("1");
-    try std.testing.expect(try host.history.apply(.redo, &host, ActionHost.apply));
     try host.expectCounter("2");
+    try std.testing.expect(try host.history.apply(.redo, &host, ActionHost.apply));
+    try host.expectCounter("3");
+    try app.input.handle(press);
+    game.editorCommand(2, &editor);
+    try host.expectCounter("4");
 }

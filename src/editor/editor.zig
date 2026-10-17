@@ -50,6 +50,8 @@ const descriptors = @import("assets/descriptors.zig");
 const ProjectAssets = @import("assets/project_assets.zig").ProjectAssets;
 const extensions = @import("extensions/extensions.zig");
 const GameInput = @import("game_input.zig").State;
+const InputSettings = @import("input_settings.zig").InputSettings;
+const InputMappingsWindow = @import("input_mappings.zig").InputMappingsWindow;
 
 /// The editor for `project`, which declares `name` and `game_library` (the game library's
 /// `file_name`, beside the editor). The game and its plugins run as they do in the runtime,
@@ -61,6 +63,8 @@ pub fn Editor(comptime project: type) type {
         app: eggy.App,
         extension_state: extensions.State = .{},
         game_input: GameInput = .{},
+        input_settings: ?*InputSettings = null,
+        input_mappings_window: ?*InputMappingsWindow = null,
         /// The game and its plugins, from their library; null if it couldn't load (logged).
         game: ?HotGame,
         /// When the game's library was built, to tell whether a rebuild changed it.
@@ -291,16 +295,22 @@ pub fn Editor(comptime project: type) type {
                 break :blk loaders;
             } else null;
             errdefer if (project_assets) |loaders| gpa.destroy(loaders);
+            const input_settings = if (opened_project) |opened| try InputSettings.open(gpa, &app.input_backend.?.state, opened.dir) else null;
+            errdefer if (input_settings) |settings| settings.close();
             if (game) |*loaded| loaded.start(&app, plugin_switches.off(), .discard);
             var self = Self{ .gpa = gpa, .game = game, .game_modified = modifiedAt(library_path), .app = app, .ui = context, .mono = mono, .console_ui = console_ui, .hierarchy_ui = hierarchy_ui, .assets_ui = assets_ui, .assets_panel = .init(gpa), .asset_icons = asset_icons, .entity_editor = .init(gpa), .console = console, .plugin_pages = plugin_pages, .workspace = workspace, .frame = frame, .scene = scene, .camera_preview = camera_preview, .drawables = drawables, .overlay = overlay, .project = opened_project, .editor_modified = if (opened_project) |opened| editorModified(gpa, opened) else null, .upgrades = upgrades, .preference_folders = preference_folders, .open_scene = open_scene, .history = .{ .gpa = gpa }, .plugin_switches = plugin_switches, .project_assets = project_assets };
+            self.input_settings = input_settings;
             self.built_sources = self.sourcesNow();
             self.syncDescriptors();
             return self;
         }
 
         pub fn deinit(self: *Self) void {
+            self.game_input.deinit(self.gpa);
             self.extension_state.deinit(self.gpa);
             if (self.game) |*game| game.deinit(&self.app);
+            if (self.input_settings) |settings| settings.close();
+            if (self.input_mappings_window) |window| window.close(&self.app.graphics);
             if (self.project_flow) |flow| flow.close(&self.app.graphics);
             if (self.build_window) |window| window.close(&self.app.graphics);
             if (self.devtools_window) |window| window.close(&self.app.graphics);
@@ -364,6 +374,7 @@ pub fn Editor(comptime project: type) type {
             if (self.build_window == null) if (self.game) |*game| {
                 if (self.play_mode.running()) {
                     self.app.time.tick(sdl3.timer.getNanosecondsSinceInit());
+                    try self.app.advanceInput();
                     game.update(&self.app);
                     self.app.input.endFrame();
                 } else {
@@ -526,6 +537,8 @@ pub fn Editor(comptime project: type) type {
                     self.export_window = null;
                 }
             }
+            if (self.input_mappings_window) |window| try window.update(&self.app.graphics, &self.ui, &self.app.input_backend.?.state);
+            if (self.input_settings) |settings| try settings.recordPending(&self.history);
             // The Build progress window, if open.
             if (self.build_window) |window| if (try self.updateBuildWindow(window, frame_arena.allocator())) return .success;
 
@@ -704,7 +717,7 @@ pub fn Editor(comptime project: type) type {
             };
             // The game starts over on the scene, as it does when shipped, with no keys held and its
             // clock at zero; the selection follows.
-            self.app.input = .{};
+            self.app.input.cancel();
             self.app.time.reset();
             const place = self.entity_editor.selectionPlace(&self.app, game);
             self.play_mode.play(self.gpa, &self.app, game, self.entity_editor.roots(&self.app.world), self.plugin_switches.off()) catch |err| {
@@ -880,6 +893,10 @@ pub fn Editor(comptime project: type) type {
 
         /// Edit > Undo or Redo: carry the step back (`.undo`) or out again (`.redo`).
         fn undoOrRedo(self: *Self, direction: eggy.Direction) void {
+            if (self.input_settings) |settings| settings.recordPending(&self.history) catch |err| {
+                std.log.err("cannot record input mappings before undo: {t}", .{err});
+                return self.workspace.toast("Couldn't record input mappings: see the Console");
+            };
             // Steps are the scene's, not a play's: stop first.
             self.stopPlaying();
             // A change not recorded yet (typing just now) becomes a step first.
@@ -954,6 +971,10 @@ pub fn Editor(comptime project: type) type {
                 .project_settings => |change| {
                     try files.writeFile(io, .{ .sub_path = eggy.project.file_name, .data = change.value(direction) });
                     if (self.settings_window) |window| try window.reload();
+                },
+                .input_bindings => |change| {
+                    const settings = self.input_settings orelse return error.NoProject;
+                    try settings.restore(change.value(direction));
                 },
                 .layout => |change| {
                     const text = change.value(direction);
@@ -1133,6 +1154,15 @@ pub fn Editor(comptime project: type) type {
         }
 
         pub fn event(self: *Self, curr_event: sdl3.events.Event) !sdl3.AppResult {
+            try self.app.deviceEvent(curr_event);
+            if (self.input_mappings_window) |window| {
+                if (window.closeRequested(curr_event)) {
+                    window.close(&self.app.graphics);
+                    self.input_mappings_window = null;
+                    return .run;
+                }
+                if (window.handle(curr_event)) return self.toolWindowTook(curr_event);
+            }
             if (curr_event == .window_focus_lost) {
                 self.game_input = .{};
                 self.app.input.releaseAll();
@@ -1192,7 +1222,10 @@ pub fn Editor(comptime project: type) type {
                     else => {},
                 };
             }
-            const slot = self.slotOf(curr_event);
+            const slot = if (eggy.game_ui.isControllerInput(curr_event) and self.game_input.focused and self.workspace.placed.scene != null)
+                self.workspace.placed.scene.?.slot
+            else
+                self.slotOf(curr_event);
 
             // F2 renames what is selected in the Hierarchy or Assets (Weeoui's keys don't include it).
             if (curr_event == .key_down) if (curr_event.key_down.key) |key| if (key == .func2) {
@@ -1204,8 +1237,8 @@ pub fn Editor(comptime project: type) type {
             // While the game plays, the Scene panel is the game's: the mouse over it goes to it.
             const game_has_scene = self.play_mode.playing() and !self.workspace.simulating;
             if (game_has_scene) if (self.sceneRect(slot)) |rect| {
-                if (self.overScene(slot, curr_event) or (self.game_input.buttons != 0 and pointerOf(curr_event) != null)) {
-                    if (self.game) |*game| self.game_input.route(&self.app, game, curr_event, rect, self.play_mode.running());
+                if (self.overScene(slot, curr_event) or (self.game_input.buttons != 0 and !eggy.game_ui.isTouchInput(curr_event) and pointerOf(curr_event) != null) or self.game_input.ownsTouch(curr_event)) {
+                    if (self.game) |*game| try self.routeGameInput(game, curr_event, slot, rect);
                     return .run;
                 }
             };
@@ -1324,6 +1357,9 @@ pub fn Editor(comptime project: type) type {
                         break :blk null;
                     };
                 },
+                .input_mappings => if (self.input_mappings_window == null) {
+                    self.input_mappings_window = try InputMappingsWindow.open(self.gpa, &self.app.graphics, self.ui.font);
+                },
                 .link_developer => if (self.upgrades.can_link) try self.linkDeveloper() else self.upgrades.logUnavailable(.link),
                 else => {},
             }
@@ -1331,6 +1367,7 @@ pub fn Editor(comptime project: type) type {
             if (curr_event == .window_focus_gained and self.cameBack()) {
                 // Another editor may have unpacked a newer Eggy meanwhile.
                 self.upgrades.refresh();
+                if (self.input_settings) |settings| settings.reload() catch |err| std.log.err("cannot reload controls.zon: {t}; keeping active mappings", .{err});
                 // Files may have changed outside: models and images import again, and descriptors catch up.
                 self.app.graphics.forgetAssets();
                 self.filesChanged();
@@ -1348,7 +1385,7 @@ pub fn Editor(comptime project: type) type {
             // The pages get the rest, and every pointer move so their hover state stays current.
             const game_keyboard = game_has_scene and self.game_input.focused and self.sceneRect(slot) != null and eggy.game_ui.isInput(curr_event) and pointerOf(curr_event) == null and outcome == .ignored;
             if (game_keyboard) {
-                if (self.game) |*game| self.game_input.route(&self.app, game, curr_event, self.sceneRect(slot).?, self.play_mode.running());
+                if (self.game) |*game| try self.routeGameInput(game, curr_event, slot, self.sceneRect(slot).?);
             } else if (outcome == .ignored or curr_event == .mouse_motion) self.routeToPages(slot, curr_event);
             if (self.play_mode.running() and !eggy.game_ui.isInput(curr_event)) if (self.game) |*game| {
                 game.event(&self.app, curr_event);
@@ -1357,6 +1394,12 @@ pub fn Editor(comptime project: type) type {
             const quitting = curr_event == .quit or (curr_event == .window_close_requested and slot == main_slot);
             if (quitting and !self.mayLeave(.quit)) return .run;
             return self.app.event(curr_event);
+        }
+
+        fn routeGameInput(self: *Self, game: *HotGame, value: eggy.Event, slot: Slot, rect: ui.Rect) !void {
+            const window = self.windowOf(slot) orelse return;
+            const width, const height = try window.getSize();
+            try self.game_input.route(&self.app, game, value, rect, .{ @floatFromInt(width), @floatFromInt(height) }, self.play_mode.running());
         }
 
         /// The project named by `--project <dir>` in `args`, if any, read from its `eggy.zon`
@@ -2010,6 +2053,11 @@ pub fn Editor(comptime project: type) type {
                 .mouse_button_down, .mouse_button_up => |button| .{ .x = button.x, .y = button.y },
                 .mouse_motion => |motion| .{ .x = motion.x, .y = motion.y },
                 .mouse_wheel => |wheel| .{ .x = wheel.x, .y = wheel.y },
+                .finger_down, .finger_up, .finger_motion, .finger_canceled => |finger| blk: {
+                    const window = sdl3.video.Window.fromId(finger.window_id orelse break :blk null) catch break :blk null;
+                    const width, const height = window.getSize() catch break :blk null;
+                    break :blk .{ .x = finger.x * @as(f32, @floatFromInt(width)), .y = finger.y * @as(f32, @floatFromInt(height)) };
+                },
                 else => null,
             };
         }
@@ -2061,6 +2109,8 @@ pub fn Editor(comptime project: type) type {
 }
 
 test {
+    _ = @import("input_mappings.zig");
+    _ = @import("input_settings.zig");
     _ = @import("game_input.zig");
     _ = extensions;
     _ = @import("workspace.zig");

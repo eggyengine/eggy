@@ -3,8 +3,16 @@ const std = @import("std");
 const eggy = @import("eggy");
 
 pub const Game = if (@import("api_fixture_options").custom_ui) Custom else Hud;
+const PlayerInput = eggy.input.Map(enum { jump, move }, .{
+    .key = "player",
+    .controls = &.{
+        .{ .control = .jump, .bindings = &.{ .{ .key = .space }, .{ .controller = .{ .button = .south } } } },
+        .{ .control = .move, .kind = .vector, .bindings = &.{ .{ .keys_2d = .{} }, .{ .controller_stick = .{} } } },
+    },
+});
 
 const Hud = struct {
+    pub const input_maps = .{PlayerInput};
     clicks: u32 = 0,
     gameplay_presses: u32 = 0,
     text: eggy.ui.TextEdit(128) = .{},
@@ -19,10 +27,11 @@ const Hud = struct {
     }
 
     pub fn update(self: *Hud, app: *eggy.App) !void {
-        if (app.input.pressed(.space)) self.gameplay_presses += 1;
+        const player = app.input.map(PlayerInput);
+        if (try player.pressed(.jump)) self.gameplay_presses += 1;
         const transform = self.player.get(&app.world) orelse return;
-        const direction = app.input.direction(.{});
-        transform.translate(.{ direction[0] * app.time.delta_s, 0, -direction[1] * app.time.delta_s });
+        const direction = try player.vector(.move);
+        transform.translate(.{ direction.x * app.time.delta_s, 0, direction.y * app.time.delta_s });
         app.world.markChanged(self.player.entity.?, eggy.Transform);
     }
 
@@ -33,8 +42,8 @@ const Hud = struct {
         if (ui.button("Count UI click")) self.clicks += 1;
         _ = ui.textInput("UI text", &self.text, "Space here must not reach gameplay");
         ui.label("UI clicks: {d}", .{self.clicks});
-        ui.label("Gameplay space presses: {d}", .{self.gameplay_presses});
-        ui.muted("WASD moves the cube when the UI does not hold keyboard focus.");
+        ui.label("Gameplay jump presses: {d}", .{self.gameplay_presses});
+        ui.muted("Mapped keys or a controller move the cube outside UI keyboard focus.");
     }
 
     pub const editor_panels = [_]eggy.plugins.EditorPanel{.{ .key = "api-tools", .title = "API Tools" }};
@@ -55,11 +64,12 @@ const Hud = struct {
 };
 
 const Custom = struct {
+    pub const input_maps = .{PlayerInput};
     clicks: u32 = 0,
     gameplay_presses: u32 = 0,
 
     pub fn update(self: *Custom, app: *eggy.App) !void {
-        if (app.input.pressed(.space)) self.gameplay_presses += 1;
+        if (try app.input.map(PlayerInput).pressed(.jump)) self.gameplay_presses += 1;
     }
 
     /// A minimal custom renderer: clear the owned target without creating a Weeoui overlay.

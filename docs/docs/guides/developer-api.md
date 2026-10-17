@@ -143,18 +143,17 @@ until playback exists. Animation references do not imply that `.eggmodel` contai
 skeleton or clips. These contracts do not add unsupported components to the Inspector.
 
 Working low-level graphics (`eggy.vit`), UI (`eggy.ui`), math (`eggy.math`), ECS
-(`eggy.ecs`), scene formats, and asset formats remain available directly. Controllers,
-touch gameplay input, streaming, and async resource loading are not implemented;
-keyboard/mouse polling, value timers, and gameplay time scaling are real implementations.
-Their contracts also fail explicitly: `Input.controllers`, `controllerState`, `rumble`,
-`touches`, `rebind`,
-`Resources.readAsync`/`cancel`, and `Scenes.stream`/`replace`. Rebinding takes a value
-of your game's controls enum, not an engine-owned action name.
+(`eggy.ecs`), scene formats, and asset formats remain available directly. SDL controllers,
+touch gameplay input, [named input maps](input-mappings.md), value timers, and gameplay
+time scaling are implemented. Streaming and async resource loading are not:
+`Resources.readAsync`/`cancel` and `Scenes.stream`/`replace` fail explicitly.
 
 | Surface | Desktop | Web |
 | --- | --- | --- |
 | Native ECS/math, keyboard/mouse, frame time, static graphics | Implemented | Same core APIs |
 | Value timers and gameplay time scaling | Implemented | Same allocation-free API |
+| Named input maps, priorities, modifiers, hold/tap/chord triggers | Implemented; project editor included | Shared runtime API |
+| Controllers, rumble, and touch contacts | SDL3; hardware-dependent | SDL3/browser-dependent |
 | Synchronous project/packaged resource and scene providers | Implemented | Default provider unavailable |
 | Weeoui game UI and custom draw hooks | Implemented | Shared runtime API; no editor import |
 | Editor context, panels, commands, actions | Desktop only | Not run or linked |
@@ -176,6 +175,7 @@ that is a build limitation, not an implementation of browser resource loading.
 | `editorUi(self, ui)` | `editorUi(self, editor, ui) !void` |
 | `editorPanelUi(self, panel, ui)` | `editorPanelUi(self, panel, editor, ui) !void` |
 | Custom cache loader returning `?Model`/`?Texture` | Return an error union; author resource access uses the C-safe bridge |
+| Manually feeding `Input.handle(event)` | `try Input.handle(event)`; device/host failures are explicit |
 
 Rebuild the editor and game library together after updating the engine. Their ABI is
 checked, not mixed across revisions. Native World/query APIs, transforms, simple polling,

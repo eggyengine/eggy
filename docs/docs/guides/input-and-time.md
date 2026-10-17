@@ -98,15 +98,33 @@ loading. See [Timers](timers.md) for a complete example.
 
 ## Controllers, touch, and rebinding
 
-These are public contracts, not implemented input backends:
+SDL3 supplies controller hotplug, button/axis snapshots, rumble, and touch contacts.
+The `controller_support`, `touch_support`, and `rebinding_support` queries are `.available`.
+Hardware availability is separate: zero connected controllers or contacts is ordinary absence.
 
-| Contract | Support query |
-| --- | --- |
-| `controllers`, `controllerState`, `rumble` | `eggy.input.controller_support` |
-| `touches` | `eggy.input.touch_support` |
-| `rebind` | `eggy.input.rebinding_support` |
+```zig
+var controllers: [8]eggy.input.Controller = undefined;
+for (try app.input.controllers(&controllers)) |controller| {
+    const state = try app.input.controllerState(controller);
+    if (state.buttons_pressed.contains(.south)) jump();
+}
+```
 
-Each query is `.not_implemented`; each operation returns `error.NotImplemented`.
-Controller/touch enumeration does not return an empty successful list. Rebinding accepts
-a game-owned enum value and a typed `Binding`, not a string action asset.
+Enumeration copies into caller storage; `BufferTooSmall` never silently truncates. Query
+`controllerCount` or `touchCount` when sizing an allocated buffer. A disconnected controller
+returns `ControllerDisconnected`. Controller IDs are session-local, not save-file identities.
+Sticks use -1..1 with right/down positive; triggers use 0..1. Raw snapshots have no dead zone.
+`rumble(controller, low, high, duration_s)` takes finite strengths in 0..1 and seconds;
+unsupported hardware returns `UnsupportedDeviceFeature`. Zero strength/duration stops rumble.
+
+`touches(buffer)` returns stable contact IDs, logical `position_points`/`delta_points`,
+pressure, and `.began`, `.stationary`, `.moved`, `.ended`, or `.cancelled` phases.
+Ended/cancelled contacts remain until the frame ends, including a down/up between updates.
+Editor contacts are Scene-local. The default game UI consumes contacts on its controls;
+SDL's synthetic mouse events do not create duplicate gameplay actions.
+
+For gameplay, prefer [Input mappings](input-mappings.md): name controls such as `jump`,
+`move`, and `look`, then bind them to keys, mouse, or controllers. Developer edits in
+**Edit > Input Mappings** persist in the project's `controls.zon` and ship in the built runtime.
+
 Timers and scaling do not introduce or modify a fixed-step/physics scheduler.

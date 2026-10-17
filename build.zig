@@ -291,6 +291,13 @@ fn addPreferenceFiles(b: *std.Build, project_source: []const u8) std.Build.LazyP
         }
     } else |_| {}
     source.appendSlice(b.allocator, "};\n") catch @panic("OOM");
+    if (b.build_root.handle.access(io, @import("src/core/project.zig").controls_file, .{})) {
+        _ = files.addCopyFile(b.path(@import("src/core/project.zig").controls_file), "controls.zon");
+        source.appendSlice(b.allocator, "pub const input_bindings = @embedFile(\"controls.zon\");\n") catch @panic("OOM");
+    } else |err| switch (err) {
+        error.FileNotFound => {},
+        else => std.debug.panic("cannot read controls.zon: {t}", .{err}),
+    }
     if (b.build_root.handle.access(io, ".eggy/plugins.zon", .{})) {
         _ = files.addCopyFile(b.path(".eggy/plugins.zon"), "plugins.zon");
         source.appendSlice(b.allocator, "pub const plugin_registry = @embedFile(\"plugins.zon\");\n") catch @panic("OOM");

@@ -6,7 +6,8 @@ const sdl3 = sdl_adapter.sdl;
 const Graphics = @import("graphics.zig").Graphics;
 const clutch = @import("clutch");
 const preferences_zig = @import("preferences.zig");
-const Input = @import("input.zig").Input;
+const Input = @import("input/input.zig").Input;
+const InputBackend = @import("input/backend.zig").Backend;
 const Time = @import("time.zig").Time;
 const Resources = @import("resources/resources.zig").Resources;
 const Scenes = @import("scenes/scenes.zig").Scenes;
@@ -31,6 +32,7 @@ pub const App = struct {
     preference_values: preferences_zig.Store,
     /// The keyboard and mouse as they are this frame (see `eggy.Input`).
     input: Input = .{},
+    input_backend: ?*InputBackend = null,
     /// How long the last frame took, and how long the game has run (see `eggy.Time`).
     time: Time = .{},
     /// Installed by the executable before plugin initialization.
@@ -53,7 +55,7 @@ pub const App = struct {
     profiling: @import("profiling.zig").Profiling = .{},
 
     pub fn init(gpa: std.mem.Allocator, title: [:0]const u8) !App {
-        const init_flags = sdl3.InitFlags{ .video = true };
+        const init_flags = sdl3.InitFlags{ .video = true, .gamepad = true };
         try sdl3.init(init_flags);
         errdefer sdl3.quit(init_flags);
 
@@ -65,11 +67,13 @@ pub const App = struct {
             .hidden = builtin.os.tag == .windows,
         }));
         errdefer window.deinit();
+        const input_backend = try InputBackend.init(gpa);
+        errdefer input_backend.deinit();
         var graphics = try Graphics.init(gpa, window);
         errdefer graphics.deinit();
         if (builtin.os.tag == .windows) try window.window.show();
 
-        return .{ .window = window, .init_flags = init_flags, .graphics = graphics, .world = .init(gpa), .preference_values = .init(gpa) };
+        return .{ .window = window, .init_flags = init_flags, .graphics = graphics, .world = .init(gpa), .preference_values = .init(gpa), .input_backend = input_backend, .input = .{ .backend = input_backend.state.interface() } };
     }
 
     /// Run the world's PreDeinit, Deinit and PostDeinit stages, then free everything.
@@ -78,6 +82,7 @@ pub const App = struct {
         self.clearGameUi();
         if (self.instances) |*instances| instances.deinit();
         self.world.deinit();
+        if (self.input_backend) |backend| backend.deinit();
         self.preference_values.deinit();
         self.graphics.deinit();
         self.window.deinit();
@@ -141,6 +146,8 @@ pub const App = struct {
         self.world.deinit();
         self.world = .init(allocator);
         self.time.invalidateTimers();
+        self.input.cancel();
+        if (self.input_backend) |backend| backend.state.resetRun();
     }
 
     fn stopWorld(self: *App) void {
@@ -163,6 +170,15 @@ pub const App = struct {
         try self.world.insertResource(self.time);
         inline for (.{ .PreUpdate, .Update, .PostUpdate }) |stage| try self.world.runStage(stage);
         self.world.tick();
+    }
+
+    /// Host device bookkeeping, before UI/gameplay routing. Never call SDL from the game DLL.
+    pub fn deviceEvent(self: *App, value: sdl3.events.Event) !void {
+        if (self.input_backend) |backend| try backend.event(value);
+    }
+    /// Advance input triggers once before game hooks/systems, independent of gameplay scaling.
+    pub fn advanceInput(self: *App) !void {
+        if (self.input_backend) |backend| try backend.state.advance(self.time.unscaled_delta_s);
     }
 
     /// Window lifecycle every program shares: quit requests and closing the main window end the

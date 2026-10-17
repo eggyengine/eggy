@@ -33,6 +33,11 @@
 //!
 //!     pub const components = .{ Spin, Health };
 //!
+//! Named input maps register before `init`, under the published plugin key and map key:
+//!
+//!     pub const input_maps = .{PlayerInput}; // an eggy.input.Map
+//!     // in a hook: try app.input.map(PlayerInput).pressed(.jump)
+//!
 //! Eggy's own components (`builtin_components`: `Transform`, `Mesh`, which the scene draws, and
 //! `Camera`, which the runtime looks through, and `SceneInstance`, a scene file made under an
 //! entity) are listed first in every project, owned by `eggy`.
@@ -189,6 +194,11 @@ pub fn Set(comptime types: anytype, comptime keys: []const [:0]const u8) type {
             // Their preferences first (even those off, which keep their values), so each `init`
             // can read them.
             inline for (list, keys) |T, key| if (@hasDecl(T, "Preferences")) try app.preference_values.register(T.Preferences, key);
+            inline for (list, keys, 0..) |T, key, i| if (enabled[i] and @hasDecl(T, "input_maps")) {
+                inline for (T.input_maps) |Mapping| {
+                    try app.input.registerMap(Mapping, comptime std.fmt.comptimePrint("{s}/{s}", .{ key, Mapping.key }));
+                }
+            };
             var self: Self = undefined;
             self.enabled = enabled;
             inline for (list, 0..) |T, i| if (enabled[i]) {

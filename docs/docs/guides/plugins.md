@@ -50,6 +50,7 @@ pub const Plugin = struct {
 | `editor_commands`, `editorCommand` | Commands in the editor's View menu. See [Editor tools](editor-tools.md). |
 | `Preferences` | Settings people change in the editor's Preferences window. See [Preferences](#preferences). |
 | `components` | ECS components the editor's Hierarchy and Inspector show, add and edit. See [Components](#components). |
+| `input_maps` | Typed input maps, registered before `init` for enabled plugins. See [Input mappings](input-mappings.md). |
 
 The editor-only hooks never run in the runtime, so the runtime pays nothing for them.
 They receive a borrowed `eggy.editor.Context`: use `editor.app` for the App and its services

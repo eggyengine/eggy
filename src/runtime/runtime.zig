@@ -46,6 +46,7 @@ pub fn Runtime(comptime project: type) type {
             if (@hasDecl(project, "metadata_text")) std.mem.doNotOptimizeAway(&project.metadata_text);
             var app = try eggy.App.init(gpa, project.name);
             errdefer app.deinit();
+            if (@hasDecl(project, "input_bindings")) try app.input_backend.?.state.readOverrides(project.input_bindings);
             // Model and image files, and scenes, as packaging made them.
             const data: ?*packaged_assets.Data = if (web) null else packaged_assets.Data.open(gpa) catch |err| blk: {
                 std.log.warn("the game's data folder can't be read ({t}): it starts with no scene, models or textures", .{err});
@@ -115,6 +116,7 @@ pub fn Runtime(comptime project: type) type {
             // Scene instances' entities, from their files, for any made or changed.
             if (self.data) |packaged| self.app.sceneInstances().sync(packaged.copies(), &self.app.world, eggy.scene.registryAccess(Plugins.Components), null);
             self.app.time.tick(sdl3.timer.getNanosecondsSinceInit());
+            try self.app.advanceInput();
             try self.plugins.update(&self.app);
             try self.app.updateWorld();
             self.app.input.endFrame();
@@ -156,14 +158,19 @@ pub fn Runtime(comptime project: type) type {
         }
 
         pub fn event(self: *Self, curr_event: sdl3.events.Event) !sdl3.AppResult {
+            try self.app.deviceEvent(curr_event);
             const lifecycle = try self.app.event(curr_event);
             if (lifecycle != .run) return lifecycle;
+            if (eggy.game_ui.syntheticTouchMouse(curr_event)) return .run;
+            const width, const height = try self.app.window.window.getSize();
+            self.app.input.viewport_points = .{ @floatFromInt(width), @floatFromInt(height) };
+            if (eggy.game_ui.isTouchInput(curr_event) and (width == 0 or height == 0)) return .run;
             const consumed = if (self.app.ui_layer) |layer| layer.handle(curr_event, false) else false;
             if (eggy.game_ui.isInput(curr_event) and (consumed or try self.plugins.uiEvent(&self.app, curr_event))) {
                 self.app.input.suppress(curr_event);
                 return .run;
             }
-            self.app.input.handle(curr_event);
+            try self.app.input.handle(curr_event);
             try self.plugins.event(&self.app, curr_event);
             return .run;
         }

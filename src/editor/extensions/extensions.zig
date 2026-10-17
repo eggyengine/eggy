@@ -150,9 +150,16 @@ fn apply(host: anytype, request: api.Request, response: *api.Response) !void {
             host.history.setBaseline(baseline);
         },
         .cancel_edit => host.extension_state.deinit(host.gpa),
-        .begin_group => try host.history.beginGroup(text),
-        .commit_group => try host.history.commitGroup(),
+        .begin_group => {
+            if (host.input_settings) |controls| try controls.recordPending(&host.history);
+            try host.history.beginGroup(text);
+        },
+        .commit_group => {
+            if (host.input_settings) |controls| try controls.recordPending(&host.history);
+            try host.history.commitGroup();
+        },
         .cancel_group => {
+            if (host.input_settings) |controls| try controls.recordPending(&host.history);
             try host.history.cancelGroup(host, @TypeOf(host.*).carry);
             host.history.setBaseline(try snapshot(host));
         },

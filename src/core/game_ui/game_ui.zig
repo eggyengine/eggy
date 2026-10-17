@@ -6,6 +6,8 @@ const adapter = @import("weeoui_sdl3");
 const renderer = @import("weeoui_vitellus");
 const sdl = @import("vitellus_sdl3").sdl;
 const hit_test = @import("../ui_hit_test.zig");
+const input_types = @import("../input/types.zig");
+const input_state = @import("../input/state.zig");
 
 /// Borrowed only during `draw`. Starts outside a render pass, with the target in
 /// color-attachment state. Leave it in that state, outside a pass; never submit/present it.
@@ -42,6 +44,9 @@ pub const Overlay = struct {
     pointer_active: bool = false,
     captured_keys: std.StaticBitSet(512) = .initEmpty(),
     keyboard_owned: bool = false,
+    touch_owners: std.AutoHashMapUnmanaged(input_types.TouchKey, void) = .empty,
+    primary_touch: ?input_types.TouchKey = null,
+    finger_lifted: bool = false,
 
     pub fn init(gpa: std.mem.Allocator, device: vit.Device, queue: vit.Queue, color_format: vit.Format) !Overlay {
         var context = try ui.Context.init(gpa);
@@ -53,6 +58,7 @@ pub const Overlay = struct {
     pub fn deinit(self: *Overlay) void {
         self.queue.waitIdle() catch |err| std.log.err("cannot finish game UI GPU work: {t}", .{err});
         self.renderer.deinit();
+        self.touch_owners.deinit(self.gpa);
         self.context.deinit();
         if (self.font_bytes) |bytes| self.gpa.free(bytes);
     }
@@ -104,12 +110,19 @@ pub const Overlay = struct {
         try draw.beginPass();
         self.renderer.draw(draw.cmd, draw.extent_px, 0, vertices.len);
         draw.endPass();
+        if (self.finger_lifted) {
+            self.context.handle(.{ .pointer_move = .init(-1, -1) });
+            self.pointer_active = false;
+            self.finger_lifted = false;
+        }
         return gained_keyboard;
     }
 
     /// Route an already viewport-local SDL event. Standalone UIs use the SDL accessibility
     /// adapter; embedded UIs leave the host window's accessibility adapter in charge.
     pub fn handle(self: *Overlay, event: sdl.events.Event, embedded: bool) bool {
+        if (syntheticTouchMouse(event)) return true;
+        if (isTouchInput(event)) return self.handleTouch(event);
         switch (event) {
             .mouse_motion, .mouse_button_down, .mouse_button_up, .mouse_wheel => self.pointer_active = true,
             .window_mouse_leave => self.pointer_active = false,
@@ -146,10 +159,59 @@ pub const Overlay = struct {
         return consumed;
     }
 
+    fn handleTouch(self: *Overlay, event: sdl.events.Event) bool {
+        const finger = switch (event) {
+            .finger_down, .finger_up, .finger_motion, .finger_canceled => |finger| finger,
+            else => unreachable,
+        };
+        const key = input_state.touchKey(finger);
+        const point = ui.Vec2.init(self.context.viewport.x + finger.x * self.context.viewport.w, self.context.viewport.y + finger.y * self.context.viewport.h);
+        if (event == .finger_down) {
+            const root = self.context.last_root;
+            const over_ui = self.context.open_popup != 0 or (if (root) |tree| hit_test.controlAt(tree, point.x, point.y) != 0 or scrollableAt(tree, point.x, point.y) else false);
+            if (!over_ui) {
+                if (self.primary_touch == null) {
+                    self.context.focus = 0;
+                    self.context.wants_text = false;
+                }
+                return false;
+            }
+            self.touch_owners.put(self.gpa, key, {}) catch |err| {
+                self.context.err = err;
+                return true;
+            };
+            if (self.primary_touch == null) {
+                self.primary_touch = key;
+                self.pointer_active = true;
+                self.context.handle(.{ .pointer_down = .{ .position = point, .button = .left, .clicks = 1 } });
+            }
+            return true;
+        }
+        if (!self.touch_owners.contains(key)) return false;
+        if (self.primary_touch) |primary| if (std.meta.eql(primary, key)) {
+            if (event == .finger_motion) {
+                self.context.handle(.{ .pointer_move = point });
+            } else {
+                if (event == .finger_canceled) {
+                    self.context.press = null;
+                    self.context.active = 0;
+                }
+                self.context.handle(.{ .pointer_up = .{ .position = point, .button = .left } });
+                self.primary_touch = null;
+                self.finger_lifted = true;
+            }
+        };
+        if (event == .finger_up or event == .finger_canceled) _ = self.touch_owners.remove(key);
+        return true;
+    }
+
     /// Clear transient capture without retaining references into a previous game frame.
     pub fn cancel(self: *Overlay) void {
         self.pointer_active = false;
         self.keyboard_owned = false;
+        self.touch_owners.clearRetainingCapacity();
+        self.primary_touch = null;
+        self.finger_lifted = false;
         self.context.focus = 0;
         self.context.active = 0;
         self.context.press = null;
@@ -206,12 +268,24 @@ fn scrollableAt(element: *const ui.Layout.Element, x: f32, y: f32) bool {
 pub fn isInput(event: sdl.events.Event) bool {
     return switch (event) {
         .key_down, .key_up, .text_input, .text_editing, .mouse_motion, .mouse_button_down, .mouse_button_up, .mouse_wheel => true,
+        .gamepad_axis_motion, .gamepad_button_down, .gamepad_button_up, .finger_down, .finger_up, .finger_motion, .finger_canceled => true,
         else => false,
     };
 }
 
+pub fn isControllerInput(event: sdl.events.Event) bool {
+    return event == .gamepad_axis_motion or event == .gamepad_button_down or event == .gamepad_button_up;
+}
+pub fn isTouchInput(event: sdl.events.Event) bool {
+    return event == .finger_down or event == .finger_up or event == .finger_motion or event == .finger_canceled;
+}
+/// Game touch input uses real contacts, not a second mouse action synthesized by SDL.
+pub fn syntheticTouchMouse(event: sdl.events.Event) bool {
+    return adapter.fromTouch(event);
+}
+
 /// Translate window logical coordinates to game-viewport logical coordinates.
-pub fn localEvent(event: sdl.events.Event, viewport: ui.Rect) sdl.events.Event {
+pub fn localEvent(event: sdl.events.Event, viewport: ui.Rect, window_points: [2]f32) sdl.events.Event {
     var result = event;
     switch (result) {
         .mouse_motion => |*e| {
@@ -225,6 +299,12 @@ pub fn localEvent(event: sdl.events.Event, viewport: ui.Rect) sdl.events.Event {
         .mouse_wheel => |*e| {
             e.x -= viewport.x;
             e.y -= viewport.y;
+        },
+        .finger_down, .finger_up, .finger_motion, .finger_canceled => |*e| {
+            e.x = (e.x * window_points[0] - viewport.x) / viewport.w;
+            e.y = (e.y * window_points[1] - viewport.y) / viewport.h;
+            e.dx *= window_points[0] / viewport.w;
+            e.dy *= window_points[1] / viewport.h;
         },
         else => {},
     }
@@ -268,4 +348,34 @@ test "viewport pixels use the actual window scale" {
     const pixels = pixelRect(.{ .x = 10, .y = 20, .w = 100, .h = 50 }, .{ .x = 0, .y = 0, .w = 400, .h = 300 }, .{ .width = 800, .height = 600 });
     try std.testing.expectEqual(ui.Rect{ .x = 20, .y = 40, .w = 200, .h = 100 }, pixels);
     std.testing.refAllDecls(Overlay);
+}
+
+test "UI owns touch drags but leaves other contacts to gameplay" {
+    const gpa = std.testing.allocator;
+    var overlay = Overlay{
+        .gpa = gpa,
+        .queue = undefined,
+        .device = undefined,
+        .color_format = undefined,
+        .renderer = undefined,
+        .context = try ui.Context.init(gpa),
+    };
+    defer overlay.context.deinit();
+    defer overlay.touch_owners.deinit(gpa);
+    overlay.context.newFrame(.{ .x = 0, .y = 0, .w = 400, .h = 300 });
+    _ = overlay.context.button("Pause");
+    _ = try overlay.context.render();
+    var finger = sdl.events.TouchFinger{ .common = undefined, .id = .{ .value = 1 }, .finger_id = .{ .value = 2 }, .x = 0.1, .y = 0.1, .dx = 0, .dy = 0, .pressure = 1 };
+    try std.testing.expect(overlay.handle(.{ .finger_down = finger }, true));
+    finger.x = 2;
+    try std.testing.expect(overlay.handle(.{ .finger_motion = finger }, true));
+    var other = finger;
+    other.finger_id.value = 3;
+    try std.testing.expect(!overlay.handle(.{ .finger_down = other }, true));
+    try std.testing.expect(overlay.handle(.{ .finger_up = finger }, true));
+    try std.testing.expect(overlay.primary_touch == null);
+    try std.testing.expectEqual(@as(usize, 0), overlay.touch_owners.count());
+    const local = localEvent(.{ .finger_motion = .{ .common = undefined, .id = .{ .value = 1 }, .finger_id = .{ .value = 2 }, .x = 0.5, .y = 0.5, .dx = 0.1, .dy = 0.1, .pressure = 1 } }, .{ .x = 100, .y = 50, .w = 300, .h = 200 }, .{ 500, 300 });
+    try std.testing.expectApproxEqAbs(@as(f32, 0.5), local.finger_motion.x, 1e-6);
+    try std.testing.expectApproxEqAbs(@as(f32, 0.5), local.finger_motion.y, 1e-6);
 }

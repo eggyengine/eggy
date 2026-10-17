@@ -62,15 +62,6 @@ test "every missing backend operation returns NotImplemented" {
     try expect(error.NotImplemented, profiling.end(@enumFromInt(0)));
     try expect(error.NotImplemented, profiling.counter("entities", 1));
 
-    var input = @import("input.zig").Input{};
-    var controllers: [4]@import("input.zig").Controller = undefined;
-    var touches: [4]@import("input.zig").Touch = undefined;
-    try expect(error.NotImplemented, input.controllers(&controllers));
-    try expect(error.NotImplemented, input.controllerState(@enumFromInt(0)));
-    try expect(error.NotImplemented, input.rumble(@enumFromInt(0), 1, 1, 0.5));
-    try expect(error.NotImplemented, input.touches(&touches));
-    const Control = enum { jump };
-    try expect(error.NotImplemented, input.rebind(Control.jump, .{ .key = .space }));
     const resources = @import("resources/resources.zig").Resources{};
     try expect(error.NotImplemented, resources.readAsync(std.testing.allocator, @import("refs.zig").AssetRef(.text).init("notes.txt")));
     try expect(error.NotImplemented, resources.cancel(@enumFromInt(0)));
