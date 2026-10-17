@@ -57,6 +57,7 @@ pub const Resources = struct {
             if (refs.refKind(@TypeOf(file)) != .asset) @compileError("read expects an AssetRef");
         }
         if (file.path().len == 0) return error.UnsetAsset;
+        if (assets.manifest.Packaged.of(file.path()) != .copy) return error.ConvertedResource;
         const provider = self.provider orelse return unavailable();
         var bytes: Bytes = undefined;
         try check(provider.read(provider.context, &gpa, file.path().ptr, file.path().len, &bytes));
@@ -75,6 +76,7 @@ pub const Resources = struct {
     /// Decode caller-owned pixels; call `Texture.deinit(gpa)` afterwards.
     pub fn loadImage(self: Resources, gpa: std.mem.Allocator, file: refs.AssetRef(.image)) !assets.Texture {
         if (file.len == 0) return error.UnsetAsset;
+        if (!assets.Kind.isTexture(file.path())) return error.UnsupportedImageFormat;
         const provider = self.provider orelse return unavailable();
         var result: assets.Texture = undefined;
         try check(provider.image(provider.context, &gpa, file.path().ptr, file.path().len, &result));
@@ -156,4 +158,6 @@ test "C-safe resource reads preserve stable failures and caller ownership" {
     try std.testing.expectError(error.NoResourceProvider, (Resources{}).read(std.testing.allocator, refs.AssetRef(.text).init("notes.txt")));
     try std.testing.expectError(error.NotPackaged, resources.loadModel(std.testing.allocator, .init("ship.glb")));
     try std.testing.expectError(error.OutOfMemory, resources.loadImage(std.testing.allocator, .init("ship.png")));
+    try std.testing.expectError(error.ConvertedResource, resources.read(std.testing.allocator, refs.AssetRef(.image).init("ship.png")));
+    try std.testing.expectError(error.UnsupportedImageFormat, resources.loadImage(std.testing.allocator, .init("ship.svg")));
 }

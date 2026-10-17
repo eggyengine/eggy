@@ -424,6 +424,8 @@ fn addEngine(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.buil
     engine.addImport("weeoui", weeoui.module("weeoui"));
     engine.addImport("fatal_dialog", fatal_dialog);
     const assets = models.assetsModule(b, target, optimize);
+    // Tools can import the formats without linking App, SDL, the renderer, or editor code.
+    b.modules.put(b.allocator, "eggy_assets", assets) catch @panic("OOM");
     engine.addImport("eggy_assets", assets);
     // Weeoui's renderer compiled against Eggy's own Vitellus (its -Dvitellus would fetch a second copy).
     const weeoui_vitellus = b.createModule(.{
