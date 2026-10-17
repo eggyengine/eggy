@@ -22,6 +22,9 @@ pub const Plugin = struct {
     pub fn deinit(self: *Plugin) void { ... }
     pub fn event(self: *Plugin, app: *eggy.App, event: eggy.Event) !void { ... }
     pub fn update(self: *Plugin, app: *eggy.App) !void { ... }
+    pub fn gameUi(self: *Plugin, app: *eggy.App, ui: *eggy.ui.Context) !void { ... }
+    pub fn draw(self: *Plugin, app: *eggy.App, target: eggy.DrawContext) !void { ... }
+    pub fn uiEvent(self: *Plugin, app: *eggy.App, event: eggy.Event) !bool { ... }
     pub fn editorUpdate(self: *Plugin, editor: *eggy.editor.Context) !void { ... }
     pub fn editorUi(self: *Plugin, editor: *eggy.editor.Context, ui: *eggy.ui.Context) !void { ... }
 
@@ -36,8 +39,11 @@ pub const Plugin = struct {
 | --- | --- |
 | `init` | Once, at start-up. Without it, the plugin starts as `.{}`. |
 | `deinit` | Once, at shutdown. |
-| `event` | For every SDL event: input, window changes and so on. |
+| `event` | Gameplay input not consumed by UI, plus platform/window events. |
 | `update` | Once per frame, before the frame is drawn. In the editor, only while playing. |
+| `gameUi` | Build Weeoui game content after scene/custom drawing; also in editor Play, including pause. |
+| `draw` | Record custom rendering into an engine-owned target, outside a render pass. |
+| `uiEvent` | Custom UI input before gameplay; return true to consume it. |
 | `editorUpdate` | Once per frame in the editor while not playing, for editor tools. |
 | `editorUi` | Each frame in the editor, to add to the Inspector panel. |
 | `editor_panels`, `editorPanelUi` | In the editor, to add dock panels of your own. See [Editor panels](#editor-panels). |
@@ -48,6 +54,7 @@ pub const Plugin = struct {
 The editor-only hooks never run in the runtime, so the runtime pays nothing for them.
 They receive a borrowed `eggy.editor.Context`: use `editor.app` for the App and its services
 for selection, undoable edits, project settings, scenes, and files. Do not retain the context.
+See [Game UI](game-ui.md) for styling, fonts, custom renderers, and input capture.
 
 ### Order
 

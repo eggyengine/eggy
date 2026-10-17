@@ -84,8 +84,13 @@ const root = try app.scenes().instantiate(
 ```
 
 `loadModel` likewise returns caller-owned CPU data, not a borrowed GPU cache entry.
+Use these typed loaders for models and converted images: raw `read` returns
+`ConvertedResource` instead of handing you different formats in editor and runtime.
 Loading failures return errors; importer diagnostics supply more detail. Web resource
 reads are unsupported until a browser resource provider is implemented.
+Providers use C-callable bridges and stable status codes across the editor/game-library
+boundary. `FileNotFound`, `NotPackaged`, `InvalidAssetData`, `InvalidPath`, and
+`OutOfMemory` remain distinguishable. Other failures are logged and return `AssetLoadFailed`.
 
 Instantiation creates a scene-instance root and its immediate entities before returning.
 The world owns them. Nested instances populate at the normal scene-sync point. Scene
@@ -139,6 +144,39 @@ Working low-level graphics (`eggy.vit`), UI (`eggy.ui`), math (`eggy.math`), ECS
 (`eggy.ecs`), scene formats, and asset formats remain available directly. Controllers,
 touch gameplay input, streaming, async resource loading, and advanced timing are not
 implemented; keyboard/mouse polling and existing frame time are not placeholders.
+Their contracts also fail explicitly: `Input.controllers`, `controllerState`, `rumble`,
+`touches`, `rebind`, `Time.startTimer`, `cancelTimer`, `setScale`,
+`Resources.readAsync`/`cancel`, and `Scenes.stream`/`replace`. Rebinding takes a value
+of your game's controls enum, not an engine-owned action name.
+
+| Surface | Desktop | Web |
+| --- | --- | --- |
+| Native ECS/math, keyboard/mouse, frame time, static graphics | Implemented | Same core APIs |
+| Synchronous project/packaged resource and scene providers | Implemented | Default provider unavailable |
+| Weeoui game UI and custom draw hooks | Implemented | Shared runtime API; no editor import |
+| Editor context, panels, commands, actions | Desktop only | Not run or linked |
+| Missing-backend contracts listed above | `NotImplemented` | `NotImplemented` |
+
+Game UI styling/fonts and custom rendering are described in [Game UI](game-ui.md).
+For focused examples, see [Input and time](input-and-time.md),
+[Assets and scenes](assets-and-scenes.md), [Rendering and transforms](rendering-and-transforms.md),
+[Audio and animation](audio-and-animation.md), and [Project settings and builds](project-settings-and-builds.md).
+The current Zig 0.16 browser toolchain may reject its own Emscripten wait-status types;
+that is a build limitation, not an implementation of browser resource loading.
+
+## Migrating existing code
+
+| Older code | Current code |
+| --- | --- |
+| `AssetRef(kind).init(runtime_path)` | `try AssetRef(kind).parse(runtime_path)`; `init` is for literals |
+| `editorUpdate(self, app)` | `editorUpdate(self, editor)`; use `editor.app` |
+| `editorUi(self, ui)` | `editorUi(self, editor, ui) !void` |
+| `editorPanelUi(self, panel, ui)` | `editorPanelUi(self, panel, editor, ui) !void` |
+| Custom cache loader returning `?Model`/`?Texture` | Return an error union; author resource access uses the C-safe bridge |
+
+Rebuild the editor and game library together after updating the engine. Their ABI is
+checked, not mixed across revisions. Native World/query APIs, transforms, simple polling,
+preferences, `addGame`/`addPlugin`, and physics are not renamed or wrapped.
 
 ## Design references
 

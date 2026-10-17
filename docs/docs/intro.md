@@ -35,4 +35,7 @@ From your package's directory:
 | `zig build all` | Build both into `zig-out/bin/` without running them. |
 | `zig build test` | Run your tests. |
 
-The UI in the editor, and in your editor panels, is [Weeoui](https://eggyengine.github.io/weeoui/), an immediate-mode UI library for Zig.
+The editor, plugin panels, and optional game UI use [Weeoui](https://eggyengine.github.io/weeoui/),
+an immediate-mode UI library for Zig. Games can instead supply their own renderer. See
+[Developer API](guides/developer-api.md), [Game UI](guides/game-ui.md), and
+[Editor tools](guides/editor-tools.md).

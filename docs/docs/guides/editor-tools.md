@@ -39,6 +39,9 @@ marks the component changed, and records the scene in host-owned history. You do
 assign the component or call `markChanged`. Pointer-containing components cannot be
 snapshotted this way. List your component in the plugin's `components` so scenes can store
 it. A value that has no serialized scene change is rejected and restored.
+Fields are preflighted against the existing 4 KiB serialized-field and 16 KiB parse budgets;
+oversized/over-complex values fail before mutation rather than producing an incomplete undo.
+Undo restores serialized scene data, not arbitrary runtime-only world state.
 
 Scene/file mutations require editing mode, not Play. Selection is available in either mode.
 Errors propagate to the editor's Console without closing the editor.
@@ -90,6 +93,13 @@ Paths are project-relative except the source passed to `importFile`.
 `projectSettings(arena)` returns `eggy.project.Config`, with strings owned by your arena.
 `setDefaultScene(path)` changes the project's startup scene as an undoable setting.
 Plugin preference values remain available through `editor.app.preferences(Preferences)`.
+
+`requestBuild` and `requestReload` queue the existing Build/Reload workflow.
+`showExport`, `showNewProject`, and `showOpenProject` queue the corresponding editor
+window or picker. They run after your hook returns, so a project transition never unloads
+code that is still executing. A successful request means **queued**, not finished;
+progress, errors, and unsaved-change prompts appear through the normal editor UI.
+Only one lifecycle request may be pending, and one cannot be queued inside an action group.
 
 Custom importer, inspector, and scene-tool registration currently return
 `error.NotImplemented`. These contracts do not retain callbacks or pretend to register a
