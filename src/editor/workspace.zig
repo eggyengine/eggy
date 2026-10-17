@@ -57,6 +57,8 @@ pub const Outcome = union(enum) {
     open_project_linked,
     /// Help > DevTools (F12): open or close the DevTools window.
     toggle_devtools,
+    /// Help > About Eggy.
+    about,
     /// Edit > Preferences: open the Preferences window.
     preferences,
     input_mappings,
@@ -691,8 +693,7 @@ pub const Workspace = struct {
                 .undo => return .undo,
                 .redo => return .redo,
                 .reset_layout => self.resetLayout() catch |err| std.log.warn("cannot reset the layout: {t}", .{err}),
-                // ponytail: a stub until there is an About window.
-                .about => std.log.info("about: not implemented yet", .{}),
+                .about => return .about,
             },
         }
         return .handled;

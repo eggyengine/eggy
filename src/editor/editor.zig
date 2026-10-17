@@ -21,6 +21,7 @@ const BuildWindow = @import("build_window.zig").BuildWindow;
 const ExportWindow = @import("export_window.zig").ExportWindow;
 const ProjectSettingsWindow = @import("project_settings.zig").ProjectSettingsWindow;
 const DevtoolsWindow = @import("devtools_window.zig").DevtoolsWindow;
+const AboutWindow = @import("about_window.zig").AboutWindow;
 const window_placement = @import("window_placement.zig");
 const source_stamp = @import("projects/source_stamp.zig");
 const Console = @import("console.zig").Console;
@@ -162,6 +163,7 @@ pub fn Editor(comptime project: type) type {
         built_sources: source_stamp.Stamp = .{},
         /// Help > DevTools' window, while open.
         devtools_window: ?*DevtoolsWindow = null,
+        about_window: ?*AboutWindow = null,
         /// When the last frame started, for DevTools' Performance.
         frame_start_ns: u64 = 0,
         /// Whether to open the project's editor once `rebuild` is done, changed or not (Reload).
@@ -314,6 +316,7 @@ pub fn Editor(comptime project: type) type {
             if (self.project_flow) |flow| flow.close(&self.app.graphics);
             if (self.build_window) |window| window.close(&self.app.graphics);
             if (self.devtools_window) |window| window.close(&self.app.graphics);
+            if (self.about_window) |window| window.close(&self.app.graphics);
             if (self.preferences_window) |window| window.close(&self.app.graphics);
             if (self.export_window) |window| window.close(&self.app.graphics);
             if (self.settings_window) |window| window.close(&self.app.graphics);
@@ -539,6 +542,10 @@ pub fn Editor(comptime project: type) type {
             }
             if (self.input_mappings_window) |window| try window.update(&self.app.graphics, &self.ui, &self.app.input_backend.?.state);
             if (self.input_settings) |settings| try settings.recordPending(&self.history);
+            if (self.about_window) |window| if (!try window.update(&self.app.graphics, &self.ui)) {
+                window.close(&self.app.graphics);
+                self.about_window = null;
+            };
             // The Build progress window, if open.
             if (self.build_window) |window| if (try self.updateBuildWindow(window, frame_arena.allocator())) return .success;
 
@@ -1155,6 +1162,14 @@ pub fn Editor(comptime project: type) type {
 
         pub fn event(self: *Self, curr_event: sdl3.events.Event) !sdl3.AppResult {
             try self.app.deviceEvent(curr_event);
+            if (self.about_window) |window| {
+                if (window.closeRequested(curr_event)) {
+                    window.close(&self.app.graphics);
+                    self.about_window = null;
+                    return .run;
+                }
+                if (window.handle(curr_event)) return self.toolWindowTook(curr_event);
+            }
             if (self.input_mappings_window) |window| {
                 if (window.closeRequested(curr_event)) {
                     window.close(&self.app.graphics);
@@ -1336,6 +1351,12 @@ pub fn Editor(comptime project: type) type {
                 },
                 .upgrade_editor => if (self.upgrades.can_upgrade) try self.upgradeEditor() else self.upgrades.logUnavailable(.upgrade),
                 .toggle_devtools => self.toggleDevtools(),
+                .about => if (self.about_window == null) {
+                    self.about_window = AboutWindow.open(self.gpa, &self.app.graphics, self.ui.font) catch |err| blk: {
+                        std.log.err("cannot open About Eggy: {t}", .{err});
+                        break :blk null;
+                    };
+                },
                 .save => self.saveScene(),
                 .project_settings => if (self.settings_window == null) if (self.project) |opened| {
                     self.settings_window = ProjectSettingsWindow.open(self.gpa, &self.app.graphics, self.ui.font, opened.dir) catch |err| blk: {
@@ -2128,6 +2149,7 @@ test {
     _ = @import("export_window.zig");
     _ = @import("project_settings.zig");
     _ = @import("devtools_window.zig");
+    _ = @import("about_window.zig");
     _ = eggy.ui_hit_test;
     _ = @import("scene_file.zig");
     _ = @import("layout_file.zig");
