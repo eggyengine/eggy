@@ -9,6 +9,19 @@ Editor hooks receive a borrowed `*eggy.editor.Context`. It is available only dur
 hook: do not store it, App pointers, or live component pointers for a later call.
 `editor.app` is the same App that game hooks receive.
 
+## Scene navigation
+
+The Scene toolbar's touchpad button switches between **Mouse** (the default) and
+**Touchpad** navigation. In Touchpad mode, two-finger scrolling orbits the focus point
+on both axes; hold **Shift** to pan, or **Ctrl** to zoom. Native pinch gestures zoom
+where the desktop exposes them through SDL. Fractional scroll motion and momentum are
+preserved. Gestures start only over the Scene, not its floating toolbar or another panel.
+
+Mouse mode keeps wheel zoom, right-drag look and WASD flight, Alt+left-drag orbit,
+and middle-drag pan. Those button/drag controls also work in Touchpad mode.
+SDL does not expose a native twist-rotation event; use horizontal two-finger scrolling
+to rotate around the scene. Desktop-reserved gestures remain controlled by the OS.
+
 ## Edit the selected entity
 
 Use a typed `Action(T)` instead of applying a change and separately constructing its undo:

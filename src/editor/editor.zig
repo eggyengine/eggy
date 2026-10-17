@@ -1284,6 +1284,7 @@ pub fn Editor(comptime project: type) type {
             // The Scene panel's camera takes presses, drags and wheels over it; F frames the
             // selection, and Delete deletes it.
             if (!game_has_scene) if (self.scene_view.handleFirst(curr_event, self.sceneRectFor(slot, curr_event))) {
+                self.scene_view.camera.cancelNavigation();
                 if (curr_event == .mouse_button_down) self.unfocusOnPress(slot, .{ .x = curr_event.mouse_button_down.x, .y = curr_event.mouse_button_down.y }, false);
                 return .run;
             };
@@ -2084,7 +2085,7 @@ pub fn Editor(comptime project: type) type {
         /// press or wheel on a workspace control floating over it, which takes it instead.
         fn sceneRectFor(self: *const Self, slot: Slot, curr_event: sdl3.events.Event) ?ui.Rect {
             const on_control = switch (curr_event) {
-                .mouse_button_down, .mouse_wheel => if (pointerOf(curr_event)) |at| self.workspace.hasControlAt(slot, at.x, at.y) else false,
+                .mouse_button_down, .mouse_wheel, .pinch_begin => if (pointerOf(curr_event)) |at| self.workspace.hasControlAt(slot, at.x, at.y) else false,
                 else => false,
             };
             return if (on_control) null else self.sceneRect(slot);
@@ -2185,6 +2186,10 @@ test {
     _ = @import("scene_view/scene_view.zig");
     _ = @import("save_prompt.zig");
     _ = @import("assets/assets.zig");
+                .pinch_begin, .pinch_update, .pinch_end => blk: {
+                    const mouse = sdl3.mouse.getState();
+                    break :blk .{ .x = mouse[1], .y = mouse[2] };
+                },
     _ = @import("assets/listing.zig");
     _ = @import("assets/icons.zig");
     _ = @import("assets/file_ops.zig");

@@ -183,7 +183,7 @@ pub const SceneView = struct {
 
     /// Whether the panel's controls are moving a camera now, which history waits out.
     pub fn steeringNow(self: *const SceneView) bool {
-        return self.drag != null or self.camera.drag != null;
+        return self.drag != null or self.camera.drag != null or self.camera.pinch != null;
     }
 
     /// A toolbar button was pressed.
@@ -197,14 +197,18 @@ pub const SceneView = struct {
             .space => self.tools.space = if (self.tools.space == .world) .local else .world,
             .snap => self.tools.snapping = !self.tools.snapping,
             .game_camera => self.tools.through_game_camera = !self.tools.through_game_camera,
+            .touchpad => {
+                self.tools.navigation = if (self.tools.navigation == .mouse) .touchpad else .mouse;
+                self.camera.cancelNavigation();
+            },
             .fold => self.tools.folded = !self.tools.folded,
         }
     }
 
-    /// Before the workspace sees `event`: the camera's drags and wheel over the panel at
+    /// Before the workspace sees `event`: the camera's drags, scroll and pinch over the panel at
     /// `scene`, and W, E, R and T over it. Returns whether it was used.
     pub fn handleFirst(self: *SceneView, event: sdl3.events.Event, scene: ?ui.Rect) bool {
-        if (self.camera.handle(event, scene)) return true;
+        if (self.camera.handle(event, scene, self.tools.navigation)) return true;
         const key_down = switch (event) {
             .key_down => |key_down| key_down,
             else => return false,
@@ -374,6 +378,12 @@ test "the toolbar picks the gizmo and its axes, and folds away" {
     view.press(.game_camera);
     view.press(.game_camera);
     try std.testing.expect(!view.tools.through_game_camera);
+    view.press(.touchpad);
+    try std.testing.expectEqual(@import("scene_camera.zig").Navigation.touchpad, view.tools.navigation);
+    view.camera.pinch = .{ .window_id = null };
+    view.press(.touchpad);
+    try std.testing.expectEqual(@import("scene_camera.zig").Navigation.mouse, view.tools.navigation);
+    try std.testing.expect(!view.steeringNow());
     view.press(.fold);
     try std.testing.expect(view.tools.folded);
 }

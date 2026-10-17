@@ -1,13 +1,14 @@
 //! The Scene panel's floating toolbar: icon buttons for the gizmo (Move, Rotate, Scale,
 //! Universal), whether it works in the world's axes or the entity's own, snapping, and looking
-//! through the game's camera. Dragged by its grip it moves anywhere inside the panel, and its
-//! last button folds it down to the grip.
+//! through the game's camera, plus mouse/touchpad navigation. Drag its grip to move it inside
+//! the panel; its last button folds it down to the grip.
 const std = @import("std");
 const ui = @import("eggy").ui;
 const L = ui.Layout;
 const gizmo = @import("gizmo.zig");
+const Navigation = @import("scene_camera.zig").Navigation;
 
-pub const Button = enum(u32) { grip, move, rotate, scale, universal, space, snap, game_camera, fold };
+pub const Button = enum(u32) { grip, move, rotate, scale, universal, space, snap, game_camera, touchpad, fold };
 
 /// What the toolbar shows and where.
 pub const State = struct {
@@ -15,6 +16,7 @@ pub const State = struct {
     space: gizmo.Space = .world,
     snapping: bool = false,
     through_game_camera: bool = false,
+    navigation: Navigation = .mouse,
     /// Folded down to its grip and the button that unfolds it.
     folded: bool = false,
     /// Where its top left corner is, from the Scene panel's.
@@ -44,6 +46,7 @@ pub fn describe(button: Button, state: State) []const u8 {
         .space => if (state.space == .world) "World axes (click for the entity's own)" else "The entity's own axes (click for the world's)",
         .snap => if (state.snapping) "Snapping on (Ctrl turns it off while dragging)" else "Snapping off (Ctrl snaps while dragging)",
         .game_camera => if (state.through_game_camera) "Looking through the game's camera" else "Look through the game's camera",
+        .touchpad => if (state.navigation == .touchpad) "Touchpad: scroll orbits, Shift+scroll pans, Ctrl+scroll or pinch zooms (click for mouse)" else "Mouse navigation (click for touchpad gestures)",
         .fold => if (state.folded) "Show the toolbar" else "Hide the toolbar",
     };
 }
@@ -96,6 +99,7 @@ fn pressed(button: Button, state: State) bool {
         .space => state.space == .local,
         .snap => state.snapping,
         .game_camera => state.through_game_camera,
+        .touchpad => state.navigation == .touchpad,
         .grip, .fold => false,
     };
 }
@@ -156,6 +160,11 @@ const Look = struct {
                 // A film camera: a body and a lens.
                 try outlineRect(c, .{ .x = m.x - 8, .y = m.y - 4, .w = 11, .h = 9 }, 1.3, ink);
                 try c.triangle(.{ .{ m.x + 3, m.y }, .{ m.x + 8, m.y - 4 }, .{ m.x + 8, m.y + 4 } }, .{ ink, ink, ink });
+            },
+            .touchpad => {
+                try outlineRect(c, .{ .x = m.x - 8, .y = m.y - 6, .w = 16, .h = 12 }, 1.3, ink);
+                try line(c, .{ .x = m.x - 3, .y = m.y - 3 }, .{ .x = m.x - 3, .y = m.y + 3 }, 1.8, ink);
+                try line(c, .{ .x = m.x + 3, .y = m.y - 3 }, .{ .x = m.x + 3, .y = m.y + 3 }, 1.8, ink);
             },
             .fold => try chevron(c, m, if (self.folded) 1 else -1, ink),
         }
