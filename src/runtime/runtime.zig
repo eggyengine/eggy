@@ -55,7 +55,7 @@ pub fn Runtime(comptime project: type) type {
             if (data) |packaged| {
                 app.graphics.models.loader = packaged.models();
                 app.graphics.textures.loader = packaged.textures();
-                app.resource_files = packaged.copies();
+                app.resource_provider = packaged.resources();
             }
             app.scene_access = eggy.scene.registryAccess(Plugins.Components);
             // The project's preferences, baked in by `addGame`, before the plugins start.
@@ -123,18 +123,49 @@ pub fn Runtime(comptime project: type) type {
             if (eggy.camera.find(&self.app.world)) |view| {
                 const drawn = eggy.mesh.gather(&self.app.world, self.drawables);
                 try self.app.graphics.drawScene(frame, self.drawables[0..drawn], view);
-            } else {
+            } else if (!Plugins.has_game_ui and !Plugins.has_draw) {
                 if (self.notice == null) self.notice = try eggy.Notice.init(self.gpa, &self.app.graphics);
                 try self.notice.?.draw(frame, "No camera available");
+            }
+            const logical_width, const logical_height = try self.app.window.window.getSize();
+            if (logical_width > 0 and logical_height > 0) {
+                const draw = eggy.DrawContext{
+                    .cmd = frame.cmd,
+                    .target = frame.target,
+                    .extent_px = frame.extent,
+                    .viewport = .{ .x = 0, .y = 0, .w = @floatFromInt(logical_width), .h = @floatFromInt(logical_height) },
+                    .color_format = self.app.graphics.color_format,
+                    .frame_owner = &self.app.graphics.surface,
+                    .frame_slot = self.app.graphics.surface.slot,
+                };
+                try self.plugins.draw(&self.app, draw);
+                if (Plugins.has_game_ui) {
+                    const layer = try self.app.gameUi();
+                    layer.begin(draw, sdl3.timer.getMillisecondsSinceInit());
+                    try self.plugins.gameUi(&self.app, &layer.context);
+                    if (try layer.render(draw)) self.app.input.cancel();
+                    try layer.syncClipboard();
+                    const window = self.app.window.window;
+                    if (sdl3.keyboard.textInputActive(window) != layer.context.wants_text) {
+                        if (layer.context.wants_text) try sdl3.keyboard.startTextInput(window) else try sdl3.keyboard.stopTextInput(window);
+                    }
+                }
             }
             try self.app.graphics.endFrame(frame);
             return .run;
         }
 
         pub fn event(self: *Self, curr_event: sdl3.events.Event) !sdl3.AppResult {
+            const lifecycle = try self.app.event(curr_event);
+            if (lifecycle != .run) return lifecycle;
+            const consumed = if (self.app.ui_layer) |layer| layer.handle(curr_event, false) else false;
+            if (eggy.game_ui.isInput(curr_event) and (consumed or try self.plugins.uiEvent(&self.app, curr_event))) {
+                self.app.input.suppress(curr_event);
+                return .run;
+            }
             self.app.input.handle(curr_event);
             try self.plugins.event(&self.app, curr_event);
-            return self.app.event(curr_event);
+            return .run;
         }
     };
 }

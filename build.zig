@@ -27,9 +27,23 @@ pub fn build(b: *std.Build) void {
     // Eggy's own executables, eggy_runtime and eggy_editor: an empty project, built exactly as
     // `addGame` builds a game.
     const empty_game = b.addWriteFiles().add("game.zig", "pub const Game = struct {};\n");
-    const game_library = addProject(b, b, emscripten, target, optimize, .{
+    const demo = b.option(enum { weeoui, custom }, "api-demo", "Exercise developer APIs with a Weeoui HUD or custom-renderer-only game");
+    const game = b.createModule(.{ .root_source_file = if (demo != null) b.path("src/build/api_fixture.zig") else empty_game, .target = target, .optimize = optimize });
+    if (demo) |mode| {
+        const options = b.addOptions();
+        options.addOption(bool, "custom_ui", mode == .custom);
+        game.addOptions("api_fixture_options", options);
+        game.addAnonymousImport("api_fixture_font", .{ .root_source_file = b.path("resources/fonts/JetBrainsMono-Regular.ttf") });
+    }
+    const demo_plugins: []const *std.Build.Module = if (demo != null) &.{b.addModule("api_fixture_plugin", .{
+        .root_source_file = b.path("resources/template/src/root.zig"),
+        .target = target,
+        .optimize = optimize,
+    })} else &.{};
+    _ = addProject(b, b, emscripten, target, optimize, .{
         .name = "eggy",
-        .game = b.createModule(.{ .root_source_file = empty_game, .target = target, .optimize = optimize }),
+        .game = game,
+        .plugins = demo_plugins,
     }, "eggy_runtime");
 
     // `zig build docs`: the `eggy` module's API reference, Zig's own docs, into `<prefix>/api`.
@@ -53,9 +67,11 @@ pub fn build(b: *std.Build) void {
 
         // Hot reload, for real: load the empty game's library, run it, swap it, and unload it.
         const library_options = b.addOptions();
-        library_options.addOptionPath("path", game_library.?.getEmittedBin());
+        const fixture = @import("src/build/api_checks.zig").project(b, target, optimize, engine.eggy);
+        const fixture_library = addGameLibrary(b, b, target, optimize, fixture, "eggy_api_test");
+        library_options.addOptionPath("path", fixture_library.getEmittedBin());
         const hot_reload_tests = &b.addRunArtifact(b.addTest(.{ .root_module = b.createModule(.{
-            .root_source_file = b.path("src/editor/hot_reload/library_test.zig"),
+            .root_source_file = b.path("src/editor/hot_reload_test.zig"),
             .target = target,
             .optimize = optimize,
             .link_libc = true,
@@ -445,6 +461,21 @@ fn addEngine(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.buil
     }
     addMacSdk(b, engine);
 
+    // One SDL adapter for game UI and editor tools, sharing Eggy's existing SDL and device.
+    const weeoui_sdl3 = b.createModule(.{
+        .root_source_file = weeoui.path("src/sdl3.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "weeoui", .module = weeoui.module("weeoui") },
+            .{ .name = "sdl3", .module = sdl3.module("sdl3") },
+            .{ .name = "vitellus", .module = vitellus.module("vitellus") },
+            .{ .name = "vitellus_sdl3", .module = sdl_adapter },
+            .{ .name = "weeoui_vitellus", .module = weeoui_vitellus },
+        },
+    });
+    engine.addImport("weeoui_sdl3", weeoui_sdl3);
+
     // eggy_runtime: runs a game and its plugins, for every platform.
     _ = b.addModule("eggy_runtime", .{
         .root_source_file = b.path("src/runtime/runtime.zig"),
@@ -455,19 +486,6 @@ fn addEngine(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.buil
 
     // eggy_editor: a game with Weeoui tooling over it, desktop only.
     if (!web) {
-        // Weeoui's SDL adapter compiled against Eggy's SDL and Vitellus, so neither is built twice.
-        const weeoui_sdl3 = b.createModule(.{
-            .root_source_file = weeoui.path("src/sdl3.zig"),
-            .target = target,
-            .optimize = optimize,
-            .imports = &.{
-                .{ .name = "weeoui", .module = weeoui.module("weeoui") },
-                .{ .name = "sdl3", .module = sdl3.module("sdl3") },
-                .{ .name = "vitellus", .module = vitellus.module("vitellus") },
-                .{ .name = "vitellus_sdl3", .module = sdl_adapter },
-                .{ .name = "weeoui_vitellus", .module = weeoui_vitellus },
-            },
-        });
         const editor = b.addModule("eggy_editor", .{
             .root_source_file = b.path("src/editor/editor.zig"),
             .target = target,

@@ -4,6 +4,10 @@
 //!
 //!     transform.position[0] += speed_m_per_s * app.time.delta_s;
 const std = @import("std");
+const support = @import("support.zig");
+pub const Timer = enum(u32) { _ };
+pub const timer_support: support.Support = .not_implemented;
+pub const scaling_support: support.Support = .not_implemented;
 
 /// The longest a frame counts as, so a stall (a breakpoint, a dragged window) doesn't send
 /// things flying.
@@ -26,6 +30,17 @@ pub const Time = struct {
         self.delta_s = @min(max_delta_s, @as(f32, @floatFromInt(since_ns)) / std.time.ns_per_s);
         self.elapsed_s += self.delta_s;
         self.frame += 1;
+    }
+
+    // ponytail: frame time has no timer or scaling scheduler, implement it without changing physics stages.
+    pub fn startTimer(_: *Time, duration_s: f32) support.Error!Timer {
+        return support.notImplemented(duration_s);
+    }
+    pub fn cancelTimer(_: *Time, timer: Timer) support.Error!void {
+        return support.notImplemented(timer);
+    }
+    pub fn setScale(_: *Time, multiplier: f32) support.Error!void {
+        return support.notImplemented(multiplier);
     }
 };
 

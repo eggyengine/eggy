@@ -61,4 +61,28 @@ test "every missing backend operation returns NotImplemented" {
     try expect(error.NotImplemented, profiling.begin("frame"));
     try expect(error.NotImplemented, profiling.end(@enumFromInt(0)));
     try expect(error.NotImplemented, profiling.counter("entities", 1));
+
+    var input = @import("input.zig").Input{};
+    var controllers: [4]@import("input.zig").Controller = undefined;
+    var touches: [4]@import("input.zig").Touch = undefined;
+    try expect(error.NotImplemented, input.controllers(&controllers));
+    try expect(error.NotImplemented, input.controllerState(@enumFromInt(0)));
+    try expect(error.NotImplemented, input.rumble(@enumFromInt(0), 1, 1, 0.5));
+    try expect(error.NotImplemented, input.touches(&touches));
+    const Control = enum { jump };
+    try expect(error.NotImplemented, input.rebind(Control.jump, .{ .key = .space }));
+    var time = @import("time.zig").Time{};
+    try expect(error.NotImplemented, time.startTimer(1));
+    try expect(error.NotImplemented, time.cancelTimer(@enumFromInt(0)));
+    try expect(error.NotImplemented, time.setScale(0.5));
+    const resources = @import("resources/resources.zig").Resources{};
+    try expect(error.NotImplemented, resources.readAsync(std.testing.allocator, @import("refs.zig").AssetRef(.text).init("notes.txt")));
+    try expect(error.NotImplemented, resources.cancel(@enumFromInt(0)));
+    var world = @import("clutch").World.init(std.testing.allocator);
+    defer world.deinit();
+    var instances = @import("scene_instances.zig").SceneInstances.init(std.testing.allocator);
+    defer instances.deinit();
+    const scenes = @import("scenes/scenes.zig").Scenes{ .world = &world, .instances = &instances, .resources = .{}, .access = null };
+    try expect(error.NotImplemented, scenes.stream(.init("level.scene.zon"), .{}));
+    try expect(error.NotImplemented, scenes.replace(.init("level.scene.zon")));
 }

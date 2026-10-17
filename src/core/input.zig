@@ -11,6 +11,7 @@
 //!     }
 const std = @import("std");
 const sdl3 = @import("vitellus_sdl3").sdl;
+const support = @import("support.zig");
 
 /// A key, by where it is on the keyboard.
 pub const Key = sdl3.Scancode;
@@ -19,6 +20,14 @@ pub const MouseButton = enum { left, middle, right, x1, x2 };
 
 /// Four physical keys describing a two-dimensional direction.
 pub const DirectionKeys = struct { left: Key = .a, right: Key = .d, down: Key = .s, up: Key = .w };
+pub const controller_support: support.Support = .not_implemented;
+pub const touch_support: support.Support = .not_implemented;
+pub const rebinding_support: support.Support = .not_implemented;
+pub const Controller = enum(u32) { _ };
+pub const ControllerButton = enum { south, east, west, north, left_shoulder, right_shoulder, left_stick, right_stick, start, back, up, down, left, right };
+pub const ControllerState = struct { buttons: std.EnumSet(ControllerButton), left_stick: [2]f32, right_stick: [2]f32, triggers: [2]f32 };
+pub const Touch = struct { id: u64, position_points: [2]f32, pressure: f32 };
+pub const Binding = union(enum) { key: Key, mouse: MouseButton, controller: struct { device: Controller, button: ControllerButton } };
 
 const key_count = 512;
 const KeySet = std.StaticBitSet(key_count);
@@ -63,6 +72,28 @@ pub const Input = struct {
         return .{ self.axis(keys.left, keys.right), self.axis(keys.down, keys.up) };
     }
 
+    // ponytail: only keyboard/mouse events populate gameplay state, add device backends before enabling these requests.
+    /// Enumerate into caller storage; currently returns NotImplemented, never a fake device.
+    pub fn controllers(_: *const Input, buffer: []Controller) support.Error![]const Controller {
+        return support.notImplemented(buffer);
+    }
+    pub fn controllerState(_: *const Input, device: Controller) support.Error!ControllerState {
+        return support.notImplemented(device);
+    }
+    pub fn rumble(_: *const Input, device: Controller, low: f32, high: f32, duration_s: f32) support.Error!void {
+        return support.notImplemented(.{ device, low, high, duration_s });
+    }
+    pub fn touches(_: *const Input, buffer: []Touch) support.Error![]const Touch {
+        return support.notImplemented(buffer);
+    }
+    /// Controls are a game-owned enum, not string-based engine action assets.
+    pub fn rebind(_: *Input, control: anytype, binding: Binding) support.Error!void {
+        comptime {
+            if (@typeInfo(@TypeOf(control)) != .@"enum") @compileError("a control must be a value of your controls enum");
+        }
+        return support.notImplemented(.{ control, binding });
+    }
+
     /// Forget gameplay state when UI takes capture, without synthesizing release actions.
     pub fn cancel(self: *Input) void {
         self.* = .{ .mouse_position = self.mouse_position };
@@ -88,16 +119,16 @@ pub const Input = struct {
                 self.keys_held.set(at);
             },
             .key_up => |key| if (key.scancode) |code| if (index(code)) |at| {
+                if (self.keys_held.isSet(at)) self.keys_released.set(at);
                 self.keys_held.unset(at);
-                self.keys_released.set(at);
             },
             .mouse_button_down => |down| if (mouseButton(down.button)) |which| {
                 self.buttons_held.insert(which);
                 self.buttons_pressed.insert(which);
             },
             .mouse_button_up => |up| if (mouseButton(up.button)) |which| {
+                if (self.buttons_held.contains(which)) self.buttons_released.insert(which);
                 self.buttons_held.remove(which);
-                self.buttons_released.insert(which);
             },
             .mouse_motion => |motion| {
                 self.mouse_position = .{ motion.x, motion.y };
@@ -129,6 +160,27 @@ pub const Input = struct {
         self.buttons_released.setUnion(self.buttons_held);
         self.buttons_held = .initEmpty();
     }
+
+    /// Withhold a UI-consumed event while cleaning up any gameplay hold it would release.
+    /// Taking keyboard focus with a UI click cancels gameplay without synthetic edges.
+    pub fn suppress(self: *Input, event: sdl3.events.Event) void {
+        switch (event) {
+            .key_down, .key_up => |key| if (key.scancode) |code| if (index(code)) |at| {
+                self.keys_held.unset(at);
+                self.keys_pressed.unset(at);
+                self.keys_released.unset(at);
+            },
+            .mouse_button_down => self.cancel(),
+            .mouse_button_up => |up| if (mouseButton(up.button)) |button| {
+                self.buttons_held.remove(button);
+                self.buttons_pressed.remove(button);
+                self.buttons_released.remove(button);
+            },
+            .mouse_motion => self.mouse_delta = .{ 0, 0 },
+            .mouse_wheel => self.wheel = 0,
+            else => {},
+        }
+    }
 };
 
 fn index(key: Key) ?usize {
@@ -159,5 +211,19 @@ test "a key held for frames is pressed once, and an axis reads two keys" {
     try std.testing.expect(input.released(.w) and !input.held(.w));
     try std.testing.expectEqual(@as(f32, 0), input.axis(.s, .w));
     input.cancel();
+    try std.testing.expect(!input.released(.w));
+}
+
+test "a swallowed release clears a gameplay hold without inventing an edge" {
+    var input = Input{};
+    const down = sdl3.events.Event{ .key_down = .{ .common = undefined, .id = null, .scancode = .w, .key = null, .mod = .{}, .raw = 0, .down = true, .repeat = false } };
+    input.handle(down);
+    input.endFrame();
+    var up = down.key_down;
+    up.down = false;
+    const event = sdl3.events.Event{ .key_up = up };
+    input.suppress(event);
+    try std.testing.expect(!input.held(.w) and !input.released(.w));
+    input.handle(event);
     try std.testing.expect(!input.released(.w));
 }

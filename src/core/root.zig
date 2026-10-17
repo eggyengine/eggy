@@ -45,7 +45,8 @@ pub const input = @import("input.zig");
 pub const Input = input.Input;
 pub const Key = input.Key;
 pub const MouseButton = input.MouseButton;
-pub const Time = @import("time.zig").Time;
+pub const time = @import("time.zig");
+pub const Time = time.Time;
 pub const Action = @import("action.zig").Action;
 pub const Direction = @import("action.zig").Direction;
 pub const resources = @import("resources/resources.zig");
@@ -64,10 +65,14 @@ pub const localization = @import("localization.zig");
 pub const debug_draw = @import("debug_draw.zig");
 pub const profiling = @import("profiling.zig");
 pub const editor = @import("editor_api/editor_api.zig");
+pub const game_ui = @import("game_ui/game_ui.zig");
+pub const DrawContext = game_ui.DrawContext;
+pub const ui_hit_test = @import("ui_hit_test.zig");
 
 test {
     _ = @import("capabilities_test.zig");
     _ = editor;
+    _ = game_ui;
     _ = resources;
     _ = scenes;
     _ = @import("action.zig");

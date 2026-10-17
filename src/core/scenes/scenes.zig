@@ -4,12 +4,15 @@ const ecs = @import("clutch");
 const refs = @import("../refs.zig");
 const scene = @import("../scene.zig");
 const instances = @import("../scene_instances.zig");
+const Resources = @import("../resources/resources.zig").Resources;
+const support = @import("../support.zig");
+pub const streaming_support: support.Support = .not_implemented;
 
 /// A borrowed view of the current world. Do not retain it across world resets or hot reload.
 pub const Scenes = struct {
     world: *ecs.World,
     instances: *instances.SceneInstances,
-    files: ?instances.Files,
+    resources: Resources,
     access: ?scene.Access,
 
     pub const Options = struct { parent: ?ecs.EntityId = null };
@@ -19,10 +22,18 @@ pub const Scenes = struct {
     /// it. Read/parse/allocation failures remove everything this call spawned.
     pub fn instantiate(self: Scenes, file: refs.AssetRef(.scene), options: Options) !ecs.EntityId {
         if (file.len == 0) return error.UnsetAsset;
-        const files = self.files orelse return error.NoResourceProvider;
         const access = self.access orelse return error.NoSceneRegistry;
         if (options.parent) |parent| if (!self.world.isAlive(parent)) return error.InvalidEntity;
-        return self.instances.create(files, self.world, access, file, options.parent);
+        var resources = self.resources;
+        return self.instances.create(resources.sceneFiles(), self.world, access, file, options.parent);
+    }
+
+    // ponytail: scenes instantiate synchronously, add streaming ownership and completion before exposing loaded handles.
+    pub fn stream(_: Scenes, file: refs.AssetRef(.scene), options: Options) support.Error!ecs.EntityId {
+        return support.notImplemented(.{ file, options });
+    }
+    pub fn replace(_: Scenes, file: refs.AssetRef(.scene)) support.Error!void {
+        return support.notImplemented(file);
     }
 };
 
@@ -31,6 +42,6 @@ test "scene instantiation reports missing context rather than manufacturing a ro
     defer world.deinit();
     var made = instances.SceneInstances.init(std.testing.allocator);
     defer made.deinit();
-    const scenes = Scenes{ .world = &world, .instances = &made, .files = null, .access = null };
-    try std.testing.expectError(error.NoResourceProvider, scenes.instantiate(.init("level.scene.zon"), .{}));
+    const scenes = Scenes{ .world = &world, .instances = &made, .resources = .{}, .access = null };
+    try std.testing.expectError(error.NoSceneRegistry, scenes.instantiate(.init("level.scene.zon"), .{}));
 }

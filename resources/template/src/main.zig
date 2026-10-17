@@ -11,9 +11,14 @@ pub const Game = struct {
         self.frames += 1;
     }
 
+    /// Builds the game's HUD. Omit this hook to use only your own `draw` renderer.
+    pub fn gameUi(self: *Game, app: *eggy.App, ui: *eggy.ui.Context) !void {
+        _ = app;
+        ui.label("Frames: {d}", .{self.frames});
+    }
+
     /// Adds to the editor's panel. Never called in the runtime.
     pub fn editorUi(self: *Game, editor: *eggy.editor.Context, ui: *eggy.ui.Context) !void {
-        _ = editor;
-        ui.label("Frames: {d}", .{self.frames});
+        try self.gameUi(editor.app, ui);
     }
 };

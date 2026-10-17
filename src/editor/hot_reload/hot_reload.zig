@@ -108,6 +108,21 @@ pub const HotGame = struct {
         _ = self.game.update(state, app);
     }
 
+    pub fn gameUi(self: *HotGame, app: *eggy.App, context: *eggy.ui.Context) void {
+        const state = self.state orelse return;
+        _ = self.game.game_ui(state, app, context);
+    }
+
+    pub fn draw(self: *HotGame, app: *eggy.App, context: eggy.DrawContext) void {
+        const state = self.state orelse return;
+        _ = self.game.draw(state, app, &context);
+    }
+
+    pub fn uiEvent(self: *HotGame, app: *eggy.App, event_value: eggy.Event) bool {
+        const state = self.state orelse return false;
+        return self.game.ui_event(state, app, &event_value) != 0;
+    }
+
     /// Run a frame of the plugins' editor tools (not playing), if the game is running.
     pub fn editorUpdate(self: *HotGame, editor: *eggy.editor.Context) void {
         const state = self.state orelse return;

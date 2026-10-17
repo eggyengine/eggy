@@ -12,8 +12,8 @@ const log = std.log.scoped(.textures);
 /// How an image file (by its path in the project) becomes pixels.
 pub const Loader = struct {
     context: *anyopaque,
-    /// The image at `path`, allocated with `gpa`; null when it can't be loaded (having said why).
-    load: *const fn (context: *anyopaque, gpa: std.mem.Allocator, path: []const u8) ?assets.Texture,
+    /// Host-local loader; author code uses `Resources`' C-safe provider bridge.
+    load: *const fn (context: *anyopaque, gpa: std.mem.Allocator, path: []const u8) anyerror!assets.Texture,
 };
 
 /// A texture on the GPU, and the bind group that paints with it (see `TextureCache.layout`).
@@ -129,7 +129,10 @@ pub const TextureCache = struct {
     /// Load the image at `path` and put it on the GPU.
     fn load(self: *TextureCache, path: []const u8) ?Gpu {
         const loader = self.loader orelse return null;
-        var texture = loader.load(loader.context, self.gpa, path) orelse return null;
+        var texture = loader.load(loader.context, self.gpa, path) catch |err| {
+            log.err("cannot load image {s}: {t}", .{ path, err });
+            return null;
+        };
         defer texture.deinit(self.gpa);
         return self.make(texture, path) catch |err| {
             log.err("cannot upload {s}: {t}", .{ path, err });

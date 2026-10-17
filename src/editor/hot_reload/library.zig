@@ -78,6 +78,11 @@ const game = api.Game{
     .plugin_count = plugin_keys.len,
     .stop = stop,
     .update = update,
+    .has_game_ui = Plugins.has_game_ui,
+    .has_draw = Plugins.has_draw,
+    .game_ui = gameUi,
+    .draw = draw,
+    .ui_event = uiEvent,
     .editor_update = editorUpdate,
     .event = event,
     .editor_ui = editorUi,
@@ -130,7 +135,7 @@ fn start(editor: *const api.Host, gpa_ptr: *const anyopaque, app_ptr: *anyopaque
 
 /// What can fail each frame, and the error each last failed with: one failing every frame is
 /// logged once, and again only when it fails differently or after it recovers.
-const Hook = enum { update, editor_update, editor_ui, editor_panel_ui, editor_command, event, world_start, world_update };
+const Hook = enum { update, game_ui, draw, ui_event, editor_update, editor_ui, editor_panel_ui, editor_command, event, world_start, world_update };
 var failures: [std.meta.fields(Hook).len]?anyerror = @splat(null);
 
 fn report(hook: Hook, err: anyerror) void {
@@ -139,6 +144,9 @@ fn report(hook: Hook, err: anyerror) void {
     last.* = err;
     const what = switch (hook) {
         .update => "an update hook",
+        .game_ui => "a gameUi hook",
+        .draw => "a draw hook",
+        .ui_event => "a uiEvent hook",
         .editor_update => "an editorUpdate hook",
         .editor_ui => "an editorUi hook",
         .editor_panel_ui => "an editorPanelUi hook",
@@ -182,6 +190,35 @@ fn editorUpdate(state_ptr: *anyopaque, editor_ptr: *anyopaque) callconv(.c) bool
     };
     recovered(.editor_update);
     return true;
+}
+
+fn gameUi(state_ptr: *anyopaque, app_ptr: *anyopaque, context: *anyopaque) callconv(.c) bool {
+    stateOf(state_ptr).plugins.gameUi(appOf(app_ptr), @ptrCast(@alignCast(context))) catch |err| {
+        report(.game_ui, err);
+        return false;
+    };
+    recovered(.game_ui);
+    return true;
+}
+
+fn draw(state_ptr: *anyopaque, app_ptr: *anyopaque, context: *const anyopaque) callconv(.c) bool {
+    const target: *const eggy.DrawContext = @ptrCast(@alignCast(context));
+    stateOf(state_ptr).plugins.draw(appOf(app_ptr), target.*) catch |err| {
+        report(.draw, err);
+        return false;
+    };
+    recovered(.draw);
+    return true;
+}
+
+fn uiEvent(state_ptr: *anyopaque, app_ptr: *anyopaque, event_ptr: *const anyopaque) callconv(.c) i32 {
+    const input: *const eggy.Event = @ptrCast(@alignCast(event_ptr));
+    const consumed = stateOf(state_ptr).plugins.uiEvent(appOf(app_ptr), input.*) catch |err| {
+        report(.ui_event, err);
+        return -1;
+    };
+    recovered(.ui_event);
+    return if (consumed) 1 else 0;
 }
 
 fn event(state_ptr: *anyopaque, app_ptr: *anyopaque, event_ptr: *const anyopaque) callconv(.c) bool {

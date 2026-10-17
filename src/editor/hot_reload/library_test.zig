@@ -1,8 +1,8 @@
-//! Hot reload for real, with Eggy's own (empty) game's library: load it, run a frame, swap it,
-//! and unload it. The game's hooks only reach the world, so no window or GPU is needed.
+//! Hot reload for real, using a headless API fixture game.
 const std = @import("std");
 const eggy = @import("eggy");
 const HotGame = @import("hot_reload.zig").HotGame;
+const history_zig = @import("../history.zig");
 
 test "the game's library loads, runs, swaps for a fresh copy, and unloads cleanly" {
     const gpa = std.testing.allocator;
@@ -11,8 +11,12 @@ test "the game's library loads, runs, swaps for a fresh copy, and unloads cleanl
     defer gpa.free(path);
     var app: eggy.App = undefined;
     app.world = .init(gpa);
+    app.input = .{};
+    app.time = .{};
     app.instances = null;
+    app.ui_layer = null;
     app.scene_access = null;
+    app.resource_provider = .{};
     defer app.world.deinit();
     app.preference_values = .init(gpa);
     defer app.preference_values.deinit();
@@ -36,4 +40,124 @@ test "the game's library loads, runs, swaps for a fresh copy, and unloads cleanl
     defer gpa.free(last_copy);
     game.deinit(&app);
     try std.testing.expectError(error.FileNotFound, std.Io.Dir.cwd().access(io, last_copy, .{}));
+}
+
+const ActionHost = struct {
+    app: *eggy.App,
+    game: *HotGame,
+    history: history_zig.History,
+    before: ?[]u8 = null,
+
+    fn snapshot(self: *ActionHost) ![]u8 {
+        var scene = try eggy.scene.Scene.capture(self.history.gpa, &self.app.world, self.game.sceneAccess(), null);
+        defer scene.deinit();
+        var text: std.Io.Writer.Allocating = .init(self.history.gpa);
+        defer text.deinit();
+        try scene.write(&text.writer);
+        return text.toOwnedSlice();
+    }
+
+    fn request(raw: *anyopaque, input: *const eggy.editor.Request, _: *eggy.editor.Response) callconv(.c) eggy.editor.Status {
+        const self: *ActionHost = @ptrCast(@alignCast(raw));
+        self.perform(input.operation) catch |err| return if (err == error.OutOfMemory) .out_of_memory else .failed;
+        return .ok;
+    }
+
+    fn perform(self: *ActionHost, operation: eggy.editor.Operation) !void {
+        switch (operation) {
+            .begin_edit => {
+                try self.history.reserve();
+                self.before = try self.snapshot();
+            },
+            .commit_edit => {
+                const after = try self.snapshot();
+                self.history.record(.{ .scene = .{ .before = self.before.?, .after = after } });
+                self.before = null;
+            },
+            .cancel_edit => {
+                if (self.before) |before| self.history.gpa.free(before);
+                self.before = null;
+            },
+            else => return error.UnexpectedRequest,
+        }
+    }
+
+    fn apply(self: *ActionHost, step: *history_zig.Step, direction: eggy.Direction) !void {
+        const source = try self.history.gpa.dupeZ(u8, step.scene.value(direction));
+        defer self.history.gpa.free(source);
+        var scene = try eggy.scene.Scene.parse(self.history.gpa, source);
+        defer scene.deinit();
+        self.game.restart(self.app, &scene, &.{}, .keep);
+    }
+
+    fn expectCounter(self: *ActionHost, expected: []const u8) !void {
+        const component = for (self.game.component_types, 0..) |info, index| {
+            if (std.mem.eql(u8, info.name, "Counter")) break index;
+        } else return error.NoCounter;
+        const entity = for (self.app.world.slots.items, 0..) |slot, index| {
+            if (slot.alive) break eggy.ecs.EntityId.init(@intCast(index), slot.generation);
+        } else return error.NoEntity;
+        var buffer: [128]u8 = undefined;
+        try std.testing.expectEqualStrings(expected, self.game.readField(self.app, entity, component, 0, &buffer).?);
+    }
+};
+
+test "typed actions and game UI cross the real ABI and undo after library replacement" {
+    const gpa = std.testing.allocator;
+    const path = try std.fs.path.resolve(gpa, &.{@import("test_library").path});
+    defer gpa.free(path);
+    var app: eggy.App = undefined;
+    app.world = .init(gpa);
+    defer app.world.deinit();
+    app.preference_values = .init(gpa);
+    defer app.preference_values.deinit();
+    app.instances = null;
+    app.ui_layer = null;
+    app.scene_access = null;
+    const Source = struct {
+        fn read(_: *anyopaque, _: std.mem.Allocator, _: []const u8) ![:0]u8 {
+            return error.FileNotFound;
+        }
+        fn model(_: *anyopaque, _: std.mem.Allocator, _: []const u8) !eggy.assets.Model {
+            return error.NotPackaged;
+        }
+        fn image(_: *anyopaque, _: std.mem.Allocator, _: []const u8) !eggy.assets.Texture {
+            return error.OutOfMemory;
+        }
+    };
+    var resource_context: u8 = 0;
+    app.resource_provider = eggy.resources.Resources.from(&resource_context, Source.read, Source.model, Source.image);
+    app.input = .{};
+    app.time = .{};
+    var game = try HotGame.load(gpa, path);
+    defer game.deinit(&app);
+    game.start(&app, &.{}, .keep);
+    var host = ActionHost{ .app = &app, .game = &game, .history = .{ .gpa = gpa } };
+    defer host.history.deinit();
+    defer if (host.before) |before| gpa.free(before);
+    var editor = eggy.editor.Context{ .app = &app, .host = .{ .context = &host, .request = ActionHost.request } };
+    game.editorCommand(1, &editor);
+    try host.expectCounter("2");
+    try std.testing.expectEqual(@as(usize, 1), host.history.undo_steps.items.len);
+    {
+        var ui = try eggy.ui.Context.init(gpa);
+        defer ui.deinit();
+        ui.newFrame(.{ .x = 0, .y = 0, .w = 320, .h = 200 });
+        game.gameUi(&app, &ui);
+        try std.testing.expect((try ui.render()).len > 0);
+        ui.newFrame(.{ .x = 0, .y = 0, .w = 320, .h = 200 });
+        game.editorPanelUi(0, &editor, &ui);
+        try std.testing.expect((try ui.render()).len > 0);
+    }
+    var kept = try eggy.scene.Scene.capture(gpa, &app.world, game.sceneAccess(), null);
+    defer kept.deinit();
+    try game.reload(&app);
+    const restored = try kept.instantiate(gpa, &app.world, game.sceneAccess(), null);
+    gpa.free(restored.entities);
+    game.start(&app, &.{}, .keep);
+    try host.expectCounter("2");
+    try std.testing.expect(try host.history.apply(.undo, &host, ActionHost.apply));
+    try host.expectCounter("1");
+    try std.testing.expect(try host.history.apply(.redo, &host, ActionHost.apply));
+    try host.expectCounter("2");
 }

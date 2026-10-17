@@ -15,7 +15,7 @@ const play_button = @import("play_button.zig");
 const pause_button = @import("pause_button.zig");
 const simulate_button = @import("simulate_button.zig");
 const scene_view = @import("scene_view/scene_view.zig");
-const hit_test = @import("hit_test.zig");
+const hit_test = eggy.ui_hit_test;
 const reload_button = @import("reload_button.zig");
 const Panel = panels.Panel;
 /// Eggy's version, from its `build.zig.zon`.

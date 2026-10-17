@@ -5,6 +5,9 @@
 //!     pub fn deinit(self: *Self) void
 //!     pub fn event(self: *Self, app: *eggy.App, event: eggy.Event) !void
 //!     pub fn update(self: *Self, app: *eggy.App) !void  // in the editor, only while playing
+//!     pub fn gameUi(self: *Self, app: *eggy.App, ui: *eggy.ui.Context) !void
+//!     pub fn draw(self: *Self, app: *eggy.App, draw: eggy.DrawContext) !void
+//!     pub fn uiEvent(self: *Self, app: *eggy.App, event: eggy.Event) !bool  // true consumes input
 //!     pub fn editorUpdate(self: *Self, editor: *eggy.editor.Context) !void  // while not playing
 //!     pub fn editorUi(self: *Self, editor: *eggy.editor.Context, ui: *eggy.ui.Context) !void
 //!
@@ -52,6 +55,7 @@ const ui = @import("weeoui");
 const preferences = @import("preferences.zig");
 const components = @import("components.zig");
 const EditorContext = @import("editor_api/editor_api.zig").Context;
+const DrawContext = @import("game_ui/game_ui.zig").DrawContext;
 
 /// The components every project has, before its plugins' own.
 pub const builtin_components = .{ @import("transform.zig").Transform, @import("mesh.zig").Mesh, @import("camera.zig").Camera, @import("scene_instance.zig").SceneInstance };
@@ -103,6 +107,14 @@ pub fn Set(comptime types: anytype, comptime keys: []const [:0]const u8) type {
         enabled: [list.len]bool,
 
         const Self = @This();
+        pub const has_game_ui = blk: {
+            for (list) |T| if (@hasDecl(T, "gameUi")) break :blk true;
+            break :blk false;
+        };
+        pub const has_draw = blk: {
+            for (list) |T| if (@hasDecl(T, "draw")) break :blk true;
+            break :blk false;
+        };
 
         /// Every plugin's `editor_panels`, in plugin order.
         pub const editor_panels: []const EditorPanel = blk: {
@@ -198,6 +210,26 @@ pub fn Set(comptime types: anytype, comptime keys: []const [:0]const u8) type {
 
         pub fn update(self: *Self, app: *App) !void {
             inline for (list, 0..) |T, i| if (@hasDecl(T, "update") and self.enabled[i]) try self.instances[i].update(app);
+        }
+
+        /// Default UI content in plugin order, after scene/custom drawing.
+        pub fn gameUi(self: *Self, app: *App, context: *ui.Context) !void {
+            inline for (list, 0..) |T, i| if (@hasDecl(T, "gameUi") and self.enabled[i]) try self.instances[i].gameUi(app, context);
+        }
+
+        /// Custom rendering outside a pass; the engine still owns frame submission.
+        pub fn draw(self: *Self, app: *App, context: DrawContext) !void {
+            inline for (list, 0..) |T, i| if (@hasDecl(T, "draw") and self.enabled[i]) try self.instances[i].draw(app, context);
+        }
+
+        /// Custom UI consumers are consulted in reverse visual order.
+        pub fn uiEvent(self: *Self, app: *App, curr_event: Event) !bool {
+            comptime var i = list.len;
+            inline while (i > 0) {
+                i -= 1;
+                if (@hasDecl(list[i], "uiEvent") and self.enabled[i]) if (try self.instances[i].uiEvent(app, curr_event)) return true;
+            }
+            return false;
         }
 
         /// A frame in the editor while the game isn't playing: each plugin's `editorUpdate`.

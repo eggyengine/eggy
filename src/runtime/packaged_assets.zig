@@ -7,7 +7,6 @@ const std = @import("std");
 const eggy = @import("eggy");
 const sdl3 = eggy.sdl_adapter.sdl;
 const manifest = eggy.assets.manifest;
-const log = std.log.scoped(.assets);
 
 pub const Data = struct {
     gpa: std.mem.Allocator,
@@ -15,6 +14,11 @@ pub const Data = struct {
     dir: std.Io.Dir,
     arena: std.heap.ArenaAllocator,
     files: manifest.Manifest,
+
+    /// C-callable providers, matching the editor provider's author-facing results.
+    pub fn resources(self: *Data) eggy.resources.Resources {
+        return eggy.resources.Resources.from(self, readCopy, loadModel, loadTexture);
+    }
 
     /// The game's `data/` folder and its manifest. On the heap, as the loaders keep a pointer to
     /// it.
@@ -61,12 +65,12 @@ pub const Data = struct {
         return self.dir.openFile(self.threaded.io(), manifest.packagedName(&name, entry), .{});
     }
 
-    fn loadModel(context: *anyopaque, gpa: std.mem.Allocator, path: []const u8) ?eggy.assets.Model {
+    fn loadModel(context: *anyopaque, gpa: std.mem.Allocator, path: []const u8) !eggy.assets.Model {
         const self: *Data = @ptrCast(@alignCast(context));
         return self.readPackaged(eggy.assets.Model, eggy.assets.model, gpa, path);
     }
 
-    fn loadTexture(context: *anyopaque, gpa: std.mem.Allocator, path: []const u8) ?eggy.assets.Texture {
+    fn loadTexture(context: *anyopaque, gpa: std.mem.Allocator, path: []const u8) !eggy.assets.Texture {
         const self: *Data = @ptrCast(@alignCast(context));
         return self.readPackaged(eggy.assets.Texture, eggy.assets.texture, gpa, path);
     }
@@ -82,18 +86,12 @@ pub const Data = struct {
     }
 
     /// What packaging made of the project's file at `path`, read by `format`'s `read`.
-    fn readPackaged(self: *Data, comptime T: type, comptime format: type, gpa: std.mem.Allocator, path: []const u8) ?T {
+    fn readPackaged(self: *Data, comptime T: type, comptime format: type, gpa: std.mem.Allocator, path: []const u8) !T {
         const io = self.threaded.io();
-        var file = self.openPackaged(path) catch |err| {
-            log.err("{s} wasn't packaged with the game ({t})", .{ path, err });
-            return null;
-        };
+        var file = try self.openPackaged(path);
         defer file.close(io);
         var buffer: [64 * 1024]u8 = undefined;
         var reader = file.reader(io, &buffer);
-        return format.read(gpa, &reader.interface) catch |err| {
-            log.err("cannot read {s}: {t}", .{ path, err });
-            return null;
-        };
+        return format.read(gpa, &reader.interface);
     }
 };

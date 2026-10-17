@@ -42,13 +42,14 @@ const save_prompt_zig = @import("save_prompt.zig");
 const page_style = @import("page_style.zig");
 const file_ops = @import("assets/file_ops.zig");
 const code_editor = @import("code_editor.zig");
-const hit_test = @import("hit_test.zig");
+const hit_test = eggy.ui_hit_test;
 const scene_view = @import("scene_view/scene_view.zig");
 const assets = @import("assets/assets.zig");
 const AssetIcons = @import("assets/icons.zig").Icons;
 const descriptors = @import("assets/descriptors.zig");
 const ProjectAssets = @import("assets/project_assets.zig").ProjectAssets;
 const extensions = @import("extensions/extensions.zig");
+const GameInput = @import("game_input.zig").State;
 
 /// The editor for `project`, which declares `name` and `game_library` (the game library's
 /// `file_name`, beside the editor). The game and its plugins run as they do in the runtime,
@@ -59,6 +60,7 @@ pub fn Editor(comptime project: type) type {
         gpa: std.mem.Allocator,
         app: eggy.App,
         extension_state: extensions.State = .{},
+        game_input: GameInput = .{},
         /// The game and its plugins, from their library; null if it couldn't load (logged).
         game: ?HotGame,
         /// When the game's library was built, to tell whether a rebuild changed it.
@@ -285,7 +287,7 @@ pub fn Editor(comptime project: type) type {
                 loaders.* = .{ .project_dir = opened.dir };
                 app.graphics.models.loader = loaders.models();
                 app.graphics.textures.loader = loaders.textures();
-                app.resource_files = loaders.files();
+                app.resource_provider = loaders.resources();
                 break :blk loaders;
             } else null;
             errdefer if (project_assets) |loaders| gpa.destroy(loaders);
@@ -382,6 +384,9 @@ pub fn Editor(comptime project: type) type {
             const look: scene_view.SceneView.Look = if (!self.play_mode.playing()) .editing else if (self.workspace.simulating) .simulating else .playing;
             self.scene_view.update(self.sceneTarget(), if (self.workspace.placed.scene) |placed| placed.rect else null, look);
             self.workspace.scene_overlay = self.scene_view.overlay();
+            if (self.play_mode.playing() and !self.workspace.simulating) if (self.game) |game| {
+                if (game.game.has_game_ui or game.game.has_draw) self.workspace.scene_overlay.no_camera = false;
+            };
 
             // Lay out every window, then tell the OS where the main title bar is.
             const flags = self.app.window.window.getFlags();
@@ -468,8 +473,6 @@ pub fn Editor(comptime project: type) type {
                 vertices.* = try page_ui.render();
                 syncClipboard(page_ui);
             }
-            self.syncTextInput();
-
             // Draw each window.
             try self.present(main_slot, &self.app.graphics.surface, &self.overlay, viewport, pages);
             for (&self.popouts, 0..) |*popout, i| if (popout.*) |*open| {
@@ -477,6 +480,7 @@ pub fn Editor(comptime project: type) type {
                 try open.surface.syncSize(self.app.graphics.queue, open.window);
                 try self.present(workspace_zig.windowSlot(i), &open.surface, &open.overlay, area, pages);
             };
+            self.syncTextInput();
             // A folder chosen in File > Open Project's picker: open it, linking it first for Open
             // Project with Developer Eggy once that is confirmed.
             if (self.picked_project.swap(null, .acq_rel)) |path| {
@@ -697,11 +701,13 @@ pub fn Editor(comptime project: type) type {
             };
             self.entity_editor.reselect(&self.app, game, place);
             self.workspace.playing = true;
+            self.game_input = .{ .focused = true };
         }
 
         /// Stop: the game starts over on the scene kept by Play. Entities are made anew; the
         /// selection follows its entity there.
         fn stopPlaying(self: *Self) void {
+            self.game_input.cancel(&self.app);
             self.workspace.playing = false;
             self.workspace.simulating = false;
             self.workspace.paused = false;
@@ -1049,15 +1055,38 @@ pub fn Editor(comptime project: type) type {
 
             // Render the scene offscreen at the Scene panel's pixel size.
             const frame = try surface.beginFrame();
-            const scene_px = if (self.workspace.placed.scene) |placed| if (placed.slot == slot) self.toPixels(placed.rect) else null else null;
+            const scene_px = if (self.workspace.placed.scene) |placed| if (placed.slot == slot) eggy.game_ui.pixelRect(placed.rect, viewport, frame.extent) else null else null;
             // Nothing at all without a camera to see it through.
-            const preview_px = if (scene_px != null and self.scene_view.preview != null) self.toPixels(scene_view.previewRect(self.workspace.placed.scene.?.rect)) else null;
+            const preview_px = if (scene_px != null and self.scene_view.preview != null) eggy.game_ui.pixelRect(scene_view.previewRect(self.workspace.placed.scene.?.rect), viewport, frame.extent) else null;
             if (scene_px) |rect| {
                 const gathered = if (self.game) |*game| game.gatherMeshes(&self.app, self.drawables) else self.drawables[0..0];
                 const meshes = if (self.scene_view.no_camera) gathered[0..0] else gathered;
                 self.scene_view.drawn = meshes;
                 // The ground grid only through the panel's own camera, not the game's.
                 try self.scene.render(&self.app.graphics, frame.cmd, pixelSize(rect), meshes, self.scene_view.view, self.entity_editor.selected, !self.scene_view.throughGameCamera());
+                if (self.build_window == null and self.play_mode.playing() and !self.workspace.simulating) if (self.game) |*game| {
+                    if (game.game.has_draw or game.game.has_game_ui) {
+                        const logical = self.workspace.placed.scene.?.rect;
+                        const draw_context = eggy.DrawContext{
+                            .cmd = frame.cmd,
+                            .target = try self.scene.beginOverlay(frame.cmd),
+                            .extent_px = pixelSize(rect),
+                            .viewport = .{ .x = 0, .y = 0, .w = logical.w, .h = logical.h },
+                            .color_format = self.app.graphics.color_format,
+                            .frame_owner = surface,
+                            .frame_slot = surface.slot,
+                        };
+                        game.draw(&self.app, draw_context);
+                        if (game.game.has_game_ui) {
+                            const layer = try self.app.gameUi();
+                            layer.begin(draw_context, sdl3.timer.getMillisecondsSinceInit());
+                            game.gameUi(&self.app, &layer.context);
+                            if (try layer.render(draw_context)) self.app.input.cancel();
+                            try layer.syncClipboard();
+                        }
+                        try self.scene.endOverlay(frame.cmd);
+                    }
+                };
                 // The selected camera's view, unoutlined. Rendering sorts `meshes`, which is no matter.
                 if (preview_px) |inset| try self.camera_preview.render(&self.app.graphics, frame.cmd, pixelSize(inset), meshes, self.scene_view.preview.?, null, false);
             }
@@ -1091,6 +1120,12 @@ pub fn Editor(comptime project: type) type {
         }
 
         pub fn event(self: *Self, curr_event: sdl3.events.Event) !sdl3.AppResult {
+            if (curr_event == .window_focus_lost) {
+                self.game_input = .{};
+                self.app.input.releaseAll();
+                if (self.app.ui_layer) |layer| layer.cancel();
+            }
+            if (self.save_prompt != null or self.project_flow != null or self.build_window != null) self.game_input.cancel(&self.app);
             // "Save changes?" takes its own events, and the editor no input meanwhile.
             if (self.save_prompt) |prompt| {
                 if (prompt.keyAnswer(curr_event)) |answer| return if (try self.answerSavePrompt(answer)) .success else .run;
@@ -1155,13 +1190,18 @@ pub fn Editor(comptime project: type) type {
 
             // While the game plays, the Scene panel is the game's: the mouse over it goes to it.
             const game_has_scene = self.play_mode.playing() and !self.workspace.simulating;
-            if (game_has_scene and self.overScene(slot, curr_event)) {
-                if (self.play_mode.running()) if (self.game) |*game| {
-                    self.app.input.handle(curr_event);
-                    game.event(&self.app, curr_event);
-                };
-                return .run;
+            if (game_has_scene) if (self.sceneRect(slot)) |rect| {
+                if (self.overScene(slot, curr_event) or (self.game_input.buttons != 0 and pointerOf(curr_event) != null)) {
+                    if (self.game) |*game| self.game_input.route(&self.app, game, curr_event, rect, self.play_mode.running());
+                    return .run;
+                }
+            };
+            if (curr_event == .mouse_button_down) {
+                self.game_input.cancel(&self.app);
             }
+            if (curr_event == .mouse_motion) if (self.app.ui_layer) |layer| {
+                layer.pointer_active = false;
+            };
 
             // The Scene panel's camera takes presses, drags and wheels over it; F frames the
             // selection, and Delete deletes it.
@@ -1227,7 +1267,10 @@ pub fn Editor(comptime project: type) type {
                 .play => |playing| if (playing) self.startPlaying() else self.stopPlaying(),
                 .simulate => self.startPlaying(),
                 .scene_button => |button| self.scene_view.press(button),
-                .pause => |paused| self.play_mode.paused = paused,
+                .pause => |paused| {
+                    self.play_mode.paused = paused;
+                    self.app.input.cancel();
+                },
                 .new_project => if (self.project_flow == null and self.mayLeave(.new_project)) {
                     layout_file.save(self.gpa, self.preference_folders.global, &self.workspace.dock, self.workspace.seen_plugin_panels.items);
                     self.project_flow = try ProjectFlow.create(self.gpa, &self.app.graphics, self.ui.font, self.mono);
@@ -1289,10 +1332,11 @@ pub fn Editor(comptime project: type) type {
                 if (self.scene_view.handlePointer(curr_event, self.sceneRect(slot), target)) return .run;
             };
             // The pages get the rest, and every pointer move so their hover state stays current.
-            if (outcome == .ignored or curr_event == .mouse_motion) self.routeToPages(slot, curr_event);
-            // Input reaches the game only while it plays.
-            if (self.play_mode.running()) if (self.game) |*game| {
-                self.app.input.handle(curr_event);
+            const game_keyboard = game_has_scene and self.game_input.focused and self.sceneRect(slot) != null and eggy.game_ui.isInput(curr_event) and pointerOf(curr_event) == null and outcome == .ignored;
+            if (game_keyboard) {
+                if (self.game) |*game| self.game_input.route(&self.app, game, curr_event, self.sceneRect(slot).?, self.play_mode.running());
+            } else if (outcome == .ignored or curr_event == .mouse_motion) self.routeToPages(slot, curr_event);
+            if (self.play_mode.running() and !eggy.game_ui.isInput(curr_event)) if (self.game) |*game| {
                 game.event(&self.app, curr_event);
             };
             // Quitting from the system (or closing the window) asks about unsaved changes too.
@@ -1589,6 +1633,7 @@ pub fn Editor(comptime project: type) type {
         /// One of the editor's own windows (Preferences, DevTools, Build, a project's) took
         /// `curr_event`: a press there takes the keyboard off every page's field.
         fn toolWindowTook(self: *Self, curr_event: sdl3.events.Event) sdl3.AppResult {
+            self.game_input.cancel(&self.app);
             if (curr_event == .mouse_button_down) for (0..self.pageCount()) |index| {
                 self.page(index).focus = 0;
             };
@@ -1667,14 +1712,9 @@ pub fn Editor(comptime project: type) type {
 
         /// Bring each scene instance's entities up to date with its file (see `SceneInstances`).
         fn syncSceneInstances(self: *Self) void {
-            const opened = self.project orelse return;
+            const provider = self.project_assets orelse return;
             const game = if (self.game) |*loaded| loaded else return;
-            var threaded: std.Io.Threaded = .init_single_threaded;
-            const io = threaded.io();
-            var files = std.Io.Dir.cwd().openDir(io, opened.dir, .{}) catch return;
-            defer files.close(io);
-            var folder = eggy.scene_instances.FolderFiles{ .io = io, .dir = files };
-            self.app.sceneInstances().sync(folder.files(), &self.app.world, game.sceneAccess(), self.openScenePath());
+            self.app.sceneInstances().sync(provider.files(), &self.app.world, game.sceneAccess(), self.openScenePath());
         }
 
         /// The project's files changed: the Assets panel lists them again, descriptors keep up,
@@ -1799,6 +1839,11 @@ pub fn Editor(comptime project: type) type {
         /// SDL's own state is checked each frame, as Weeoui's Inspector handling switches it too.
         fn syncTextInput(self: *Self) void {
             var wanted: ?Slot = null;
+            if (self.play_mode.playing() and self.game_input.focused) if (self.app.ui_layer) |layer| {
+                if (layer.context.wants_text) if (self.workspace.placed.scene) |scene| {
+                    wanted = scene.slot;
+                };
+            };
             for (0..self.pageCount()) |index| {
                 const placed = self.workspace.placed.pages[index] orelse continue;
                 if (self.page(index).wants_text) wanted = placed.slot;
@@ -1904,6 +1949,9 @@ pub fn Editor(comptime project: type) type {
                         const window_id: ?sdl3.video.WindowId = payload.window_id;
                         break :blk window_id orelse return main_slot;
                     }
+                    if (@typeInfo(T) == .@"struct" and @hasField(T, "id")) {
+                        if (@TypeOf(payload.id) == ?sdl3.video.WindowId) break :blk payload.id orelse return main_slot;
+                    }
                     return main_slot;
                 },
             };
@@ -1999,6 +2047,7 @@ pub fn Editor(comptime project: type) type {
 }
 
 test {
+    _ = @import("game_input.zig");
     _ = @import("workspace.zig");
     _ = @import("menus.zig");
     _ = @import("panels.zig");
@@ -2014,7 +2063,7 @@ test {
     _ = @import("export_window.zig");
     _ = @import("project_settings.zig");
     _ = @import("devtools_window.zig");
-    _ = @import("hit_test.zig");
+    _ = eggy.ui_hit_test;
     _ = @import("scene_file.zig");
     _ = @import("layout_file.zig");
     _ = @import("play_mode.zig");

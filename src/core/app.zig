@@ -12,6 +12,7 @@ const Resources = @import("resources/resources.zig").Resources;
 const Scenes = @import("scenes/scenes.zig").Scenes;
 const SceneInstances = @import("scene_instances.zig").SceneInstances;
 const scene = @import("scene.zig");
+const Overlay = @import("game_ui/game_ui.zig").Overlay;
 
 const web = builtin.os.tag == .emscripten;
 const width = 900;
@@ -33,10 +34,11 @@ pub const App = struct {
     /// How long the last frame took, and how long the game has run (see `eggy.Time`).
     time: Time = .{},
     /// Installed by the executable before plugin initialization.
-    resource_files: ?@import("scene_instances.zig").Files = null,
+    resource_provider: Resources = .{},
     /// Typed registry installed by the game library, never the editor host.
     scene_access: ?scene.Access = null,
     instances: ?SceneInstances = null,
+    ui_layer: ?*Overlay = null,
     audio: @import("audio.zig").Audio = .{},
     animation: @import("animation.zig").Animation = .{},
     draw2d: @import("draw2d.zig").Draw2d = .{},
@@ -73,6 +75,7 @@ pub const App = struct {
     /// Run the world's PreDeinit, Deinit and PostDeinit stages, then free everything.
     pub fn deinit(self: *App) void {
         self.stopWorld();
+        self.clearGameUi();
         if (self.instances) |*instances| instances.deinit();
         self.world.deinit();
         self.preference_values.deinit();
@@ -91,12 +94,12 @@ pub const App = struct {
 
     /// Borrow this executable's resource providers. Loaded CPU data belongs to the caller.
     pub fn resources(self: *const App) Resources {
-        return .{ .files = self.resource_files, .models = self.graphics.models.loader, .images = self.graphics.textures.loader };
+        return self.resource_provider;
     }
 
     /// Borrow the current world's scene service; do not retain across reset/reload.
     pub fn scenes(self: *App) Scenes {
-        return .{ .world = &self.world, .instances = self.sceneInstances(), .files = self.resource_files, .access = self.scene_access };
+        return .{ .world = &self.world, .instances = self.sceneInstances(), .resources = self.resources(), .access = self.scene_access };
     }
 
     /// The instance registry shared by author calls and the executable's scene-sync point.
@@ -105,12 +108,32 @@ pub const App = struct {
         return &self.instances.?;
     }
 
+    /// Lazily create the default game UI. Customize its context theme/widgets, or use
+    /// `setFont` to copy a font. Custom-renderer-only games need never create this service.
+    pub fn gameUi(self: *App) !*Overlay {
+        if (self.ui_layer) |layer| return layer;
+        const layer = try self.world.allocator.create(Overlay);
+        errdefer self.world.allocator.destroy(layer);
+        layer.* = try Overlay.init(self.world.allocator, self.graphics.device, self.graphics.queue, self.graphics.color_format);
+        self.ui_layer = layer;
+        return layer;
+    }
+
+    fn clearGameUi(self: *App) void {
+        if (self.ui_layer) |layer| {
+            layer.deinit();
+            self.world.allocator.destroy(layer);
+            self.ui_layer = null;
+        }
+    }
+
     /// Start over with an empty world: run the old one's PreDeinit, Deinit and PostDeinit
     /// stages and free it. The editor does this before swapping in a rebuilt game, while the old
     /// game's code, which the world's schedules and storages point into, is still loaded. Run
     /// `startWorld` once the new game's plugins have registered their schedules.
     pub fn resetWorld(self: *App) void {
         self.stopWorld();
+        self.clearGameUi();
         if (self.instances) |*instances| instances.deinit();
         self.instances = null;
         self.scene_access = null;
