@@ -88,6 +88,7 @@ test {
     _ = input.asset;
     _ = @import("input/state_test.zig");
     _ = @import("time.zig");
+    _ = @import("process_init.zig");
     _ = @import("plugins.zig");
     _ = @import("project.zig");
     _ = @import("preferences.zig");

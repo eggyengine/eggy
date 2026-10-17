@@ -40,11 +40,12 @@ pub fn Runtime(comptime project: type) type {
             }
         }
 
-        pub fn init(gpa: std.mem.Allocator, args: []const [*:0]const u8) !Self {
+        pub fn init(process_init: *const std.process.Init, args: []const [*:0]const u8) !Self {
             _ = args;
+            const gpa = process_init.gpa;
             // Used, so a release build's linker keeps the metadata's section.
             if (@hasDecl(project, "metadata_text")) std.mem.doNotOptimizeAway(&project.metadata_text);
-            var app = try eggy.App.init(gpa, project.name);
+            var app = try eggy.App.init(process_init, project.name);
             errdefer app.deinit();
             if (@hasDecl(project, "input_bindings")) try app.input_backend.?.state.readOverrides(project.input_bindings);
             // Model and image files, and scenes, as packaging made them.

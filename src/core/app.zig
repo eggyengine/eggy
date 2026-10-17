@@ -22,6 +22,9 @@ const height = 675;
 /// Owns SDL, one window, the `Graphics` that draws into it, and the game's ECS `world`.
 pub const App = struct {
     window: sdl_adapter.Sdl3Window,
+    /// What Zig 0.16 hands `main` (`std.process.Init`): the command line, the environment
+    /// (`environ_map`), the process arena, allocator and `Io`. Valid for the whole run.
+    process_init: *const std.process.Init,
     init_flags: sdl3.InitFlags,
     graphics: Graphics,
     /// Entities, components, resources and schedules. Plugins register schedules in `init`;
@@ -54,7 +57,8 @@ pub const App = struct {
     debug_draw: @import("debug_draw.zig").DebugDraw = .{},
     profiling: @import("profiling.zig").Profiling = .{},
 
-    pub fn init(gpa: std.mem.Allocator, title: [:0]const u8) !App {
+    pub fn init(process_init: *const std.process.Init, title: [:0]const u8) !App {
+        const gpa = process_init.gpa;
         const init_flags = sdl3.InitFlags{ .video = true, .gamepad = true };
         try sdl3.init(init_flags);
         errdefer sdl3.quit(init_flags);
@@ -73,7 +77,7 @@ pub const App = struct {
         errdefer graphics.deinit();
         if (builtin.os.tag == .windows) try window.window.show();
 
-        return .{ .window = window, .init_flags = init_flags, .graphics = graphics, .world = .init(gpa), .preference_values = .init(gpa), .input_backend = input_backend, .input = .{ .backend = input_backend.state.interface() } };
+        return .{ .window = window, .process_init = process_init, .init_flags = init_flags, .graphics = graphics, .world = .init(gpa), .preference_values = .init(gpa), .input_backend = input_backend, .input = .{ .backend = input_backend.state.interface() } };
     }
 
     /// Run the world's PreDeinit, Deinit and PostDeinit stages, then free everything.

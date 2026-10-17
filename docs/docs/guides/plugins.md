@@ -140,6 +140,10 @@ configured code editor; `.inmap.zon` files open in Eggy's Input Map editor.
 | `window` | The SDL window. |
 | `graphics` | The GPU device and the main window's swapchain. |
 | `world` | The game's ECS world (`eggy.ecs`). |
+| `process_init` | Zig's `std.process.Init`, as `main` would get it: `minimal.args`, `environ_map`, `arena`, `gpa` and `io`. |
+
+Read the command line or environment through `app.process_init`, for example
+`app.process_init.environ_map.get("MY_GAME_LEVEL")`. It stays valid for the whole run.
 
 Register systems on the world in `init`. Eggy runs the world's stages from then on: its Init stages once every plugin has started, and its Update stages every frame after the plugins' `update`.
 

@@ -192,8 +192,9 @@ pub fn Editor(comptime project: type) type {
         /// What would lose the scene's unsaved changes, and so asks first (see `mayLeave`).
         const Leaving = enum { quit, reload, new_project, open_project, open_project_linked };
 
-        pub fn init(gpa: std.mem.Allocator, args: []const [*:0]const u8) !Self {
-            var app = try eggy.App.init(gpa, title);
+        pub fn init(process_init: *const std.process.Init, args: []const [*:0]const u8) !Self {
+            const gpa = process_init.gpa;
+            var app = try eggy.App.init(process_init, title);
             errdefer app.deinit();
             const opened_project = try openProject(gpa, app.window.window, args);
             errdefer if (opened_project) |opened| freeProject(gpa, opened);
