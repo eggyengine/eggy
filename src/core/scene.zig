@@ -62,6 +62,21 @@ pub const Access = struct {
     }
 };
 
+test "captured scenes own component metadata independently of their registry" {
+    const Value = struct { count: u32 = 1 };
+    const Registry = components.Registry(&.{Value}, &.{"game"});
+    var world = ecs.World.init(std.testing.allocator);
+    defer world.deinit();
+    _ = try world.spawn(.{Value{}});
+    var captured = try Scene.capture(std.testing.allocator, &world, registryAccess(Registry), null);
+    defer captured.deinit();
+    const saved = captured.entities[0].components[0];
+    try std.testing.expect(saved.type.ptr != Registry.infos[0].name.ptr);
+    try std.testing.expect(saved.owner.ptr != Registry.infos[0].owner.ptr);
+    try std.testing.expect(saved.fields[0].name.ptr != Registry.infos[0].fields[0].name.ptr);
+    try std.testing.expectEqualStrings("count", saved.fields[0].name);
+}
+
 /// `Access` straight through `Registry` (a `components.Registry`), for code that has the types.
 pub fn registryAccess(comptime Registry: type) Access {
     const Through = struct {
@@ -201,9 +216,10 @@ pub const Scene = struct {
                     log.warn("{s}.{s} of an entity can't be saved", .{ info.name, field.name });
                     continue;
                 };
-                try fields.append(arena, .{ .name = field.name, .value = try arena.dupe(u8, value) });
+                try fields.append(arena, .{ .name = try arena.dupe(u8, field.name), .value = try arena.dupe(u8, value) });
             }
-            try list.append(arena, .{ .type = info.name, .owner = info.owner, .fields = fields.items });
+            // A captured scene outlives the registry/library it came from during hot reload.
+            try list.append(arena, .{ .type = try arena.dupe(u8, info.name), .owner = try arena.dupe(u8, info.owner), .fields = fields.items });
         }
         return .{ .name = name, .parent = parent, .components = list.items };
     }
