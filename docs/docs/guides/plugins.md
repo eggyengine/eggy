@@ -110,8 +110,9 @@ A plugin keeps its state in its own fields. Eggy stores plugins by value and may
 
 ## File templates
 
-Declare `editor_file_types` inside `Game` or `Plugin` to add entries to both Assets
-**New** menus:
+Assets **New** offers Eggy's own kinds (Scene, Input Map, Folder). Declare
+`editor_file_types` inside `Game` or `Plugin` to add your own, listed under your
+plugin's name in both **New** menus:
 
 ```zig
 pub const editor_file_types = [_]eggy.plugins.EditorFileType{.{

@@ -469,21 +469,10 @@ pub const AssetsPanel = struct {
                 };
             }
         }.f;
-        const new_items = arena.alloc(ui.widgets.MenuItem, creation.count(self.file_types)) catch |err| {
+        const new_items = newMenuItems(context, self.file_types) catch |err| {
             context.err = err;
             return null;
         };
-        // Last frame's hit-test tree must survive a game-library swap.
-        for (new_items, 0..) |*item, i| {
-            const label = page_style.fitText(arena, context.font, creation.at(i, self.file_types).?.label(), 14, @max(0, @min(200, context.viewport.w) - 40));
-            item.* = .{
-                .id = creation_id_base + @as(u32, @intCast(i)),
-                .label = arena.dupe(u8, label) catch |err| {
-                    context.err = err;
-                    return null;
-                },
-            };
-        }
         if (menu.new_only) return self.newMenu(context, new_items, menu.at, self.newFilesFolder());
         if (menu.entry) |entry| {
             if (entry.kind == .scene or entry.kind == .input_map or entry.kind == .code or entry.kind == .text) add(&choices, context, .open, "Open");
@@ -562,11 +551,18 @@ pub const AssetsPanel = struct {
             context.err = err;
             return null;
         };
+        // A long list (many plugins' templates) scrolls rather than running off the page.
         const width = @min(200, context.viewport.w);
-        const height = 8 + 33 * @as(f32, @floatFromInt(items.len));
+        var content_height: f32 = 8;
+        for (items) |item| content_height += switch (item.kind) {
+            .separator => 9,
+            .label => 28,
+            else => 32,
+        };
+        const height = @min(content_height, new_menu_max_height, context.viewport.h);
         popup.id = new_root_id;
         popup.style.width = width;
-        popup.style.height = @min(height, context.viewport.h);
+        popup.style.height = height;
         popup.style.overflow = .scroll;
         popup.scroll = &self.new_menu_scroll;
         self.new_menu_scroll.overlay_bar = true;
@@ -576,9 +572,9 @@ pub const AssetsPanel = struct {
             .y = @max(context.viewport.y, @min(at.y, context.viewport.y + context.viewport.h - height)),
         } };
         context.element(popup);
-        for (items, 0..) |item, i| if (context.activated(item.id)) {
+        for (items) |item| if (item.kind == .item and context.activated(item.id)) {
             self.menu = null;
-            return switch (creation.at(i, self.file_types).?) {
+            return switch (creation.at(item.id - creation_id_base, self.file_types).?) {
                 .scene => .{ .create_scene = folder },
                 .folder => .{ .create_folder = folder },
                 .file => |file_type| .{ .create_file = .{ .folder = folder, .file_type = file_type } },
@@ -776,6 +772,42 @@ const Highlight = struct {
 };
 
 const ui_checks = @import("../ui_checks.zig");
+
+/// The tallest the New menu grows before it scrolls: about ten rows.
+const new_menu_max_height: f32 = 330;
+
+/// The New menu's rows: Eggy's own, then each plugin's templates under its name. Items' ids are
+/// `creation_id_base` plus their place in `creation`'s catalog. In the frame's arena, as last
+/// frame's hit-test tree must survive a game-library swap.
+fn newMenuItems(context: *ui.Context, file_types: []const eggy.plugins.EditorFileType) ![]ui.widgets.MenuItem {
+    const arena = context.builder().allocator;
+    var items: std.ArrayList(ui.widgets.MenuItem) = .empty;
+    var owner: ?[]const u8 = null;
+    for (0..creation.count(file_types)) |i| {
+        const entry = creation.at(i, file_types).?;
+        if (i >= creation.builtin_count) {
+            const from = creation.ownerOf(entry.file);
+            if (owner == null or !std.mem.eql(u8, owner.?, from)) {
+                if (owner == null) try items.append(arena, .{ .kind = .separator });
+                try items.append(arena, .{ .kind = .label, .label = try displayName(arena, from) });
+                owner = from;
+            }
+        }
+        const label = page_style.fitText(arena, context.font, entry.label(), 14, @max(0, @min(200, context.viewport.w) - 40));
+        try items.append(arena, .{ .id = creation_id_base + @as(u32, @intCast(i)), .label = try arena.dupe(u8, label) });
+    }
+    return items.items;
+}
+
+/// A plugin key as a heading: `my_physics` as "My physics", the game's as "Game".
+fn displayName(arena: std.mem.Allocator, key: []const u8) ![]const u8 {
+    const name = try arena.dupe(u8, key);
+    for (name) |*c| if (c.* == '_' or c.* == '-') {
+        c.* = ' ';
+    };
+    if (name.len > 0) name[0] = std.ascii.toUpper(name[0]);
+    return name;
+}
 
 test "the panel fits a narrow dock, as a list and as a grid" {
     const gpa = std.testing.allocator;
