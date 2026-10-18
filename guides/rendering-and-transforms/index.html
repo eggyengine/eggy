@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="generator" content="Docusaurus v3.10.2">
 <title data-rh="true">Rendering and transforms | Eggy</title><meta data-rh="true" name="viewport" content="width=device-width,initial-scale=1"><meta data-rh="true" name="twitter:card" content="summary_large_image"><meta data-rh="true" property="og:url" content="https://eggyengine.github.io/eggy/guides/rendering-and-transforms"><meta data-rh="true" property="og:locale" content="en"><meta data-rh="true" name="docusaurus_locale" content="en"><meta data-rh="true" name="docsearch:language" content="en"><meta data-rh="true" name="docusaurus_version" content="current"><meta data-rh="true" name="docusaurus_tag" content="docs-default-current"><meta data-rh="true" name="docsearch:version" content="current"><meta data-rh="true" name="docsearch:docusaurus_tag" content="docs-default-current"><meta data-rh="true" property="og:title" content="Rendering and transforms | Eggy"><meta data-rh="true" name="description" content="Start with scene components rather than GPU commands. Native ECS spawning is explicit:"><meta data-rh="true" property="og:description" content="Start with scene components rather than GPU commands. Native ECS spawning is explicit:"><link data-rh="true" rel="icon" href="/eggy/img/icon.svg"><link data-rh="true" rel="canonical" href="https://eggyengine.github.io/eggy/guides/rendering-and-transforms"><link data-rh="true" rel="alternate" href="https://eggyengine.github.io/eggy/guides/rendering-and-transforms" hreflang="en"><link data-rh="true" rel="alternate" href="https://eggyengine.github.io/eggy/guides/rendering-and-transforms" hreflang="x-default"><script data-rh="true" type="application/ld+json">{"@context":"https://schema.org","@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"Rendering and transforms","item":"https://eggyengine.github.io/eggy/guides/rendering-and-transforms"}]}</script><link rel="stylesheet" href="/eggy/assets/css/styles.78e6bda1.css">
-<script src="/eggy/assets/js/runtime~main.4f321b63.js" defer="defer"></script>
+<script src="/eggy/assets/js/runtime~main.77db55ff.js" defer="defer"></script>
 <script src="/eggy/assets/js/main.d2eb925f.js" defer="defer"></script>
 </head>
 <body>
@@ -41,6 +41,10 @@ For an imported static model:</p>
 Without it, a model uses its imported textures; an untextured shape uses plain color.
 The renderer owns GPU caches and prepares texture uploads outside render passes.
 Use <a class="" href="/eggy/guides/assets-and-scenes">resource loaders</a> when you need owned CPU data instead.</p>
+<p>For custom rendering, <code>eggy.mesh.gatherAlloc(gpa, &amp;app.world)</code> returns all drawables
+without a fixed buffer limit. Free the slice with <code>gpa.free</code>; model and texture paths
+still borrow the world&#x27;s Mesh components. The non-allocating <code>gather(world, buffer)</code>
+continues to return only as many drawables as fit.</p>
 <h2 class="anchor anchorTargetStickyNavbar_Vzrq" id="cameras-and-custom-drawing">Cameras and custom drawing<a href="#cameras-and-custom-drawing" class="hash-link" aria-label="Direct link to Cameras and custom drawing" title="Direct link to Cameras and custom drawing" translate="no">​</a></h2>
 <p>The game looks through the first matching Camera entity, placed by its world transform.
 This change does not introduce camera priorities, camera stacks, or a global current camera.
