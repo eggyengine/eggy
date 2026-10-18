@@ -1,6 +1,15 @@
 const std = @import("std");
 const eggy = @import("eggy");
 
+/// Zig's build entry point: publish this package's plugin, build its game and add plugin tests.
+/// The graph owns all modules; game/plugin use identical Eggy target/optimization settings.
+/// Run commands from the project directory; compile, dependency and SDK errors fail the build.
+///
+/// ```sh
+/// zig build run
+/// zig build run-runtime
+/// zig build test
+/// ```
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});

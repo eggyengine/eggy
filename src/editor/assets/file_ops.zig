@@ -11,6 +11,13 @@ pub const trash_dir = ".eggy/trash";
 
 /// Make an empty folder in `parent` ("" for the project), named "New folder" (or "New folder 2"
 /// and so on). Returns its path; caller-owned.
+/// Editor-only: paths are project-relative; allocation, naming and filesystem errors propagate.
+///
+/// ```zig
+/// // Given allocator gpa, I/O io and an open project directory:
+/// const path = try createFolder(gpa, io, project, "resources");
+/// defer gpa.free(path);
+/// ```
 pub fn createFolder(gpa: std.mem.Allocator, io: std.Io, project: std.Io.Dir, parent: []const u8) ![]u8 {
     const path = try freeName(gpa, io, project, parent, "New folder", "");
     errdefer gpa.free(path);
@@ -20,6 +27,14 @@ pub fn createFolder(gpa: std.mem.Allocator, io: std.Io, project: std.Io.Dir, par
 
 /// Create a uniquely named file from a New-menu template, without overwriting existing files.
 /// Returns a caller-owned project-relative path.
+/// Editor-only: validates parent/name/extension and removes an incomplete file on write failure
+/// where possible; filesystem and allocation failures propagate.
+///
+/// ```zig
+/// // Given gpa, io, an open project, and a plugin's EditorFileType template:
+/// const path = try createFile(gpa, io, project, "resources", template);
+/// defer gpa.free(path);
+/// ```
 pub fn createFile(gpa: std.mem.Allocator, io: std.Io, project: std.Io.Dir, parent: []const u8, file_type: @import("eggy").plugins.EditorFileType) ![]u8 {
     try @import("eggy").refs.validatePath(parent);
     try checkName(file_type.title);
@@ -63,6 +78,14 @@ test "file templates create unique complete files and reject path-like names" {
 }
 
 /// Rename `path` to `new_name` in the same folder. Returns the new path; caller-owned.
+/// Editor-only: rejects invalid names and occupied destinations. Moves the descriptor too;
+/// descriptor failures are logged after the file moves, rather than rolling it back.
+///
+/// ```zig
+/// // Given gpa, io and an open project containing resources/old.png:
+/// const path = try rename(gpa, io, project, "resources/old.png", "new.png");
+/// defer gpa.free(path);
+/// ```
 pub fn rename(gpa: std.mem.Allocator, io: std.Io, project: std.Io.Dir, path: []const u8, new_name: []const u8) ![]u8 {
     try checkName(new_name);
     const target = try join(gpa, parentOf(path), new_name);
@@ -75,6 +98,14 @@ pub fn rename(gpa: std.mem.Allocator, io: std.Io, project: std.Io.Dir, path: []c
 
 /// Copy `path` (a file, or a folder and everything in it) beside itself as "<name> copy".
 /// Returns the copy's path; caller-owned.
+/// Editor-only: copies directory trees without descriptors so copies acquire new asset ids.
+/// I/O/allocation errors propagate; a partially copied tree may remain on failure.
+///
+/// ```zig
+/// // Given gpa, io and an open project containing resources/main.scene.zon:
+/// const path = try duplicate(gpa, io, project, "resources/main.scene.zon");
+/// defer gpa.free(path);
+/// ```
 pub fn duplicate(gpa: std.mem.Allocator, io: std.Io, project: std.Io.Dir, path: []const u8) ![]u8 {
     const name = std.fs.path.basename(path);
     const stem_end = extensionStart(name);
@@ -88,6 +119,14 @@ pub fn duplicate(gpa: std.mem.Allocator, io: std.Io, project: std.Io.Dir, path: 
 
 /// Move `path` into `folder` ("" for the project), keeping its name. Returns the new path;
 /// caller-owned. Fails with `error.PathAlreadyExists` when the folder has one so named.
+/// Editor-only: rejects moving into the source or its descendants; the destination folder
+/// must exist. Descriptor failures are logged after a successful file move.
+///
+/// ```zig
+/// // Given gpa, io and an open project with these paths:
+/// const path = try moveInto(gpa, io, project, "resources/ship.glb", "resources/models");
+/// defer gpa.free(path);
+/// ```
 pub fn moveInto(gpa: std.mem.Allocator, io: std.Io, project: std.Io.Dir, path: []const u8, folder: []const u8) ![]u8 {
     try checkDestination(path, folder);
     const target = try join(gpa, folder, std.fs.path.basename(path));
@@ -98,6 +137,14 @@ pub fn moveInto(gpa: std.mem.Allocator, io: std.Io, project: std.Io.Dir, path: [
 
 /// Copy `path` (a file, or a folder and everything in it) into `folder`, under its own name or,
 /// when that is taken, "<name> 2" and so on. Returns the copy's path; caller-owned.
+/// Editor-only: rejects copying into the source or its descendants and omits descriptors.
+/// I/O/allocation failures propagate without removing already-copied entries.
+///
+/// ```zig
+/// // Given gpa, io and an open project with these paths:
+/// const path = try copyInto(gpa, io, project, "resources/ship.glb", "resources/models");
+/// defer gpa.free(path);
+/// ```
 pub fn copyInto(gpa: std.mem.Allocator, io: std.Io, project: std.Io.Dir, path: []const u8, folder: []const u8) ![]u8 {
     try checkDestination(path, folder);
     const target = try freeTarget(gpa, io, project, folder, std.fs.path.basename(path));
@@ -108,6 +155,14 @@ pub fn copyInto(gpa: std.mem.Allocator, io: std.Io, project: std.Io.Dir, path: [
 
 /// Copy `outside` (an absolute path: a file, or a folder and everything in it) into `folder` of
 /// the project, as `copyInto` does. Returns the copy's path; caller-owned.
+/// Editor-only: creates the destination folder, omits descriptors from copied trees, and
+/// propagates I/O/allocation errors; failure can leave partial output.
+///
+/// ```zig
+/// // Given gpa, io, an open project and an absolute external file path:
+/// const path = try import(gpa, io, project, outside, "resources");
+/// defer gpa.free(path);
+/// ```
 pub fn import(gpa: std.mem.Allocator, io: std.Io, project: std.Io.Dir, outside: []const u8, folder: []const u8) ![]u8 {
     const target = try freeTarget(gpa, io, project, folder, std.fs.path.basename(outside));
     errdefer gpa.free(target);
@@ -124,6 +179,15 @@ fn freeTarget(gpa: std.mem.Allocator, io: std.Io, project: std.Io.Dir, folder: [
 
 /// Move `path` into the trash, in a folder of its own, keeping its name. Returns where it went
 /// (for `restore`); caller-owned.
+/// Editor-only: creates a random trash subfolder and carries the descriptor when possible.
+/// Retain the original path separately for undo; filesystem/allocation failures propagate.
+///
+/// ```zig
+/// // Given gpa, io and an open project containing resources/old.png:
+/// const trashed = try trash(gpa, io, project, "resources/old.png");
+/// defer gpa.free(trashed);
+/// try restore(io, project, trashed, "resources/old.png");
+/// ```
 pub fn trash(gpa: std.mem.Allocator, io: std.Io, project: std.Io.Dir, path: []const u8) ![]u8 {
     var tag: [8]u8 = undefined;
     io.random(&tag);
@@ -138,6 +202,13 @@ pub fn trash(gpa: std.mem.Allocator, io: std.Io, project: std.Io.Dir, path: []co
 }
 
 /// Move `from` to `to` (both relative to the project), as undoing a rename does.
+/// Editor-only: refuses an existing destination; its parent must already exist.
+/// File-move failures propagate; a failed descriptor move only logs a warning.
+///
+/// ```zig
+/// // Given io and an open project with resources/new.png:
+/// try move(io, project, "resources/new.png", "resources/old.png");
+/// ```
 pub fn move(io: std.Io, project: std.Io.Dir, from: []const u8, to: []const u8) !void {
     if (exists(io, project, to)) return error.PathAlreadyExists;
     try project.rename(from, project, to, io);
@@ -145,6 +216,13 @@ pub fn move(io: std.Io, project: std.Io.Dir, from: []const u8, to: []const u8) !
 }
 
 /// Move `from` (in the trash) back to `to`.
+/// Editor-only: creates missing parent folders but never overwrites an existing target.
+/// File errors propagate; descriptor failures are logged without undoing the restoration.
+///
+/// ```zig
+/// // Given io, an open project and the path returned by trash:
+/// try restore(io, project, trashed, "resources/old.png");
+/// ```
 pub fn restore(io: std.Io, project: std.Io.Dir, from: []const u8, to: []const u8) !void {
     if (exists(io, project, to)) return error.PathAlreadyExists;
     if (std.fs.path.dirname(to)) |parent| try project.createDirPath(io, parent);

@@ -33,6 +33,12 @@ pub const View = extern struct {
     pub const default: View = lookingAt(.{ 0, 8, 18 }, .{ 0, 1, 0 }, .{});
 
     /// From `eye` towards `target`, as `camera` sees.
+    /// Positions use world units (metres). Choose distinct points with a direction not
+    /// parallel to world +y, so a useful up vector can be constructed. Returns plain data.
+    ///
+    /// ```zig
+    /// const view = View.lookingAt(.{ 0, 2, 8 }, .{ 0, 0, 0 }, .{ .fov_deg = 70 });
+    /// ```
     pub fn lookingAt(eye: [3]f32, target: [3]f32, camera: Camera) View {
         const forward = normalize(sub(target, eye));
         const right = normalize(cross(forward, .{ 0, 1, 0 }));
@@ -41,6 +47,12 @@ pub const View = extern struct {
 
     /// The matrix taking world points to clip space, for a view `aspect` wide for each unit tall,
     /// as columns.
+    /// `aspect` must be positive; use valid perspective settings (`0 < near < far` and
+    /// a field of view between 0 and 180 degrees).
+    ///
+    /// ```zig
+    /// const clip_from_world = View.default.viewProjection(1920.0 / 1080.0);
+    /// ```
     pub fn viewProjection(self: View, aspect: f32) [4][4]f32 {
         const eye = math.Vec3{ .x = self.eye[0], .y = self.eye[1], .z = self.eye[2] };
         const target = math.Vec3{ .x = self.eye[0] + self.forward[0], .y = self.eye[1] + self.forward[1], .z = self.eye[2] + self.forward[2] };
@@ -55,6 +67,12 @@ pub const View = extern struct {
 
 /// The view through the first entity of `world` with a `Camera`, placed by its transform (and
 /// its parents'); null when there is none.
+/// Borrows the world only during the query; returns a copy independent of ECS storage.
+/// When several cameras exist, query order determines which wins.
+///
+/// ```zig
+/// const view = find(world) orelse View.default;
+/// ```
 pub fn find(world: *ecs.World) ?View {
     var cameras = world.query(.{*const Camera});
     const found = cameras.next() orelse return null;
@@ -70,14 +88,29 @@ pub fn find(world: *ecs.World) ?View {
     };
 }
 
+/// Subtract `b` from `a` component-wise; inputs must use the same coordinate space and units.
+///
+/// ```zig
+/// const displacement = sub(.{ 3, 2, 1 }, .{ 1, 2, 0 });
+/// ```
 pub fn sub(a: [3]f32, b: [3]f32) [3]f32 {
     return @as(@Vector(3, f32), a) - @as(@Vector(3, f32), b);
 }
 
+/// Return the right-handed cross product; its magnitude is not normalized.
+///
+/// ```zig
+/// const normal = cross(.{ 1, 0, 0 }, .{ 0, 1, 0 });
+/// ```
 pub fn cross(a: [3]f32, b: [3]f32) [3]f32 {
     return .{ a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0] };
 }
 
+/// Return a unit vector in `v`'s direction, or the unchanged zero vector for zero length.
+///
+/// ```zig
+/// const direction = normalize(.{ 0, 0, -5 });
+/// ```
 pub fn normalize(v: [3]f32) [3]f32 {
     const length = @sqrt(@reduce(.Add, @as(@Vector(3, f32), v) * @as(@Vector(3, f32), v)));
     if (length == 0) return v;
@@ -86,6 +119,12 @@ pub fn normalize(v: [3]f32) [3]f32 {
 
 /// Where world point `point` lands through `view_projection`: x and y from -1 to 1 (y up), and
 /// whether it is in front of the camera.
+/// Uses a column-major clip matrix; points behind return zero coordinates.
+/// `in_front` does not mean inside the viewport or between the near/far planes.
+///
+/// ```zig
+/// const projected = project(View.default.viewProjection(16.0 / 9.0), .{ 0, 1, 0 });
+/// ```
 pub fn project(view_projection: [4][4]f32, point: [3]f32) struct { x: f32, y: f32, in_front: bool } {
     var clip: @Vector(4, f32) = view_projection[3];
     for (0..3) |i| clip += @as(@Vector(4, f32), view_projection[i]) * @as(@Vector(4, f32), @splat(point[i]));

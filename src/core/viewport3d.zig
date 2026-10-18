@@ -43,6 +43,14 @@ pub const Preview = struct {
 
     /// The backdrop and meshes for a target in `format` at `extent`, painting with textures
     /// bound as `texture_layout` describes (`TextureCache.layout`).
+    /// Host renderer setup: `extent` is the nonzero physical-pixel depth-buffer size.
+    /// The device/layout must remain alive; GPU/shader/allocation errors propagate.
+    /// Owns render resources and must be deinitialized after their GPU work completes.
+    ///
+    /// ```zig
+    /// var preview = try Preview.init(device, color_format, target_extent_pixels, textures.layout);
+    /// defer preview.deinit(); // Finish GPU use before this host scope ends.
+    /// ```
     pub fn init(device: vit.Device, format: vit.Format, extent: vit.Extent2D, texture_layout: vit.BindGroupLayout) !Preview {
         const geometry = try vit.Buffer.init(device, .{
             .label = "scene backdrop",
@@ -119,6 +127,14 @@ pub const Preview = struct {
         };
     }
 
+    /// Replace the host preview's depth target with a nonzero physical-pixel `extent`.
+    /// Use its creating device and ensure the GPU is finished with the old depth resources
+    /// first. GPU allocation errors leave the previous depth target intact.
+    ///
+    /// ```zig
+    /// try graphics.queue.waitIdle();
+    /// try preview.resize(graphics.device, resized_extent_pixels);
+    /// ```
     pub fn resize(self: *Preview, device: vit.Device, extent: vit.Extent2D) !void {
         const depth = try makeDepth(device, extent);
         errdefer depth.deinit();
@@ -130,6 +146,13 @@ pub const Preview = struct {
         self.depth_initialized = false;
     }
 
+    /// Destroy host preview resources once after all their GPU work has finished.
+    /// Does not destroy the target or borrowed asset caches; device must still be alive.
+    ///
+    /// ```zig
+    /// try graphics.queue.waitIdle();
+    /// preview.deinit();
+    /// ```
     pub fn deinit(self: *Preview) void {
         self.grid.deinit();
         self.meshes.deinit();
@@ -149,6 +172,16 @@ pub const Preview = struct {
     /// outlined, into `scene` of `target`, a window `window` big at `extent` pixels, cut to
     /// `clip`, with model files and textures from `sources`, and the editor's ground grid when
     /// `grid` says. Call outside a render pass.
+    /// Host-only: `scene`, `clip` and `window` share logical UI coordinates; `extent` is
+    /// the physical-pixel target/depth size. `srgb` says the target encodes sRGB itself.
+    /// The target must already be in color-attachment state and match the configured
+    /// format. Borrows live drawable paths, loads assets, changes bindings and records a
+    /// complete pass; the caller fences in-flight buffers before reuse. GPU errors
+    /// propagate; empty/invalid clipped rectangles record nothing.
+    ///
+    /// ```zig
+    /// try preview.draw(scene_cmd, target_view, scene_rect, clip_rect, window_rect, target_extent_pixels, target_is_srgb, drawables, asset_sources, camera_view, selected_entity, true);
+    /// ```
     pub fn draw(self: *Preview, cmd: vit.CommandBuffer, target: vit.TextureView, scene: ui.Rect, clip: ui.Rect, window: ui.Rect, extent: vit.Extent2D, srgb: bool, drawables: []mesh.Drawable, sources: mesh_renderer.Sources, view: camera.View, selected: ?ecs.EntityId, grid: bool) !void {
         const scissor = previewScissor(scene, clip, window, extent) orelse return;
         try self.meshes.prepare(cmd, drawables, sources);
@@ -197,6 +230,13 @@ pub const Preview = struct {
 };
 
 /// The build compiles the Slang shaders to WGSL for the web and SPIR-V elsewhere.
+/// Host shader adapter: wraps those compiled `code` bytes without compiling source here.
+/// `entry_point` selects the WGSL entry on the web; keep both inputs alive through shader
+/// creation. Returns a borrowed shader-module description, not an owned GPU shader.
+///
+/// ```zig
+/// const source = shaderSource(compiled_vertex_bytes, "vertexMain");
+/// ```
 pub fn shaderSource(code: []const u8, entry_point: []const u8) vit.ShaderModule {
     if (@import("builtin").os.tag == .emscripten)
         return vit.BinaryShaderModule.init(.{ .backend = .webgpu, .format = .wgsl, .bytes = code, .entry_point = entry_point });

@@ -13,6 +13,13 @@ pub const Importer = struct {
 };
 
 /// The `eggy_assets` module for `target`, made with `eggy`, Eggy's own builder.
+/// Build-internal; returns a graph-owned module independent of the engine/GPU, with the
+/// matching s2s serialization dependency. Reuse this module within the compilation.
+///
+/// ```zig
+/// const assets = models.assetsModule(engine_builder, target, optimize);
+/// tool_module.addImport("eggy_assets", assets);
+/// ```
 pub fn assetsModule(eggy: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builtin.OptimizeMode) *std.Build.Module {
     const s2s = eggy.dependency("s2s", .{ .target = target, .optimize = optimize });
     return eggy.createModule(.{
@@ -26,6 +33,13 @@ pub fn assetsModule(eggy: *std.Build, target: std.Build.ResolvedTarget, optimize
 /// The importer for `target`, built with `eggy` (Eggy's builder), using `assets` (an
 /// `assetsModule`, the one everything else in the compilation imports). Null until assimp has
 /// been fetched; Zig then runs the build again.
+/// Build-internal; the build graph owns both results. Link/import the returned module and
+/// separately install its shared library using `installedPath` for deployed editors.
+///
+/// ```zig
+/// const importer = models.addImporter(engine_builder, target, optimize, assets) orelse return;
+/// editor_module.addImport("eggy_model_import", importer.module);
+/// ```
 pub fn addImporter(eggy: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builtin.OptimizeMode, assets: *std.Build.Module) ?Importer {
     const source = eggy.lazyDependency("assimp", .{}) orelse return null;
     const built = assimp.build(eggy, source, target, optimize);
@@ -68,6 +82,13 @@ pub fn addImporter(eggy: *std.Build, target: std.Build.ResolvedTarget, optimize:
 }
 
 /// Where a game installs `library` (a shared library) beside its executables, which find it there.
+/// Returns a library-owner-build-allocated relative path: `bin/` on Windows, `lib/` elsewhere.
+/// Does not create an install step or change the library's loader search path.
+///
+/// ```zig
+/// const path = models.installedPath(target.result, importer.library);
+/// b.getInstallStep().dependOn(&b.addInstallFile(importer.library.getEmittedBin(), path).step);
+/// ```
 pub fn installedPath(target: std.Target, library: *std.Build.Step.Compile) []const u8 {
     const owner = library.step.owner;
     return if (target.os.tag == .windows) owner.fmt("bin/{s}", .{library.out_filename}) else owner.fmt("lib/{s}", .{library.out_filename});
@@ -77,6 +98,15 @@ pub fn installedPath(target: std.Target, library: *std.Build.Step.Compile) []con
 /// `<prefix>/data/<id>.eggmodel`, and each texture to `<id>.eggtexture` (see
 /// `assets/manifest.zig`), by a tool built with `eggy` for the machine building. Null when the
 /// game has neither (so assimp isn't built for it), or until assimp is fetched.
+/// The graph owns the returned install step; attach it to each runtime/install target
+/// that needs converted assets. File/descriptor changes invalidate the packaging step.
+/// Conversion/I/O failures surface when the step runs, not during configuration.
+///
+/// ```zig
+/// if (models.addPackaging(b, engine_builder, optimize, files)) |step| {
+///     runtime_step.dependOn(step);
+/// }
+/// ```
 pub fn addPackaging(b: *std.Build, eggy: *std.Build, optimize: std.builtin.OptimizeMode, files: []const manifest.Entry) ?*std.Build.Step {
     var converted: std.ArrayList(manifest.Entry) = .empty;
     for (files) |entry| if (manifest.Packaged.of(entry.path) != .copy) converted.append(b.allocator, entry) catch @panic("OOM");

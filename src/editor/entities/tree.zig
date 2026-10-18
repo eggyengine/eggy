@@ -24,6 +24,14 @@ pub const Row = struct {
 /// and described through `access` (null: no game library, so neither), into `arena`. With a
 /// `filter`, only the entities whose name or a component's name contains it (ignoring case) are
 /// listed, with their ancestors to place them.
+/// Editor-only: supply live, ordered roots from this world and access from its loaded game.
+/// Rows, copied names and guide lines live in `arena`; component-name strings still borrow
+/// the game's metadata and must not survive library unload. Allocation failures propagate.
+///
+/// ```zig
+/// // Given arena allocator, world, ordered root ids and optional game scene access:
+/// const rows = try collect(arena, &world, roots, access, "camera");
+/// ```
 pub fn collect(arena: std.mem.Allocator, world: *ecs.World, roots: []const ecs.EntityId, access: ?eggy.scene.Access, filter: []const u8) ![]const Row {
     var rows: std.ArrayList(Row) = .empty;
     for (roots) |entity| try addSubtree(arena, &rows, world, access, entity, 0);

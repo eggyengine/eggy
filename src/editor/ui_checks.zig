@@ -10,6 +10,14 @@ const slack: f32 = 0.5;
 
 /// Fail if any element of `root` (laid out in `viewport`) reaches past the viewport's sides,
 /// or holds text wider than itself.
+/// Test-only editor helper: borrows a laid-out tree and loaded font, measuring logical points
+/// with 0.5-point slack. Checks horizontal bounds, not height/scroll clipping; prints a
+/// diagnostic and returns `ElementOutsideWindow` or `TextOverflows` on failure.
+///
+/// ```zig
+/// // After the test's context.render() has produced a laid-out last_root:
+/// try ui_checks.expectFits(context.last_root.?, context.font, viewport);
+/// ```
 pub fn expectFits(root: *const L.Element, font: *const ui.Font, viewport: ui.Rect) !void {
     try visit(root, font, viewport);
 }

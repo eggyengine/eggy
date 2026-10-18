@@ -93,6 +93,14 @@ pub const Registry = struct {
 };
 
 /// The keys of the plugins `source` (a `registry_file`) has off, in `arena`.
+/// Host-only: accepts sentinel-terminated ZON and ignores unknown registry fields.
+/// Returned list/strings live in `arena`, including parse allocations on failure.
+///
+/// ```zig
+/// var arena = std.heap.ArenaAllocator.init(gpa);
+/// defer arena.deinit();
+/// const off = try parseOff(arena.allocator(), ".{ .plugins = .{.{ .key = \"stats\", .on = false }} }");
+/// ```
 pub fn parseOff(arena: std.mem.Allocator, source: [:0]const u8) ![]const []const u8 {
     const registry = try std.zon.parse.fromSliceAlloc(Registry, arena, source, null, .{ .ignore_unknown_fields = true });
     var off: std.ArrayList([]const u8) = .empty;
@@ -124,6 +132,17 @@ pub const EditorFileType = struct {
 /// order, so the game, listed first, sees each frame before its plugins; `deinit` and `uiEvent`
 /// run in reverse.
 /// `keys` names each one's preferences (see `preferences.Manifest`), in the same order.
+/// Host-only: provide at least the game type and one stable published key per type.
+/// Returned instances own their hook-created resources; deinitialize before unloading their
+/// code. Instances may move, so hooks must not retain self/App pointers. Compile-time
+/// metadata includes disabled plugins; runtime dispatch skips them.
+///
+/// ```zig
+/// // Host with Game/Stats plugin types and a live app:
+/// const Plugins = Set(.{ Game, Stats }, &.{ "game", "stats" });
+/// var plugins = try Plugins.init(gpa, app, Plugins.enabledExcept(&.{}));
+/// defer plugins.deinit();
+/// ```
 pub fn Set(comptime types: anytype, comptime keys: []const [:0]const u8) type {
     const list: [types.len]type = types;
     if (keys.len != list.len) @compileError("one preference key per plugin");
@@ -134,10 +153,21 @@ pub fn Set(comptime types: anytype, comptime keys: []const [:0]const u8) type {
         enabled: [list.len]bool,
 
         const Self = @This();
+        /// Host-only: whether any enabled plugin declares gameUi, without calling hooks.
+        /// Use to avoid creating an unused overlay; disabled instances are never inspected.
+        ///
+        /// ```zig
+        /// const needs_overlay = plugins.hasGameUi(); // An initialized plugin set.
+        /// ```
         pub fn hasGameUi(self: *const Self) bool {
             inline for (list, 0..) |T, i| if (@hasDecl(T, "gameUi") and self.enabled[i]) return true;
             return false;
         }
+        /// Host-only: whether any enabled plugin declares custom draw, without executing it.
+        ///
+        /// ```zig
+        /// const needs_custom_draw = plugins.hasDraw(); // An initialized plugin set.
+        /// ```
         pub fn hasDraw(self: *const Self) bool {
             inline for (list, 0..) |T, i| if (@hasDecl(T, "draw") and self.enabled[i]) return true;
             return false;
@@ -221,6 +251,11 @@ pub fn Set(comptime types: anytype, comptime keys: []const [:0]const u8) type {
 
         /// Which plugins are on when those keyed in `off` aren't. The game (listed first) is
         /// always on.
+        /// Host-only: unknown keys are ignored; returned flags are values with no ownership.
+        ///
+        /// ```zig
+        /// const enabled = Plugins.enabledExcept(&.{"stats"}); // Plugins is a Set type.
+        /// ```
         pub fn enabledExcept(off: []const []const u8) [list.len]bool {
             var enabled: [list.len]bool = @splat(true);
             for (keys[1..], enabled[1..]) |key, *on| {
@@ -233,6 +268,16 @@ pub fn Set(comptime types: anytype, comptime keys: []const [:0]const u8) type {
 
         /// Start every plugin that `enabled` has on. If one fails, those already started are
         /// stopped again.
+        /// Host-only: registers preferences (including disabled plugins) and enabled input
+        /// maps before init hooks, then constructs enabled instances in order. `app` is
+        /// borrowed only during each hook; returned instances may move. Hook resources
+        /// belong to the set until deinit. Registration side effects are not rolled back
+        /// on failure; the host owns resetting run-local registrations before a fresh start.
+        ///
+        /// ```zig
+        /// var plugins = try Plugins.init(gpa, app, Plugins.enabledExcept(&.{}));
+        /// defer plugins.deinit(); // Before unloading the game library or destroying app.
+        /// ```
         pub fn init(gpa: std.mem.Allocator, app: *App, enabled: [list.len]bool) !Self {
             // Their preferences first (even those off, which keep their values), so each `init`
             // can read them.
@@ -257,29 +302,71 @@ pub fn Set(comptime types: anytype, comptime keys: []const [:0]const u8) type {
             return self;
         }
 
+        /// Host-only: run enabled deinit hooks in reverse order, freeing hook-owned resources.
+        /// Call once on a successfully initialized set while its code is still loaded.
+        /// Does not clear host preference/input registrations or make the set reusable.
+        ///
+        /// ```zig
+        /// var plugins = try Plugins.init(gpa, app, Plugins.enabledExcept(&.{}));
+        /// defer plugins.deinit();
+        /// ```
         pub fn deinit(self: *Self) void {
             self.deinitFirst(list.len);
         }
 
+        /// Host-only: dispatch an SDL event to enabled event hooks in game-first order.
+        /// Borrows app/event for the calls; hook side effects remain if a hook errors,
+        /// and later hooks are skipped. Input capture/gating is the host's responsibility.
+        ///
+        /// ```zig
+        /// try plugins.event(app, event); // Host with the current SDL event.
+        /// ```
         pub fn event(self: *Self, app: *App, curr_event: Event) !void {
             inline for (list, 0..) |T, i| if (@hasDecl(T, "event") and self.enabled[i]) try self.instances[i].event(app, curr_event);
         }
 
+        /// Host-only: invoke enabled gameplay update hooks in game-first order.
+        /// Call only when gameplay should advance; this method does not check pause/play
+        /// state. First hook failure propagates and skips subsequent hooks.
+        ///
+        /// ```zig
+        /// try plugins.update(app); // Host's active gameplay frame.
+        /// ```
         pub fn update(self: *Self, app: *App) !void {
             inline for (list, 0..) |T, i| if (@hasDecl(T, "update") and self.enabled[i]) try self.instances[i].update(app);
         }
 
         /// Default UI content in plugin order, after scene/custom drawing.
+        /// Host-only: context must be in its widget-building frame. Hooks borrow it only
+        /// for this call; first failure skips later hooks and leaves earlier UI declarations.
+        ///
+        /// ```zig
+        /// // Host after overlay.begin, before overlay.render:
+        /// try plugins.gameUi(app, &overlay.context);
+        /// ```
         pub fn gameUi(self: *Self, app: *App, context: *ui.Context) !void {
             inline for (list, 0..) |T, i| if (@hasDecl(T, "gameUi") and self.enabled[i]) try self.instances[i].gameUi(app, context);
         }
 
         /// Custom rendering outside a pass; the engine still owns frame submission.
+        /// Host-only: pass the current engine-owned draw context. Each hook must finish
+        /// outside a pass with the target in color-attachment state; never retain it.
+        /// First hook error propagates without undoing already recorded commands.
+        ///
+        /// ```zig
+        /// try plugins.draw(app, draw_context); // Host, outside any render pass.
+        /// ```
         pub fn draw(self: *Self, app: *App, context: DrawContext) !void {
             inline for (list, 0..) |T, i| if (@hasDecl(T, "draw") and self.enabled[i]) try self.instances[i].draw(app, context);
         }
 
         /// Custom UI consumers are consulted in reverse visual order.
+        /// Host-only: stops at the first true result or error. True means the host must
+        /// withhold gameplay input; this dispatcher does not mutate App.input itself.
+        ///
+        /// ```zig
+        /// const consumed = try plugins.uiEvent(app, event);
+        /// ```
         pub fn uiEvent(self: *Self, app: *App, curr_event: Event) !bool {
             comptime var i = list.len;
             inline while (i > 0) {
@@ -290,15 +377,36 @@ pub fn Set(comptime types: anytype, comptime keys: []const [:0]const u8) type {
         }
 
         /// A frame in the editor while editing or paused: each plugin's `editorUpdate`.
+        /// Host-only: caller enforces play state and supplies a hook-local editor context.
+        /// Dispatches game-first; the first failure propagates and skips later hooks.
+        ///
+        /// ```zig
+        /// try plugins.editorUpdate(&editor_context); // Host's editing/paused frame.
+        /// ```
         pub fn editorUpdate(self: *Self, editor: *EditorContext) !void {
             inline for (list, 0..) |T, i| if (@hasDecl(T, "editorUpdate") and self.enabled[i]) try self.instances[i].editorUpdate(editor);
         }
 
+        /// Host-only: build the project Inspector UI through enabled editorUi hooks, game-first.
+        /// Both contexts are borrowed for this call and UI must be in its building frame.
+        /// First hook failure propagates without undoing earlier declarations.
+        ///
+        /// ```zig
+        /// try plugins.editorUi(&editor_context, ui_context); // Host building Inspector.
+        /// ```
         pub fn editorUi(self: *Self, editor: *EditorContext, context: *ui.Context) !void {
             inline for (list, 0..) |T, i| if (@hasDecl(T, "editorUi") and self.enabled[i]) try self.instances[i].editorUi(editor, context);
         }
 
         /// Fill panel `panel` of `editor_panels` through the plugin that declared it.
+        /// Host-only: index is global within this Set's current metadata, converted to a
+        /// plugin-local index. Disabled panels draw an explanation; missing hooks/out-of-range
+        /// indices do nothing. Contexts are hook-local; UI/hook errors propagate.
+        ///
+        /// ```zig
+        /// // Host building a panel from this generation's editor_panels list:
+        /// try plugins.editorPanelUi(panel_index, &editor_context, ui_context);
+        /// ```
         pub fn editorPanelUi(self: *Self, panel: usize, editor: *EditorContext, context: *ui.Context) !void {
             comptime var first: usize = 0;
             inline for (list, 0..) |T, i| if (@hasDecl(T, "editor_panels")) {
@@ -313,6 +421,13 @@ pub fn Set(comptime types: anytype, comptime keys: []const [:0]const u8) type {
         }
 
         /// Dispatch a current-generation command to its declaring plugin's local index.
+        /// Host-only: `command` indexes this Set's flattened editor_commands, not a stable
+        /// persisted ID. Returns PluginDisabled/NoEditorCommandHook/NoEditorCommand as needed,
+        /// or propagates the hook's failure; context must not escape the call.
+        ///
+        /// ```zig
+        /// try plugins.editorCommand(command_index, &editor_context); // Host menu dispatch.
+        /// ```
         pub fn editorCommand(self: *Self, command: usize, editor: *EditorContext) !void {
             comptime var first: usize = 0;
             inline for (list, 0..) |T, i| if (@hasDecl(T, "editor_commands")) {
@@ -374,13 +489,31 @@ test "plugins start in order, stop in reverse, and skip hooks they don't declare
             const Game = struct {
                 last: ?usize = null,
                 pub const editor_commands = [_]EditorCommand{ .{ .key = "raise", .title = "Raise" }, .{ .key = "lower", .title = "Lower" } };
+                /// Test fixture: record the plugin-local command index without using editor services.
+                ///
+                /// ```zig
+                /// // Within this fixture, with game: Game and an editor context:
+                /// try game.editorCommand(1, editor);
+                /// ```
                 pub fn editorCommand(self: *@This(), command: usize, _: *EditorContext) !void {
                     self.last = command;
                 }
 
                 test "disabled UI plugins do not opt a game into overlay rendering" {
                     const Widget = struct {
+                        /// Test fixture: a no-op UI hook used only to test enabled-hook detection.
+                        ///
+                        /// ```zig
+                        /// // Within this fixture, with widget, app and a building UI context:
+                        /// try widget.gameUi(app, context);
+                        /// ```
                         pub fn gameUi(_: *@This(), _: *App, _: *ui.Context) !void {}
+                        /// Test fixture: a no-op draw hook; records no commands and retains no context.
+                        ///
+                        /// ```zig
+                        /// // Within this fixture, with widget and a current draw context:
+                        /// try widget.draw(app, draw);
+                        /// ```
                         pub fn draw(_: *@This(), _: *App, _: DrawContext) !void {}
                     };
                     const Plugins = Set(.{ struct {}, Widget }, &.{ "game", "widgets" });
@@ -399,23 +532,55 @@ test "plugins start in order, stop in reverse, and skip hooks they don't declare
         }
     };
     const Game = struct {
+        /// Test fixture: append the game's start marker and return an empty instance.
+        /// Allocator/App are unused; no resources are acquired.
+        ///
+        /// ```zig
+        /// // Within this fixture with a live app:
+        /// var game = try Game.init(gpa, app);
+        /// ```
         pub fn init(_: std.mem.Allocator, _: *App) !@This() {
             Log.add('g');
             return .{};
         }
+        /// Test fixture: append the update marker, without reading App or changing game state.
+        ///
+        /// ```zig
+        /// // Within this fixture, after initialization:
+        /// try game.update(app);
+        /// ```
         pub fn update(_: *@This(), _: *App) !void {
             Log.add('u');
         }
+        /// Test fixture: append the game's stop marker; no allocations are owned.
+        ///
+        /// ```zig
+        /// // Within this fixture, after Game.init:
+        /// game.deinit();
+        /// ```
         pub fn deinit(_: *@This()) void {
             Log.add('G');
         }
     };
     const Quiet = struct {}; // no hooks at all
     const Stats = struct {
+        /// Test fixture: append the Stats start marker and return an empty instance.
+        /// Allocator/App are unused; there is no resource ownership.
+        ///
+        /// ```zig
+        /// // Within this fixture:
+        /// var stats = try Stats.init(gpa, app);
+        /// ```
         pub fn init(_: std.mem.Allocator, _: *App) !@This() {
             Log.add('s');
             return .{};
         }
+        /// Test fixture: append the Stats stop marker to verify reverse teardown order.
+        ///
+        /// ```zig
+        /// // Within this fixture, after Stats.init:
+        /// stats.deinit();
+        /// ```
         pub fn deinit(_: *@This()) void {
             Log.add('S');
         }
@@ -434,6 +599,13 @@ test "editor panels from every plugin are listed in order and reach the plugin t
     };
     const Game = struct {
         pub const editor_panels = [_]EditorPanel{.{ .title = "Level" }};
+        /// Test fixture: append 10 plus the plugin-local panel index to the bounded log.
+        /// Caller must leave a free log slot; editor/UI pointers are unused.
+        ///
+        /// ```zig
+        /// // Within this fixture, with game and hook contexts:
+        /// try game.editorPanelUi(0, editor, context);
+        /// ```
         pub fn editorPanelUi(_: *@This(), panel: usize, _: *EditorContext, _: *ui.Context) !void {
             Log.drawn[Log.len] = 10 + panel;
             Log.len += 1;
@@ -441,6 +613,13 @@ test "editor panels from every plugin are listed in order and reach the plugin t
     };
     const Stats = struct {
         pub const editor_panels = [_]EditorPanel{ .{ .title = "Frames" }, .{ .title = "Memory" } };
+        /// Test fixture: append 20 plus the local panel index to verify global-to-local dispatch.
+        /// Caller must leave a free log slot; no UI is constructed or retained.
+        ///
+        /// ```zig
+        /// // Within this fixture, with stats and hook contexts:
+        /// try stats.editorPanelUi(1, editor, context);
+        /// ```
         pub fn editorPanelUi(_: *@This(), panel: usize, _: *EditorContext, _: *ui.Context) !void {
             Log.drawn[Log.len] = 20 + panel;
             Log.len += 1;
@@ -459,11 +638,23 @@ test "a plugin that fails to start stops the ones started before it" {
         var stopped: u32 = 0;
     };
     const Started = struct {
+        /// Test fixture: increment the stop count, verifying cleanup after later init fails.
+        ///
+        /// ```zig
+        /// var started = Started{};
+        /// started.deinit();
+        /// ```
         pub fn deinit(_: *@This()) void {
             Log.stopped += 1;
         }
     };
     const Failing = struct {
+        /// Test fixture: always fail with `NoAudioDevice`, acquiring no resources.
+        /// Allocator/App are unused; no initialized instance is returned.
+        ///
+        /// ```zig
+        /// try std.testing.expectError(error.NoAudioDevice, Failing.init(gpa, app));
+        /// ```
         pub fn init(_: std.mem.Allocator, _: *App) !@This() {
             return error.NoAudioDevice;
         }
@@ -478,15 +669,34 @@ test "a plugin that is off doesn't start or run, and the game can't be turned of
         var started: u32 = 0;
     };
     const Game = struct {
+        /// Test fixture: count one successful game start; returns an allocation-free value.
+        /// Allocator/App are unused.
+        ///
+        /// ```zig
+        /// // Within this fixture:
+        /// const game = try Game.init(gpa, app);
+        /// ```
         pub fn init(_: std.mem.Allocator, _: *App) !@This() {
             Log.started += 1;
             return .{};
         }
     };
     const Broken = struct {
+        /// Test fixture: fail with `ShouldNotStart` if disabled-plugin filtering is broken.
+        /// No resources or App pointers are retained.
+        ///
+        /// ```zig
+        /// try std.testing.expectError(error.ShouldNotStart, Broken.init(gpa, app));
+        /// ```
         pub fn init(_: std.mem.Allocator, _: *App) !@This() {
             return error.ShouldNotStart;
         }
+        /// Test fixture: fail with `ShouldNotRun` if a disabled plugin receives an update.
+        ///
+        /// ```zig
+        /// var broken = Broken{}; // Empty fixture, deliberately bypassing its failing init.
+        /// try std.testing.expectError(error.ShouldNotRun, broken.update(app));
+        /// ```
         pub fn update(_: *@This(), _: *App) !void {
             return error.ShouldNotRun;
         }

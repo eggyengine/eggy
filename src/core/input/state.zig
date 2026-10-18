@@ -46,9 +46,24 @@ pub const State = struct {
         waiting_for_release: bool = false,
     };
 
+    /// Host-only: create an empty resolver, recording the current thread for bridge requests.
+    /// `gpa` backs all owned registrations/devices/contacts; pair the value with `deinit`.
+    /// Keep its address stable after publishing `interface`.
+    ///
+    /// ```zig
+    /// var state = State.init(gpa);
+    /// defer state.deinit();
+    /// ```
     pub fn init(gpa: std.mem.Allocator) State {
         return .{ .gpa = gpa, .thread = if (builtin.single_threaded) 0 else std.Thread.getCurrentId(), .overrides = .init(gpa) };
     }
+    /// Host-only: free resolver allocations and overrides, invalidating every published bridge
+    /// and borrowed control value. Does not close SDL handles; Backend owns those.
+    ///
+    /// ```zig
+    /// var state = State.init(gpa);
+    /// defer state.deinit();
+    /// ```
     pub fn deinit(self: *State) void {
         self.forgetControls();
         self.controls.deinit(self.gpa);
@@ -72,6 +87,14 @@ pub const State = struct {
         self.owners.clearRetainingCapacity();
     }
     /// Device handles/overrides survive reload, compilation-local control markers do not.
+    /// Host-only: call before unloading/restarting game code. Clears controls, contacts and
+    /// trigger time, restores routed controllers from physical snapshots without frame edges,
+    /// and increments configuration revision; Backend retains the actual device handles.
+    ///
+    /// ```zig
+    /// // Host before re-registering a rebuilt game's input maps:
+    /// state.resetRun();
+    /// ```
     pub fn resetRun(self: *State) void {
         self.configuration_revision +%= 1;
         self.forgetControls();
@@ -84,9 +107,25 @@ pub const State = struct {
             device.game.buttons_released = .initEmpty();
         }
     }
+    /// Host-only: parse and install a complete sentinel-terminated controls configuration.
+    /// Validates against registered controls before replacing active state; parse/validation/
+    /// allocation failures leave it unchanged. Does not persist the supplied text to disk.
+    ///
+    /// ```zig
+    /// try state.readOverrides(".{ .version = 1, .controls = .{} }");
+    /// ```
     pub fn readOverrides(self: *State, source: [:0]const u8) !void {
         self.installOverrides(try self.prepareOverrides(source));
     }
+    /// Host-only: parse and validate a candidate without changing active resolver state.
+    /// Returns owned Overrides using this state's allocator; either transfer them once to
+    /// `installOverrides` or deinitialize them. Registered kinds/chords are checked; unknown
+    /// controls remain available for later registration. Failures free the candidate.
+    ///
+    /// ```zig
+    /// var candidate = try state.prepareOverrides(source); // Sentinel-terminated config text.
+    /// defer candidate.deinit(); // Preview only; do not also install this value.
+    /// ```
     pub fn prepareOverrides(self: *State, source: [:0]const u8) !config.Overrides {
         var replacement = config.Overrides.init(self.gpa);
         errdefer replacement.deinit();
@@ -95,6 +134,14 @@ pub const State = struct {
         return replacement;
     }
     /// Commit an already validated, owned configuration without allocating after a file write.
+    /// Host-only: consumes `replacement` once; it must come from a compatible validated
+    /// candidate and not alias current overrides. Frees previous overrides, restores map
+    /// defaults and resets trigger evaluation. Caller must not deinitialize the transferred copy.
+    ///
+    /// ```zig
+    /// const candidate = try state.prepareOverrides(source);
+    /// state.installOverrides(candidate); // Ownership transferred, no candidate.deinit().
+    /// ```
     pub fn installOverrides(self: *State, replacement: config.Overrides) void {
         self.overrides.deinit();
         self.overrides = replacement;
@@ -108,6 +155,12 @@ pub const State = struct {
         self.resetEvaluation();
     }
     /// Input trigger timing uses counted unscaled gameplay seconds, not time dilation.
+    /// Host-only: add finite nonnegative `delta_s` seconds and recompute trigger edges.
+    /// Returns `InvalidDuration` without mutation for invalid input; does not clear frame edges.
+    ///
+    /// ```zig
+    /// try state.advance(app.time.unscaled_delta_s); // Host's gameplay frame step.
+    /// ```
     pub fn advance(self: *State, delta_s: f32) !void {
         if (!std.math.isFinite(delta_s) or delta_s < 0) return error.InvalidDuration;
         self.time_s += delta_s;
@@ -122,6 +175,13 @@ pub const State = struct {
         }
         self.recompute(false);
     }
+    /// Host-only: borrow this resolver as a synchronous C-callable input bridge.
+    /// `self` must keep its address and outlive all snapshots using the bridge; calls must run
+    /// on the initialization thread and both compilations must share matching Eggy layouts.
+    ///
+    /// ```zig
+    /// var input = @import("input.zig").Input{ .backend = state.interface() };
+    /// ```
     pub fn interface(self: *State) protocol.Bridge {
         return .{ .context = self, .request = request };
     }
@@ -274,6 +334,17 @@ pub const State = struct {
     }
 
     /// Copy validated map defaults into this host-local resolver, transactionally.
+    /// Host-only: copies owner/name/default bindings/chord strings, applies saved overrides,
+    /// then resets evaluation. Type marker and owner must each be unique in this run.
+    /// Duplicate tags, invalid bindings/kinds/chords and allocation failures leave registration
+    /// uninstalled. Markers must be discarded before their code is unloaded.
+    ///
+    /// ```zig
+    /// // Host with a run-local marker:
+    /// try state.register(.{ .type_marker = map_marker, .owner = "game/player", .controls = &.{
+    ///     .{ .tag = 0, .name = "jump", .bindings = &.{.{ .key = .space }} },
+    /// } });
+    /// ```
     pub fn register(self: *State, registration: types.Registration) !void {
         if (self.owners.contains(registration.type_marker)) return error.DuplicateControls;
         var owners = self.owners.valueIterator();
@@ -317,6 +388,15 @@ pub const State = struct {
         resolution.update(self, edges);
     }
     /// Validate and save the whole edit before changing the active resolver.
+    /// Host-only: `id` identifies a registered control; bindings must match its kind.
+    /// Null trigger uses registered defaults; physical controller selectors cannot persist.
+    /// Copies mappings and any chord string, then resets evaluation/increments configuration
+    /// revision. Unknown-control, validation, allocation or save failures leave the edit inactive.
+    ///
+    /// ```zig
+    /// // Host with a current-generation registered control ID:
+    /// try state.setMappings(control_id, &.{.{ .key = .j }}, null);
+    /// ```
     pub fn setMappings(self: *State, id: types.ControlId, mappings: []const types.Binding, trigger: ?types.Trigger) !void {
         const control = self.controls.get(id) orelse return error.UnknownControl;
         try config.validate(mappings, self.persistence != null);
@@ -325,11 +405,25 @@ pub const State = struct {
         self.configuration_revision +%= 1;
         self.resetEvaluation();
     }
+    /// Host-only: remove a registered control's saved bindings/trigger override and recompute.
+    /// Validates restored defaults and persists before mutation; unknown IDs and validation/
+    /// save failures propagate. Success increments configuration revision.
+    ///
+    /// ```zig
+    /// try state.resetMappings(control_id); // Current-generation registered control ID.
+    /// ```
     pub fn resetMappings(self: *State, id: types.ControlId) !void {
         var response = protocol.Response{};
         try self.dispatch(.{ .operation = .reset_bindings, .control = id }, &response);
     }
     /// Edit project defaults, not a gameplay context's temporary activation/priority.
+    /// Host-only: `map_id` is the current run's registered type marker. Null removes saved
+    /// defaults and restores registration defaults; successful edits reset evaluation.
+    /// Unknown map, allocation and save errors propagate before changing active defaults.
+    ///
+    /// ```zig
+    /// try state.setMapDefaults(map_id, .{ .priority = 10, .enabled = false });
+    /// ```
     pub fn setMapDefaults(self: *State, map_id: usize, value: ?types.MapDefaults) !void {
         const owner = self.owners.getPtr(map_id) orelse return error.UnknownControl;
         try self.overrides.setMap(owner.key, value, self.persistence);
@@ -339,15 +433,34 @@ pub const State = struct {
         self.configuration_revision +%= 1;
         self.resetEvaluation();
     }
+    /// Host-only: insert or replace this SDL device ID's raw and routed snapshots.
+    /// No SDL handle ownership transfers. Recomputes without new edges; allocation failures
+    /// propagate. Initial snapshots should not contain synthetic frame edges.
+    ///
+    /// ```zig
+    /// try state.addController(7, .{ .rumble_supported = true });
+    /// ```
     pub fn addController(self: *State, id: u32, raw: types.ControllerState) !void {
         try self.devices.put(self.gpa, id, .{ .raw = raw, .game = raw });
         self.recompute(false);
     }
+    /// Host-only: forget an SDL device ID and recompute controls, allowing release edges.
+    /// Missing IDs are harmless; Backend must separately close any corresponding handle.
+    ///
+    /// ```zig
+    /// state.removeController(7);
+    /// ```
     pub fn removeController(self: *State, id: u32) void {
         _ = self.devices.orderedRemove(id);
         self.recompute(true);
     }
     /// Physical state is tracked while editing; only routed gameplay events create edges.
+    /// Host-only: updates raw snapshots for known gamepad button/axis events, ignoring others.
+    /// Does not create devices, update routed gameplay values, allocate or own event storage.
+    ///
+    /// ```zig
+    /// state.rawEvent(event); // Host's polled SDL event, before gameplay gating.
+    /// ```
     pub fn rawEvent(self: *State, event: sdl.events.Event) void {
         switch (event) {
             .gamepad_button_down, .gamepad_button_up => |button| if (self.devices.getPtr(button.id.value)) |device| setButton(&device.raw, button.button, button.down, false),
@@ -426,6 +539,12 @@ pub const State = struct {
     }
 };
 
+/// Host-only: translate SDL's physical gamepad button names, including dpad names, to Eggy's.
+/// Pure value conversion; no device connection or pressed state is required.
+///
+/// ```zig
+/// const direction_button = buttonFromSdl(.dpad_up); // .up
+/// ```
 pub fn buttonFromSdl(button: sdl.gamepad.Button) types.ControllerButton {
     return switch (button) {
         .dpad_up => .up,
@@ -435,6 +554,13 @@ pub fn buttonFromSdl(button: sdl.gamepad.Button) types.ControllerButton {
         inline else => |tag| @field(types.ControllerButton, @tagName(tag)),
     };
 }
+/// Host-only: update a snapshot's held button; `edges` also accumulates a press/release only
+/// on an actual transition. Does not clear existing edges or resolve logical controls.
+///
+/// ```zig
+/// var snapshot = types.ControllerState{};
+/// setButton(&snapshot, .south, true, true);
+/// ```
 pub fn setButton(state: *types.ControllerState, button: sdl.gamepad.Button, down: bool, edges: bool) void {
     const mapped = buttonFromSdl(button);
     const held = state.buttons.contains(mapped);
@@ -442,6 +568,14 @@ pub fn setButton(state: *types.ControllerState, button: sdl.gamepad.Button, down
     if (edges and down and !held) state.buttons_pressed.insert(mapped);
     if (edges and !down and held) state.buttons_released.insert(mapped);
 }
+/// Host-only: normalize SDL's signed 16-bit axis into the snapshot, using asymmetric endpoint
+/// divisors for exact -1/+1 sticks. Trigger values clamp negative input to zero; no dead zone
+/// is applied and no logical controls are recomputed.
+///
+/// ```zig
+/// var snapshot = types.ControllerState{};
+/// setAxis(&snapshot, .left_x, -32768); // left_stick[0] becomes -1.
+/// ```
 pub fn setAxis(state: *types.ControllerState, axis: sdl.gamepad.Axis, raw: i16) void {
     const value = @as(f32, @floatFromInt(raw)) / (if (raw < 0) @as(f32, 32768) else 32767);
     switch (axis) {
@@ -453,6 +587,12 @@ pub fn setAxis(state: *types.ControllerState, axis: sdl.gamepad.Axis, raw: i16) 
         .right_trigger => state.triggers[1] = @max(0, value),
     }
 }
+/// Host-only: preserve the device/finger ID bit patterns as a composite contact lookup key.
+/// Does not allocate or generate the gameplay contact ID; position/pressure are irrelevant.
+///
+/// ```zig
+/// const key = touchKey(finger); // finger is an SDL TouchFinger event payload.
+/// ```
 pub fn touchKey(finger: sdl.events.TouchFinger) types.TouchKey {
     return .{ .device = @bitCast(finger.id.value), .finger = @bitCast(finger.finger_id.value) };
 }

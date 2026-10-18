@@ -81,6 +81,15 @@ pub const ControlState = struct { held: bool = false, pressed: bool = false, rel
 pub const Value = union(Kind) { button: ControlState, axis: f32, vector: [2]f32 };
 
 /// Defaults declared by a game/plugin. Project overrides use its published owner and tag name.
+/// `Controls` is the plugin's controls enum; each entry names one control, its value kind,
+/// trigger and borrowed binding defaults. The host copies entries during registration.
+///
+/// ```zig
+/// const Controls = enum { jump };
+/// const jump: eggy.input.ControlBinding(Controls) = .{
+///     .control = .jump, .bindings = &.{.{ .key = .space }},
+/// };
+/// ```
 pub fn ControlBinding(comptime Controls: type) type {
     return struct { control: Controls, kind: Kind = .button, trigger: Trigger = .immediate, bindings: []const Binding };
 }

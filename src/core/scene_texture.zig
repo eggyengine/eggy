@@ -38,6 +38,14 @@ pub const SceneTexture = struct {
         }
     };
 
+    /// Create host/editor offscreen-scene pipelines using this graphics device/format.
+    /// The actual target is allocated lazily by `render`. Graphics must outlive the
+    /// returned value; allocation/shader errors propagate. Pair with `deinit` after GPU use.
+    ///
+    /// ```zig
+    /// var scene_texture = try SceneTexture.init(&graphics);
+    /// defer scene_texture.deinit(); // Finish GPU use before this host scope ends.
+    /// ```
     pub fn init(graphics: *const Graphics) !SceneTexture {
         const device = graphics.device;
         var preview = try viewport3d.Preview.init(device, graphics.color_format, .{ .width = 1, .height = 1 }, graphics.textures.layout);
@@ -71,6 +79,13 @@ pub const SceneTexture = struct {
     }
 
     /// Free everything. The GPU must be done with it (`Graphics.queue.waitIdle`).
+    /// Host teardown: invalidates overlay views and the offscreen target; call once before
+    /// destroying the graphics device.
+    ///
+    /// ```zig
+    /// try graphics.queue.waitIdle();
+    /// scene_texture.deinit();
+    /// ```
     pub fn deinit(self: *SceneTexture) void {
         if (self.target) |target| target.deinit();
         self.pipeline.deinit();
@@ -85,6 +100,13 @@ pub const SceneTexture = struct {
     /// outlined, and the editor's ground grid when `grid` says, into the texture at `extent_px`.
     /// Call outside a render pass. A new size recreates the texture, which first waits for the GPU
     /// to finish earlier frames.
+    /// Host-only: `extent_px` is physical pixels; zero dimensions skip rendering. Uses the
+    /// creating graphics' caches and device, borrows live drawable paths, and leaves the
+    /// target sampled for `draw`. GPU/upload errors propagate.
+    ///
+    /// ```zig
+    /// try scene_texture.render(&graphics, scene_cmd, .{ .width = 800, .height = 600 }, drawables, camera_view, selected_entity, true);
+    /// ```
     pub fn render(self: *SceneTexture, graphics: *Graphics, cmd: vit.CommandBuffer, extent_px: vit.Extent2D, drawables: []mesh.Drawable, view: camera.View, selected: ?ecs.EntityId, grid: bool) !void {
         if (extent_px.width == 0 or extent_px.height == 0) return;
         const target = try self.targetSized(graphics, extent_px);
@@ -99,6 +121,19 @@ pub const SceneTexture = struct {
 
     /// Reopen the rendered target for custom drawing, outside a pass. Pair with `endOverlay`
     /// before sampling it. The returned view is borrowed until resize/deinit.
+    /// Host-only transition, not a render-pass begin: returns `SceneNotRendered` until a
+    /// nonempty render succeeds; barrier errors propagate. Custom passes must preserve
+    /// the target contents, then end before `endOverlay`.
+    ///
+    /// ```zig
+    /// const overlay_target = try scene_texture.beginOverlay(scene_cmd);
+    /// try scene_cmd.beginRenderPass(.{ .color_attachments = &.{.{
+    ///     .view = overlay_target, .load_op = .load, .store_op = .store,
+    /// }} });
+    /// // Record host overlay drawing here.
+    /// scene_cmd.endRenderPass();
+    /// try scene_texture.endOverlay(scene_cmd);
+    /// ```
     pub fn beginOverlay(self: *SceneTexture, cmd: vit.CommandBuffer) !vit.TextureView {
         const target = if (self.target) |*target| target else return error.SceneNotRendered;
         if (!target.rendered) return error.SceneNotRendered;
@@ -107,6 +142,15 @@ pub const SceneTexture = struct {
     }
 
     /// Return the overlay target to the sampled state used by `draw`.
+    /// Host-only: pair once with `beginOverlay` after ending the custom pass, on the same
+    /// recording command buffer. Missing targets give `SceneNotRendered`; GPU errors
+    /// propagate. Does not itself end a render pass.
+    ///
+    /// ```zig
+    /// // After beginOverlay and the custom render pass:
+    /// scene_cmd.endRenderPass();
+    /// try scene_texture.endOverlay(scene_cmd);
+    /// ```
     pub fn endOverlay(self: *SceneTexture, cmd: vit.CommandBuffer) !void {
         const target = if (self.target) |*target| target else return error.SceneNotRendered;
         try cmd.barrier(&.{.{ .texture = .{ .texture = target.texture, .before = .color_attachment, .after = .sampled } }});
@@ -141,6 +185,14 @@ pub const SceneTexture = struct {
 
     /// Draw the last `render` into `rect_px` of the render pass in progress, whose target is
     /// `target_extent`. Draws nothing before the first `render`.
+    /// Host blit: `rect_px` and `target_extent` are physical pixels; clips to the target
+    /// and changes viewport/scissor/pipeline bindings. The pass format must match graphics;
+    /// call only after `render`/`endOverlay` has left the scene texture sampled.
+    ///
+    /// ```zig
+    /// // Inside the host window's compatible render pass:
+    /// scene_texture.draw(window_cmd, panel_rect_pixels, window_extent_pixels);
+    /// ```
     pub fn draw(self: *const SceneTexture, cmd: vit.CommandBuffer, rect_px: ui.Rect, target_extent: vit.Extent2D) void {
         const target = self.target orelse return;
         if (!target.rendered) return;

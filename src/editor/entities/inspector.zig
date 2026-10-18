@@ -87,22 +87,49 @@ pub const EntityInspector = struct {
     const name_key = std.math.maxInt(u32);
     const search_key = std.math.maxInt(u32) - 1;
 
+    /// Create editor inspector state; future fold/field allocations use `gpa`.
+    /// Pair with `deinit`; no entity or game metadata is retained yet.
+    ///
+    /// ```zig
+    /// var inspector = EntityInspector.init(gpa); // Existing allocator.
+    /// defer inspector.deinit();
+    /// ```
     pub fn init(gpa: std.mem.Allocator) EntityInspector {
         return .{ .gpa = gpa, .values = .init(gpa) };
     }
 
+    /// Release editor field/fold storage once; no later builds or drop queries are valid.
+    ///
+    /// ```zig
+    /// var inspector = EntityInspector.init(gpa); // Existing allocator.
+    /// defer inspector.deinit();
+    /// ```
     pub fn deinit(self: *EntityInspector) void {
         self.values.deinit();
         self.folded.deinit(self.gpa);
     }
 
     /// The reference under `at` in last frame's layout, if any: what a drop there must fit.
+    /// Editor-only: query before the next build clears slots; `at` is in UI coordinates.
+    /// Returned Part metadata can borrow the loaded game's library and must not outlive it.
+    ///
+    /// ```zig
+    /// const target = inspector.targetAt(context, at); // Last-layout context and UI position.
+    /// ```
     pub fn targetAt(self: *const EntityInspector, context: *const ui.Context, at: ui.Vec2) ?components.Part {
         const slot = self.values.slotAt(context, at) orelse return null;
         return slot.target;
     }
 
     /// `dragged` let go at `at`: set the reference there, if it takes it.
+    /// Editor-only: only proposes an action; it does not write the world. Query against last
+    /// layout before rebuilding; returned ZON lives in `arena`. Null means no compatible slot
+    /// or serialization/allocation failure.
+    ///
+    /// ```zig
+    /// // Given inspector, last-layout context, UI position, Dragged and arena allocator:
+    /// const action = inspector.dropAt(context, at, dragged, arena);
+    /// ```
     pub fn dropAt(self: *const EntityInspector, context: *const ui.Context, at: ui.Vec2, dragged: Dragged, arena: std.mem.Allocator) ?Action {
         const slot = self.values.slotAt(context, at) orelse return null;
         if (!dragged.fits(slot.target)) return null;
@@ -112,11 +139,25 @@ pub const EntityInspector = struct {
 
     /// Whether a number is being dragged or a colour picked: the changes become one undo step
     /// once that ends.
+    /// Editor-only: use the value to coalesce undo snapshots, not to apply field changes.
+    ///
+    /// ```zig
+    /// const coalesce_edits = inspector.scrubbing(); // Existing EntityInspector.
+    /// ```
     pub fn scrubbing(self: *const EntityInspector) bool {
         return self.values.scrubbing();
     }
 
     /// Draw `details` into `context`. Returns what the user did this frame, if anything.
+    /// Editor-only: details must describe one entity with aligned field/value arrays and
+    /// live game metadata. Resets selection-specific state when the entity changes; returned
+    /// action text lives in the UI frame arena. The host applies actions; UI failures are
+    /// handled as incomplete UI/no action rather than errors.
+    ///
+    /// ```zig
+    /// // Given inspector, building context and Details collected through the game ABI:
+    /// const action = inspector.build(context, details);
+    /// ```
     pub fn build(self: *EntityInspector, context: *ui.Context, details: Details) ?Action {
         const arena = context.builder().allocator;
         if (self.shown == null or !self.shown.?.eql(details.entity)) {

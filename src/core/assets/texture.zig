@@ -12,23 +12,48 @@ pub const Texture = struct {
     pixels: []u8,
 
     /// Free what `read` (or a decoder) allocated with `gpa`.
+    /// The pixel slice must belong to this allocator; invalidates it and must be called once.
+    ///
+    /// ```zig
+    /// var texture = try read(gpa, reader);
+    /// defer texture.deinit(gpa);
+    /// ```
     pub fn deinit(self: *Texture, gpa: std.mem.Allocator) void {
         gpa.free(self.pixels);
     }
 
     /// Whether `pixels` holds exactly `width` by `height` of them, and there are some.
+    /// Checks RGBA byte count without modifying or decoding the pixels.
+    ///
+    /// ```zig
+    /// if (!texture.isWhole()) return error.InvalidTexture;
+    /// ```
     pub fn isWhole(self: Texture) bool {
         return self.width > 0 and self.height > 0 and self.pixels.len == @as(usize, self.width) * self.height * 4;
     }
 };
 
 /// Write `texture` as an `.eggtexture`.
+/// Borrows the RGBA pixels without validating their count; propagates writer errors.
+///
+/// ```zig
+/// var output: std.Io.Writer.Allocating = .init(gpa);
+/// defer output.deinit();
+/// try write(&output.writer, texture);
+/// ```
 pub fn write(writer: *std.Io.Writer, texture: Texture) std.Io.Writer.Error!void {
     try s2s.serialize(writer, Texture, texture);
 }
 
 /// Read an `.eggtexture`, allocating with `gpa` (see `Texture.deinit`). Fails with
 /// `error.UnexpectedData` for one of another version, or whose pixels don't fill it.
+/// Reader/allocation errors propagate; the caller owns the returned RGBA bytes.
+///
+/// ```zig
+/// var input: std.Io.Reader = .fixed(eggtexture_bytes);
+/// var texture = try read(gpa, &input);
+/// defer texture.deinit(gpa);
+/// ```
 pub fn read(gpa: std.mem.Allocator, reader: *std.Io.Reader) !Texture {
     var texture = try s2s.deserializeAlloc(reader, Texture, gpa);
     errdefer texture.deinit(gpa);

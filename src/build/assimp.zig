@@ -20,6 +20,15 @@ pub const Built = struct {
 };
 
 /// Build assimp from `source` (its dependency) with `b`, Eggy's own builder.
+/// Build-internal; returns graph-owned library/header steps, without installing them.
+/// `source` must be the pinned assimp release layout. Enables only `formats`, builds PIC,
+/// and leaves actual compilation/link failures to execution of the dependent build steps.
+///
+/// ```zig
+/// const built = assimp.build(b, source, target, optimize);
+/// importer_module.linkLibrary(built.library);
+/// importer_module.addConfigHeader(built.config);
+/// ```
 pub fn build(b: *std.Build, source: *std.Build.Dependency, target: std.Build.ResolvedTarget, optimize: std.builtin.OptimizeMode) Built {
     const library = b.addLibrary(.{
         .name = "assimp",

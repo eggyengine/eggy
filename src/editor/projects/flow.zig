@@ -31,6 +31,13 @@ pub const ProjectFlow = struct {
 
     /// File > New Project: open the wizard. The result is on the heap, since the wizard's folder
     /// picker keeps a pointer to it.
+    /// Desktop editor only: borrows live graphics/font/mono resources through `close`; returns
+    /// a caller-managed flow pointer. Allocation/window errors propagate with partial setup freed.
+    ///
+    /// ```zig
+    /// const flow = try ProjectFlow.create(gpa, graphics, font, mono);
+    /// defer flow.close(graphics); // Existing desktop editor resources.
+    /// ```
     pub fn create(gpa: std.mem.Allocator, graphics: *const eggy.Graphics, font: *ui.Font, mono: *const ui.Font) !*ProjectFlow {
         const self = try gpa.create(ProjectFlow);
         errdefer gpa.destroy(self);
@@ -50,6 +57,14 @@ pub const ProjectFlow = struct {
 
     /// File > Open Project: build and open the project in `dir` (absolute). `action` is `.open`,
     /// or `.link` to link it to an Eggy codebase first (Open Project with Developer Eggy).
+    /// Desktop editor only: copies the job's paths/options before returning and opens a loading
+    /// window. Borrows graphics/font/mono until `close`; allocation/job-start/window errors
+    /// propagate. Worker failures arrive later as status shown by `update`.
+    ///
+    /// ```zig
+    /// const flow = try ProjectFlow.open(gpa, graphics, font, mono, project_dir, .open);
+    /// defer flow.close(graphics); // Existing resources and absolute project path.
+    /// ```
     pub fn open(gpa: std.mem.Allocator, graphics: *const eggy.Graphics, font: *ui.Font, mono: *const ui.Font, dir: []const u8, action: job_zig.Action) !*ProjectFlow {
         const self = try gpa.create(ProjectFlow);
         errdefer gpa.destroy(self);
@@ -68,6 +83,13 @@ pub const ProjectFlow = struct {
     }
 
     /// Close its window, stopping the build if one is under way.
+    /// Desktop editor only: cancels/joins a job, frees loading UI/images or wizard state, then
+    /// destroys this heap pointer. Ensure wizard picker callbacks no longer reference it.
+    /// Files already written by a cancelled job are not rolled back.
+    ///
+    /// ```zig
+    /// flow.close(graphics); // Existing ProjectFlow pointer and owning Graphics, once.
+    /// ```
     pub fn close(self: *ProjectFlow, graphics: *eggy.Graphics) void {
         switch (self.phase) {
             .wizard => |*wizard| wizard.deinit(),
@@ -82,12 +104,24 @@ pub const ProjectFlow = struct {
     }
 
     /// Whether the loading screen is up: the project is being made or built.
+    /// Desktop editor only: reports phase, including a completed/failed job still on screen,
+    /// rather than whether its worker is currently executing.
+    ///
+    /// ```zig
+    /// const loading_screen = flow.isWorking(); // Existing ProjectFlow.
+    /// ```
     pub fn isWorking(self: *const ProjectFlow) bool {
         return self.phase == .working;
     }
 
     /// Handle `curr_event` if it is for this flow's window; returns whether it was. The loading
     /// screen's output view sees input first, so it can select and copy.
+    /// Desktop editor only: accepts raw SDL events, returns false for another window, and
+    /// does not cancel or close the flow for a close event.
+    ///
+    /// ```zig
+    /// const used = flow.handle(event); // Existing ProjectFlow and raw SDL event.
+    /// ```
     pub fn handle(self: *ProjectFlow, curr_event: sdl3.events.Event) bool {
         if (!self.window.owns(curr_event)) return false;
         if (self.phase == .working) if (@import("weeoui_sdl3").translate(curr_event)) |input| {
@@ -98,6 +132,11 @@ pub const ProjectFlow = struct {
     }
 
     /// Whether `curr_event` asks to close this flow's window: its close button, or Escape in it.
+    /// Desktop editor only: ignores other windows and reports intent without destruction.
+    ///
+    /// ```zig
+    /// if (flow.closeRequested(event)) flow.close(graphics); // Host SDL event/graphics.
+    /// ```
     pub fn closeRequested(self: *const ProjectFlow, curr_event: sdl3.events.Event) bool {
         if (!self.window.owns(curr_event)) return false;
         if (curr_event == .window_close_requested) return true;
@@ -106,6 +145,15 @@ pub const ProjectFlow = struct {
     }
 
     /// Draw a frame and move the flow on.
+    /// Desktop editor only: borrows main UI style; can start a creation job, replace the wizard
+    /// window or launch a finished project's editor. Returns running/closed/launched; caller
+    /// closes this flow for either terminal outcome and quits the old editor after launched.
+    /// Presentation/status/job-start/spawn failures propagate; worker failures show in Splash.
+    ///
+    /// ```zig
+    /// const outcome = try flow.update(graphics, style); // Existing flow and editor resources.
+    /// if (outcome != .running) flow.close(graphics);
+    /// ```
     pub fn update(self: *ProjectFlow, graphics: *eggy.Graphics, style: *const ui.Context) !Outcome {
         switch (self.phase) {
             .wizard => |*wizard| {
@@ -113,6 +161,13 @@ pub const ProjectFlow = struct {
                     wizard: *Wizard,
                     window: sdl3.video.Window,
                     action: @import("wizard.zig").Action = .none,
+                    /// ToolWindow callback for the editor wizard frame, storing its action.
+                    /// Borrows wizard/window/context; create-action strings remain wizard-owned.
+                    ///
+                    /// ```zig
+                    /// // Inside ProjectFlow.update's wizard branch, with local Page:
+                    /// page.build(context);
+                    /// ```
                     pub fn build(page: *@This(), context: *ui.Context) void {
                         page.action = page.wizard.build(context, page.window);
                     }
@@ -133,6 +188,13 @@ pub const ProjectFlow = struct {
                     splash: *Splash,
                     status: job_zig.Status,
                     action: @import("splash.zig").Action = .none,
+                    /// ToolWindow callback for the editor loading frame, storing close/cancel
+                    /// intent. Status text must survive synchronous UI building/rendering.
+                    ///
+                    /// ```zig
+                    /// // Inside ProjectFlow.update's working branch, with local Page:
+                    /// page.build(context);
+                    /// ```
                     pub fn build(page: *@This(), context: *ui.Context) void {
                         page.action = page.splash.build(context, page.status);
                     }

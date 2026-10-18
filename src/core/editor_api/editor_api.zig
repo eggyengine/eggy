@@ -58,11 +58,25 @@ pub const Context = struct {
     app: *App,
     host: Host,
 
+    /// Read the editor's selected live entity, or null when nothing is selected.
+    /// The ID belongs to `app.world`, not this context; host failures propagate.
+    ///
+    /// ```zig
+    /// // Inside an editor hook with editor: *eggy.editor.Context:
+    /// const selected = try editor.selection();
+    /// ```
     pub fn selection(self: *Context) !?ecs.EntityId {
         const response = try self.send(.{ .operation = .selection });
         return if (response.has_entity) ecs.EntityId.init(response.entity.id, response.entity.generation) else null;
     }
 
+    /// Select a live entity in the current world, or clear selection with null.
+    /// A dead/stale ID returns `InvalidEntity`; selection itself is not a component edit.
+    ///
+    /// ```zig
+    /// // Inside an editor hook:
+    /// try editor.select(null);
+    /// ```
     pub fn select(self: *Context, entity: ?ecs.EntityId) !void {
         _ = try self.send(.{ .operation = .select, .entity = if (entity) |id| .{ .id = id.id, .generation = id.generation } else .{}, .has_entity = entity != null });
     }
@@ -70,6 +84,16 @@ pub const Context = struct {
     /// Apply a typed before/after edit, mark it changed, and record host-owned scene snapshots.
     /// No component pointer is retained in history. Reject a stale before-state or non-data
     /// component; errors before commit leave the component unchanged.
+    /// Requires editing mode and a live entity with `T`; the Action's before-state must
+    /// match its current value. A failed host commit restores and marks the before-state.
+    ///
+    /// ```zig
+    /// // Editor hook, with entity carrying the registered plain-data Health component:
+    /// const before = editor.app.world.get(entity, Health).?.*;
+    /// var after = before;
+    /// after.value = 100;
+    /// try editor.changeComponent(entity, eggy.Action(Health){ .before = before, .after = after });
+    /// ```
     pub fn changeComponent(self: *Context, entity: ecs.EntityId, change: anytype) !void {
         const T = @TypeOf(change.before);
         comptime {
@@ -100,61 +124,174 @@ pub const Context = struct {
 
     /// Group several editor operations as one named action. Defer `Group.deinit`; commit
     /// explicitly. An uncommitted group is reverted, with cleanup failures logged.
+    /// Requires editing mode and no already-open group. Keep the group within this hook;
+    /// its context must remain alive until commit or cleanup.
+    ///
+    /// ```zig
+    /// var group = try editor.beginAction("Restore health");
+    /// defer group.deinit();
+    /// try editor.changeComponent(entity, health_change); // A typed eggy.Action(Health).
+    /// try group.commit();
+    /// ```
     pub fn beginAction(self: *Context, label: []const u8) !Group {
         try self.textRequest(.begin_group, label, "");
         return .{ .editor = self };
     }
 
+    /// Open a project-relative scene through the editor's undo-aware scene workflow, recording
+    /// the previous world for undo rather than prompting to save it. Requires editing mode;
+    /// path and host failures propagate.
+    ///
+    /// ```zig
+    /// // Inside an editor hook:
+    /// try editor.openScene("resources/level.scene.zon");
+    /// ```
     pub fn openScene(self: *Context, path: []const u8) !void {
         try self.textRequest(.open_scene, path, "");
     }
+    /// Save the currently open scene through the editor. Requires editing mode and a project;
+    /// host/I/O failures propagate rather than reporting a successful save.
+    ///
+    /// ```zig
+    /// // Inside an editor hook:
+    /// try editor.saveScene();
+    /// ```
     pub fn saveScene(self: *Context) !void {
         _ = try self.send(.{ .operation = .save_scene });
     }
+    /// Create a uniquely named folder under project-relative `parent`, recording undo.
+    /// Requires editing mode and a project; empty parent means the project root.
+    /// The host owns generated paths; no path is returned.
+    ///
+    /// ```zig
+    /// try editor.createFolder("resources");
+    /// ```
     pub fn createFolder(self: *Context, parent: []const u8) !void {
         try self.textRequest(.create_folder, parent, "");
     }
+    /// Rename a project-relative file/folder to the path-free leaf `name`, with its descriptor
+    /// and undo history. Requires editing mode; invalid names and filesystem failures are errors.
+    ///
+    /// ```zig
+    /// try editor.renameFile("resources/old.txt", "story.txt");
+    /// ```
     pub fn renameFile(self: *Context, path: []const u8, name: []const u8) !void {
         try self.textRequest(.rename_file, path, name);
     }
+    /// Delete a nonempty project-relative file/folder through the undo-aware editor workflow.
+    /// Requires editing mode and a project; path/I/O errors propagate.
+    ///
+    /// ```zig
+    /// try editor.deleteFile("resources/unused.txt");
+    /// ```
     pub fn deleteFile(self: *Context, path: []const u8) !void {
         try self.textRequest(.delete_file, path, "");
     }
+    /// Duplicate a project-relative file/folder under a unique name, recording undo.
+    /// Requires editing mode; the host chooses and owns the destination path.
+    ///
+    /// ```zig
+    /// try editor.duplicateFile("resources/enemy.scene.zon");
+    /// ```
     pub fn duplicateFile(self: *Context, path: []const u8) !void {
         try self.textRequest(.duplicate_file, path, "");
     }
+    /// Move a project-relative file/folder into project-relative `folder`, preserving its
+    /// descriptor and recording undo. Requires editing mode; destination conflicts are errors.
+    ///
+    /// ```zig
+    /// try editor.moveFile("resources/story.txt", "resources/dialogue");
+    /// ```
     pub fn moveFile(self: *Context, path: []const u8, folder: []const u8) !void {
         try self.textRequest(.move_file, path, folder);
     }
+    /// Copy a project-relative file/folder into `folder` with new asset identities and undo.
+    /// Requires editing mode; source remains unchanged and host/I/O errors propagate.
+    ///
+    /// ```zig
+    /// try editor.copyFile("resources/story.txt", "resources/dialogue");
+    /// ```
     pub fn copyFile(self: *Context, path: []const u8, folder: []const u8) !void {
         try self.textRequest(.copy_file, path, folder);
     }
+    /// Copy an external filesystem path into a project-relative folder and record creation
+    /// in undo history. Requires editing mode; external source is not moved or deleted.
+    ///
+    /// ```zig
+    /// // source_path is an existing external file chosen by the user:
+    /// try editor.importFile(source_path, "resources");
+    /// ```
     pub fn importFile(self: *Context, outside: []const u8, folder: []const u8) !void {
         try self.textRequest(.import_file, outside, folder);
     }
+    /// Set the project's default scene to a project-relative scene path, recording a settings
+    /// undo action. Requires editing mode; path validation and write failures propagate.
+    /// This string-taking operation does not expose the settings field's null/clear state.
+    ///
+    /// ```zig
+    /// try editor.setDefaultScene("resources/level.scene.zon");
+    /// ```
     pub fn setDefaultScene(self: *Context, path: []const u8) !void {
         try self.textRequest(.default_scene, path, "");
     }
 
     /// Queue a project build after this hook unwinds. Progress/failures use the Build window.
+    /// Requires an open project and no conflicting pending workflow/edit. Success means
+    /// queued, not that compilation succeeded.
+    ///
+    /// ```zig
+    /// try editor.requestBuild();
+    /// ```
     pub fn requestBuild(self: *Context) !void {
         _ = try self.send(.{ .operation = .request_build });
     }
     /// Queue the editor's existing rebuild/reload workflow, including unsaved-change prompts.
+    /// Requires an open project and no conflicting operation. Do not retain this hook's
+    /// context or world pointers for the replacement library.
+    ///
+    /// ```zig
+    /// try editor.requestReload();
+    /// ```
     pub fn requestReload(self: *Context) !void {
         _ = try self.send(.{ .operation = .request_reload });
     }
+    /// Queue opening the Export window after this hook returns. Requires a project and an
+    /// available workflow slot; success does not mean the game has been exported.
+    ///
+    /// ```zig
+    /// try editor.showExport();
+    /// ```
     pub fn showExport(self: *Context) !void {
         _ = try self.send(.{ .operation = .show_export });
     }
+    /// Queue the New Project wizard after the hook returns, with normal unsaved-change
+    /// handling. No existing project is required; conflicting workflows return `EditorBusy`.
+    ///
+    /// ```zig
+    /// try editor.showNewProject();
+    /// ```
     pub fn showNewProject(self: *Context) !void {
         _ = try self.send(.{ .operation = .show_new_project });
     }
+    /// Queue the project-folder picker after the hook returns, with normal unsaved-change
+    /// handling. No existing project is required; conflicting workflows return `EditorBusy`.
+    ///
+    /// ```zig
+    /// try editor.showOpenProject();
+    /// ```
     pub fn showOpenProject(self: *Context) !void {
         _ = try self.send(.{ .operation = .show_open_project });
     }
 
     /// Parse settings into a caller-owned arena; all returned strings live in `arena`.
+    /// Reads the open project's file through the host. Requires a project; changed size
+    /// between reads, parse failures, allocation failures and host failures return errors.
+    ///
+    /// ```zig
+    /// var arena = std.heap.ArenaAllocator.init(gpa);
+    /// defer arena.deinit();
+    /// const settings = try editor.projectSettings(arena.allocator());
+    /// ```
     pub fn projectSettings(self: *Context, arena: std.mem.Allocator) !project.Config {
         const size = try self.send(.{ .operation = .project_settings });
         const buffer = try arena.allocSentinel(u8, size.length, 0);
@@ -164,14 +301,32 @@ pub const Context = struct {
     }
 
     // ponytail: custom inspectors/importers/scene tools have no host registration, add one before exposing callbacks.
+    /// Reserved importer registration; always returns `NotImplemented`, retaining no name
+    /// or callbacks. Declaring a name does not enable custom asset importing.
+    ///
+    /// ```zig
+    /// try std.testing.expectError(error.NotImplemented, editor.registerImporter("sprites"));
+    /// ```
     pub fn registerImporter(_: *Context, name: []const u8) error{NotImplemented}!void {
         _ = name;
         return error.NotImplemented;
     }
+    /// Reserved inspector registration; always returns `NotImplemented` and retains nothing.
+    /// Existing component field editors are not replaced by this call.
+    ///
+    /// ```zig
+    /// try std.testing.expectError(error.NotImplemented, editor.registerInspector("health"));
+    /// ```
     pub fn registerInspector(_: *Context, name: []const u8) error{NotImplemented}!void {
         _ = name;
         return error.NotImplemented;
     }
+    /// Reserved scene-tool registration; always returns `NotImplemented` and retains nothing.
+    /// No tool is added to the Scene toolbar.
+    ///
+    /// ```zig
+    /// try std.testing.expectError(error.NotImplemented, editor.registerSceneTool("paint"));
+    /// ```
     pub fn registerSceneTool(_: *Context, name: []const u8) error{NotImplemented}!void {
         _ = name;
         return error.NotImplemented;
@@ -201,11 +356,27 @@ pub const Group = struct {
     editor: *Context,
     active: bool = true,
 
+    /// Finish this hook-local undo group as one action. Host failure leaves it active so
+    /// deferred `deinit` can revert it; a second commit returns `ActionAlreadyFinished`.
+    ///
+    /// ```zig
+    /// var group = try editor.beginAction("Edit objects");
+    /// defer group.deinit();
+    /// // Apply editor operations here.
+    /// try group.commit();
+    /// ```
     pub fn commit(self: *Group) !void {
         if (!self.active) return error.ActionAlreadyFinished;
         _ = try self.editor.send(.{ .operation = .commit_group });
         self.active = false;
     }
+    /// Revert an active uncommitted group; a committed/finished group is a no-op.
+    /// Must run before its editor hook ends. Cleanup failures are logged, not returned.
+    ///
+    /// ```zig
+    /// var group = try editor.beginAction("Edit objects");
+    /// defer group.deinit(); // Also rolls back when an intervening operation fails.
+    /// ```
     pub fn deinit(self: *Group) void {
         if (!self.active) return;
         if (self.editor.send(.{ .operation = .cancel_group })) |_| {} else |err| {

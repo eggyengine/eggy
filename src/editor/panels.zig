@@ -16,6 +16,12 @@ pub const Panel = enum(u32) {
     assets,
     console,
 
+    /// Return a static, sentinel-terminated display title for a built-in editor panel.
+    ///
+    /// ```zig
+    /// const title = Panel.scene.title();
+    /// std.debug.assert(std.mem.eql(u8, title, "Scene"));
+    /// ```
     pub fn title(panel: Panel) [:0]const u8 {
         return switch (panel) {
             .scene => "Scene",
@@ -29,6 +35,15 @@ pub const Panel = enum(u32) {
 
 /// Beginning of the plugin panel ID range. Keyed panels keep their ID across reorder/reload.
 pub const plugin_first: u32 = 100;
+/// Derive an internal dock ID from a panel's stable key; unkeyed panels use their zero-based
+/// declaration index. The host checks hash collisions; this does not guarantee uniqueness.
+/// Borrowed panel metadata is not retained; unkeyed indices must fit the dock's panel range.
+///
+/// ```zig
+/// const panel = EditorPanel{ .title = "Stats" };
+/// const id = panels.pluginId(panel, 0);
+/// std.debug.assert(id == panels.plugin_first);
+/// ```
 pub fn pluginId(panel: EditorPanel, index: usize) u32 {
     if (panel.key.len == 0) return plugin_first + @as(u32, @intCast(index));
     return 128 + @as(u32, @intCast(std.hash.Wyhash.hash(0, panel.key) % (ui.dock.max_panel - 128)));
@@ -43,6 +58,12 @@ pub const assets_page = 3;
 pub const first_plugin_page = 4;
 
 /// Page index of dock panel `id`, if it is a page.
+/// Borrows the current plugin declarations; Scene and unknown IDs return null.
+///
+/// ```zig
+/// const page = panels.pageOf(@intFromEnum(Panel.inspector), &.{}).?;
+/// std.debug.assert(page == panels.inspector_page);
+/// ```
 pub fn pageOf(id: u32, plugin_panels: []const EditorPanel) ?usize {
     if (id == @intFromEnum(Panel.inspector)) return inspector_page;
     if (id == @intFromEnum(Panel.console)) return console_page;
@@ -53,6 +74,12 @@ pub fn pageOf(id: u32, plugin_panels: []const EditorPanel) ?usize {
 }
 
 /// Title of dock panel `id`, built in or from `plugin_panels`.
+/// Returns static built-in/fallback text or a borrowed plugin title; keep plugin metadata alive.
+///
+/// ```zig
+/// const title = panels.panelTitle(@intFromEnum(Panel.console), &.{});
+/// std.debug.assert(std.mem.eql(u8, title, "Console"));
+/// ```
 pub fn panelTitle(id: u32, plugin_panels: []const EditorPanel) [:0]const u8 {
     if (id >= plugin_first) {
         for (plugin_panels, 0..) |panel, index| if (pluginId(panel, index) == id) return panel.title;
@@ -81,10 +108,28 @@ pub const Provider = struct {
     /// What floats over the Scene panel.
     scene_overlay: *const scene_view.Overlay = &scene_view.Overlay.none,
 
+    /// Dock-provider callback for the title of `panel`; canonical behavior is `panelTitle`.
+    /// Returned text borrows plugin metadata or static storage, never the builder arena.
+    ///
+    /// ```zig
+    /// // Host has a Provider for this window:
+    /// const label = provider.title(@intFromEnum(Panel.scene));
+    /// _ = label;
+    /// ```
     pub fn title(self: Provider, panel: u32) []const u8 {
         return panelTitle(panel, self.plugin_panels);
     }
 
+    /// Build the internal dock placeholder/Scene overlay in `rect` (window logical points),
+    /// recording page placement and a draw-order marker for the host's later render splice.
+    /// The returned element belongs to `b`'s frame arena; placements must outlive its draw.
+    /// Plugin pages must fit `max_pages`; allocation/overlay-building errors propagate.
+    ///
+    /// ```zig
+    /// // Host's active layout builder and per-window Provider:
+    /// const scene = try provider.content(b, @intFromEnum(Panel.scene), content_rect);
+    /// context.element(scene);
+    /// ```
     pub fn content(self: Provider, b: L.Builder, panel: u32, rect: ui.Rect) !*L.Element {
         const placed = self.placements;
         if (pageOf(panel, self.plugin_panels)) |page| {

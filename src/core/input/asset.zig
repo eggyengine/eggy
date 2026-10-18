@@ -34,6 +34,14 @@ pub const File = struct {
     controls: []const Control = &.{},
 
     /// Parse and validate into caller-owned arena storage. Invalid files never register controls.
+    /// `source` is sentinel-terminated ZON. Returned strings, bindings and controls live in
+    /// `arena`; release the arena even after failure, since partial parse allocations remain.
+    ///
+    /// ```zig
+    /// var arena = std.heap.ArenaAllocator.init(gpa);
+    /// defer arena.deinit();
+    /// const file = try File.parse(arena.allocator(), ".{ .controls = .{} }");
+    /// ```
     pub fn parse(arena: std.mem.Allocator, source: [:0]const u8) !File {
         const saved = try std.zon.parse.fromSliceAlloc(Saved, arena, source, null, .{});
         const controls = try arena.alloc(Control, saved.controls.len);
@@ -48,6 +56,13 @@ pub const File = struct {
     }
 
     /// Validate names, persistent bindings, value kinds and the complete chord graph.
+    /// Host/tool helper: borrows the file and uses `gpa` only for scratch allocations.
+    /// Rejects unsupported versions, duplicate/invalid names, transient devices and bad chords.
+    ///
+    /// ```zig
+    /// const file = File{ .controls = &.{.{ .name = "jump", .bindings = &.{.{ .key = .space }} }} };
+    /// try file.validate(gpa);
+    /// ```
     pub fn validate(self: File, gpa: std.mem.Allocator) !void {
         if (self.version != 1) return error.UnsupportedInputMap;
         const checked = try gpa.alloc(struct {
@@ -71,6 +86,14 @@ pub const File = struct {
     }
 
     /// Describe this file to a host-local editor resolver, preserving its file order.
+    /// Host-only: allocate the outer array in `arena`; names, triggers and bindings still
+    /// borrow this file's storage. Tags are zero-based file indices, not a game's enum tags.
+    /// Requires a validated file; allocation errors propagate.
+    ///
+    /// ```zig
+    /// // Host with validated file and an arena that outlives registration:
+    /// const definitions = try file.definitions(arena.allocator());
+    /// ```
     pub fn definitions(self: File, arena: std.mem.Allocator) ![]t.ControlDefinition {
         const result = try arena.alloc(t.ControlDefinition, self.controls.len);
         for (result, self.controls, 0..) |*definition, control, i| definition.* = .{
@@ -84,6 +107,14 @@ pub const File = struct {
     }
 
     /// Write an already validated map as editable ZON.
+    /// Host/tool helper: borrows `writer` and propagates writer/portable-binding conversion
+    /// failures. Does not validate the complete map, flush, or save to disk.
+    ///
+    /// ```zig
+    /// var text: std.Io.Writer.Allocating = .init(gpa);
+    /// defer text.deinit();
+    /// try file.write(&text.writer); // file was validated before writing.
+    /// ```
     pub fn write(self: File, writer: *std.Io.Writer) !void {
         try writer.print(".{{\n    .version = {d},\n    .priority = {d},\n    .enabled = {},\n    .consume = {},\n    .controls = .{{\n", .{ self.version, self.priority, self.enabled, self.consume });
         for (self.controls) |control| {

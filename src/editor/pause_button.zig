@@ -10,6 +10,13 @@ const gap: f32 = 6;
 
 /// The button for a bar `bar_height` tall spanning `bar_width` from `bar_x`, beside the play
 /// button. `paused` lights it.
+/// All geometry is logical points; show only during play. Returns a frame-arena element,
+/// propagating allocation errors; this does not pause the game until the host handles its ID.
+///
+/// ```zig
+/// if (mode.playing())
+///     context.element(try pause_button.element(b, mode.paused, 0, viewport.w, 34));
+/// ```
 pub fn element(b: L.Builder, paused: bool, bar_x: f32, bar_width: f32, bar_height: f32) !*L.Element {
     const glyph = try b.allocator.create(Glyph);
     glyph.* = .{ .paused = paused };

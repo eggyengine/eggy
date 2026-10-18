@@ -46,6 +46,15 @@ pub const Action = union(enum) {
 
 /// The editor's resources (beside its `bin` folder) and the user's engines folder, for `Options`.
 /// Caller-owned.
+/// Editor GUI/CLI helper: uses SDL executable/user-data paths without starting a project job.
+/// Free both absolute strings with `gpa`; path/allocation errors clean partial results and
+/// propagate. Does not create either directory.
+///
+/// ```zig
+/// const folders = try editorFolders(gpa); // Existing allocator.
+/// defer gpa.free(folders.resources_dir);
+/// defer gpa.free(folders.engines_dir);
+/// ```
 pub fn editorFolders(gpa: std.mem.Allocator) !struct { resources_dir: []u8, engines_dir: []u8 } {
     const sdl3 = eggy.sdl_adapter.sdl;
     const resources_dir = try std.fs.path.resolve(gpa, &.{ try sdl3.filesystem.getBasePath(), "..", "resources" });
@@ -73,6 +82,11 @@ pub const Stage = enum {
     done,
     failed,
 
+    /// Return a static human-readable editor/CLI progress label for this job stage.
+    ///
+    /// ```zig
+    /// const caption = Stage.building.label(); // "Building the editor"
+    /// ```
     pub fn label(stage: Stage) []const u8 {
         return switch (stage) {
             .reading_project => "Reading the project",
@@ -128,6 +142,20 @@ pub const Job = struct {
     shown: std.ArrayList(u8) = .empty,
 
     /// Start the job described by `options` (copied).
+    /// Editor GUI/CLI only: paths must be absolute, and creation requires a missing/empty
+    /// project directory. Owns copied options, threaded I/O and worker until `deinit`.
+    /// Returns after spawning the worker; preparation/build failures are reported by `status`,
+    /// while allocation/worker-start failures propagate. Worker actions can unpack engines,
+    /// rewrite dependencies/project files and launch Zig; cancellation does not roll them back.
+    ///
+    /// ```zig
+    /// // Given allocator and absolute project/resources/engine-store paths:
+    /// const job = try Job.start(gpa, .{
+    ///     .dir = project_dir, .resources_dir = resources_dir,
+    ///     .engines_dir = engines_dir, .action = .rebuild,
+    /// });
+    /// defer job.deinit();
+    /// ```
     pub fn start(gpa: std.mem.Allocator, options: Options) !*Job {
         const self = try gpa.create(Job);
         errdefer gpa.destroy(self);
@@ -154,6 +182,13 @@ pub const Job = struct {
     }
 
     /// Stop the job if it is still running (the build is killed), and free it.
+    /// Editor GUI/CLI only: cancels/joins worker activity before releasing I/O and owned
+    /// options/output. Call once with no concurrent status/io consumers; returned job/log
+    /// pointers become invalid. Completed filesystem changes remain on disk.
+    ///
+    /// ```zig
+    /// defer job.deinit(); // Existing Job pointer, retained until polling/launching is done.
+    /// ```
     pub fn deinit(self: *Job) void {
         const gpa = self.gpa;
         self.worker.cancel(self.io());
@@ -179,12 +214,26 @@ pub const Job = struct {
         if (self.action == .create) inline for (.{ "title", "name" }) |field| gpa.free(@field(self.action.create, field));
     }
 
+    /// Borrow this editor project's threaded I/O implementation and inherited process environment.
+    /// The value is valid only until job teardown; do not use it concurrently with `deinit`.
+    ///
+    /// ```zig
+    /// const job_io = job.io(); // Existing live Job pointer.
+    /// ```
     pub fn io(self: *Job) std.Io {
         return self.threaded.io();
     }
 
     /// The job's progress, its detail copied into `arena` and its log the job's own (see
     /// `Status.log`). Call it from one thread only.
+    /// Editor GUI/CLI only: locks shared progress while collecting a snapshot; fraction is
+    /// normalized [0, 1]. Detail lives in `arena`, log borrows job storage until the next call
+    /// or teardown. Allocation failures propagate and never transfer output ownership.
+    ///
+    /// ```zig
+    /// const progress = try job.status(arena); // Live Job and per-frame arena allocator.
+    /// std.log.info("{s}", .{progress.stage.label()});
+    /// ```
     pub fn status(self: *Job, arena: std.mem.Allocator) !Status {
         self.mutex.lockUncancelable(self.io());
         defer self.mutex.unlock(self.io());
@@ -208,6 +257,15 @@ pub const Job = struct {
 
     /// Open the project's editor with `--project`, and `extra_args` after it; call once the job
     /// is `done`. The editor runs on its own, so this one can quit.
+    /// Editor GUI/CLI only: use after a successful editor-building action, not export_game.
+    /// Does not verify stage/executable existence before spawning; allocation/spawn errors
+    /// propagate. Extra argument strings are borrowed during spawn and the child owns its
+    /// process lifetime independently of this job.
+    ///
+    /// ```zig
+    /// // Given a Job whose latest status is .done after an editor build:
+    /// try job.launchEditor(&.{});
+    /// ```
     pub fn launchEditor(self: *Job, extra_args: []const []const u8) !void {
         const exe = try std.fmt.allocPrint(self.gpa, "{s}{c}zig-out{c}bin{c}{s}_editor{s}", .{ self.dir, std.fs.path.sep, std.fs.path.sep, std.fs.path.sep, self.name, builtin.target.exeFileExt() });
         defer self.gpa.free(exe);

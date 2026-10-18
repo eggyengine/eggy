@@ -11,6 +11,14 @@ pub const PluginSwitches = struct {
     off_keys: std.ArrayList([]u8) = .empty,
 
     /// The switches as `project_dir`'s registry has them (every plugin on without one).
+    /// Editor-host helper: copies disabled keys using `gpa`, without retaining the path.
+    /// Null/missing/unreadable registry yields all-on; parse errors log and allocation
+    /// failures may yield a partial set. Caller owns the returned value.
+    ///
+    /// ```zig
+    /// var switches = PluginSwitches.load(gpa, project_dir);
+    /// defer switches.deinit();
+    /// ```
     pub fn load(gpa: std.mem.Allocator, project_dir: ?[]const u8) PluginSwitches {
         var self = PluginSwitches{ .gpa = gpa };
         const dir_path = project_dir orelse return self;
@@ -30,21 +38,47 @@ pub const PluginSwitches = struct {
         return self;
     }
 
+    /// Free all disabled-key copies and list storage; does not rewrite the project registry.
+    /// Do not use this value or slices returned by `off` afterward.
+    ///
+    /// ```zig
+    /// switches.deinit(); // Host teardown after the game's last use of off().
+    /// ```
     pub fn deinit(self: *PluginSwitches) void {
         for (self.off_keys.items) |key| self.gpa.free(key);
         self.off_keys.deinit(self.gpa);
     }
 
     /// The keys turned off, for `HotGame.start` and the registry.
+    /// Returns a borrowed slice invalidated by mutation/deinit; do not free or retain across set.
+    ///
+    /// ```zig
+    /// game.start(app, switches.off(), .discard); // Editor host's loaded HotGame.
+    /// ```
     pub fn off(self: *const PluginSwitches) []const []const u8 {
         return self.off_keys.items;
     }
 
+    /// Whether a borrowed stable plugin key is absent from the disabled set.
+    /// Unknown keys count as enabled; no plugin registration lookup is performed.
+    ///
+    /// ```zig
+    /// const enabled = switches.isOn("weather");
+    /// _ = enabled;
+    /// ```
     pub fn isOn(self: *const PluginSwitches, key: []const u8) bool {
         return self.indexOf(key) == null;
     }
 
     /// Turn plugin `key` on or off. The caller saves it with the registry.
+    /// Disabling copies the borrowed key; enabling frees its stored copy.
+    /// Idempotent for unchanged state; allocation failure leaves the set unchanged.
+    ///
+    /// ```zig
+    /// try switches.set("weather", false);
+    /// std.debug.assert(!switches.isOn("weather"));
+    /// // Host rewrites the registry and restarts/reconfigures plugins separately.
+    /// ```
     pub fn set(self: *PluginSwitches, key: []const u8, on: bool) !void {
         if (self.indexOf(key)) |index| {
             if (on) self.gpa.free(self.off_keys.orderedRemove(index));

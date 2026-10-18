@@ -22,6 +22,13 @@ pub const SavePrompt = struct {
     /// Open the prompt over `parent`, modal to it, asking about scene `scene_name` (null: one not
     /// saved anywhere yet) before `doing` ("reloading", "quitting", ...). On the heap, as its
     /// page keeps a pointer to it.
+    /// Editor-host only: copies the question into a bounded buffer; borrowed font/graphics
+    /// must outlive `close`. Allocation/window errors propagate; modal/parent failures are ignored.
+    ///
+    /// ```zig
+    /// const prompt = try SavePrompt.open(gpa, graphics, font, parent, scene_name, "reloading");
+    /// defer prompt.close(graphics);
+    /// ```
     pub fn open(gpa: std.mem.Allocator, graphics: *const eggy.Graphics, font: *ui.Font, parent: sdl3.video.Window, scene_name: ?[]const u8, doing: []const u8) !*SavePrompt {
         const self = try gpa.create(SavePrompt);
         errdefer gpa.destroy(self);
@@ -34,6 +41,12 @@ pub const SavePrompt = struct {
         return self;
     }
 
+    /// Destroy the prompt's window/UI/surface and free `self`, without saving/discarding anything.
+    /// The host owns carrying out the answer and must not reuse this pointer.
+    ///
+    /// ```zig
+    /// prompt.close(graphics); // After receiving an answer.
+    /// ```
     pub fn close(self: *SavePrompt, graphics: *eggy.Graphics) void {
         self.window.close(graphics);
         self.gpa.destroy(self);
@@ -41,6 +54,13 @@ pub const SavePrompt = struct {
 
     /// Handle `curr_event` if it is for this window; returns whether it was. Closing the window
     /// or Escape answers Cancel, Enter answers Save (see `keyAnswer`).
+    /// This method only forwards UI input; the host must query `keyAnswer` first to act on
+    /// keyboard/close answers. Does not retain the event or destroy the prompt.
+    ///
+    /// ```zig
+    /// // After the host has checked prompt.keyAnswer(event):
+    /// if (prompt.handle(event)) return;
+    /// ```
     pub fn handle(self: *SavePrompt, curr_event: sdl3.events.Event) bool {
         if (!self.window.owns(curr_event)) return false;
         self.window.handle(curr_event);
@@ -49,6 +69,14 @@ pub const SavePrompt = struct {
 
     /// The answer `curr_event` gives, if it is one: closing the window or Escape cancels,
     /// Enter saves.
+    /// Returns null for unrelated windows/events; pure query, so the host applies the answer.
+    ///
+    /// ```zig
+    /// if (prompt.keyAnswer(event)) |answer| {
+    ///     std.log.info("Save prompt: {t}", .{answer});
+    ///     // Host handles answer before closing prompt.
+    /// }
+    /// ```
     pub fn keyAnswer(self: *const SavePrompt, curr_event: sdl3.events.Event) ?Answer {
         if (!self.window.owns(curr_event)) return null;
         if (curr_event == .window_close_requested) return .cancel;
@@ -62,10 +90,27 @@ pub const SavePrompt = struct {
     }
 
     /// Draw a frame; returns the answer if a button was pressed.
+    /// Borrows the editor's style for this call; rendering errors propagate.
+    /// Neither answer application nor prompt destruction is performed here.
+    ///
+    /// ```zig
+    /// if (try prompt.update(graphics, style)) |answer| {
+    ///     std.log.info("Save prompt: {t}", .{answer});
+    ///     // Host performs save/discard/cancel and closes the prompt.
+    /// }
+    /// ```
     pub fn update(self: *SavePrompt, graphics: *eggy.Graphics, style: *const ui.Context) !?Answer {
         const Page = struct {
             prompt: *SavePrompt,
             answer: ?Answer = null,
+            /// Internal synchronous tool-page adapter; appends prompt controls in the
+            /// active frame and stores a button answer in this borrowed stack page.
+            ///
+            /// ```zig
+            /// // Inside update:
+            /// var page = Page{ .prompt = self };
+            /// try self.window.present(graphics, style, &page);
+            /// ```
             pub fn build(page: *@This(), context: *ui.Context) void {
                 page.answer = page.prompt.build(context);
             }

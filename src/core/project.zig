@@ -13,6 +13,11 @@ pub const resources_dir = "resources";
 pub const scenes_dir = resources_dir ++ "/scene";
 
 /// Make the folders every project has (`resources_dir`, `scenes_dir`) in `dir`, if missing.
+/// Leaves existing contents intact and propagates directory creation errors.
+///
+/// ```zig
+/// try makeFolders(io, project_dir);
+/// ```
 pub fn makeFolders(io: std.Io, dir: std.Io.Dir) !void {
     try dir.createDirPath(io, scenes_dir);
 }
@@ -46,6 +51,13 @@ pub const Metadata = struct {
 };
 
 /// `config` as an `eggy.zon`, with its comments.
+/// Borrows strings and writes escaped ZON without opening a file; writer errors propagate.
+///
+/// ```zig
+/// var output: std.Io.Writer.Allocating = .init(gpa);
+/// defer output.deinit();
+/// try write(&output.writer, .{ .name = "space_game", .title = "Space Game" });
+/// ```
 pub fn write(writer: *std.Io.Writer, config: Config) std.Io.Writer.Error!void {
     try writer.writeAll(".{\n    // The package name, as build.zig's addGame uses it: the editor opens `<name>_editor`.\n");
     try writer.print("    .name = \"{f}\",\n    .title = \"{f}\",\n    .version = \"{f}\",\n", .{ std.zig.fmtString(config.name), std.zig.fmtString(config.title), std.zig.fmtString(config.version) });
@@ -68,11 +80,27 @@ pub fn write(writer: *std.Io.Writer, config: Config) std.Io.Writer.Error!void {
 }
 
 /// `source` (an `eggy.zon`) parsed. Strings live in `arena`.
+/// Requires sentinel-terminated input; malformed or unknown fields fail parsing.
+/// Release all returned strings and parser allocations by destroying the arena.
+///
+/// ```zig
+/// var arena = std.heap.ArenaAllocator.init(gpa);
+/// defer arena.deinit();
+/// const config = try parse(arena.allocator(), ".{ .name = \"game\", .title = \"Game\" }");
+/// ```
 pub fn parse(arena: std.mem.Allocator, source: [:0]const u8) !Config {
     return std.zon.parse.fromSliceAlloc(Config, arena, source, null, .{});
 }
 
 /// The `eggy.zon` in `dir`, parsed into `arena`.
+/// Reads at most 1 MiB; missing files, I/O, allocation and parse errors propagate.
+/// The arena owns both source bytes and returned strings.
+///
+/// ```zig
+/// var arena = std.heap.ArenaAllocator.init(gpa);
+/// defer arena.deinit();
+/// const config = try load(arena.allocator(), io, project_dir);
+/// ```
 pub fn load(arena: std.mem.Allocator, io: std.Io, dir: std.Io.Dir) !Config {
     const source = try dir.readFileAllocOptions(io, file_name, arena, .limited(1 << 20), .of(u8), 0);
     return parse(arena, source);

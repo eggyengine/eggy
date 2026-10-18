@@ -14,12 +14,26 @@ const sdl = eggy.sdl_adapter.sdl;
 pub const State = struct {
     before: ?[]u8 = null,
     pending: ?api.Operation = null,
+    /// Free an editor extension's pending snapshot with its allocating `gpa`, then reset state.
+    /// Host-only: discards queued lifecycle work; it does not restore the world or cancel an
+    /// already-recorded history group. Safe to call again on the reset state.
+    ///
+    /// ```zig
+    /// extension_state.deinit(gpa); // Host State and its snapshot allocator.
+    /// ```
     pub fn deinit(self: *State, gpa: std.mem.Allocator) void {
         if (self.before) |before| gpa.free(before);
         self.* = .{};
     }
 
     /// Take a lifecycle request only after game-library hooks have returned.
+    /// Host-only: clears the single queued request, returning its workspace outcome or null.
+    /// Queue only lifecycle operations; any other stored operation is unreachable.
+    ///
+    /// ```zig
+    /// // After all hooks return, given the host's extension State:
+    /// const request = extension_state.takeRequest();
+    /// ```
     pub fn takeRequest(self: *State) ?workspace.Outcome {
         const request = self.pending orelse return null;
         self.pending = null;
@@ -36,6 +50,18 @@ pub const State = struct {
 
 /// Start existing desktop workflows only after the requesting library hook has unwound.
 /// True means the editor's reload workflow launched its replacement.
+/// Host-only: `host` is the concrete editor pointer providing the workflow fields/methods
+/// used here, not a plugin context. May start builds, create windows or open a folder picker;
+/// cancelled navigation returns false, and busy/no-project/invalid-request/I/O errors propagate.
+/// Never call while a game hook or extension edit transaction is on the stack.
+///
+/// ```zig
+/// // Given the concrete editor pointer after game-library hooks unwind:
+/// if (editor.extension_state.takeRequest()) |request| {
+///     const replaced = try processRequest(editor, request);
+///     _ = replaced; // Quit the old editor if its replacement launched.
+/// }
+/// ```
 pub fn processRequest(host: anytype, request: workspace.Outcome) !bool {
     switch (request) {
         .build_project => {
@@ -65,6 +91,15 @@ pub fn processRequest(host: anytype, request: workspace.Outcome) !bool {
 }
 
 /// Construct a hook-local view after the concrete editor has reached its final address.
+/// Host-only: `editor` must be a pointer to the concrete editor with extension/history/project
+/// services. The view borrows it and its App; never retain it in a plugin or move the editor.
+/// Requests run synchronously except lifecycle work, which is queued for after hooks unwind.
+///
+/// ```zig
+/// // Given a stably stored concrete editor pointer and loaded HotGame pointer:
+/// var view = context(editor);
+/// game.editorUpdate(&view);
+/// ```
 pub fn context(editor: anytype) api.Context {
     const Through = struct {
         fn request(raw: *anyopaque, input: *const api.Request, output: *api.Response) callconv(.c) api.Status {
@@ -225,6 +260,14 @@ test "deferred workflow requests are taken once without retaining callbacks" {
 }
 
 /// Scene text for history, captured through the current library's typed registry.
+/// Host-only: `host` supplies gpa, App, optional HotGame and EntityEditor; capture uses ordered
+/// roots. Returns caller-owned ZON bytes allocated by `host.gpa`; temporary scene storage is
+/// released. Missing library, capture and writer/allocation failures propagate.
+///
+/// ```zig
+/// const before = try snapshot(editor); // Concrete editor pointer, outside library reload.
+/// defer editor.gpa.free(before);
+/// ```
 pub fn snapshot(host: anytype) ![]u8 {
     const game = if (host.game) |*loaded| loaded else return error.NoGameLibrary;
     var scene = try eggy.scene.Scene.capture(host.gpa, &host.app.world, game.sceneAccess(), host.entity_editor.roots(&host.app.world));

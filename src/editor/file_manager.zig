@@ -5,6 +5,12 @@ const std = @import("std");
 const sdl3 = @import("eggy").sdl_adapter.sdl;
 
 /// Open `dir` (absolute) in the file manager. Returns once one is launched, not once it shows.
+/// Editor-host helper; borrows the path, frees temporary URL storage from `gpa`,
+/// and propagates allocation/SDL launch errors. Does not validate the folder's existence.
+///
+/// ```zig
+/// try file_manager.showFolder(gpa, "/home/me/game");
+/// ```
 pub fn showFolder(gpa: std.mem.Allocator, dir: []const u8) !void {
     const url = try folderUrl(gpa, dir);
     defer gpa.free(url);
@@ -12,6 +18,12 @@ pub fn showFolder(gpa: std.mem.Allocator, dir: []const u8) !void {
 }
 
 /// Open `file` (absolute) in the app the system opens it with.
+/// Returns after handing the path to the system, not after viewing completes.
+/// Borrows `file`; temporary URL allocation and SDL launch failures propagate.
+///
+/// ```zig
+/// try file_manager.openFile(gpa, "/home/me/game/resources/manual.pdf");
+/// ```
 pub fn openFile(gpa: std.mem.Allocator, file: []const u8) !void {
     const url = try folderUrl(gpa, file);
     defer gpa.free(url);

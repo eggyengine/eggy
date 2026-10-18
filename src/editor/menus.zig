@@ -95,6 +95,16 @@ pub const Menubar = struct {
     /// The menus as `widgets` draws them: the first `shown` (see `shownMenus`) on the bar and the
     /// rest in the "..." menu. Window lists each panel, the built-in ones then `plugin_panels`,
     /// checked while `layout` shows it.
+    /// Editor-host only: allocate with a frame arena, which owns the returned menus and nested
+    /// item slices; labels borrow plugin declarations/static strings through drawing.
+    /// Updates command dispatch bounds; errors on allocation or over 65536 plugin commands.
+    ///
+    /// ```zig
+    /// const shown = menus.shownMenus(font, available_points);
+    /// const list = try menubar.list(arena, &layout, plugin_panels, plugin_commands, project_state, shown);
+    /// // Feed list to the frame's titlebarMenubar widget.
+    /// _ = list;
+    /// ```
     pub fn list(self: *Menubar, gpa: std.mem.Allocator, layout: *const dock.DockSpace, plugin_panels: []const eggy.plugins.EditorPanel, plugin_commands: []const eggy.plugins.EditorCommand, project: ProjectState, shown: usize) ![]const widgets.MenubarMenu {
         if (plugin_commands.len > 65536) return error.TooManyEditorCommands;
         self.plugin_command_count = plugin_commands.len;
@@ -158,6 +168,15 @@ pub const Menubar = struct {
 
     /// A left press on element `id`: on a trigger, an item, or anywhere while a menu is open
     /// (which closes it). Null when the menu bar has nothing to do with it.
+    /// `id` is the hit-tested element ID, not a menu index; returns an action for the host
+    /// to execute and mutates open-menu state, but performs no command side effects.
+    ///
+    /// ```zig
+    /// if (menubar.press(hit_id)) |action| switch (action) {
+    ///     .command => |command| std.log.info("command: {t}", .{command}),
+    ///     else => {},
+    /// };
+    /// ```
     pub fn press(self: *Menubar, id: u32) ?Action {
         if (std.enums.fromInt(Menu, id) != null) {
             self.open = if (self.open == id) 0 else id;
@@ -180,6 +199,11 @@ pub const Menubar = struct {
 
     /// The pointer moved onto element `id`: over a folded menu's row, open that menu beside it.
     /// Returns whether that changed anything.
+    /// Pass the hit-tested element ID; only an open overflow menu reacts.
+    ///
+    /// ```zig
+    /// _ = menubar.hover(hit_id); // Host pointer-motion route.
+    /// ```
     pub fn hover(self: *Menubar, id: u32) bool {
         if (self.open != @intFromEnum(Menu.more) or !isOverflowRow(id) or self.open_submenu == id) return false;
         self.open_submenu = id;
@@ -193,6 +217,13 @@ pub const Menubar = struct {
 
 /// How many menus fit on the bar in `available` points of width at `font`; the rest fold into
 /// the "..." menu, which then needs room of its own.
+/// Borrows the loaded font; returns a count from zero through five, without allocating.
+///
+/// ```zig
+/// const shown = menus.shownMenus(context.font, 240);
+/// // Pass shown to Menubar.list for the same frame.
+/// _ = shown;
+/// ```
 pub fn shownMenus(font: *const ui.Font, available: f32) usize {
     var used: f32 = 0;
     var fitting: usize = 0;
@@ -217,6 +248,13 @@ fn triggerWidth(font: *const ui.Font, menu: Menu) f32 {
 
 /// Draw the "..." trigger in `tree` (from `widgets.titlebarMenubar`) as three dots, as the font
 /// has no ellipsis glyph.
+/// Mutates the frame tree in place and allocates replacement children from `b`; allocation
+/// failures propagate. Both builder storage and tree must live through layout/draw.
+///
+/// ```zig
+/// // Host: tree was created by widgets.titlebarMenubar in builder b.
+/// try menus.drawMoreAsDots(b, tree);
+/// ```
 pub fn drawMoreAsDots(b: L.Builder, tree: *L.Element) !void {
     for (tree.children) |child| try drawMoreAsDots(b, child);
     if (tree.id != @intFromEnum(Menu.more)) return;

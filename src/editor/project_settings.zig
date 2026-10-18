@@ -43,6 +43,13 @@ pub const ProjectSettings = struct {
     scene: usize = 0,
 
     /// Read the project in `project_dir`'s `eggy.zon` into a new form.
+    /// Editor-only heap state: copies the path and owns field/scene storage until `close`.
+    /// Allocation/read/parse/field-capacity errors propagate, cleaning partially opened state.
+    ///
+    /// ```zig
+    /// const settings = try ProjectSettings.open(gpa, project_dir);
+    /// defer settings.close();
+    /// ```
     pub fn open(gpa: std.mem.Allocator, project_dir: []const u8) !*ProjectSettings {
         const self = try gpa.create(ProjectSettings);
         errdefer gpa.destroy(self);
@@ -57,6 +64,12 @@ pub const ProjectSettings = struct {
         return self;
     }
 
+    /// Free the form, its copied project path, cached config/scene lists, and `self`.
+    /// Does not save pending field edits or free changes already returned by `save`.
+    ///
+    /// ```zig
+    /// settings.close(); // Editor preferences window is no longer using its fields.
+    /// ```
     pub fn close(self: *ProjectSettings) void {
         self.gpa.free(self.project_dir);
         self.gpa.free(self.written);
@@ -68,6 +81,12 @@ pub const ProjectSettings = struct {
 
     /// Read `eggy.zon` and the project's scenes again into the fields: they changed elsewhere
     /// (undo, say).
+    /// Replaces cached strings/fields, invalidating old borrowed names and scene labels.
+    /// I/O/parse/allocation/field-capacity errors propagate; it is not a transactional reload.
+    ///
+    /// ```zig
+    /// try settings.reload(); // After the host restores eggy.zon through undo.
+    /// ```
     pub fn reload(self: *ProjectSettings) !void {
         var threaded: std.Io.Threaded = .init_single_threaded;
         const io = threaded.io();
@@ -104,6 +123,14 @@ pub const ProjectSettings = struct {
 
     /// The section's cards, in the Preferences window's style: a card per setting, its name and
     /// note on the left and its control on the right.
+    /// Builds in an active editor UI frame, mutating draft fields only; call `save` afterward
+    /// to persist and obtain undo text. Frame elements borrow the form through rendering.
+    ///
+    /// ```zig
+    /// settings.build(context);
+    /// if (try settings.save()) |change|
+    ///     history.recordProjectSettings(change.before, change.after, now_ms);
+    /// ```
     pub fn build(self: *ProjectSettings, context: *ui.Context) void {
         context.muted("Saved in eggy.zon as you change them; Edit > Undo takes them back.");
         smallText(context, 12);
@@ -154,6 +181,17 @@ pub const ProjectSettings = struct {
     }
 
     /// Write `eggy.zon` from the fields if they changed it; what changed, caller-owned.
+    /// Null means identical serialized settings. Returned before/after buffers use `self.gpa`;
+    /// transfer them to matching-allocator history or free both. Serialization/I/O/allocation
+    /// failures propagate; the disk write can precede a later allocation failure.
+    ///
+    /// ```zig
+    /// if (try settings.save()) |change| {
+    ///     defer gpa.free(change.before);
+    ///     defer gpa.free(change.after);
+    ///     std.log.info("Project settings saved", .{});
+    /// }
+    /// ```
     pub fn save(self: *ProjectSettings) !?Change {
         var arena_state = std.heap.ArenaAllocator.init(self.gpa);
         defer arena_state.deinit();
@@ -213,6 +251,15 @@ fn endCard(context: *ui.Context) void {
 
 /// Make `scene` the default scene in the `eggy.zon` of the project in `project_dir`; what changed
 /// (caller-owned), or null when it already was.
+/// Editor export helper: `scene` is a trusted project-relative scene path, not validated here.
+/// Borrows paths, reads/parses and rewrites the config, returning two `gpa`-owned buffers.
+/// Errors propagate, possibly after the file was written; transfer returned texts to history
+/// or free both.
+///
+/// ```zig
+/// if (try project_settings.setDefaultScene(gpa, project_dir, "resources/scene/main.scene.zon")) |change|
+///     history.recordProjectSettings(change.before, change.after, now_ms);
+/// ```
 pub fn setDefaultScene(gpa: std.mem.Allocator, project_dir: []const u8, scene: []const u8) !?Change {
     var threaded: std.Io.Threaded = .init_single_threaded;
     const io = threaded.io();

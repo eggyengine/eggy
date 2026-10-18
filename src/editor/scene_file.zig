@@ -19,16 +19,35 @@ pub const OpenScene = struct {
     /// A hash of the world as last saved or opened, to tell when it has changed since.
     saved_hash: ?u64 = null,
 
+    /// Free the editor's owned scene path, not the borrowed project folder or world.
+    /// Does not save changes; the value must not be reused without reinitializing it.
+    ///
+    /// ```zig
+    /// var open_scene = OpenScene{ .gpa = gpa, .project_dir = project_dir };
+    /// defer open_scene.deinit();
+    /// ```
     pub fn deinit(self: *OpenScene) void {
         if (self.path) |path| self.gpa.free(path);
     }
 
     /// Its file name, for the status bar; null with none open.
+    /// Returns a borrowed basename valid until the open path changes or this state is destroyed.
+    ///
+    /// ```zig
+    /// if (open_scene.name()) |name| context.text(name);
+    /// ```
     pub fn name(self: *const OpenScene) ?[]const u8 {
         return std.fs.path.basename(self.path orelse return null);
     }
 
     /// Reopen the scene that was open last into `world`, if it still exists.
+    /// Editor startup helper; `access` must match this world's game's component registry.
+    /// Missing/invalid memory is ignored; open failures log. A successful open replaces entities.
+    ///
+    /// ```zig
+    /// open_scene.reopen(&app.world, game.sceneAccess());
+    /// // Start editor-mode plugins after restoring the remembered scene.
+    /// ```
     pub fn reopen(self: *OpenScene, world: *eggy.ecs.World, access: eggy.scene.Access) void {
         const remembered = self.readMemory() orelse return;
         defer self.gpa.free(remembered);
@@ -37,6 +56,15 @@ pub const OpenScene = struct {
 
     /// Replace `world`'s entities with the scene at `path` (relative to the project), and
     /// remember it as the open one.
+    /// Borrows `path`; `access` must match the loaded game/world. Rejects unsafe lexical paths
+    /// with `BadPathName`; read/parse/allocation/instantiate errors propagate. Parsing occurs
+    /// before clearing, but later failures may leave a changed/partial world; the host should
+    /// snapshot history first. Scene-memory write failures log rather than abort.
+    ///
+    /// ```zig
+    /// // Host has already dealt with unsaved changes and captured undo state.
+    /// try open_scene.open("resources/scene/main.scene.zon", &app.world, game.sceneAccess());
+    /// ```
     pub fn open(self: *OpenScene, path: []const u8, world: *eggy.ecs.World, access: eggy.scene.Access) !void {
         if (!isProjectPath(path)) return error.BadPathName;
         var threaded: std.Io.Threaded = .init_single_threaded;
@@ -58,12 +86,26 @@ pub const OpenScene = struct {
 
     /// Whether `world` has changes not saved to the open scene: it differs from what was last
     /// saved or opened, or (with no scene open) it has entities at all.
+    /// Captures/serializes with the matching game registry; allocation failures return false.
+    /// Does not write or modify the world; the hash comparison uses top-level ID order.
+    ///
+    /// ```zig
+    /// const dirty = open_scene.unsaved(&app.world, game.sceneAccess());
+    /// _ = dirty; // Host shows the status-bar asterisk.
+    /// ```
     pub fn unsaved(self: *const OpenScene, world: *eggy.ecs.World, access: eggy.scene.Access) bool {
         const now = hashOf(self.gpa, world, access) catch return false;
         return self.unsavedHash(now, world);
     }
 
     /// `unsaved`, for the world whose scene text hashes (Wyhash, seed 0) to `hash`.
+    /// Caller must supply the same serialization hash used by save/open.
+    /// Without a saved hash, checks only whether the borrowed world has any entities.
+    ///
+    /// ```zig
+    /// const dirty = open_scene.unsavedHash(std.hash.Wyhash.hash(0, scene_text), &app.world);
+    /// _ = dirty;
+    /// ```
     pub fn unsavedHash(self: *const OpenScene, hash: u64, world: *eggy.ecs.World) bool {
         const saved = self.saved_hash orelse return world.entityCount() > 0;
         return hash != saved;
@@ -71,6 +113,14 @@ pub const OpenScene = struct {
 
     /// Write `world`, from its top-level entities `roots` in order, to the open scene; with none
     /// open, to a new one in `resources/scene/`, which becomes the open one.
+    /// `access` must match `world`; null roots uses the capture's default ordering.
+    /// Writes the project file, creating parent folders, and updates the saved hash on success.
+    /// I/O/capture/allocation errors propagate; a fresh path may already be selected on failure.
+    ///
+    /// ```zig
+    /// try open_scene.save(&app.world, game.sceneAccess(), root_ids);
+    /// // null instead of root_ids captures with the registry's default root ordering.
+    /// ```
     pub fn save(self: *OpenScene, world: *eggy.ecs.World, access: eggy.scene.Access, roots: ?[]const eggy.ecs.EntityId) !void {
         if (self.path == null) {
             const fresh = try self.freshPath();
@@ -96,6 +146,14 @@ pub const OpenScene = struct {
 
     /// Start a new, empty scene in `folder` (relative to the project; "" for the project
     /// itself), written at once, and open it: `world` empties.
+    /// Rejects non-project folder paths; capture/allocation/I/O failures propagate.
+    /// Clearing happens before file creation, so the host must capture undo/confirm leaving
+    /// first. Borrows the folder and matching component access only during this call.
+    ///
+    /// ```zig
+    /// // Host already captured the previous world for an open_scene history step.
+    /// try open_scene.create(eggy.project.scenes_dir, &app.world, game.sceneAccess());
+    /// ```
     pub fn create(self: *OpenScene, folder: []const u8, world: *eggy.ecs.World, access: eggy.scene.Access) !void {
         if (folder.len > 0 and !isProjectPath(folder)) return error.BadPathName;
         world.clear();
@@ -107,6 +165,14 @@ pub const OpenScene = struct {
 
     /// Make `path` (none: no scene) the open scene again, its file holding what hashes to
     /// `saved_hash`, as undoing or redoing opening a scene does; the world is the caller's.
+    /// Copies a non-null path with `self.gpa` and attempts to remember it on disk;
+    /// allocation errors propagate. Accepts trusted history paths without validation and does
+    /// not load/save scene contents; the host restores the world separately.
+    ///
+    /// ```zig
+    /// // After restoring the corresponding world's history snapshot:
+    /// try open_scene.reopenAs(previous_path, previous_saved_hash);
+    /// ```
     pub fn reopenAs(self: *OpenScene, path: ?[]const u8, saved_hash: ?u64) !void {
         if (path) |chosen| try self.setPath(chosen) else if (self.path) |old| {
             self.gpa.free(old);
@@ -123,6 +189,13 @@ pub const OpenScene = struct {
     }
 
     /// The open scene's file moved from `from` to `to` (or a folder holding it did): follow it.
+    /// Paths are trusted project-relative asset paths, borrowed for this call.
+    /// Updates/copies the matching path and scene memory; allocation/write failures are ignored
+    /// or logged. It does not move files or change the world's saved hash.
+    ///
+    /// ```zig
+    /// open_scene.moved("resources/scene", "resources/levels"); // After the actual rename.
+    /// ```
     pub fn moved(self: *OpenScene, from: []const u8, to: []const u8) void {
         const path = self.path orelse return;
         if (!std.mem.startsWith(u8, path, from)) return;
@@ -135,6 +208,12 @@ pub const OpenScene = struct {
 
     /// The open scene's file (or a folder holding it) was deleted: it stays in the world, unsaved,
     /// with no scene open.
+    /// Borrows a project-relative file/folder path and clears matching path/hash state only.
+    /// Does not delete files, clear the world, or rewrite remembered scene memory.
+    ///
+    /// ```zig
+    /// open_scene.deleted("resources/scene/main.scene.zon"); // After moving it to trash.
+    /// ```
     pub fn deleted(self: *OpenScene, path: []const u8) void {
         const current_path = self.path orelse return;
         if (!std.mem.startsWith(u8, current_path, path)) return;
@@ -209,6 +288,13 @@ fn hashOf(gpa: std.mem.Allocator, world: *eggy.ecs.World, access: eggy.scene.Acc
 }
 
 /// Whether `path` stays inside the project: relative, with no `..`.
+/// Pure lexical check for editor asset paths; empty/absolute paths are rejected and either
+/// slash is recognized. Does not resolve symlinks or guarantee filesystem containment.
+///
+/// ```zig
+/// std.debug.assert(scene_file.isProjectPath("resources/scene/main.scene.zon"));
+/// std.debug.assert(!scene_file.isProjectPath("../main.scene.zon"));
+/// ```
 pub fn isProjectPath(path: []const u8) bool {
     if (path.len == 0 or std.fs.path.isAbsolute(path)) return false;
     var parts = std.mem.tokenizeAny(u8, path, "/\\");

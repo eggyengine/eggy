@@ -37,12 +37,27 @@ pub const ColorPopup = struct {
         closed: bool = false,
     };
 
+    /// Create an editor picker for field-part `key`, copying sRGB RGBA channels in [0, 1].
+    /// The original color is retained for cancellation; no allocation or ownership transfer.
+    ///
+    /// ```zig
+    /// var popup = ColorPopup.open(1, .{ 0.2, 0.4, 0.6, 1 });
+    /// ```
     pub fn open(key: u64, color: [4]f32) ColorPopup {
         return .{ .key = key, .editor = .init(.{ color[0], color[1], color[2] }, color[3]) };
     }
 
     /// Draw the picker over everything in `context`'s page, under the swatch `anchor`, taking ids
     /// from `first_id`, and handle this frame's input on it.
+    /// Editor-only: `anchor` belongs to this frame and 32 ids starting at `first_id` must be
+    /// reserved. Apply `result.color` even when closed (Cancel returns the original RGBA),
+    /// then discard the popup if `closed`. UI allocation failures leave a partial/no overlay.
+    ///
+    /// ```zig
+    /// // Given popup, a building UI context and this frame's swatch element:
+    /// const result = popup.build(context, anchor, 0x4000_0000);
+    /// _ = result; // Apply any color, then close the owning optional when requested.
+    /// ```
     pub fn build(self: *ColorPopup, context: *ui.Context, anchor: *const L.Element, first_id: u32) Result {
         var result: Result = .{};
         const before = self.editor;

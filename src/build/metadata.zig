@@ -12,6 +12,13 @@ pub const Pairs = []const project.Metadata.Entry;
 
 /// The project's metadata as name and value pairs, empty ones left out; none without an
 /// `eggy.zon` that reads.
+/// Build-internal; result and strings live in `b`'s arena. Invalid/missing configuration
+/// produces an empty list. Does not modify the project or escape values for a destination format.
+///
+/// ```zig
+/// const pairs = metadata.read(b);
+/// metadata.addTo(b, runtime_exe, pairs);
+/// ```
 pub fn read(b: *std.Build) Pairs {
     const source = b.build_root.handle.readFileAllocOptions(b.graph.io, project.file_name, b.allocator, .limited(1 << 20), .of(u8), 0) catch return &.{};
     const config = project.parse(b.allocator, source) catch return &.{};
@@ -30,6 +37,12 @@ pub fn read(b: *std.Build) Pairs {
 }
 
 /// `pairs` as text, a `name=value` line each, for the section the runtime keeps them in.
+/// Allocates in `b`'s arena and preserves pair order. This is display metadata, not an escaped
+/// interchange format: embedded line breaks and equals signs are left unchanged.
+///
+/// ```zig
+/// project_options.addOption([]const u8, "metadata_text", metadata.text(b, metadata.read(b)));
+/// ```
 pub fn text(b: *std.Build, pairs: Pairs) []const u8 {
     var out: std.ArrayList(u8) = .empty;
     for (pairs) |pair| out.print(b.allocator, "{s}={s}\n", .{ pair.name, pair.value }) catch @panic("OOM");
@@ -38,6 +51,12 @@ pub fn text(b: *std.Build, pairs: Pairs) []const u8 {
 
 /// On Windows, give `exe` a version information resource holding `pairs` (its version numbers
 /// from `ProductVersion`); elsewhere, nothing.
+/// Build-internal; adds an escaped generated `.rc` input to `exe`, owned by the build graph.
+/// No-op for empty pairs or non-Windows targets. Missing/non-numeric version parts remain zero.
+///
+/// ```zig
+/// metadata.addTo(b, runtime_exe, metadata.read(b));
+/// ```
 pub fn addTo(b: *std.Build, exe: *std.Build.Step.Compile, pairs: Pairs) void {
     if (exe.rootModuleTarget().os.tag != .windows or pairs.len == 0) return;
     var version: [4]u16 = .{ 0, 0, 0, 0 };

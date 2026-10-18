@@ -8,6 +8,14 @@ const std = @import("std");
 const assets = @import("eggy_assets");
 const model_import = @import("eggy_model_import");
 
+/// Build-tool entry point: convert project-relative model/image path and output-name pairs.
+/// Owns temporary imports only for the run; creates/overwrites named files in the output
+/// directory. Logs individual conversion failures and returns `PackagingFailed` after trying
+/// the remaining pairs; bad argument counts return `Usage`.
+///
+/// ```sh
+/// eggy_package_assets ./my_game ./data resources/models/ship.glb 42.eggmodel
+/// ```
 pub fn main(init: std.process.Init) !void {
     const gpa = init.gpa;
     const io = init.io;

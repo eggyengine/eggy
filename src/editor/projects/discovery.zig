@@ -3,6 +3,13 @@ const std = @import("std");
 const project = @import("eggy").project;
 
 /// An explicit project takes precedence over discovery. A missing value is an error.
+/// Editor startup helper: scan sentinel-terminated process arguments, including argv[0].
+/// Returns a borrowed, unnormalized directory after the first `--project`, null if absent,
+/// or MissingProjectDirectory for a missing/empty value. Does not check disk.
+///
+/// ```zig
+/// const dir = try explicitDirectory(&.{ "game_editor", "--project", "../game" });
+/// ```
 pub fn explicitDirectory(args: []const [*:0]const u8) !?[]const u8 {
     for (args, 0..) |arg, i| {
         if (!std.mem.eql(u8, std.mem.span(arg), "--project")) continue;
@@ -15,17 +22,28 @@ pub fn explicitDirectory(args: []const [*:0]const u8) !?[]const u8 {
 /// Find the nearest ancestor with a matching `eggy.zon` and both Zig build files. Prefer the
 /// executable's ancestors, then the launch directory's (for builds using an external prefix).
 /// The absolute directory is caller-owned; malformed or unreadable projects report an error.
-pub fn find(gpa: std.mem.Allocator, io: std.Io, name: []const u8, executable_dir: []const u8, launch_dir: []const u8) !?[]u8 {
+/// Editor startup only: `name` must match the project's package name; both start directories
+/// must exist. Null means neither ancestor chain matches; free a successful sentinel-terminated
+/// result with `gpa`. Resolution, read/parse and allocation errors propagate.
+///
+/// ```zig
+/// // Given allocator, I/O and existing editor/launch directory paths:
+/// if (try find(gpa, io, "space_game", executable_dir, launch_dir)) |dir| {
+///     defer gpa.free(dir);
+///     std.log.info("Project: {s}", .{dir});
+/// }
+/// ```
+pub fn find(gpa: std.mem.Allocator, io: std.Io, name: []const u8, executable_dir: []const u8, launch_dir: []const u8) !?[:0]u8 {
     if (try findAbove(gpa, io, name, executable_dir)) |dir| return dir;
     return findAbove(gpa, io, name, launch_dir);
 }
 
-fn findAbove(gpa: std.mem.Allocator, io: std.Io, name: []const u8, start: []const u8) !?[]u8 {
+fn findAbove(gpa: std.mem.Allocator, io: std.Io, name: []const u8, start: []const u8) !?[:0]u8 {
     const absolute = try std.Io.Dir.cwd().realPathFileAlloc(io, start, gpa);
     defer gpa.free(absolute);
     var candidate: []const u8 = absolute;
     while (true) {
-        if (try matches(gpa, io, name, candidate)) return try gpa.dupe(u8, candidate);
+        if (try matches(gpa, io, name, candidate)) return try gpa.dupeZ(u8, candidate);
         const parent = std.fs.path.dirname(candidate) orelse return null;
         if (std.mem.eql(u8, parent, candidate)) return null;
         candidate = parent;
@@ -69,6 +87,15 @@ test "an editor in zig-out/bin finds its matching developable project" {
     const found = (try find(std.testing.allocator, io, "foobar_game", bin, launch)).?;
     defer std.testing.allocator.free(found);
     try std.testing.expectEqualStrings(root, found);
+    for ([_]bool{ false, true }) |explicit| {
+        const resolved = if (explicit)
+            try std.Io.Dir.cwd().realPathFileAlloc(io, root, std.testing.allocator)
+        else
+            (try find(std.testing.allocator, io, "foobar_game", bin, launch)).?;
+        defer std.testing.allocator.free(resolved);
+        try std.testing.expectEqualStrings(root, resolved);
+        try std.testing.expectEqual(@as(u8, 0), resolved[resolved.len]);
+    }
     try std.testing.expect(try find(std.testing.allocator, io, "other_game", bin, launch) == null);
 
     try tmp.dir.deleteFile(io, "foobar_game/build.zig");

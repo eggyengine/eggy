@@ -23,9 +23,26 @@ pub const DrawContext = struct {
     frame_slot: usize,
 
     /// Begin a pass that preserves the scene and earlier custom drawing.
+    /// In a `draw` hook, call only outside a pass and pair with `endPass`; this records
+    /// commands but neither submits nor changes ownership of the engine's target.
+    ///
+    /// ```zig
+    /// // In a draw hook with draw: eggy.DrawContext:
+    /// try draw.beginPass();
+    /// defer draw.endPass();
+    /// // Record custom graphics commands here.
+    /// ```
     pub fn beginPass(self: DrawContext) !void {
         try self.cmd.beginRenderPass(.{ .label = "game ui", .color_attachments = &.{.{ .view = self.target, .load_op = .load, .store_op = .store }} });
     }
+    /// End the pass opened by `beginPass`, leaving the borrowed target in color-attachment
+    /// state. Must be called exactly once for that active pass; never submits the frame.
+    ///
+    /// ```zig
+    /// try draw.beginPass();
+    /// // Record custom graphics commands here.
+    /// draw.endPass();
+    /// ```
     pub fn endPass(self: DrawContext) void {
         self.cmd.endRenderPass();
     }
@@ -48,6 +65,15 @@ pub const Overlay = struct {
     primary_touch: ?input_types.TouchKey = null,
     finger_lifted: bool = false,
 
+    /// Host-only: create owned UI/font and renderer resources for this device and target format.
+    /// The device/queue must outlive the overlay. Allocation/GPU failures clean up partial
+    /// initialization; keep the result at a stable address while exposing its context.
+    ///
+    /// ```zig
+    /// // Host with live device, queue and matching target color_format:
+    /// var overlay = try Overlay.init(gpa, device, queue, color_format);
+    /// defer overlay.deinit();
+    /// ```
     pub fn init(gpa: std.mem.Allocator, device: vit.Device, queue: vit.Queue, color_format: vit.Format) !Overlay {
         var context = try ui.Context.init(gpa);
         errdefer context.deinit();
@@ -55,6 +81,14 @@ pub const Overlay = struct {
         return .{ .gpa = gpa, .queue = queue, .device = device, .color_format = color_format, .context = context, .renderer = painter };
     }
 
+    /// Host-only: wait for queued rendering, then free UI/font, renderer and capture storage.
+    /// Call before destroying the device; wait failures are logged. Borrowed context/font
+    /// pointers become invalid and this value must not be used again.
+    ///
+    /// ```zig
+    /// var overlay = try Overlay.init(gpa, device, queue, color_format);
+    /// defer overlay.deinit();
+    /// ```
     pub fn deinit(self: *Overlay) void {
         self.queue.waitIdle() catch |err| std.log.err("cannot finish game UI GPU work: {t}", .{err});
         self.renderer.deinit();
@@ -65,6 +99,13 @@ pub const Overlay = struct {
 
     /// Copy a TTF/OTF and replace the default font safely. Bytes may come from a temporary
     /// resource read or game library. Call once when selecting a font, not every frame.
+    /// Host-only: waits for GPU work before replacing resources. Font/renderer/allocation
+    /// or wait failures leave the previous font installed.
+    ///
+    /// ```zig
+    /// // Host with valid TTF/OTF bytes, which may be freed after this call:
+    /// try overlay.setFont(font_bytes);
+    /// ```
     pub fn setFont(self: *Overlay, bytes: []const u8) !void {
         const owned = try self.gpa.dupe(u8, bytes);
         errdefer self.gpa.free(owned);
@@ -87,6 +128,15 @@ pub const Overlay = struct {
         self.renderer = painter;
     }
 
+    /// Host-only: begin building this frame's UI with target DPI and millisecond animation time.
+    /// Requires a positive logical viewport size and compatible target format; declare widgets
+    /// on `context` afterwards, then call `render` during the same borrowed draw frame.
+    ///
+    /// ```zig
+    /// // Host with current draw context and monotonic time_ms:
+    /// overlay.begin(draw, time_ms);
+    /// overlay.context.label("HUD", .{});
+    /// ```
     pub fn begin(self: *Overlay, draw: DrawContext, time_ms: u64) void {
         self.context.pixel_scale = .{ @as(f32, @floatFromInt(draw.extent_px.width)) / draw.viewport.w, @as(f32, @floatFromInt(draw.extent_px.height)) / draw.viewport.h };
         self.context.font.dpi_scale = self.context.pixel_scale[0];
@@ -98,6 +148,13 @@ pub const Overlay = struct {
     /// Upload outside a pass, then draw over the target. True means UI newly acquired
     /// keyboard focus: cancel gameplay holds before the next update. Moving between surfaces
     /// waits once so their frame slots cannot overwrite another surface's pending vertices.
+    /// Host-only: call after `begin` and widget declarations, outside a pass on the same
+    /// device/format. Records commands only; layout/upload/GPU errors propagate.
+    ///
+    /// ```zig
+    /// // Host with overlay built for the current draw frame:
+    /// if (try overlay.render(draw)) input.cancel();
+    /// ```
     pub fn render(self: *Overlay, draw: DrawContext) !bool {
         if (self.last_owner) |owner| if (owner != draw.frame_owner) try self.queue.waitIdle();
         self.last_owner = draw.frame_owner;
@@ -120,6 +177,14 @@ pub const Overlay = struct {
 
     /// Route an already viewport-local SDL event. Standalone UIs use the SDL accessibility
     /// adapter; embedded UIs leave the host window's accessibility adapter in charge.
+    /// Host-only: returns whether gameplay must withhold this event; updates UI/capture state,
+    /// consumes synthetic touch-mouse duplicates, and cancels focus on window focus loss.
+    ///
+    /// ```zig
+    /// // Host routing an event into an embedded Scene viewport:
+    /// const local = localEvent(event, viewport, window_points);
+    /// const consumed = overlay.handle(local, true);
+    /// ```
     pub fn handle(self: *Overlay, event: sdl.events.Event, embedded: bool) bool {
         if (syntheticTouchMouse(event)) return true;
         if (isTouchInput(event)) return self.handleTouch(event);
@@ -206,6 +271,13 @@ pub const Overlay = struct {
     }
 
     /// Clear transient capture without retaining references into a previous game frame.
+    /// Host-only: cancels focus, popups and active pointer/touch interaction without invoking
+    /// plugin callbacks. Does not destroy the overlay or its font.
+    ///
+    /// ```zig
+    /// // Host leaving gameplay or losing focus:
+    /// overlay.cancel();
+    /// ```
     pub fn cancel(self: *Overlay) void {
         self.pointer_active = false;
         self.keyboard_owned = false;
@@ -222,6 +294,13 @@ pub const Overlay = struct {
     }
 
     /// Synchronize this UI's clipboard requests; text input ownership is managed by the host.
+    /// Host-only: requires SDL clipboard access on the host thread. Copies outgoing text
+    /// and delivers pasted text to the UI; allocation and SDL failures propagate.
+    ///
+    /// ```zig
+    /// // Host after processing the overlay's widgets:
+    /// try overlay.syncClipboard();
+    /// ```
     pub fn syncClipboard(self: *Overlay) !void {
         if (self.context.copied) |text| {
             const copy = try self.gpa.dupeZ(u8, text);
@@ -240,6 +319,13 @@ pub const Overlay = struct {
 
 /// Decide consumption from the last laid-out tree, focus and captured drags. Labels alone
 /// do not capture the viewport. Keyboard releases stay with the focused keyboard consumer.
+/// Host-only, read-only query: coordinates must already match the context's logical viewport.
+/// Does not track previously consumed keys; `Overlay.handle` adds that release tracking.
+///
+/// ```zig
+/// // Host with a laid-out UI context and matching SDL event coordinates:
+/// const consumed = captures(&overlay.context, event);
+/// ```
 pub fn captures(context: *const ui.Context, event: sdl.events.Event) bool {
     return switch (event) {
         .key_down => |key| context.focus != 0 or context.open_popup != 0 or (key.scancode == .tab and context.last_focusables.items.len != 0),
@@ -265,6 +351,13 @@ fn scrollableAt(element: *const ui.Layout.Element, x: f32, y: f32) bool {
     return false;
 }
 
+/// Host-only: identify keyboard/text, pointer/wheel, controller and touch gameplay events.
+/// Connection/window events are false; this classification does not consume the event.
+///
+/// ```zig
+/// // Host deciding which events require gameplay/UI routing:
+/// const gameplay_event = isInput(event);
+/// ```
 pub fn isInput(event: sdl.events.Event) bool {
     return switch (event) {
         .key_down, .key_up, .text_input, .text_editing, .mouse_motion, .mouse_button_down, .mouse_button_up, .mouse_wheel => true,
@@ -273,18 +366,40 @@ pub fn isInput(event: sdl.events.Event) bool {
     };
 }
 
+/// Host-only: whether this is a gamepad button or axis event, excluding hotplug/remap events.
+///
+/// ```zig
+/// const controller_event = isControllerInput(event); // event is an SDL event.
+/// ```
 pub fn isControllerInput(event: sdl.events.Event) bool {
     return event == .gamepad_axis_motion or event == .gamepad_button_down or event == .gamepad_button_up;
 }
+/// Host-only: whether this is a real finger begin/move/end/cancel event, not mouse emulation.
+///
+/// ```zig
+/// const touch_event = isTouchInput(event); // event is an SDL event.
+/// ```
 pub fn isTouchInput(event: sdl.events.Event) bool {
     return event == .finger_down or event == .finger_up or event == .finger_motion or event == .finger_canceled;
 }
 /// Game touch input uses real contacts, not a second mouse action synthesized by SDL.
+/// Host-only: true identifies an SDL mouse event synthesized from touch, for deduplication.
+///
+/// ```zig
+/// const duplicate_mouse = syntheticTouchMouse(event); // event is an SDL event.
+/// ```
 pub fn syntheticTouchMouse(event: sdl.events.Event) bool {
     return adapter.fromTouch(event);
 }
 
 /// Translate window logical coordinates to game-viewport logical coordinates.
+/// Host-only: returns a copy; mouse positions subtract the viewport origin, while finger
+/// positions/deltas remain normalized to its size. `window_points` is the logical window
+/// size and viewport width/height must be positive. Other event payloads are unchanged.
+///
+/// ```zig
+/// const local = localEvent(event, .{ .x = 100, .y = 50, .w = 400, .h = 300 }, .{ 800, 600 });
+/// ```
 pub fn localEvent(event: sdl.events.Event, viewport: ui.Rect, window_points: [2]f32) sdl.events.Event {
     var result = event;
     switch (result) {
@@ -312,6 +427,13 @@ pub fn localEvent(event: sdl.events.Event, viewport: ui.Rect, window_points: [2]
 }
 
 /// A logical rectangle in pixels of the actual target window, including pop-out DPI.
+/// Host-only: `viewport` describes the positive-sized logical area corresponding to
+/// `extent_px`; returns target-local pixel coordinates without rounding or clipping.
+///
+/// ```zig
+/// const pixels = pixelRect(.{ .x = 10, .y = 20, .w = 100, .h = 50 },
+///     .{ .x = 0, .y = 0, .w = 400, .h = 300 }, .{ .width = 800, .height = 600 });
+/// ```
 pub fn pixelRect(rect: ui.Rect, viewport: ui.Rect, extent_px: vit.Extent2D) ui.Rect {
     const sx = @as(f32, @floatFromInt(extent_px.width)) / viewport.w;
     const sy = @as(f32, @floatFromInt(extent_px.height)) / viewport.h;

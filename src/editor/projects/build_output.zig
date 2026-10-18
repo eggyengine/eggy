@@ -23,12 +23,26 @@ pub const Stream = struct {
     /// Bound a single diagnostic, not the build; later errors are always read.
     const max_diagnostic = 1 << 20;
 
+    /// Free this editor build pipe's buffered diagnostic once using its configured allocator.
+    /// Does not emit pending output; call `finish` first when EOF is reached normally.
+    ///
+    /// ```zig
+    /// var stream = Stream{ .gpa = gpa, .project_dir = project_dir };
+    /// defer stream.deinit(); // Existing allocator and project path.
+    /// ```
     pub fn deinit(self: *Stream) void {
         self.pending.deinit(self.gpa);
     }
 
     /// Start an output line, including its newline if present. Use `continueLine` when
     /// the pipe reader splits a long line across buffer-sized fragments.
+    /// Editor-only: copies retained bytes, filters runner noise, and may emit the previous
+    /// diagnostic synchronously through `emit`. Allocation/emitter failures propagate;
+    /// keep separate Streams for stdout/stderr to avoid joining unrelated traces.
+    ///
+    /// ```zig
+    /// try stream.line("src/main.zig:1:1: error: invalid value\n"); // Existing Stream.
+    /// ```
     pub fn line(self: *Stream, text: []const u8) !void {
         const trimmed = std.mem.trimEnd(u8, text, "\r\n");
         if (trimmed.len == 0) return self.continueLine(text);
@@ -56,11 +70,24 @@ pub const Stream = struct {
     }
 
     /// Continue the same logical line without interpreting fragments as new messages.
+    /// Editor-only: call only after `line` for that logical line; ignored when nothing is
+    /// pending. Copies bytes up to the 1 MiB diagnostic cap; allocation failures propagate.
+    ///
+    /// ```zig
+    /// try stream.line("error: a long diagnostic "); // Existing Stream.
+    /// try stream.continueLine("continued here\n");
+    /// ```
     pub fn continueLine(self: *Stream, text: []const u8) !void {
         if (self.pending.items.len != 0) try self.append(text);
     }
 
     /// Emit the last pending message at EOF, preserving whether this pipe reported an error.
+    /// Editor-only: no-op when empty; calls the emitter with borrowed buffered text, then
+    /// clears it only after success. Emitter/allocation errors propagate for caller handling.
+    ///
+    /// ```zig
+    /// try stream.finish(); // Existing Stream after its build pipe reaches EOF.
+    /// ```
     pub fn finish(self: *Stream) !void {
         if (self.pending.items.len == 0) return;
         if (self.truncated) try self.pending.appendSlice(self.gpa, "\n    [Further details omitted after 1 MiB]\n");
@@ -84,6 +111,16 @@ pub const Stream = struct {
 
 /// Group source excerpts, notes and reference traces with their diagnostic. Ranges borrow
 /// `output`; unknown output is kept, while known build summaries and failed commands are not.
+/// Editor-only: clears/reuses `messages`, allocating its range records through `gpa`; callers
+/// retain the original output for slicing and deinit the list with that allocator.
+/// Allocation failures propagate with a possibly partial list.
+///
+/// ```zig
+/// var messages: std.ArrayList(Message) = .empty;
+/// defer messages.deinit(gpa); // Existing allocator and captured build output.
+/// try parse(gpa, output, &messages);
+/// for (messages.items) |message| std.debug.print("{s}\n", .{output[message.start..message.end]});
+/// ```
 pub fn parse(gpa: std.mem.Allocator, output: []const u8, messages: *std.ArrayList(Message)) !void {
     messages.clearRetainingCapacity();
     var current: ?usize = null;
@@ -123,6 +160,13 @@ pub fn parse(gpa: std.mem.Allocator, output: []const u8, messages: *std.ArrayLis
 
 /// Log a completed build. If it failed without a recognised error, retain its full output
 /// under one error instead of filtering away the only explanation.
+/// Editor-only: borrows output/project path, emits Console log entries and adds hook-signature
+/// hints where recognized. Temporary allocations use `gpa` and are freed; allocation failures
+/// propagate and earlier messages may already have been logged.
+///
+/// ```zig
+/// try log(gpa, output, true, project_dir); // Failed editor build's captured output.
+/// ```
 pub fn log(gpa: std.mem.Allocator, output: []const u8, failed: bool, project_dir: []const u8) !void {
     var messages: std.ArrayList(Message) = .empty;
     defer messages.deinit(gpa);

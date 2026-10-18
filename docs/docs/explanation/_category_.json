@@ -1,0 +1,9 @@
+{
+  "label": "Explanation",
+  "position": 5,
+  "link": {
+    "type": "generated-index",
+    "slug": "/explanation",
+    "description": "Understand execution, state ownership, asset packaging, input routing, and gameplay clocks."
+  }
+}

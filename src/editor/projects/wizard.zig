@@ -36,6 +36,13 @@ pub const Wizard = struct {
     dir: []const u8 = "",
 
     /// A wizard suggesting a project in `default_location`.
+    /// Desktop editor only: copies/truncates the location to 1024 bytes and initializes fixed
+    /// edit buffers. Keep the wizard at a stable address once a folder picker can reference it.
+    ///
+    /// ```zig
+    /// var wizard = Wizard.init("/home/you/EggyProjects");
+    /// defer wizard.deinit();
+    /// ```
     pub fn init(default_location: []const u8) Wizard {
         var self = Wizard{
             .title = ui.TextEdit(64).init("My Game") catch unreachable,
@@ -46,11 +53,27 @@ pub const Wizard = struct {
         return self;
     }
 
+    /// Free any picked folder awaiting consumption by this desktop editor wizard.
+    /// Ensure no asynchronous picker callback can still access the wizard before destroying
+    /// its enclosing storage; this does not cancel an outstanding system picker.
+    ///
+    /// ```zig
+    /// wizard.deinit(); // Existing Wizard after picker callbacks have finished.
+    /// ```
     pub fn deinit(self: *Wizard) void {
         if (self.picked.swap(null, .acq_rel)) |path| std.heap.c_allocator.free(std.mem.span(path));
     }
 
     /// Draw the current step into `context`; `window` parents the folder picker.
+    /// Desktop editor only: call during UI construction; may start an asynchronous folder
+    /// picker referencing this stable wizard. A create action borrows title/name/directory
+    /// buffers until further edits/destruction; copy them before transitioning the flow.
+    /// This validates choices but does not create project files.
+    ///
+    /// ```zig
+    /// const action = wizard.build(context, app.window.window);
+    /// // Existing Wizard, building UI context and editor App pointer.
+    /// ```
     pub fn build(self: *Wizard, context: *ui.Context, window: sdl3.video.Window) Action {
         self.followTitle();
         if (self.picked.swap(null, .acq_rel)) |path| {

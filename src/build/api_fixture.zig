@@ -18,6 +18,14 @@ const Hud = struct {
     text: eggy.ui.TextEdit(128) = .{},
     player: eggy.EntityRef(eggy.Transform) = .{},
 
+    /// Demo startup hook: install the bundled font, create a cube/camera and return HUD state.
+    /// The App owns entities/UI; propagates font/GPU/entity allocation failures.
+    /// The engine calls this after registering PlayerInput.
+    ///
+    /// ```zig
+    /// // Fixture-host dispatch, normally performed by plugins.Set:
+    /// var hud = try Hud.init(gpa, app);
+    /// ```
     pub fn init(_: std.mem.Allocator, app: *eggy.App) !Hud {
         const layer = try app.gameUi();
         try layer.setFont(@embedFile("api_fixture_font"));
@@ -26,6 +34,12 @@ const Hud = struct {
         return .{ .player = .init(player) };
     }
 
+    /// Demo gameplay hook: count mapped jumps and move the cube using gameplay seconds.
+    /// Resolves the entity reference each call, skips deleted cubes and propagates input errors.
+    ///
+    /// ```zig
+    /// try hud.update(app); // Once per running frame, before ECS Update systems.
+    /// ```
     pub fn update(self: *Hud, app: *eggy.App) !void {
         const player = app.input.map(PlayerInput);
         if (try player.pressed(.jump)) self.gameplay_presses += 1;
@@ -35,6 +49,12 @@ const Hud = struct {
         app.world.markChanged(self.player.entity.?, eggy.Transform);
     }
 
+    /// Build the demo's dark HUD into a borrowed, already-begun UI context.
+    /// Updates local click/text state; the host renders it and isolates captured input.
+    ///
+    /// ```zig
+    /// try hud.gameUi(app, ui); // During the host's game UI pass only.
+    /// ```
     pub fn gameUi(self: *Hud, _: *eggy.App, ui: *eggy.ui.Context) !void {
         ui.theme = .dark;
         ui.heading(2, "Eggy developer API");
@@ -49,11 +69,23 @@ const Hud = struct {
     pub const editor_panels = [_]eggy.plugins.EditorPanel{.{ .key = "api-tools", .title = "API Tools" }};
     pub const editor_commands = [_]eggy.plugins.EditorCommand{.{ .key = "raise", .title = "Raise Selected Entity" }};
 
+    /// Build panel index 0, providing an undoable raise-selection button.
+    /// Borrows both contexts during the hook; selection/edit errors propagate to the Console.
+    ///
+    /// ```zig
+    /// try hud.editorPanelUi(0, editor, ui); // Editor panel dispatch.
+    /// ```
     pub fn editorPanelUi(self: *Hud, _: usize, editor: *eggy.editor.Context, ui: *eggy.ui.Context) !void {
         ui.heading(3, "Developer tools");
         if (ui.button("Raise selection")) try self.editorCommand(0, editor);
     }
 
+    /// Raise the selected Transform by one metre through the host's undoable component edit.
+    /// Fixture command index is 0. Missing selection/Transform is a no-op; edit errors propagate.
+    ///
+    /// ```zig
+    /// try hud.editorCommand(0, editor); // The fixture's "Raise Selected Entity" command.
+    /// ```
     pub fn editorCommand(_: *Hud, _: usize, editor: *eggy.editor.Context) !void {
         const entity = try editor.selection() orelse return;
         const transform = editor.app.world.get(entity, eggy.Transform) orelse return;
@@ -68,11 +100,23 @@ const Custom = struct {
     clicks: u32 = 0,
     gameplay_presses: u32 = 0,
 
+    /// Count gameplay jump edges for the custom-renderer fixture; input errors propagate.
+    /// The host invokes this only for running gameplay, after UI event consumption.
+    ///
+    /// ```zig
+    /// try custom.update(app);
+    /// ```
     pub fn update(self: *Custom, app: *eggy.App) !void {
         if (try app.input.map(PlayerInput).pressed(.jump)) self.gameplay_presses += 1;
     }
 
     /// A minimal custom renderer: clear the owned target without creating a Weeoui overlay.
+    /// Requires no active render pass and `app.ui_layer == null`. Borrows `target` only for
+    /// this frame; the host submits/presents it. Propagates render-pass setup errors.
+    ///
+    /// ```zig
+    /// try custom.draw(app, draw_context); // After scene drawing, before frame submission.
+    /// ```
     pub fn draw(self: *Custom, app: *eggy.App, target: eggy.DrawContext) !void {
         std.debug.assert(app.ui_layer == null);
         try target.cmd.beginRenderPass(.{ .color_attachments = &.{.{
@@ -84,6 +128,13 @@ const Custom = struct {
         target.cmd.endRenderPass();
     }
 
+    /// Consume mouse-button input and non-repeated Space presses for the custom UI.
+    /// Returns true when gameplay must not see the event; increments/logs press counts.
+    /// Borrows the event only during dispatch and may run while editor Play is paused.
+    ///
+    /// ```zig
+    /// if (try custom.uiEvent(app, current)) return .run; // Host input routing.
+    /// ```
     pub fn uiEvent(self: *Custom, _: *eggy.App, event: eggy.Event) !bool {
         const pressed = switch (event) {
             .mouse_button_down => true,

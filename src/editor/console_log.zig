@@ -19,6 +19,14 @@ pub const Messages = struct {
     text: std.ArrayList(u8) = .empty,
     entries: std.ArrayList(Entry) = .empty,
 
+    /// Free copied text and entry ranges with the allocator passed to `snapshot`.
+    /// Does not affect the shared editor log; the snapshot is invalid afterward.
+    ///
+    /// ```zig
+    /// var messages: Messages = .{};
+    /// defer messages.deinit(gpa);
+    /// _ = try snapshot(gpa, &messages, .{});
+    /// ```
     pub fn deinit(self: *Messages, allocator: std.mem.Allocator) void {
         self.text.deinit(allocator);
         self.entries.deinit(allocator);
@@ -48,6 +56,13 @@ var next_id: u64 = 0;
 const gpa = std.heap.smp_allocator;
 
 /// `std.Options.logFn` for the editor: logs as usual, and keeps the message for the Console.
+/// Thread-safe; formatting arguments follow `std.log`. Allocation failures drop the message.
+/// Tests suppress stderr forwarding; normal editor execution also uses the default logger.
+///
+/// ```zig
+/// // Test/internal host use; production normally installs this in std_options.logFn.
+/// logFn(.info, .projects, "opened {s}", .{"Space"});
+/// ```
 pub fn logFn(comptime level: std.log.Level, comptime scope: @EnumLiteral(), comptime format: []const u8, args: anytype) void {
     // Tests keep their messages here only: the test runner fails a test that logs a warning.
     if (!@import("builtin").is_test) std.log.defaultLog(level, scope, format, args);
@@ -65,11 +80,25 @@ pub fn logFn(comptime level: std.log.Level, comptime scope: @EnumLiteral(), comp
 }
 
 /// A number that changes whenever the log does.
+/// Atomically reads a wrapping version, not a message count; compare for inequality.
+///
+/// ```zig
+/// const previous = changes();
+/// logFn(.info, .default, "ready", .{});
+/// const refresh_needed = changes() != previous;
+/// _ = refresh_needed;
+/// ```
 pub fn changes() u64 {
     return @atomicLoad(u64, &version, .acquire);
 }
 
 /// Drop every message.
+/// Thread-safe; retains storage, preserves monotonically assigned message identities,
+/// and changes the version so Console views refresh. Existing snapshots remain owned copies.
+///
+/// ```zig
+/// clear(); // Editor Console's Clear command.
+/// ```
 pub fn clear() void {
     const io = std.Options.debug_io;
     mutex.lockUncancelable(io);
@@ -84,6 +113,16 @@ pub const Snapshot = struct { shown: usize, total: usize };
 
 /// The messages `filter` shows, joined, into `out` (replacing what it held, allocating with
 /// `allocator`); and how many there were in all.
+/// Locks the shared log while copying; reuse the same allocator for `out` and its cleanup.
+/// `filter` is borrowed during the call. Allocation failures propagate and may leave a
+/// partial output; entry offsets refer to `out.text`, not the global log.
+///
+/// ```zig
+/// var messages: Messages = .{};
+/// defer messages.deinit(gpa);
+/// const counts = try snapshot(gpa, &messages, .{ .query = "error" });
+/// std.log.info("{d} of {d}", .{ counts.shown, counts.total });
+/// ```
 pub fn snapshot(allocator: std.mem.Allocator, out: *Messages, filter: Filter) !Snapshot {
     const io = std.Options.debug_io;
     mutex.lockUncancelable(io);

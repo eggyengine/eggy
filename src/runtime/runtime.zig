@@ -10,6 +10,14 @@ const fps = 340000;
 
 /// The runtime for `project`, which declares `name` (the window title) and `plugins` (a tuple of
 /// plugin types, the game first). `addGame` generates it from the game's build.
+/// `project` also supplies published `plugin_keys` and may include packaged scenes,
+/// preferences and metadata. Returns a host state type, not an initialized game.
+///
+/// ```zig
+/// const State = @import("eggy_runtime").Runtime(@import("eggy_project"));
+/// const callbacks = eggy.entry.Callbacks(State);
+/// pub const init = callbacks.init;
+/// ```
 pub fn Runtime(comptime project: type) type {
     const Plugins = eggy.plugins.Set(project.plugins, &project.plugin_keys);
     return struct {
@@ -40,6 +48,16 @@ pub fn Runtime(comptime project: type) type {
             }
         }
 
+        /// Host startup: open the App, install packaged providers/preferences, start enabled
+        /// plugins and world schedules, then allocate draw storage. `args` is currently ignored.
+        /// `process_init` must outlive the result; pair success with `deinit` on the main thread.
+        /// Core setup failures propagate; unavailable packaged data/scenes are logged and skipped.
+        ///
+        /// ```zig
+        /// // A custom host; normally entry.Callbacks calls this for SDL.
+        /// var runtime = try State.init(process, args);
+        /// defer runtime.deinit();
+        /// ```
         pub fn init(process_init: *const std.process.Init, args: []const [*:0]const u8) !Self {
             _ = args;
             const gpa = process_init.gpa;
@@ -99,6 +117,14 @@ pub fn Runtime(comptime project: type) type {
             if (made.skipped > 0) std.log.warn("{s}: {d} components or fields left out (see above)", .{ path, made.skipped });
         }
 
+        /// Host shutdown: release notice rendering, plugins, App, packaged providers and draw
+        /// storage, in that order. Call exactly once on a fully initialized state, on the main
+        /// thread; invalidates all pointers borrowed from it. World teardown failures are logged.
+        ///
+        /// ```zig
+        /// var runtime = try State.init(process, args);
+        /// defer runtime.deinit();
+        /// ```
         pub fn deinit(self: *Self) void {
             if (self.notice) |*notice| {
                 self.app.graphics.queue.waitIdle() catch {};
@@ -110,6 +136,16 @@ pub fn Runtime(comptime project: type) type {
             self.gpa.free(self.drawables);
         }
 
+        /// Run one host frame: synchronize scenes, tick time/input, update plugins/world and
+        /// draw/present the camera and optional game UI. Returns `.run` after a complete frame.
+        /// GPU, input, system and hook failures propagate to the executable's fatal boundary.
+        /// Call only while the initialized state and graphics device are alive.
+        ///
+        /// ```zig
+        /// // SDL normally drives this; a custom host must also dispatch events.
+        /// const result = try runtime.iterate();
+        /// if (result != .run) return result;
+        /// ```
         pub fn iterate(self: *Self) !sdl3.AppResult {
             try self.app.graphics.syncSize(self.app.window);
             // The browser already paces frames to the display.
@@ -158,6 +194,14 @@ pub fn Runtime(comptime project: type) type {
             return .run;
         }
 
+        /// Route a borrowed SDL event through device/window bookkeeping, UI capture, input and
+        /// plugin hooks on the main thread. Quit/main-window-close returns `.success`;
+        /// consumed input does not reach gameplay. Backend/hook/resize errors propagate.
+        ///
+        /// ```zig
+        /// const result = try runtime.event(current);
+        /// if (result != .run) return result; // Honor the host lifecycle decision.
+        /// ```
         pub fn event(self: *Self, curr_event: sdl3.events.Event) !sdl3.AppResult {
             try self.app.deviceEvent(curr_event);
             const lifecycle = try self.app.event(curr_event);

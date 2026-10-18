@@ -93,6 +93,16 @@ pub const View = struct {
         return null;
     }
 
+    /// Build the internal mapping editor in an active UI frame, borrowing the registered
+    /// backend. Save/reset actions mutate mappings and may call its persistence writer;
+    /// the view owns drafts across frames, while labels use the context's frame arena.
+    /// Allocation errors propagate; edit-validation failures are displayed in the view.
+    ///
+    /// ```zig
+    /// // Editor host: context.newFrame has run and state contains registered maps.
+    /// var view = View{};
+    /// try view.build(context, state);
+    /// ```
     pub fn build(self: *View, context: *ui.Context, state: *State) !void {
         const arena = context.builder().allocator;
         if (self.source == .registered) {
@@ -381,6 +391,14 @@ pub const View = struct {
         const control = state.controls.get(id).?;
         try state.setMappings(id, next, state.overrides.getTrigger(control.key));
     }
+    /// Consume the next suitable key/controller press into the active draft capture.
+    /// Escape cancels; key repeats and unrelated events return false. This changes only
+    /// the draft: a later Save action persists it. The UI must set a matching draft/capture.
+    ///
+    /// ```zig
+    /// // Host routes owned-window/controller events before normal input:
+    /// if (view.captureEvent(event)) return;
+    /// ```
     pub fn captureEvent(self: *View, event: eggy.Event) bool {
         const target = self.capture orelse return false;
         if (event == .key_down and event.key_down.scancode == .escape) {
@@ -434,16 +452,35 @@ pub const InputMappingsWindow = struct {
     gpa: std.mem.Allocator,
     window: ToolWindow,
     view: View = .{},
+    /// Allocate the editor's mappings tool window. SDL/graphics and its borrowed font
+    /// must outlive `close`; allocation/window/surface failures propagate.
+    ///
+    /// ```zig
+    /// const mappings = try InputMappingsWindow.open(gpa, graphics, font);
+    /// defer mappings.close(graphics);
+    /// ```
     pub fn open(gpa: std.mem.Allocator, graphics: *const eggy.Graphics, font: *ui.Font) !*InputMappingsWindow {
         const self = try gpa.create(InputMappingsWindow);
         errdefer gpa.destroy(self);
         self.* = .{ .gpa = gpa, .window = try ToolWindow.open(gpa, graphics, font, "Input Mappings", .{ 700, 700 }, .{ .resizable = true }) };
         return self;
     }
+    /// Destroy window/UI/surface and free `self`; registered backend maps are not owned here.
+    ///
+    /// ```zig
+    /// mappings.close(graphics); // Before shared font/device teardown.
+    /// ```
     pub fn close(self: *InputMappingsWindow, graphics: *eggy.Graphics) void {
         self.window.close(graphics);
         self.gpa.destroy(self);
     }
+    /// Route owned-window events, or controller input during capture, to the mapping view.
+    /// True means consumed; check `closeRequested` first because this does not close the tool.
+    ///
+    /// ```zig
+    /// // After the host's closeRequested check:
+    /// if (mappings.handle(event)) return;
+    /// ```
     pub fn handle(self: *InputMappingsWindow, event: eggy.Event) bool {
         if (self.view.capture != null and (self.window.owns(event) or eggy.game_ui.isControllerInput(event))) {
             if (self.view.captureEvent(event)) return true;
@@ -452,14 +489,39 @@ pub const InputMappingsWindow = struct {
         self.window.handle(event);
         return true;
     }
+    /// Test for this tool's close request or Escape outside capture mode.
+    /// Does not consume events; Escape during capture belongs to `handle` instead.
+    ///
+    /// ```zig
+    /// if (mappings.closeRequested(event)) {
+    ///     mappings.close(graphics);
+    ///     return;
+    /// }
+    /// _ = mappings.handle(event);
+    /// ```
     pub fn closeRequested(self: *InputMappingsWindow, event: eggy.Event) bool {
         if (!self.window.owns(event)) return false;
         return event == .window_close_requested or (self.view.capture == null and event == .key_down and event.key_down.scancode == .escape);
     }
+    /// Present the mapping editor using the main UI's style and borrowed backend.
+    /// Page edits may persist overrides; rendering errors propagate, while page-building
+    /// failures are stored/displayed in the view. Neither style nor backend is retained.
+    ///
+    /// ```zig
+    /// try mappings.update(graphics, style, input_state); // Editor host frame.
+    /// ```
     pub fn update(self: *InputMappingsWindow, graphics: *eggy.Graphics, style: *const ui.Context, state: *State) !void {
         const Page = struct {
             view: *View,
             state: *State,
+            /// Internal tool-page adapter: balances the scroll container and renders the
+            /// borrowed view/backend, displaying build errors rather than throwing.
+            ///
+            /// ```zig
+            /// // Inside update, ToolWindow.present supplies the active frame:
+            /// var page = Page{ .view = &self.view, .state = state };
+            /// try self.window.present(graphics, style, &page);
+            /// ```
             pub fn build(page: *@This(), context: *ui.Context) void {
                 context.beginScroll(&page.view.scroll, @max(1, context.viewport.h - 24));
                 defer context.end();

@@ -27,6 +27,13 @@ pub const Resources = struct {
 
     /// Install host-local loaders. Instantiate in the executable that owns `context` and the
     /// callbacks, which must outlive this view. Only generated C callbacks cross the boundary.
+    /// Host-only: callbacks allocate results with the supplied caller allocator, including a
+    /// trailing zero for reads. Both sides must use matching Eggy/asset layouts.
+    ///
+    /// ```zig
+    /// // Host with context pointer and correctly typed read/model/image callbacks:
+    /// const resources = Resources.from(context, readSource, loadModelSource, loadImageSource);
+    /// ```
     pub fn from(context: *anyopaque, comptime read_source: Read, comptime model_source: @FieldType(ModelLoader, "load"), comptime image_source: @FieldType(ImageLoader, "load")) Resources {
         const Bridge = struct {
             fn readBytes(raw: *anyopaque, allocator: *const anyopaque, path: [*]const u8, len: usize, out: *Bytes) callconv(.c) Status {
@@ -52,6 +59,14 @@ pub const Resources = struct {
     }
 
     /// Read an AssetRef into caller-owned sentinel-terminated bytes; free with `gpa.free`.
+    /// Only copied resources support raw reads; converted models/images return
+    /// `ConvertedResource`. Unset paths, missing providers and provider failures are errors.
+    ///
+    /// ```zig
+    /// // In a game hook, with gpa:
+    /// const text = try app.resources().read(gpa, eggy.AssetRef(.text).init("resources/story.txt"));
+    /// defer gpa.free(text);
+    /// ```
     pub fn read(self: Resources, gpa: std.mem.Allocator, file: anytype) ![:0]u8 {
         comptime {
             if (refs.refKind(@TypeOf(file)) != .asset) @compileError("read expects an AssetRef");
@@ -65,6 +80,14 @@ pub const Resources = struct {
     }
 
     /// Import/decode caller-owned CPU geometry; call `Model.deinit(gpa)` afterwards.
+    /// Does not populate GPU caches. An unset reference, absent provider or loader failure
+    /// returns an error without transferring a model to the caller.
+    ///
+    /// ```zig
+    /// // In a game hook, with gpa:
+    /// var model = try app.resources().loadModel(gpa, .init("resources/ship.glb"));
+    /// defer model.deinit(gpa);
+    /// ```
     pub fn loadModel(self: Resources, gpa: std.mem.Allocator, file: refs.AssetRef(.model)) !assets.Model {
         if (file.len == 0) return error.UnsetAsset;
         const provider = self.provider orelse return unavailable();
@@ -74,6 +97,14 @@ pub const Resources = struct {
     }
 
     /// Decode caller-owned pixels; call `Texture.deinit(gpa)` afterwards.
+    /// Does not upload a GPU texture. Rejects unset references and unsupported image formats;
+    /// allocation, provider and decode failures propagate through stable error codes.
+    ///
+    /// ```zig
+    /// // In a game hook, with gpa:
+    /// var image = try app.resources().loadImage(gpa, .init("resources/ship.png"));
+    /// defer image.deinit(gpa);
+    /// ```
     pub fn loadImage(self: Resources, gpa: std.mem.Allocator, file: refs.AssetRef(.image)) !assets.Texture {
         if (file.len == 0) return error.UnsetAsset;
         if (!assets.Kind.isTexture(file.path())) return error.UnsupportedImageFormat;
@@ -84,18 +115,39 @@ pub const Resources = struct {
     }
 
     // ponytail: resource providers are synchronous, add request ownership and completion before async reads.
+    /// Reserved asynchronous read API; always returns `NotImplemented`, allocates nothing,
+    /// and never starts a request. Use `read` for supported synchronous reads.
+    ///
+    /// ```zig
+    /// // Capability check, with resources and gpa:
+    /// try std.testing.expectError(error.NotImplemented,
+    ///     resources.readAsync(gpa, refs.AssetRef(.text).init("notes.txt")));
+    /// ```
     pub fn readAsync(_: Resources, gpa: std.mem.Allocator, file: anytype) support.Error!Request {
         comptime {
             if (refs.refKind(@TypeOf(file)) != .asset) @compileError("readAsync expects an AssetRef");
         }
         return support.notImplemented(.{ gpa, file });
     }
+    /// Reserved cancellation API; always returns `NotImplemented` and changes no state.
+    /// No supported operation currently produces a `Request`.
+    ///
+    /// ```zig
+    /// // Given a future/externally supplied request token:
+    /// try std.testing.expectError(error.NotImplemented, resources.cancel(request));
+    /// ```
     pub fn cancel(_: Resources, request: Request) support.Error!void {
         return support.notImplemented(request);
     }
 
     /// Adapt to a local scene reader. This callback and its caller must be in the same
     /// compilation; `self` must outlive the synchronous scene operation.
+    /// Host-only: the returned adapter borrows this Resources value, not just its provider.
+    ///
+    /// ```zig
+    /// // Host with resources, scene_instances, world, access and a scene reference:
+    /// const root = try scene_instances.create(resources.sceneFiles(), world, access, file, null);
+    /// ```
     pub fn sceneFiles(self: *Resources) Files {
         return .{ .context = self, .read = readScene };
     }

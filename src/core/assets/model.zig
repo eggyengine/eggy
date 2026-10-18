@@ -31,6 +31,13 @@ pub const Model = struct {
     textures: []Texture,
 
     /// Free what `read` (or an importer) allocated with `gpa`.
+    /// Recursively frees textures too; all slices must belong to that allocator.
+    /// Invalidates the model and any borrowed views; call once after GPU upload/use finishes.
+    ///
+    /// ```zig
+    /// var model = try read(gpa, reader);
+    /// defer model.deinit(gpa);
+    /// ```
     pub fn deinit(self: *Model, gpa: std.mem.Allocator) void {
         gpa.free(self.vertices);
         gpa.free(self.indices);
@@ -41,6 +48,11 @@ pub const Model = struct {
 
     /// Whether every index points at a vertex, every part at indices and a texture there are,
     /// and every texture is whole.
+    /// Does not allocate or check triangle winding, normal lengths, or index-count divisibility.
+    ///
+    /// ```zig
+    /// if (!model.isWhole()) return error.InvalidModel;
+    /// ```
     pub fn isWhole(self: Model) bool {
         for (self.indices) |index| if (index >= self.vertices.len) return false;
         for (self.parts) |part| {
@@ -53,12 +65,27 @@ pub const Model = struct {
 };
 
 /// Write `model` as an `.eggmodel`.
+/// Borrows its slices without validating them; propagates writer errors.
+///
+/// ```zig
+/// var output: std.Io.Writer.Allocating = .init(gpa);
+/// defer output.deinit();
+/// try write(&output.writer, model);
+/// ```
 pub fn write(writer: *std.Io.Writer, model: Model) std.Io.Writer.Error!void {
     try s2s.serialize(writer, Model, model);
 }
 
 /// Read an `.eggmodel`, allocating with `gpa` (see `Model.deinit`). Fails with
 /// `error.UnexpectedData` for one of another version of the format.
+/// Also rejects invalid index/texture ranges via `isWhole`; reader and allocation errors
+/// propagate. The caller owns all returned slices, including embedded textures.
+///
+/// ```zig
+/// var input: std.Io.Reader = .fixed(eggmodel_bytes);
+/// var model = try read(gpa, &input);
+/// defer model.deinit(gpa);
+/// ```
 pub fn read(gpa: std.mem.Allocator, reader: *std.Io.Reader) !Model {
     var model = try s2s.deserializeAlloc(reader, Model, gpa);
     errdefer model.deinit(gpa);

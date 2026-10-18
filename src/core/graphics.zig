@@ -32,6 +32,14 @@ pub const Graphics = struct {
     /// Linux Vulkan; on the web WebGPU. `VITELLUS_BACKEND` puts one first. One that fails part way
     /// (no adapter, no surface for the window) gives way to the next. Validation only in debug
     /// builds: a release asks for none.
+    /// Host-only initialization: SDL must already own a live `window`, which must outlive
+    /// the returned graphics. Retains `allocator` for caches and backend state; propagates
+    /// backend/device/swapchain creation errors. Pair with `deinit` after other surfaces.
+    ///
+    /// ```zig
+    /// var graphics = try Graphics.init(gpa, sdl_window_adapter);
+    /// defer graphics.deinit();
+    /// ```
     pub fn init(allocator: std.mem.Allocator, window: sdl_adapter.Sdl3Window) !Graphics {
         // Null: Vitellus's own choice; once one fails, every other.
         var allowed: ?vit.BackendType = null;
@@ -84,12 +92,24 @@ pub const Graphics = struct {
     }
 
     /// Where the scene's model files and textures come from, for drawing it.
+    /// Host renderer helper: the returned pointers borrow `self`; do not retain them after
+    /// graphics moves or is destroyed. Loader configuration remains on the caches.
+    ///
+    /// ```zig
+    /// const asset_sources = graphics.sources();
+    /// ```
     pub fn sources(self: *Graphics) Sources {
         return .{ .models = &self.models, .textures = &self.textures };
     }
 
     /// Forget every model file and image, so each loads again when next drawn: their files may
     /// have changed. Waits for the GPU to finish with them.
+    /// Host-only cache invalidation: invalidates all cached GPU handles and model bounds.
+    /// Queue-idle errors are ignored; do not call while recording draws using those assets.
+    ///
+    /// ```zig
+    /// graphics.forgetAssets();
+    /// ```
     pub fn forgetAssets(self: *Graphics) void {
         self.queue.waitIdle() catch {};
         self.models.forgetAll(&self.textures);
@@ -97,6 +117,13 @@ pub const Graphics = struct {
     }
 
     /// Match the main window's swapchain to its pixel size.
+    /// Host resize step before beginning a frame; waits for the queue when size changes and
+    /// resizes scene depth resources. Minimized windows keep the previous size.
+    /// Window, queue and GPU allocation errors propagate.
+    ///
+    /// ```zig
+    /// try graphics.syncSize(main_window_adapter);
+    /// ```
     pub fn syncSize(self: *Graphics, window: sdl_adapter.Sdl3Window) !void {
         const before = self.surface.extent;
         try self.surface.syncSize(self.queue, window);
@@ -104,6 +131,14 @@ pub const Graphics = struct {
         try self.preview.resize(self.device, self.surface.extent);
     }
 
+    /// Tear down host graphics and all cached assets once, waiting for queued work first.
+    /// Destroy extra surfaces and dependent renderers before this; keep SDL/window alive
+    /// until afterward. Invalidates every borrowed device/cache/frame handle.
+    ///
+    /// ```zig
+    /// var graphics = try Graphics.init(gpa, main_window_adapter);
+    /// defer graphics.deinit();
+    /// ```
     pub fn deinit(self: *Graphics) void {
         self.queue.waitIdle() catch {};
         self.models.deinit(&self.textures);
@@ -117,22 +152,57 @@ pub const Graphics = struct {
     }
 
     /// A `Surface` for another window, rendering in `color_format`. Deinit it before `self`.
+    /// Host-only: the second SDL window must remain alive through surface destruction.
+    /// Returns independently owned swapchain resources; unsupported formats and GPU errors
+    /// propagate. Wait for the queue before deinitializing the surface.
+    ///
+    /// ```zig
+    /// var surface = try graphics.addSurface(popout_window_adapter);
+    /// // After the pop-out's final frame:
+    /// try graphics.queue.waitIdle();
+    /// surface.deinit();
+    /// ```
     pub fn addSurface(self: *const Graphics, window: sdl_adapter.Sdl3Window) !Surface {
         return Surface.initFor(self.instance, self.adapter, self.device, self.queue, window, self.color_format);
     }
 
     /// Start a frame in the main window (see `Surface.beginFrame`).
+    /// Host loop only: returns borrowed recording/target handles, not caller-owned GPU
+    /// objects. Finish this frame with `endFrame` before starting another on this surface.
+    /// Acquisition/recording errors propagate.
+    ///
+    /// ```zig
+    /// const frame = try graphics.beginFrame();
+    /// try graphics.endFrame(frame);
+    /// ```
     pub fn beginFrame(self: *Graphics) !Frame {
         return self.surface.beginFrame();
     }
 
     /// Finish and present a frame from `beginFrame`.
+    /// Host loop only: all render passes must be ended and the target left in
+    /// color-attachment state. Submits once, advances the slot, and propagates GPU errors;
+    /// do not reuse `frame` afterward.
+    ///
+    /// ```zig
+    /// const frame = try graphics.beginFrame();
+    /// try graphics.endFrame(frame);
+    /// ```
     pub fn endFrame(self: *Graphics, frame: Frame) !void {
         return self.surface.endFrame(self.queue, frame);
     }
 
     /// Draw the 3D scene, with `drawables` (from `eggy.mesh.gather`; sorted in place) seen from
     /// `view`, over the whole of `frame`. Call outside a render pass.
+    /// Host runtime rendering step: may load/upload assets and records passes into this
+    /// graphics' active frame. Paths in `drawables` must still be valid; GPU errors
+    /// propagate. Games normally let the runtime own this frame lifecycle.
+    ///
+    /// ```zig
+    /// const frame = try graphics.beginFrame();
+    /// try graphics.drawScene(frame, gathered_drawables, camera_view);
+    /// try graphics.endFrame(frame);
+    /// ```
     pub fn drawScene(self: *Graphics, frame: Frame, drawables: []mesh.Drawable, view: camera.View) !void {
         const window = ui.Rect{ .x = 0, .y = 0, .w = @floatFromInt(frame.extent.width), .h = @floatFromInt(frame.extent.height) };
         try self.preview.draw(frame.cmd, frame.target, window, window, window, frame.extent, weeoui_vitellus.isSrgb(self.color_format), drawables, self.sources(), view, null, false);
@@ -191,6 +261,13 @@ pub const Surface = struct {
     }
 
     /// Free the swapchain. The GPU must be done with it (`queue.waitIdle`).
+    /// Host-only teardown: call once before destroying its window or owning `Graphics`.
+    /// Invalidates frame slots, semaphores and any borrowed swapchain target.
+    ///
+    /// ```zig
+    /// try graphics.queue.waitIdle();
+    /// extra_surface.deinit();
+    /// ```
     pub fn deinit(self: *Surface) void {
         self.swapchain.deinit();
         for (&self.slots) |*slot| slot.deinit();
@@ -199,6 +276,13 @@ pub const Surface = struct {
     }
 
     /// Match the swapchain to `window`'s pixel size.
+    /// Host-only resize, outside an active frame. Uses the surface's graphics queue and
+    /// original window; zero-sized/minimized windows keep the old swapchain.
+    /// Waits for idle on a change and propagates window/queue/resize errors.
+    ///
+    /// ```zig
+    /// try extra_surface.syncSize(graphics.queue, popout_window_adapter);
+    /// ```
     pub fn syncSize(self: *Surface, queue: vit.Queue, window: sdl_adapter.Sdl3Window) !void {
         // A minimized window has no pixels; keep the old swapchain until it comes back.
         const requested = try pixelExtent(window) orelse return;
@@ -210,6 +294,14 @@ pub const Surface = struct {
 
     /// Start a frame: wait for its slot, acquire a swapchain image, and clear it to black. Record
     /// into the returned `Frame`, then pass it to `endFrame`.
+    /// Host-only; only one active frame per surface. The surface retains all returned GPU
+    /// handles; do not deinitialize them. GPU/acquisition errors propagate, including
+    /// `TooManySwapchainImages` for an unsupported image index.
+    ///
+    /// ```zig
+    /// const frame = try extra_surface.beginFrame();
+    /// try extra_surface.endFrame(graphics.queue, frame);
+    /// ```
     pub fn beginFrame(self: *Surface) !Frame {
         // Wait for the frame that last used this slot, `frames_in_flight` frames ago.
         const slot = &self.slots[self.slot];
@@ -230,6 +322,14 @@ pub const Surface = struct {
     }
 
     /// Finish `frame`: submit its commands to `queue` and present the image once they have run.
+    /// Host-only: use the matching frame and graphics queue, with no active render pass and
+    /// the target in color-attachment state. Advances the in-flight slot; propagates submit
+    /// and present errors. Do not record into or submit this frame again.
+    ///
+    /// ```zig
+    /// const frame = try extra_surface.beginFrame();
+    /// try extra_surface.endFrame(graphics.queue, frame);
+    /// ```
     pub fn endFrame(self: *Surface, queue: vit.Queue, frame: Frame) !void {
         try frame.cmd.barrier(&.{.{ .texture_view = .{ .view = frame.target, .before = .color_attachment, .after = .present } }});
         try frame.cmd.finish();

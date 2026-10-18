@@ -11,6 +11,14 @@ pub const Notice = struct {
     context: ui.Context,
     renderer: weeoui_vitellus.Renderer,
 
+    /// Allocate a host-owned notice UI/renderer matching `graphics`' target format.
+    /// The graphics device must outlive it; UI/GPU creation errors propagate.
+    /// Release with `deinit` after the GPU finishes its draws.
+    ///
+    /// ```zig
+    /// var notice = try Notice.init(gpa, &graphics);
+    /// defer notice.deinit(); // Finish any GPU use before leaving this host scope.
+    /// ```
     pub fn init(gpa: std.mem.Allocator, graphics: *const Graphics) !Notice {
         var context = try ui.Context.init(gpa);
         errdefer context.deinit();
@@ -20,12 +28,26 @@ pub const Notice = struct {
     }
 
     /// Free it. The GPU must be done with its frames.
+    /// Host teardown: call once before destroying the graphics device.
+    ///
+    /// ```zig
+    /// try graphics.queue.waitIdle();
+    /// notice.deinit();
+    /// ```
     pub fn deinit(self: *Notice) void {
         self.renderer.deinit();
         self.context.deinit();
     }
 
     /// Clear `frame` and draw `text` in its middle. Call outside a render pass.
+    /// Host fallback rendering: borrows `text` for this call, records into the active frame,
+    /// and replaces its contents. UI allocation/upload/render errors propagate.
+    ///
+    /// ```zig
+    /// const frame = try graphics.beginFrame();
+    /// try notice.draw(frame, "No camera available");
+    /// try graphics.endFrame(frame);
+    /// ```
     pub fn draw(self: *Notice, frame: Frame, text: []const u8) !void {
         const viewport = ui.Rect{ .x = 0, .y = 0, .w = @floatFromInt(frame.extent.width), .h = @floatFromInt(frame.extent.height) };
         self.context.newFrame(viewport);

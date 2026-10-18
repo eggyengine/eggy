@@ -53,6 +53,13 @@ pub const Step = union(enum) {
         trashed: ?[]u8 = null,
     },
 
+    /// Free this editor history step's owned strings and recursive children with their
+    /// original allocator. Does not undo effects or delete files; do not reuse the step.
+    ///
+    /// ```zig
+    /// var step = Step{ .plugin = .{ .key = try gpa.dupe(u8, "weather"), .on = true } };
+    /// defer step.deinit(gpa); // Unless ownership is transferred to History.record.
+    /// ```
     pub fn deinit(self: *Step, gpa: std.mem.Allocator) void {
         switch (self.*) {
             .group => |group| {
@@ -103,6 +110,11 @@ pub const Step = union(enum) {
     }
 
     /// What it was, for the Console and the Edit menu.
+    /// Returns static text or a borrowed group label, valid while that step remains alive.
+    ///
+    /// ```zig
+    /// if (history.peek(.undo)) |step| std.log.info("Undo {s}", .{step.describe()});
+    /// ```
     pub fn describe(self: Step) []const u8 {
         return switch (self) {
             .group => |group| group.label,
@@ -135,6 +147,13 @@ pub const History = struct {
     group: ?struct { label: []u8, steps: std.ArrayList(Step) = .empty } = null,
     recovery_required: bool = false,
 
+    /// Free all steps, any pending group, baseline, and list storage using `self.gpa`.
+    /// Does not undo mutations; this editor-owned history must not be reused afterward.
+    ///
+    /// ```zig
+    /// var history = History{ .gpa = gpa };
+    /// defer history.deinit();
+    /// ```
     pub fn deinit(self: *History) void {
         self.clear();
         self.undo_steps.deinit(self.gpa);
@@ -143,6 +162,13 @@ pub const History = struct {
     }
 
     /// Forget every step: a different scene was opened.
+    /// Frees undo/redo/group entries but retains list capacity and the current baseline.
+    /// Also clears pending typing and recovery state; it does not revert any effects.
+    ///
+    /// ```zig
+    /// history.clear();
+    /// history.setBaseline(try gpa.dupe(u8, opened_scene_text));
+    /// ```
     pub fn clear(self: *History) void {
         if (self.group) |*group| {
             for (group.steps.items) |*step| step.deinit(self.gpa);
@@ -160,6 +186,11 @@ pub const History = struct {
 
     /// Take `scene_text` (owned now) as the world as it stands, without recording a step: it was
     /// just opened, or a step was just undone or redone.
+    /// `scene_text` must be a distinct allocation from `self.gpa`; the old baseline is freed.
+    ///
+    /// ```zig
+    /// history.setBaseline(try gpa.dupe(u8, scene_text));
+    /// ```
     pub fn setBaseline(self: *History, scene_text: []u8) void {
         if (self.baseline) |text| self.gpa.free(text);
         self.baseline = scene_text;
@@ -170,6 +201,14 @@ pub const History = struct {
     /// Look at the world as it is now (`scene_text`, owned now): if it differs from the last
     /// recorded state, record the change, unless `typing` is under way (then wait until it ends
     /// or pauses).
+    /// Always consumes a `self.gpa` allocation. `now_ms` is a monotonic millisecond clock;
+    /// typing changes wait up to 1000 ms from the first difference. Allocation failures log
+    /// and discard this observation rather than changing the saved baseline.
+    ///
+    /// ```zig
+    /// // Host periodically serializes the current editor world.
+    /// history.watch(try gpa.dupe(u8, scene_text), now_ms, context.wants_text);
+    /// ```
     pub fn watch(self: *History, scene_text: []u8, now_ms: u64, typing: bool) void {
         const hash = std.hash.Wyhash.hash(0, scene_text);
         if (self.baseline == null) return self.setBaseline(scene_text);
@@ -200,6 +239,14 @@ pub const History = struct {
     }
 
     /// Reserve before a mutation whose history must be recorded. Does not clear redo entries.
+    /// Reserves a slot in the active group or undo list; allocation failures and
+    /// `HistoryNeedsRecovery` propagate before the caller changes external state.
+    ///
+    /// ```zig
+    /// try history.reserve();
+    /// // Perform the mutation, then transfer its already-allocated step:
+    /// history.record(step);
+    /// ```
     pub fn reserve(self: *History) !void {
         if (self.recovery_required) return error.HistoryNeedsRecovery;
         if (self.group) |*group| return group.steps.ensureUnusedCapacity(self.gpa, 1);
@@ -208,6 +255,15 @@ pub const History = struct {
 
     /// Record `step` (owned now), made just now: it can be undone, and what was undone before
     /// can't be redone any more.
+    /// All step allocations must use `self.gpa`. Inside a group, appends a child instead;
+    /// outside one, trims history to 100 steps. On reservation failure it frees the step and logs.
+    ///
+    /// ```zig
+    /// history.record(.{ .rename = .{
+    ///     .from = try gpa.dupe(u8, "resources/old.png"),
+    ///     .to = try gpa.dupe(u8, "resources/new.png"),
+    /// } });
+    /// ```
     pub fn record(self: *History, step: Step) void {
         var owned = step;
         self.reserve() catch |err| {
@@ -228,6 +284,14 @@ pub const History = struct {
     }
 
     /// Begin one named operation. Nested groups are rejected; use `cancelGroup` on failure.
+    /// Copies the borrowed label; errors include `GroupAlreadyOpen`, recovery, and allocation.
+    /// No external effects occur until the host performs and records its child operations.
+    ///
+    /// ```zig
+    /// try history.beginGroup("Rename assets");
+    /// // Perform changes and history.record each owned step.
+    /// try history.commitGroup();
+    /// ```
     pub fn beginGroup(self: *History, label: []const u8) !void {
         if (self.group != null) return error.GroupAlreadyOpen;
         try self.reserve();
@@ -235,6 +299,14 @@ pub const History = struct {
     }
 
     /// Commit the pending group as one entry. On allocation failure it remains open.
+    /// Empty groups are discarded; `NoActionGroup` means no group was started.
+    /// Success transfers all children to undo history and invalidates redo like `record`.
+    ///
+    /// ```zig
+    /// try history.beginGroup("Batch edit");
+    /// // Perform and record children here.
+    /// try history.commitGroup();
+    /// ```
     pub fn commitGroup(self: *History) !void {
         const group = if (self.group) |*group| group else return error.NoActionGroup;
         if (group.steps.items.len == 0) {
@@ -252,6 +324,13 @@ pub const History = struct {
 
     /// Revert a pending group, in reverse order. Successfully reverted children are removed;
     /// on failure the remaining group stays open for recovery and the error is propagated.
+    /// `applyStep(context, *Step, eggy.Direction) !void` performs a leaf operation.
+    /// Context is borrowed for this synchronous call; cancellation frees reverted children.
+    ///
+    /// ```zig
+    /// // Host.applyStep implements the leaf handler using the supplied host pointer.
+    /// try history.cancelGroup(host, Host.applyStep);
+    /// ```
     pub fn cancelGroup(self: *History, context: anytype, comptime applyStep: anytype) !void {
         const group = if (self.group) |*group| group else return error.NoActionGroup;
         while (group.steps.items.len != 0) {
@@ -271,6 +350,13 @@ pub const History = struct {
     /// Record that preference `field` of `key` in `layer` went from `before` to `after` (ZON
     /// literals; null: not set). Typing into a field changes it on every key, so a change to the
     /// same preference as the last step, within `typing_pause_ms`, joins that step.
+    /// Borrows and copies all supplied text with `self.gpa`; `now_ms` is monotonic milliseconds.
+    /// This records an already-applied edit, not a write to the preference store;
+    /// copying failures silently skip recording and later reservation failures log.
+    ///
+    /// ```zig
+    /// history.recordPreference(.project, "game", "speed", "1", "2", now_ms);
+    /// ```
     pub fn recordPreference(self: *History, layer: eggy.preferences.Store.Layer, key: []const u8, field: []const u8, before: ?[]const u8, after: ?[]const u8, now_ms: u64) void {
         if (self.group == null and self.undo_steps.items.len > 0 and self.redo_steps.items.len == 0 and now_ms -| self.preference_at_ms < typing_pause_ms) {
             const last = &self.undo_steps.items[self.undo_steps.items.len - 1];
@@ -297,6 +383,14 @@ pub const History = struct {
     /// Record that the project's settings went from `before` to `after` (owned now). Typing
     /// changes them on every key, so a change within `typing_pause_ms` of the last one, when
     /// that was one too, joins it.
+    /// Both texts must be allocated with `self.gpa`; ownership transfers even when merged.
+    /// `now_ms` uses the same monotonic millisecond clock as preference recording.
+    ///
+    /// ```zig
+    /// history.recordProjectSettings(
+    ///     try gpa.dupe(u8, before_zon), try gpa.dupe(u8, after_zon), now_ms,
+    /// );
+    /// ```
     pub fn recordProjectSettings(self: *History, before: []u8, after: []u8, now_ms: u64) void {
         if (self.group == null and self.undo_steps.items.len > 0 and self.redo_steps.items.len == 0 and now_ms -| self.preference_at_ms < typing_pause_ms) {
             const last = &self.undo_steps.items[self.undo_steps.items.len - 1];
@@ -313,6 +407,12 @@ pub const History = struct {
     }
 
     /// Inspect the next operation without changing history.
+    /// Null means that direction is empty. The returned pointer is borrowed and invalidated
+    /// by operations that mutate/reallocate the corresponding history list.
+    ///
+    /// ```zig
+    /// if (history.peek(.redo)) |step| std.log.info("Redo {s}", .{step.describe()});
+    /// ```
     pub fn peek(self: *History, direction: eggy.Direction) ?*Step {
         const source = if (direction == .undo) &self.undo_steps else &self.redo_steps;
         return if (source.items.len == 0) null else &source.items[source.items.len - 1];
@@ -320,6 +420,15 @@ pub const History = struct {
 
     /// Apply with one directional handler. Only a successful application moves the entry;
     /// allocation failure happens before effects. False means history is empty.
+    /// `applyStep(context, *Step, eggy.Direction) !void` handles leaves; groups run in
+    /// forward/reverse order with rollback on failure. Context is borrowed synchronously.
+    /// Open groups/recovery block application; failed rollback requires explicit recovery.
+    ///
+    /// ```zig
+    /// // Editor host's handler applies scene/file/settings leaves:
+    /// const changed = try history.apply(.undo, host, Host.applyStep);
+    /// if (changed) std.log.info("Undone", .{});
+    /// ```
     pub fn apply(self: *History, direction: eggy.Direction, context: anytype, comptime applyStep: anytype) !bool {
         if (self.recovery_required) return error.HistoryNeedsRecovery;
         if (self.group != null) return error.ActionGroupOpen;

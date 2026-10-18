@@ -98,10 +98,25 @@ pub const Part = extern struct {
     requires: [*:0]const u8 = "",
     accepts: refs.AssetKind = .any,
 
+    /// Borrow this part's immediate children from its original flat `parts` list.
+    /// `first` and `count` must be valid for that list; no recursive descendants are copied.
+    ///
+    /// ```zig
+    /// const child_parts = parts[0].children(parts);
+    /// ```
     pub fn children(self: Part, parts: []const Part) []const Part {
         return parts[self.first..][0..self.count];
     }
 
+    /// Borrow the enum tag names; empty for parts without options.
+    /// Names and slice remain valid only while the originating registry/library is loaded.
+    ///
+    /// ```zig
+    /// for (part.optionNames()) |name| {
+    ///     const tag = std.mem.span(name);
+    ///     _ = tag;
+    /// }
+    /// ```
     pub fn optionNames(self: Part) []const [*:0]const u8 {
         return self.options[0..self.option_count];
     }
@@ -121,6 +136,13 @@ pub const Info = struct {
 
 /// The components in `types`, listed by `owners` (one each), for a world's entities. `infos[i]`
 /// describes `types[i]`, and the functions take `i` as `component`.
+/// Host reflection adapter: types must be structs, owners must align one-for-one, and every
+/// declared dependency must appear in `types`. Metadata has the loaded compilation's lifetime.
+///
+/// ```zig
+/// const Health = struct { value: u32 = 100 };
+/// const Components = Registry(&.{Health}, &.{"game"});
+/// ```
 pub fn Registry(comptime types: []const type, comptime owners: []const [:0]const u8) type {
     return struct {
         pub const infos: []const Info = blk: {
@@ -134,6 +156,11 @@ pub fn Registry(comptime types: []const type, comptime owners: []const [:0]const
         };
 
         /// Whether `entity` has component `component`.
+        /// `component` indexes `infos`, not clutch's type numbering; out-of-range is false.
+        ///
+        /// ```zig
+        /// const present = Components.has(world, entity, 0);
+        /// ```
         pub fn has(world: *ecs.World, entity: ecs.EntityId, component: usize) bool {
             inline for (types, 0..) |T, i| if (i == component) return world.hasComponent(entity, T);
             return false;
@@ -142,6 +169,12 @@ pub fn Registry(comptime types: []const type, comptime owners: []const [:0]const
         /// Give `entity` component `component`, with its defaults. Fails with
         /// `error.NotAddable` for one whose fields aren't all defaulted.
         /// What it depends on comes first, each with its defaults, where the entity hasn't it.
+        /// Mutates the world and propagates allocation errors; an invalid index gives
+        /// `NoSuchComponent`. Dependencies already added are not rolled back on failure.
+        ///
+        /// ```zig
+        /// try Components.add(world, entity, 0);
+        /// ```
         pub fn add(world: *ecs.World, entity: ecs.EntityId, component: usize) anyerror!void {
             if (component >= types.len) return error.NoSuchComponent;
             for (infos[component].dependencies) |dependency| {
@@ -154,11 +187,27 @@ pub fn Registry(comptime types: []const type, comptime owners: []const [:0]const
             unreachable;
         }
 
+        /// Remove the indexed component; an unknown index does nothing.
+        /// Host callers must enforce dependency constraints themselves before removing it.
+        /// Structural changes can invalidate borrowed component pointers.
+        ///
+        /// ```zig
+        /// Components.remove(world, entity, 0);
+        /// ```
         pub fn remove(world: *ecs.World, entity: ecs.EntityId, component: usize) void {
             inline for (types, 0..) |T, i| if (i == component) return world.remove(entity, T);
         }
 
         /// Write field `field` of `entity`'s component `component` as ZON.
+        /// Indices refer to `infos` and its `fields`; returns `NoComponent` or
+        /// `NoSuchComponent` for missing data. Unshowable types write `...`; writer errors
+        /// propagate. References serialize as their target ID/path.
+        ///
+        /// ```zig
+        /// var buffer: [max_field_bytes]u8 = undefined;
+        /// var writer: std.Io.Writer = .fixed(&buffer);
+        /// try Components.writeField(world, entity, 0, 0, &writer);
+        /// ```
         pub fn writeField(world: *ecs.World, entity: ecs.EntityId, component: usize, field: usize, writer: *std.Io.Writer) (std.Io.Writer.Error || error{ NoComponent, NoSuchComponent })!void {
             inline for (types, 0..) |T, i| if (i == component) {
                 const value = world.get(entity, T) orelse return error.NoComponent;
@@ -172,6 +221,13 @@ pub fn Registry(comptime types: []const type, comptime owners: []const [:0]const
 
         /// Set field `field` of `entity`'s component `component` from `text`, ZON for its type.
         /// Fails with `error.ParseZon` when it isn't, leaving the field as it was.
+        /// Requires sentinel-terminated text and an editable field. Missing data,
+        /// noneditable types and scratch-allocation exhaustion also fail without assignment.
+        /// A successful assignment marks the component changed.
+        ///
+        /// ```zig
+        /// try Components.setField(world, entity, 0, 0, "75");
+        /// ```
         pub fn setField(world: *ecs.World, entity: ecs.EntityId, component: usize, field: usize, text: [:0]const u8) error{ NoComponent, NoSuchComponent, NotEditable, ParseZon, OutOfMemory }!void {
             inline for (types, 0..) |T, i| if (i == component) {
                 const value = world.get(entity, T) orelse return error.NoComponent;
@@ -204,6 +260,12 @@ fn dependencyIndices(comptime T: type, comptime types: []const type) []const usi
 }
 
 /// The components `T` (a game or plugin type) lists in its `components`, if any.
+/// Returns compile-time storage, or an empty list when the declaration is absent.
+///
+/// ```zig
+/// const Plugin = struct { pub const components = .{u32}; };
+/// const types = listedBy(Plugin);
+/// ```
 pub fn listedBy(comptime T: type) []const type {
     if (!@hasDecl(T, "components")) return &.{};
     var list: [T.components.len]type = undefined;
@@ -262,6 +324,12 @@ fn shortName(comptime T: type) [:0]const u8 {
 /// Whether values of `T` are plain data: no pointers, functions or other things ZON can't parse
 /// without allocating.
 /// Whether scene/editor values can be changed without retaining arbitrary owned pointers.
+/// Recursively accepts plain fields, arrays, optionals and tagged unions; does not
+/// promise the value fits the editor's serialization/parse budgets.
+///
+/// ```zig
+/// const editable = editableType(struct { speed: f32 = 1 });
+/// ```
 pub fn editableType(comptime T: type) bool {
     return switch (@typeInfo(T)) {
         .bool, .int, .float, .@"enum" => true,
@@ -361,6 +429,14 @@ fn parseFieldValue(comptime T: type, text: [:0]const u8) error{ ParseZon, OutOfM
 
 /// Check that every field fits the current scene buffer and can be parsed back before an
 /// editor action changes it. Runtime-only pointer data is rejected by `editableType`.
+/// Host preflight for a plain component struct (or `Name`): does not mutate `value`.
+/// Oversized serialized fields give `ValueTooLarge`; parse/restore errors propagate.
+/// Callers must reject noneditable types before invoking this serialization check.
+///
+/// ```zig
+/// const Health = struct { value: u32 = 100 };
+/// try validateSnapshot(Health, &Health{});
+/// ```
 pub fn validateSnapshot(comptime T: type, value: *const T) !void {
     if (T == @import("name.zig").Name) return;
     // ponytail: fields have a 4 KiB text/16 KiB parse budget, add sized field reads to the ABI before accepting larger snapshots.
@@ -382,6 +458,13 @@ test "typed snapshots preflight the actual field size and parse budget" {
 
 /// Compare values as scenes store them, excluding unused reference buffers. Allocates
 /// temporary serialization buffers; never compares borrowed addresses.
+/// Borrows both values; releases its buffers before returning and propagates writer or
+/// allocation errors. `Name` compares only its active text.
+///
+/// ```zig
+/// const Health = struct { value: u32 = 100 };
+/// const same = try valuesEqual(gpa, Health, &Health{}, &Health{ .value = 75 });
+/// ```
 pub fn valuesEqual(gpa: std.mem.Allocator, comptime T: type, a: *const T, b: *const T) !bool {
     if (T == @import("name.zig").Name) return std.mem.eql(u8, a.text(), b.text());
     var left: std.Io.Writer.Allocating = .init(gpa);

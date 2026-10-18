@@ -6,7 +6,17 @@ const game_export = @import("src/build/export.zig");
 const build_runner = @import("src/build/runner.zig");
 const game_resources = @import("src/build/resources.zig");
 const game_metadata = @import("src/build/metadata.zig");
+const sdl_build = @import("src/build/sdl.zig");
 
+/// Configure Eggy's own runtime/editor, tests, package resources and API-reference steps.
+/// Zig owns `b` and invokes this once per build-graph evaluation; games use `addGame` instead.
+/// Dependency fetches can restart configuration, and missing platform SDKs fail explicitly.
+///
+/// ```sh
+/// zig build all
+/// zig build test
+/// zig build docs --prefix docs/static
+/// ```
 pub fn build(b: *std.Build) void {
     const update_submodules = b.addSystemCommand(&.{ "git", "submodule", "update", "--init", "--remote", "--recursive" });
     b.step("update-submodules", "Update submodules to their latest remote commits").dependOn(&update_submodules.step);
@@ -102,6 +112,18 @@ pub const GameOptions = struct {
 /// a browser) and `run-runtime`. The game and each plugin get `@import("eggy")`, this package's
 /// eggy even for plugins from other packages, so every part shares one engine. Web builds find
 /// emsdk through `$EMSDK`, then `~/emsdk`. `export` builds the game to ship (`src/build/export.zig`).
+/// Call once from a game's `build`, with a module declaring `pub const Game`; the build
+/// graph owns all resulting modules and steps. Options' target/optimization default to
+/// the caller's standard build options. See `GameOptions` for plugin ordering.
+///
+/// ```zig
+/// const game = b.createModule(.{
+///     .root_source_file = b.path("src/main.zig"),
+///     .target = b.standardTargetOptions(.{}),
+///     .optimize = b.standardOptimizeOption(.{}),
+/// });
+/// @import("eggy").addGame(b, .{ .name = "my_game", .game = game });
+/// ```
 pub fn addGame(b: *std.Build, options: GameOptions) void {
     const target = options.target orelse b.standardTargetOptions(.{});
     const optimize = options.optimize orelse b.standardOptimizeOption(.{});
@@ -122,6 +144,18 @@ pub const PluginOptions = struct {
 /// Publish a plugin or library (a package's `src/root.zig`) as module `name`, with
 /// `@import("eggy")`, so it compiles and tests on its own and other packages can depend on it.
 /// A game that lists it gets this package's plugin running on the game's own eggy.
+/// The returned module is owned by `b`'s build graph; publishing it does not enable the plugin
+/// in a game. Supply it in `GameOptions.plugins` there. Use the same engine dependency
+/// arguments for games and plugins, rather than adding divergent Eggy options.
+///
+/// ```zig
+/// const plugin = @import("eggy").addPlugin(b, .{
+///     .name = "my_plugin",
+///     .root_source_file = b.path("src/root.zig"),
+/// });
+/// const tests = b.addTest(.{ .root_module = plugin });
+/// b.step("test", "Run plugin tests").dependOn(&b.addRunArtifact(tests).step);
+/// ```
 pub fn addPlugin(b: *std.Build, options: PluginOptions) *std.Build.Module {
     const target = options.target orelse b.standardTargetOptions(.{});
     const optimize = options.optimize orelse b.standardOptimizeOption(.{});
@@ -204,7 +238,9 @@ fn addProject(b: *std.Build, engine: *std.Build, emscripten: Emscripten, target:
     game_metadata.addTo(b, runtime_app.install.artifact, metadata);
     const runtime_step = b.step("runtime", "Build the game");
     runtime_step.dependOn(&runtime_app.install.step);
-    installRuntimeLibraries(b, engine, runtime_step);
+    const runtime_libraries = installRuntimeLibraries(b, engine);
+    runtime_step.dependOn(runtime_libraries);
+    all_step.dependOn(runtime_libraries);
     // Its resources: models and textures converted, everything else copied, all into data/.
     const files = if (own) &.{} else game_resources.entries(b);
     for ([_]?*std.Build.Step{ models.addPackaging(b, engine, optimize, files), game_resources.addData(b, files) }) |found| if (found) |packaged| {
@@ -243,6 +279,7 @@ fn addProject(b: *std.Build, engine: *std.Build, emscripten: Emscripten, target:
     // Beside the editor on every platform, where it looks for it.
     const install_library = b.addInstallArtifact(game_library, .{ .dest_dir = .{ .override = .bin }, .implib_dir = .disabled, .pdb_dir = .disabled });
     const editor_step = b.step("editor", "Build the editor");
+    editor_step.dependOn(runtime_libraries);
     editor_step.dependOn(&editor_app.install.step);
     const editor_libraries = installEditorLibraries(b, engine);
     editor_step.dependOn(editor_libraries);
@@ -400,18 +437,12 @@ fn addEngine(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.buil
         .optimize = optimize,
     });
     const emath = b.dependency("eggenvector", .{ .target = target, .optimize = optimize });
-    const weeoui = b.dependency("weeoui", .{ .target = target, .optimize = optimize, .sdl3 = !web });
+    // Eggy wires Weeoui's SDL adapter below, against the same SDL as the game.
+    const weeoui = b.dependency("weeoui", .{ .target = target, .optimize = optimize, .sdl3 = false });
     const nvdialog = b.dependency("nvdialog", .{});
     const fatal_dialog = b.createModule(.{ .root_source_file = b.path("src/core/fatal_dialog.zig"), .target = target, .optimize = optimize, .link_libc = true });
     if (!web) addNvdialog(b, fatal_dialog, nvdialog, target.result);
-    // Same args as Weeoui's lazy sdl3 so both share one SDL build (static by default).
-    // On the web Weeoui skips SDL, and SDL needs Emscripten's system headers.
-    // ponytail: no C UB traps in SDL, since 3.4.0's Wayland pointer_handle_leave evaluates
-    // SDL_BUTTON_MASK(0) (a shift by -1) and SIGILLs when a window drag takes the pointer; re-enable after an SDL bump.
-    const sdl3 = if (web)
-        b.dependency("sdl3", .{ .target = target, .optimize = optimize, .c_sdl_sanitize_c = .off, .sdl_system_include_path = emscripten.include })
-    else
-        b.dependency("sdl3", .{ .target = target, .optimize = optimize, .c_sdl_sanitize_c = .off });
+    const sdl3 = sdl_build.dependency(b, target, optimize, if (web) emscripten.include else null) orelse return null;
     const sdl_adapter = b.createModule(.{
         .root_source_file = vitellus.path("src/windowing/sdl3.zig"),
         .target = target,
@@ -497,6 +528,7 @@ fn addEngine(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.buil
 
     // eggy_editor: a game with Weeoui tooling over it, desktop only.
     if (!web) {
+        const cli = b.lazyDependency("cli", .{ .target = target, .optimize = optimize }) orelse return null;
         const editor = b.addModule("eggy_editor", .{
             .root_source_file = b.path("src/editor/editor.zig"),
             .target = target,
@@ -505,6 +537,7 @@ fn addEngine(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.buil
                 .{ .name = "eggy", .module = engine },
                 .{ .name = "weeoui_sdl3", .module = weeoui_sdl3 },
                 .{ .name = "weeoui_vitellus", .module = weeoui_vitellus },
+                .{ .name = "cli", .module = cli.module("cli") },
             },
         });
         // The window icon, rendered from resources/icon.svg: `rsvg-convert -w 256 -h 256`.
@@ -514,6 +547,7 @@ fn addEngine(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.buil
         // from a checkout can offer it to projects (File > Link Developer Eggy).
         const build_options = b.addOptions();
         build_options.addOption([]const u8, "version", @import("build.zig.zon").version);
+        build_options.addOption([]const u8, "zig_version", @import("build.zig.zon").minimum_zig_version);
         const source_dir = b.build_root.handle.realPathFileAlloc(b.graph.io, ".", b.allocator) catch |err| std.debug.panic("cannot resolve Eggy's directory: {t}", .{err});
         build_options.addOption([]const u8, "source_dir", source_dir);
         editor.addOptions("build_options", build_options);
@@ -627,15 +661,17 @@ fn installEditorLibraries(b: *std.Build, engine: *std.Build) *std.Build.Step {
     return step;
 }
 
-/// Install the libraries Eggy's executables load at runtime (published by `addEngine`) into `b`'s prefix, with `zig build` and `runtime_step`.
-fn installRuntimeLibraries(b: *std.Build, engine: *std.Build, runtime_step: *std.Build.Step) void {
+/// Install the shared runtime libraries for either executable and exported games.
+fn installRuntimeLibraries(b: *std.Build, engine: *std.Build) *std.Build.Step {
+    const step = b.step("runtime-libraries", "Install the shared runtime libraries");
     var it = engine.named_lazy_paths.iterator();
     while (it.next()) |entry| {
         if (!std.mem.startsWith(u8, entry.key_ptr.*, runtime_library_prefix)) continue;
         const install = &b.addInstallFile(entry.value_ptr.*, entry.key_ptr.*[runtime_library_prefix.len..]).step;
-        b.getInstallStep().dependOn(install);
-        runtime_step.dependOn(install);
+        step.dependOn(install);
     }
+    b.getInstallStep().dependOn(step);
+    return step;
 }
 
 const DesktopApp = struct { install: *std.Build.Step.InstallArtifact, run: *std.Build.Step.Run };

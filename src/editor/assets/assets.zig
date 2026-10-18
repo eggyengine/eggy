@@ -113,10 +113,24 @@ pub const AssetsPanel = struct {
     /// What the listing was read for, to tell when to read it again.
     read_for: struct { view: View = .list, filter: std.ArrayList(u8) = .empty, folder: std.ArrayList(u8) = .empty, expanded: usize = 0 } = .{},
 
+    /// Create editor-only panel state; `gpa` backs later listings, menus and interactions.
+    /// No project is opened yet. Pair with `deinit`.
+    ///
+    /// ```zig
+    /// var panel = AssetsPanel.init(gpa); // Existing allocator.
+    /// defer panel.deinit();
+    /// ```
     pub fn init(gpa: std.mem.Allocator) AssetsPanel {
         return .{ .gpa = gpa, .shown_arena = .init(gpa), .menu_arena = .init(gpa) };
     }
 
+    /// Release panel-owned paths, interaction state and arenas; invalidate borrowed results.
+    /// Call once after the editor stops building or routing events to this panel.
+    ///
+    /// ```zig
+    /// var panel = AssetsPanel.init(gpa); // Existing allocator.
+    /// defer panel.deinit();
+    /// ```
     pub fn deinit(self: *AssetsPanel) void {
         self.folder.deinit(self.gpa);
         self.selected.deinit(self.gpa);
@@ -132,13 +146,26 @@ pub const AssetsPanel = struct {
     }
 
     /// The entry being dragged, while it is; its path, relative to the project.
+    /// The slice borrows active drag state and expires when that drag ends.
+    ///
+    /// ```zig
+    /// // Given an editor AssetsPanel:
+    /// if (panel.dragged()) |path| std.log.info("Dragging {s}", .{path});
+    /// ```
     pub fn dragged(self: *const AssetsPanel) ?[]const u8 {
         const drag = self.drag orelse return null;
         return if (drag.moving) drag.path else null;
     }
 
-    /// The folder files dropped from outside at `at` go into: the folder there, else the
-    /// grid's folder, else the project ("").
+    /// The folder files dropped from outside at `at` go into: a folder hit, a hit file's parent,
+    /// otherwise the grid's folder or the project ("").
+    /// Use coordinates in the UI context's space and its latest layout; copy the returned
+    /// borrowed path before rebuilding the listing or changing folders.
+    ///
+    /// ```zig
+    /// // Given panel, UI context and a file-drop position in UI coordinates:
+    /// const folder = panel.importFolder(context, at);
+    /// ```
     pub fn importFolder(self: *const AssetsPanel, context: *const ui.Context, at: ui.Vec2) []const u8 {
         if (self.itemAt(context, at)) |item| return if (item.entry.kind == .folder) item.entry.path else listing.parentOf(item.entry.path);
         return if (self.view == .grid) self.folder.items else "";
@@ -146,6 +173,12 @@ pub const AssetsPanel = struct {
 
     /// The chip that follows the pointer while dragging: the entry's name, or why letting go
     /// here won't move it. Null while nothing is dragged.
+    /// Borrowed text remains valid only while the drag state is unchanged.
+    ///
+    /// ```zig
+    /// // Given panel and a UI context during the editor overlay build:
+    /// if (panel.dragLabel()) |label| context.text(label);
+    /// ```
     pub fn dragLabel(self: *const AssetsPanel) ?[]const u8 {
         const drag = self.drag orelse return null;
         if (!drag.moving) return null;
@@ -183,11 +216,21 @@ pub const AssetsPanel = struct {
     }
 
     /// Read the listing again on the next build, as the files just changed.
+    /// Editor-only: invalidates the refresh timestamp without doing I/O immediately.
+    ///
+    /// ```zig
+    /// panel.refreshSoon(); // Existing AssetsPanel after a file operation.
+    /// ```
     pub fn refreshSoon(self: *AssetsPanel) void {
         self.read_at_ms = null;
     }
 
     /// Rename the selected entry (F2): its row becomes a text field.
+    /// Editor-only: no selection is a no-op; allocation failure leaves no rename active.
+    ///
+    /// ```zig
+    /// panel.renameSelected(); // Existing AssetsPanel with keyboard focus.
+    /// ```
     pub fn renameSelected(self: *AssetsPanel) void {
         if (self.selected.items.len == 0) return;
         self.startRename(self.selected.items);
@@ -195,6 +238,14 @@ pub const AssetsPanel = struct {
 
     /// A key while the panel has the keyboard: Enter keeps a rename, Escape drops it (or closes
     /// the menu), Delete deletes the selected entry. Returns whether it was used, and the action.
+    /// Editor-only: this does not perform file operations. Consume or copy action paths before
+    /// another build/interaction mutates panel storage.
+    ///
+    /// ```zig
+    /// // Given a focused panel:
+    /// const result = panel.key(.{ .key = .escape, .modifiers = .{}, .repeat = false });
+    /// if (result.used) return;
+    /// ```
     pub fn key(self: *AssetsPanel, key_down: @FieldType(ui.input.Event, "key_down")) Handled {
         switch (key_down.key) {
             .enter => if (self.renaming != null) return .{ .used = true, .action = self.finishRename() },
@@ -238,6 +289,14 @@ pub const AssetsPanel = struct {
 
     /// Draw the panel for the project in `project_dir` (none: nothing to show) into `context`,
     /// marking `open_scene` (relative to it). Returns what the user did this frame, if anything.
+    /// Editor-only: call during the UI build with live icons and game file-type metadata.
+    /// Returned paths borrow panel/frame storage; handle the action before the next build.
+    ///
+    /// ```zig
+    /// // Given panel, context, optional project/scene paths and loaded icons:
+    /// const action = panel.build(context, project_dir, &icons, open_scene);
+    /// _ = action; // Dispatch any requested file operation in the editor host.
+    /// ```
     pub fn build(self: *AssetsPanel, context: *ui.Context, project_dir: ?[]const u8, icons: *const Icons, open_scene: ?[]const u8) ?Action {
         const dir = project_dir orelse {
             context.muted("Open a project to see its files.");
@@ -296,6 +355,14 @@ pub const AssetsPanel = struct {
     /// Route a pointer event over the panel before its UI sees it: a double-click opens the
     /// entry under it (a scene opens, a folder opens in the grid, anything else shows in the
     /// file manager). `context` has last frame's layout.
+    /// Editor-only: updates selection/drag/menu state but delegates filesystem work through
+    /// `action`. Consume borrowed action paths before rebuilding or changing interaction state.
+    ///
+    /// ```zig
+    /// // Given panel, its last-layout context and a UI input event:
+    /// const result = panel.pointer(context, event);
+    /// _ = result; // Dispatch action, then forward to ordinary UI only if not used.
+    /// ```
     pub fn pointer(self: *AssetsPanel, context: *const ui.Context, event: ui.input.Event) Handled {
         const down = switch (event) {
             .pointer_down => |down| down,

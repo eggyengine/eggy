@@ -9,12 +9,25 @@ pub const RootOrder = struct {
     gpa: std.mem.Allocator,
     entities: std.ArrayList(ecs.EntityId) = .empty,
 
+    /// Release editor root-order storage once; borrowed root slices become invalid.
+    ///
+    /// ```zig
+    /// var order = RootOrder{ .gpa = gpa }; // Existing allocator.
+    /// defer order.deinit();
+    /// ```
     pub fn deinit(self: *RootOrder) void {
         self.entities.deinit(self.gpa);
     }
 
     /// The top-level entities of `world` in order: those kept that are still alive and at the top
     /// level, then any new ones in id order (a scene loaded into an empty world, in its order).
+    /// Editor-only: refreshes the stored order without changing `world`. The returned slice
+    /// borrows this list until its next mutation; allocation failure returns the partial list.
+    ///
+    /// ```zig
+    /// // Given RootOrder order and an ECS world:
+    /// const roots = order.of(&world);
+    /// ```
     pub fn of(self: *RootOrder, world: *ecs.World) []const ecs.EntityId {
         // Drop the gone and the moved under a parent.
         var kept: usize = 0;
@@ -36,12 +49,26 @@ pub const RootOrder = struct {
     }
 
     /// Put top-level `entity` at `index` (clamped: `maxInt(usize)` puts it last).
+    /// Editor-only: callers must ensure the entity is a live root; this does not reparent it.
+    /// Insertion allocation errors propagate and may leave a previously stored entity removed.
+    ///
+    /// ```zig
+    /// // Given order and a live top-level entity:
+    /// try order.place(entity, 0);
+    /// ```
     pub fn place(self: *RootOrder, entity: ecs.EntityId, index: usize) !void {
         if (self.indexOf(entity)) |at| _ = self.entities.orderedRemove(at);
         try self.entities.insert(self.gpa, @min(index, self.entities.items.len), entity);
     }
 
     /// Where `entity` is in the order; null if it isn't at the top level.
+    /// Editor-only: consults stored ids, so call `of` first to reconcile external world changes.
+    ///
+    /// ```zig
+    /// // Given order, world and entity:
+    /// _ = order.of(&world);
+    /// const position = order.indexOf(entity);
+    /// ```
     pub fn indexOf(self: *const RootOrder, entity: ecs.EntityId) ?usize {
         for (self.entities.items, 0..) |kept, index| if (kept.eql(entity)) return index;
         return null;

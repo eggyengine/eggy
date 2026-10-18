@@ -25,6 +25,12 @@ pub const NameError = error{ EmptyName, NameTooLong, NameNotIdentifier };
 pub const max_name_len = 32;
 
 /// Whether `name` can name a Zig package: a plain identifier, as `build.zig.zon` requires.
+/// Editor project-creation helper: rejects empty names, names over 32 bytes, keywords and `_`.
+/// Returns no storage and does not normalize the supplied name.
+///
+/// ```zig
+/// try validateName("space_game");
+/// ```
 pub fn validateName(name: []const u8) NameError!void {
     if (name.len == 0) return error.EmptyName;
     if (name.len > max_name_len) return error.NameTooLong;
@@ -33,6 +39,14 @@ pub fn validateName(name: []const u8) NameError!void {
 
 /// A package name for `title` in `buffer`: lower case, words joined by `_`, and a `game_` prefix
 /// when it would start with a digit. Empty when the title has no letters or digits.
+/// Editor helper: ASCII-only derivation truncates to 32 bytes; result borrows `buffer` until
+/// it is reused. Validate the proposed name before creating a project.
+///
+/// ```zig
+/// var buffer: [max_name_len]u8 = undefined;
+/// const name = packageName(&buffer, "Space Game!");
+/// try validateName(name);
+/// ```
 pub fn packageName(buffer: *[max_name_len]u8, title: []const u8) []const u8 {
     var len: usize = 0;
     var gap = false;
@@ -62,11 +76,23 @@ pub fn packageName(buffer: *[max_name_len]u8, title: []const u8) []const u8 {
 }
 
 /// The fingerprint Zig expects for package `name`: CRC32 of the name over the random `id`.
+/// Editor helper: pass a validated package name and stable non-reserved id from `fingerprintId`.
+/// Returns a numeric value without allocating or modifying either input.
+///
+/// ```zig
+/// const value = fingerprint("space_game", fingerprintId(42));
+/// ```
 pub fn fingerprint(name: []const u8, id: u32) u64 {
     return @as(u64, std.hash.Crc32.hash(name)) << 32 | id;
 }
 
 /// A fingerprint id from `random_bits`, skipping the two values Zig reserves.
+/// Editor helper: maps reserved zero/all-ones inputs to 1; the caller supplies randomness
+/// and must retain the chosen id for the lifetime of the generated package.
+///
+/// ```zig
+/// const id = fingerprintId(42); // 42
+/// ```
 pub fn fingerprintId(random_bits: u32) u32 {
     return switch (random_bits) {
         0, 0xffffffff => 1,
@@ -75,6 +101,18 @@ pub fn fingerprintId(random_bits: u32) u32 {
 }
 
 /// `contents` (a file of the template) with every placeholder filled in. Caller owns the result.
+/// Editor-only: validates package name/id and requires a relative engine path; title/path
+/// substitutions are Zig-string escaped. No filesystem writes occur. Free bytes with `gpa`;
+/// validation and allocation errors propagate with intermediate buffers cleaned up.
+///
+/// ```zig
+/// // Given allocator and the contents of one bundled template file:
+/// const rendered = try render(gpa, contents, .{
+///     .name = "space_game", .title = "Space Game",
+///     .fingerprint_id = fingerprintId(42), .engine_path = "../engines/abc",
+/// });
+/// defer gpa.free(rendered);
+/// ```
 pub fn render(gpa: std.mem.Allocator, contents: []const u8, project: Project) ![]u8 {
     try validateName(project.name);
     if (project.fingerprint_id == 0 or project.fingerprint_id == 0xffffffff) return error.InvalidFingerprintId;

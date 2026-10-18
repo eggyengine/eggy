@@ -12,6 +12,12 @@ pub const Transform = struct {
 
     /// The matrix taking points from the entity's space into its parent's: scaled, turned, then
     /// moved.
+    /// Positions are in parent-space metres, rotations in degrees, and scales unitless.
+    /// Returns the matrix by value without changing ECS storage.
+    ///
+    /// ```zig
+    /// const local = (Transform{ .position = .{ 0, 2, 0 } }).matrix();
+    /// ```
     pub fn matrix(self: Transform) math.Mat4 {
         const radians = @as(@Vector(3, f32), self.rotation_deg) * @as(@Vector(3, f32), @splat(std.math.rad_per_deg));
         const turn = math.mul(f32, 4, 4, 4, math.mat.rotationZ4x4(f32, radians[2]), math.mul(f32, 4, 4, 4, math.mat.rotationY4x4(f32, radians[1]), math.mat.rotationX4x4(f32, radians[0])));
@@ -21,22 +27,44 @@ pub const Transform = struct {
 
     /// Which way it faces, in its parent's space: its -z turned by its rotation (one metre long).
     /// A camera looks this way.
+    /// Ignores scale and translation.
+    ///
+    /// ```zig
+    /// const ahead = (Transform{}).forward(); // { 0, 0, -1 }
+    /// ```
     pub fn forward(self: Transform) [3]f32 {
         return self.axis(.{ 0, 0, -1 });
     }
 
     /// Its right, in its parent's space: its +x turned by its rotation.
+    /// Returns a unit direction, independent of scale and translation.
+    ///
+    /// ```zig
+    /// const rightward = (Transform{}).right();
+    /// ```
     pub fn right(self: Transform) [3]f32 {
         return self.axis(.{ 1, 0, 0 });
     }
 
     /// Its up, in its parent's space: its +y turned by its rotation.
+    /// Returns a unit direction, independent of scale and translation.
+    ///
+    /// ```zig
+    /// const upward = (Transform{}).up();
+    /// ```
     pub fn up(self: Transform) [3]f32 {
         return self.axis(.{ 0, 1, 0 });
     }
 
     /// Move it by `offset` (in its parent's space): `transform.translate(transform.forward())`
     /// steps a metre ahead.
+    /// Mutates only this value; when editing a borrowed ECS component, also mark it changed
+    /// through the world so observers see the edit.
+    ///
+    /// ```zig
+    /// var transform = Transform{};
+    /// transform.translate(.{ 0, 1, 0 });
+    /// ```
     pub fn translate(self: *Transform, offset: [3]f32) void {
         for (&self.position, offset) |*at, by| at.* += by;
     }
@@ -51,6 +79,12 @@ pub const Transform = struct {
 };
 
 /// `entity`'s transform within the world: its own (or none), inside each parent's.
+/// Reads the parent chain without mutation; missing transforms contribute identity.
+/// Supply an entity from this world with an acyclic parent hierarchy.
+///
+/// ```zig
+/// const placed = worldMatrix(world, entity);
+/// ```
 pub fn worldMatrix(world: *ecs.World, entity: ecs.EntityId) math.Mat4 {
     const local = if (world.get(entity, Transform)) |transform| transform.matrix() else math.identity(f32, 4);
     const parent = world.getParent(entity) orelse return local;
@@ -59,6 +93,14 @@ pub fn worldMatrix(world: *ecs.World, entity: ecs.EntityId) math.Mat4 {
 
 /// The inverse of `m`, a transform's matrix (as columns: no projection), or null when it
 /// squashes space flat (a scale of 0).
+/// Treats determinants smaller than `1e-12` in magnitude as singular; returns by value.
+///
+/// ```zig
+/// const world_from_local = [4][4]f32{
+///     .{ 1, 0, 0, 0 }, .{ 0, 1, 0, 0 }, .{ 0, 0, 1, 0 }, .{ 3, 0, 0, 1 },
+/// };
+/// const local_from_world = invert(world_from_local) orelse return error.SingularTransform;
+/// ```
 pub fn invert(m: [4][4]f32) ?[4][4]f32 {
     // The inverse of the turn-and-scale part, by cofactors.
     const a = m[0];
@@ -82,6 +124,11 @@ pub fn invert(m: [4][4]f32) ?[4][4]f32 {
 }
 
 /// `point` taken through `m` (as columns), or as a direction (`w` 0) without its move.
+/// Use `w = 1` for positions; this affine helper does not perform perspective division.
+///
+/// ```zig
+/// const transformed = apply(world_from_local, .{ 1, 2, 3 }, 1);
+/// ```
 pub fn apply(m: [4][4]f32, point: [3]f32, w: f32) [3]f32 {
     var out: [3]f32 = undefined;
     for (&out, 0..) |*value, row| value.* = m[0][row] * point[0] + m[1][row] * point[1] + m[2][row] * point[2] + m[3][row] * w;

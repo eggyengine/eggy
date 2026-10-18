@@ -37,8 +37,17 @@ pub const HotGame = struct {
     /// How many copies this editor has loaded, which names the next one.
     loads: u32 = 0,
 
-    /// Load the library at `path` (absolute). Then put any scene into `app`'s world, `start`
-    /// the game, and run `app.startWorld`.
+    /// Load a private copy of the game library at absolute `path`, without starting plugins.
+    /// Editor host only: owns copied paths/metadata until `deinit`; file, dynamic-loader,
+    /// ABI-version and allocation failures propagate with incomplete loads cleaned up.
+    /// After loading, restore any scene before calling `start` (which runs world Init stages).
+    ///
+    /// ```zig
+    /// // Given allocator gpa, absolute game-library path and App pointer:
+    /// var game = try HotGame.load(gpa, library_path);
+    /// defer game.deinit(app);
+    /// game.start(app, &.{}, .discard);
+    /// ```
     pub fn load(gpa: std.mem.Allocator, path: []const u8) !HotGame {
         var self = HotGame{ .gpa = gpa, .path = try gpa.dupe(u8, path), .copy_path = &.{}, .library = null, .game = undefined, .state = null, .panels = &.{}, .manifest_arena = .init(gpa) };
         errdefer gpa.free(self.path);
@@ -56,6 +65,15 @@ pub const HotGame = struct {
     /// Start the game and its plugins, but those keyed in `off`, on `app`, whose world may
     /// already hold a scene, and run the world's Init stages; what they spawn goes as `spawned`
     /// says. If a plugin fails to start (logged), the game stays stopped until the next swap.
+    /// Editor host only: `app` and this library must use the same Eggy ABI; the game itself
+    /// is always enabled. Already-running/unloaded games are no-ops. `.discard` preserves
+    /// pre-existing entity generations but cannot discard init-spawned entities if its
+    /// bookkeeping allocation fails; startup failures are logged, not returned.
+    ///
+    /// ```zig
+    /// // Given a loaded HotGame and its App pointer, after restoring the scene:
+    /// game.start(app, &.{"optional_plugin"}, .discard);
+    /// ```
     pub fn start(self: *HotGame, app: *eggy.App, off: []const []const u8, spawned: Spawned) void {
         if (self.library == null or self.state != null) return;
         // The entities there before, to tell those the plugins made.
@@ -86,16 +104,30 @@ pub const HotGame = struct {
     }
 
     /// Stop the game, empty the world, and unload the library.
+    /// Editor host only: call once while `app` is alive, after all hooks have returned.
+    /// Clears the world before unloading its component code, forgets preference type bindings,
+    /// releases copied metadata/paths and attempts to delete the private library copy.
+    ///
+    /// ```zig
+    /// var game = try HotGame.load(gpa, library_path); // Existing allocator/absolute path.
+    /// defer game.deinit(app); // App outlives game.
+    /// ```
     pub fn deinit(self: *HotGame, app: *eggy.App) void {
         self.close(app);
         self.manifest_arena.deinit();
         self.gpa.free(self.path);
     }
 
-    /// Swap in the library rebuilt at `path`: stop the game and empty `app`'s world, unload the
-    /// old library, and load the new one. Then put the scene back, `start` the game, and run
-    /// `app.startWorld`. If the new library can't load, the editor carries on without a game
-    /// until the next swap.
+    /// Stop the game, clear `app`'s world and load the rebuilt library from the stored path.
+    /// Editor host only: call after hooks unwind, capturing the old scene beforehand if needed.
+    /// Invalidates all borrowed metadata/access results; a failed load propagates and leaves
+    /// no library running. The caller must restore the scene and call `start` after success.
+    ///
+    /// ```zig
+    /// // Given HotGame game, App pointer and a scene captured before reload:
+    /// try game.reload(app);
+    /// game.restart(app, &scene, &.{}, .discard);
+    /// ```
     pub fn reload(self: *HotGame, app: *eggy.App) !void {
         self.close(app);
         try self.open();
@@ -104,35 +136,79 @@ pub const HotGame = struct {
 
     /// Run a frame of the game and its world (playing), if it is running. Failures are logged
     /// by the library and don't stop it.
+    /// Editor host only: updates plugin hooks then world systems; stopped games are no-ops.
+    ///
+    /// ```zig
+    /// game.update(app); // Existing running HotGame and its App pointer, while playing.
+    /// ```
     pub fn update(self: *HotGame, app: *eggy.App) void {
         const state = self.state orelse return;
         _ = self.game.update(state, app);
     }
 
+    /// Ask whether a running game's enabled plugins provide UI; false when stopped.
+    /// Editor host only: does not build UI or transfer ownership.
+    ///
+    /// ```zig
+    /// const has_ui = game.hasGameUi(); // Existing HotGame.
+    /// ```
     pub fn hasGameUi(self: *const HotGame) bool {
         return self.game.has_game_ui(self.state orelse return false);
     }
 
+    /// Ask whether a running game's enabled plugins provide custom drawing; false when stopped.
+    /// Editor host only: this is a capability query, not a rendering call.
+    ///
+    /// ```zig
+    /// const has_draw = game.hasDraw(); // Existing HotGame.
+    /// ```
     pub fn hasDraw(self: *const HotGame) bool {
         return self.game.has_draw(self.state orelse return false);
     }
 
+    /// Build running game UI into the supplied live frame context; stopped games do nothing.
+    /// Editor host only: borrows `app`/`context` for the synchronous hook; hook errors are logged.
+    ///
+    /// ```zig
+    /// game.gameUi(app, context); // Existing HotGame, App and building UI context.
+    /// ```
     pub fn gameUi(self: *HotGame, app: *eggy.App, context: *eggy.ui.Context) void {
         const state = self.state orelse return;
         _ = self.game.game_ui(state, app, context);
     }
 
+    /// Invoke running plugin drawing with the host's recording command buffer and render target.
+    /// Editor host only: call outside a render pass; hooks open/close their own passes through
+    /// DrawContext. Target/frame resources are borrowed for the call; stopped games do nothing
+    /// and hook failures are logged without ending the game.
+    ///
+    /// ```zig
+    /// game.draw(app, draw_context); // Host-provided eggy.DrawContext, outside a render pass.
+    /// ```
     pub fn draw(self: *HotGame, app: *eggy.App, context: eggy.DrawContext) void {
         const state = self.state orelse return;
         _ = self.game.draw(state, app, &context);
     }
 
+    /// Route UI-priority input to running game plugins, before ordinary gameplay routing.
+    /// Editor host only: returns true when consumed, or when the ABI reports a hook error
+    /// (logged); a stopped game returns false. Event storage is borrowed only for this call.
+    ///
+    /// ```zig
+    /// const used = game.uiEvent(app, event); // Existing HotGame, App and Eggy event.
+    /// ```
     pub fn uiEvent(self: *HotGame, app: *eggy.App, event_value: eggy.Event) bool {
         const state = self.state orelse return false;
         return self.game.ui_event(state, app, &event_value) != 0;
     }
 
     /// Run a frame of the plugins' editor tools (not playing), if the game is running.
+    /// Editor host only: `editor` is a hook-local service view of this game's App; do not
+    /// process pending reload/lifecycle requests until the hook returns. Errors are logged.
+    ///
+    /// ```zig
+    /// game.editorUpdate(&editor_context); // Existing HotGame and hook-local editor context.
+    /// ```
     pub fn editorUpdate(self: *HotGame, editor: *eggy.editor.Context) void {
         const state = self.state orelse return;
         _ = self.game.editor_update(state, editor);
@@ -143,6 +219,13 @@ pub const HotGame = struct {
     /// `off`, what they spawn going as `spawned` says. Play does this, keeping what they spawn,
     /// as the shipped game starts; Stop does it dropping that, so the world is the scene as it
     /// was before Play, its entity count included.
+    /// Editor host only: `scene` must own its snapshot independently of the old world.
+    /// Invalidates old entity ids/component pointers; logs restore/start failures and frees
+    /// the temporary made-entity list. Without a loaded library it does nothing.
+    ///
+    /// ```zig
+    /// game.restart(app, &scene, &.{}, .keep); // Independent captured scene; enter Play.
+    /// ```
     pub fn restart(self: *HotGame, app: *eggy.App, scene: *const eggy.scene.Scene, off: []const []const u8, spawned: Spawned) void {
         const made = self.restartMaking(app, scene, off, spawned);
         self.gpa.free(made);
@@ -150,6 +233,14 @@ pub const HotGame = struct {
 
     /// `restart`, returning the entities made from `scene`, in its order (caller-owned; empty
     /// when it couldn't be put back).
+    /// Editor host only: `scene` must survive resetting the old world. Free the returned
+    /// list with `self.gpa`; its ids refer to the new world, not the snapshot's original ids.
+    /// Restore/start failures are logged; startup is still attempted after a restore failure.
+    ///
+    /// ```zig
+    /// const made = game.restartMaking(app, &scene, &.{}, .discard);
+    /// defer game.gpa.free(made); // Existing HotGame, App and independent scene snapshot.
+    /// ```
     pub fn restartMaking(self: *HotGame, app: *eggy.App, scene: *const eggy.scene.Scene, off: []const []const u8, spawned: Spawned) []eggy.ecs.EntityId {
         if (self.library == null) return &.{};
         if (self.state) |state| self.game.stop(state);
@@ -163,21 +254,48 @@ pub const HotGame = struct {
         return made;
     }
 
+    /// Deliver ordinary gameplay input to running plugins after higher-priority UI routing.
+    /// Editor host only: borrows the event for the call; stopped games do nothing and errors log.
+    ///
+    /// ```zig
+    /// game.event(app, event); // Existing HotGame and App; unconsumed Eggy event.
+    /// ```
     pub fn event(self: *HotGame, app: *eggy.App, curr_event: eggy.Event) void {
         const state = self.state orelse return;
         _ = self.game.event(state, app, &curr_event);
     }
 
+    /// Build the combined plugin editor UI, or a stopped-game message, into this UI frame.
+    /// Editor host only: both contexts are hook-local; handle deferred lifecycle requests
+    /// after return. Hook failures are logged rather than propagated.
+    ///
+    /// ```zig
+    /// game.editorUi(&editor_context, context); // Existing HotGame and building UI context.
+    /// ```
     pub fn editorUi(self: *HotGame, editor: *eggy.editor.Context, context: *eggy.ui.Context) void {
         const state = self.state orelse return context.muted("The game isn't running: see the Console. It starts again when its code is rebuilt.");
         self.game.editor_ui(state, editor, context);
     }
 
+    /// Build zero-based `panels[panel]` through the running game's hook into this UI frame.
+    /// Editor host only: stopped/out-of-range calls do nothing; contexts are borrowed and
+    /// hook failures log. Process deferred lifecycle requests only after return.
+    ///
+    /// ```zig
+    /// game.editorPanelUi(0, &editor_context, context); // Live host contexts and HotGame.
+    /// ```
     pub fn editorPanelUi(self: *HotGame, panel: usize, editor: *eggy.editor.Context, context: *eggy.ui.Context) void {
         const state = self.state orelse return;
         if (panel < self.panels.len) self.game.editor_panel_ui(state, panel, editor, context);
     }
 
+    /// Execute zero-based `commands[command]` synchronously through the running game.
+    /// Editor host only: stopped/out-of-range calls do nothing and hook failures log.
+    /// The hook-local editor context may queue lifecycle work; process it only after return.
+    ///
+    /// ```zig
+    /// game.editorCommand(0, &editor_context); // Existing HotGame and host service context.
+    /// ```
     pub fn editorCommand(self: *HotGame, command: usize, editor: *eggy.editor.Context) void {
         const state = self.state orelse return;
         if (command >= self.commands.len) return;
@@ -276,6 +394,12 @@ pub const HotGame = struct {
     }
 
     /// Where Eggy's own component `name` (`Transform`, `Mesh`...) is among `component_types`.
+    /// Editor host only: matches owner "eggy" and exact type name; null if absent/unloaded.
+    /// Returned indices must be rediscovered after reload.
+    ///
+    /// ```zig
+    /// const mesh_index = game.builtinComponent("Mesh"); // Existing HotGame.
+    /// ```
     pub fn builtinComponent(self: *const HotGame, name: []const u8) ?usize {
         for (self.component_types, 0..) |info, index| {
             if (std.mem.eql(u8, info.name, name) and std.mem.eql(u8, info.owner, "eggy")) return index;
@@ -284,17 +408,38 @@ pub const HotGame = struct {
     }
 
     /// Whether `entity` of `app`'s world has component type `component` (of `component_types`).
+    /// Editor host only: uses the loaded library's type numbering, even before plugins start.
+    /// False covers missing library/out-of-range component; use ids from this App's world.
+    ///
+    /// ```zig
+    /// const present = game.hasComponent(app, entity, component); // Host-owned inputs.
+    /// ```
     pub fn hasComponent(self: *const HotGame, app: *eggy.App, entity: eggy.ecs.EntityId, component: usize) bool {
         if (self.library == null or component >= self.component_types.len) return false;
         return self.game.has_component(&app.world, entityOf(entity), component);
     }
 
     /// Give `entity` component type `component` with its defaults; false if it couldn't (logged).
+    /// Editor host only: use a live entity and a current metadata index. Adds required
+    /// dependencies through the typed registry; missing library/invalid index returns false.
+    /// The surrounding editor owns undo snapshots and dependency-removal policy.
+    ///
+    /// ```zig
+    /// // Given HotGame, App pointer and a live entity:
+    /// if (game.builtinComponent("Mesh")) |index| _ = game.addComponent(app, entity, index);
+    /// ```
     pub fn addComponent(self: *const HotGame, app: *eggy.App, entity: eggy.ecs.EntityId, component: usize) bool {
         if (self.library == null or component >= self.component_types.len) return false;
         return self.game.add_component(&app.world, entityOf(entity), component);
     }
 
+    /// Remove a component by the loaded library's current index; unloaded/invalid indices no-op.
+    /// Editor host only: callers enforce dependency/undo policy before mutating a live entity.
+    /// Any pointers into the removed component become invalid.
+    ///
+    /// ```zig
+    /// game.removeComponent(app, entity, component); // Validated host removal request.
+    /// ```
     pub fn removeComponent(self: *const HotGame, app: *eggy.App, entity: eggy.ecs.EntityId, component: usize) void {
         if (self.library == null or component >= self.component_types.len) return;
         self.game.remove_component(&app.world, entityOf(entity), component);
@@ -302,6 +447,15 @@ pub const HotGame = struct {
 
     /// Field `field` of `entity`'s component `component` as ZON, in `buffer` (cut short with
     /// "..." when it doesn't fit); null if it can't be read.
+    /// Editor host only: `buffer.len` must be at least three for truncation; result borrows
+    /// that buffer. Component/field indices refer to current game metadata; truncated text
+    /// is for display only and must not be saved back as ZON.
+    ///
+    /// ```zig
+    /// var buffer: [4096]u8 = undefined;
+    /// const zon = game.readField(app, entity, component, field, &buffer);
+    /// // Existing HotGame, App, entity and current component/field indices.
+    /// ```
     pub fn readField(self: *const HotGame, app: *eggy.App, entity: eggy.ecs.EntityId, component: usize, field: usize, buffer: []u8) ?[]const u8 {
         if (self.library == null or component >= self.component_types.len) return null;
         const len = self.game.read_field(&app.world, entityOf(entity), component, field, buffer.ptr, buffer.len);
@@ -313,12 +467,27 @@ pub const HotGame = struct {
 
     /// Set field `field` of `entity`'s component `component` from ZON `text`; false if it
     /// doesn't parse as the field's type.
+    /// Editor host only: `text` must be sentinel-terminated and survive the synchronous call.
+    /// Missing library/component/field also rejects the write; use indices from current metadata.
+    /// Successful writes mutate the world immediately; the host owns undo tracking.
+    ///
+    /// ```zig
+    /// const changed = game.writeField(app, entity, component, field, "2.5");
+    /// // Existing host inputs for a numeric component field.
+    /// ```
     pub fn writeField(self: *const HotGame, app: *eggy.App, entity: eggy.ecs.EntityId, component: usize, field: usize, text: [:0]const u8) bool {
         if (self.library == null or component >= self.component_types.len) return false;
         return self.game.write_field(&app.world, entityOf(entity), component, field, text.ptr);
     }
 
     /// `entity`'s `eggy.Name` in `buffer`; null without one (or without a library).
+    /// Editor host only: result borrows caller storage and may be shortened to its capacity.
+    /// Use `eggy.Name.max_len` bytes to retain the full name.
+    ///
+    /// ```zig
+    /// var buffer: [eggy.Name.max_len]u8 = undefined;
+    /// const name = game.readName(app, entity, &buffer); // Existing host game/App/entity.
+    /// ```
     pub fn readName(self: *const HotGame, app: *eggy.App, entity: eggy.ecs.EntityId, buffer: []u8) ?[]const u8 {
         if (self.library == null) return null;
         const len = self.game.read_name(&app.world, entityOf(entity), buffer.ptr, buffer.len);
@@ -327,12 +496,25 @@ pub const HotGame = struct {
     }
 
     /// Name `entity` `text`, or take its name away when `text` is empty.
+    /// Editor host only: copies text through the typed registry; no library is a no-op.
+    /// Name capacity limits apply, and write/allocation failures are not returned to the host.
+    ///
+    /// ```zig
+    /// game.writeName(app, entity, "Player"); // Existing HotGame, App and live entity.
+    /// ```
     pub fn writeName(self: *const HotGame, app: *eggy.App, entity: eggy.ecs.EntityId, text: []const u8) void {
         if (self.library == null) return;
         self.game.write_name(&app.world, entityOf(entity), text.ptr, text.len);
     }
 
     /// The meshes of `app`'s world to draw, into `out`; none without a library.
+    /// Editor host only: returns an initialized prefix borrowing `out`, capped by its length.
+    /// Drawable references must be consumed before relevant world/library storage changes.
+    ///
+    /// ```zig
+    /// var drawables: [256]eggy.mesh.Drawable = undefined;
+    /// const meshes = game.gatherMeshes(app, &drawables); // Existing HotGame and App.
+    /// ```
     pub fn gatherMeshes(self: *const HotGame, app: *eggy.App, out: []eggy.mesh.Drawable) []eggy.mesh.Drawable {
         if (self.library == null) return out[0..0];
         return out[0..self.game.gather_meshes(&app.world, out.ptr, out.len)];
@@ -340,6 +522,12 @@ pub const HotGame = struct {
 
     /// `entity`'s transform within `app`'s world, as columns; null if it isn't alive (or there
     /// is no library).
+    /// Editor host only: composes ancestor transforms in scene units, returning a value copy;
+    /// no component pointer crosses the shared-library boundary.
+    ///
+    /// ```zig
+    /// const matrix = game.worldMatrix(app, entity); // Existing host game/App/entity.
+    /// ```
     pub fn worldMatrix(self: *const HotGame, app: *eggy.App, entity: eggy.ecs.EntityId) ?[4][4]f32 {
         if (self.library == null) return null;
         var matrix: [4][4]f32 = undefined;
@@ -348,6 +536,12 @@ pub const HotGame = struct {
     }
 
     /// The view through the game's camera (`eggy.camera.find`); null without one.
+    /// Editor host only: queries via library-local component types; returns a view value copy
+    /// and also returns null when the library is unloaded.
+    ///
+    /// ```zig
+    /// const view = game.findCamera(app); // Existing HotGame and its App pointer.
+    /// ```
     pub fn findCamera(self: *const HotGame, app: *eggy.App) ?eggy.camera.View {
         if (self.library == null) return null;
         var view: eggy.camera.View = undefined;
@@ -355,12 +549,27 @@ pub const HotGame = struct {
     }
 
     /// The typed steps scenes need, through the library (see `eggy.scene.Access`).
+    /// Editor host only: retains a pointer to this HotGame, which must stay at a stable address.
+    /// Its world argument must be exactly the enclosing App's `world`, not a standalone World.
+    /// Access/metadata must not be used across library teardown or reload.
+    ///
+    /// ```zig
+    /// // Given a stably stored HotGame and its App pointer:
+    /// var scene = try eggy.scene.Scene.capture(gpa, &app.world, game.sceneAccess(), roots);
+    /// defer scene.deinit();
+    /// ```
     pub fn sceneAccess(self: *const HotGame) eggy.scene.Access {
         return .{ .context = self, .vtable = &scene_vtable };
     }
 
     /// Whether the game is running: it started (a plugin's `init` failing stops it until the
     /// next swap).
+    /// Editor host only: this reports started state, not Play mode; editing tools also run
+    /// with started plugins. Ordinary hook failures are logged without clearing that state.
+    ///
+    /// ```zig
+    /// const started = game.running(); // Existing HotGame.
+    /// ```
     pub fn running(self: *const HotGame) bool {
         return self.state != null;
     }

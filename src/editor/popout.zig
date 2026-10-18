@@ -15,6 +15,13 @@ pub const PopOut = struct {
 
     /// Open a `size` (in points) window titled `title`, rendering in `graphics`' color format.
     /// `flags` are SDL's (Vulkan and high pixel density are always on).
+    /// Editor-host only: clamps size to at least 160×120 points. Borrowed graphics/font
+    /// must outlive the returned caller-owned value; SDL/surface/renderer errors propagate.
+    ///
+    /// ```zig
+    /// var popout = try PopOut.open(graphics, font, "Inspector", .{ 360, 600 }, .{ .resizable = true });
+    /// defer popout.close(graphics);
+    /// ```
     pub fn open(graphics: *const eggy.Graphics, font: *const ui.Font, title: [:0]const u8, size: [2]f32, flags: sdl3.video.Window.Flags) !PopOut {
         const width: usize = @intFromFloat(@max(160, size[0]));
         const height: usize = @intFromFloat(@max(120, size[1]));
@@ -30,6 +37,12 @@ pub const PopOut = struct {
     }
 
     /// Close the window once the GPU is done with everything that drew into it.
+    /// Waits the original graphics queue idle (ignoring wait failure), destroys owned GPU/SDL
+    /// state, but not the struct or font. Do not use the value afterward.
+    ///
+    /// ```zig
+    /// popout.close(graphics); // Before shared font/device teardown.
+    /// ```
     pub fn close(self: *PopOut, graphics: *eggy.Graphics) void {
         graphics.queue.waitIdle() catch {};
         self.overlay.deinit();
@@ -37,7 +50,13 @@ pub const PopOut = struct {
         self.window.deinit();
     }
 
-    /// The window's area in points, where its pointer events are; null while minimized.
+    /// The window's area in points, where its pointer events are; null for zero width/height.
+    /// Returns origin-zero logical geometry, not pixel dimensions; SDL query errors propagate.
+    ///
+    /// ```zig
+    /// const area = try popout.viewport() orelse return;
+    /// context.newFrame(area);
+    /// ```
     pub fn viewport(self: *const PopOut) !?ui.Rect {
         const width, const height = try self.window.window.getSize();
         if (width == 0 or height == 0) return null;

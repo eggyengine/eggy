@@ -11,6 +11,7 @@ export default {
   baseUrl,
   favicon: 'img/icon.svg',
   onBrokenLinks: 'throw',
+  onBrokenAnchors: 'throw',
   presets: [
     [
       'classic',
@@ -31,7 +32,7 @@ export default {
       items: [
         { to: '/', label: 'Docs', position: 'left' },
         // `zig build docs --prefix docs/static` makes it; the docs workflow does before building.
-        { to: 'pathname:///api/', label: 'API', position: 'left' },
+        { to: 'pathname:///api/', label: 'API reference', position: 'left' },
         { href: 'https://eggyengine.github.io/weeoui/', label: 'Weeoui', position: 'left' },
         { href: 'https://github.com/eggyengine/eggy', label: 'GitHub', position: 'right' },
       ],

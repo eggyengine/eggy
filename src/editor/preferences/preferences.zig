@@ -38,12 +38,23 @@ pub const editor_key = "editor";
 pub const editor_manifest = prefs.manifest(Editor, editor_key);
 
 /// The editor's preferences in `store`.
+/// Return a value copy with store layering/defaults applied; no file read or borrowed fields.
+///
+/// ```zig
+/// const settings = editor(&app.preference_values); // Existing editor App pointer.
+/// ```
 pub fn editor(store: *const Store) Editor {
     return store.getKeyed(Editor, editor_key);
 }
 
 /// `key` (`snake_case`, as module and field names are) as people read it: `straight_bullshit`
 /// is "Straight bullshit". In `arena`.
+/// Editor label helper: replaces underscores and uppercases the first ASCII character.
+/// The result lives in `arena`; allocation failure propagates.
+///
+/// ```zig
+/// const title = try displayName(arena, "rebuild_on_focus"); // Existing arena allocator.
+/// ```
 pub fn displayName(arena: std.mem.Allocator, key: []const u8) ![]const u8 {
     const name = try arena.dupe(u8, key);
     for (name) |*char| if (char.* == '_') {
@@ -59,6 +70,13 @@ pub const Folders = struct {
     project: ?[]u8,
 
     /// The user's (in Eggy's data folder) and `project_dir`'s (`.eggy/`). Free with `deinit`.
+    /// Editor-only: `project_dir`, when present, should be absolute. Owns copies allocated
+    /// by `gpa`; SDL path/allocation failures propagate. Does not create project folders.
+    ///
+    /// ```zig
+    /// const folders = try Folders.init(gpa, project_dir); // Existing allocator/optional path.
+    /// defer folders.deinit(gpa);
+    /// ```
     pub fn init(gpa: std.mem.Allocator, project_dir: ?[]const u8) !Folders {
         const sdl3 = eggy.sdl_adapter.sdl;
         const pref = try sdl3.filesystem.getPrefPath("eggy", "eggy");
@@ -68,12 +86,24 @@ pub const Folders = struct {
         return .{ .global = global, .project = if (project_dir) |dir| try std.fs.path.join(gpa, &.{ dir, ".eggy" }) else null };
     }
 
+    /// Free editor preference paths once with the allocator passed to `init`.
+    /// Invalidates all slices previously returned by `of`; the by-value struct is not reset.
+    ///
+    /// ```zig
+    /// const folders = try Folders.init(gpa, null); // Existing allocator.
+    /// defer folders.deinit(gpa);
+    /// ```
     pub fn deinit(self: Folders, gpa: std.mem.Allocator) void {
         gpa.free(self.global);
         if (self.project) |project| gpa.free(project);
     }
 
     /// The folder for `layer`; null for a project layer without a project.
+    /// Editor-only: returns a borrowed path valid until `deinit`, without creating it.
+    ///
+    /// ```zig
+    /// const project_preferences = folders.of(.project); // Existing Folders.
+    /// ```
     pub fn of(self: Folders, layer: Store.Layer) ?[]const u8 {
         return switch (layer) {
             .global => self.global,
@@ -84,6 +114,13 @@ pub const Folders = struct {
 
 /// Read every preferences file into `store`: the editor's from both layers, the plugins' from
 /// the project's. A file that can't be read is logged and skipped.
+/// Editor-only: reads at most 1 MiB per file and mutates the supplied store; no borrowed disk
+/// buffers escape. Missing directories/iteration failures are skipped; malformed values and
+/// read/allocation failures are logged where detected, not returned.
+///
+/// ```zig
+/// load(gpa, &app.preference_values, folders); // Existing editor App, allocator and Folders.
+/// ```
 pub fn load(gpa: std.mem.Allocator, store: *Store, folders: Folders) void {
     var threaded: std.Io.Threaded = .init_single_threaded;
     const io = threaded.io();
@@ -114,6 +151,14 @@ fn readFile(gpa: std.mem.Allocator, io: std.Io, store: *Store, layer: Store.Laye
 
 /// Write `key`'s values in `layer` to its file: `preferences.zon` for the editor's, else
 /// `plugins/<key>.zon`, making the folders it needs.
+/// Editor-only: use a trusted registered key; only the requested layer is serialized, not
+/// effective merged values. Missing project layer returns NoProject; allocation/I/O errors
+/// propagate. This writes directly rather than atomically replacing the destination.
+///
+/// ```zig
+/// try save(gpa, &app.preference_values, folders, .project, editor_key);
+/// // Existing editor App, allocator and project-backed Folders.
+/// ```
 pub fn save(gpa: std.mem.Allocator, store: *const Store, folders: Folders, layer: Store.Layer, key: []const u8) !void {
     const folder = folders.of(layer) orelse return error.NoProject;
     var threaded: std.Io.Threaded = .init_single_threaded;
@@ -132,6 +177,13 @@ pub fn save(gpa: std.mem.Allocator, store: *const Store, folders: Folders, layer
 /// Keep the project's `plugins.zon` (`eggy.plugins.registry_file`) listing its plugins (`keys`,
 /// the game first), whether each is on (those in `off` aren't), and the preferences each declares
 /// (`manifests`), rewriting it only when that changed, so the file's time says when they did.
+/// Editor-only: borrows metadata for the call, creates missing preference folders and no-ops
+/// without a project. Returns no owned memory; formatting/allocation/write errors propagate.
+///
+/// ```zig
+/// // Given current game's keys/manifests, disabled keys, allocator and preference Folders:
+/// try writeRegistry(gpa, folders, game.plugin_keys, game.preference_manifests, off);
+/// ```
 pub fn writeRegistry(gpa: std.mem.Allocator, folders: Folders, keys: []const [:0]const u8, manifests: []const prefs.Manifest, off: []const []const u8) !void {
     const folder = folders.project orelse return;
     var threaded: std.Io.Threaded = .init_single_threaded;

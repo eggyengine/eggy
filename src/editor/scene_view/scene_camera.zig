@@ -49,12 +49,26 @@ pub const SceneCamera = struct {
 
     pub const Drag = enum { look, orbit, pan };
 
+    /// Compute the editor camera's world-space eye/basis and degree FOV as an owned value.
+    /// Uses focus/distance in scene metres; no world mutation or allocation.
+    ///
+    /// ```zig
+    /// const camera = SceneCamera{};
+    /// const view = camera.view();
+    /// ```
     pub fn view(self: *const SceneCamera) View {
         return .{ .eye = self.eye(), .forward = self.forward(), .up = self.up(), .fov_deg = self.fov_deg };
     }
 
     /// Steer by `event`, from window `scene`, the Scene panel's rect (in the event's window;
     /// null when it isn't there). Returns whether the camera used it.
+    /// Desktop editor only: event coordinates and scene rect must use the same window points.
+    /// Active drags can continue outside the panel; pinch updates require the captured window.
+    /// Reads SDL modifier/mouse state, mutates navigation/pose, and clears captures on focus loss.
+    ///
+    /// ```zig
+    /// const used = camera.handle(event, scene_rect); // SceneCamera, raw SDL event, optional rect.
+    /// ```
     pub fn handle(self: *SceneCamera, event: sdl3.events.Event, scene: ?eggy.ui.Rect) bool {
         switch (event) {
             .mouse_button_down => |down| {
@@ -122,6 +136,12 @@ pub const SceneCamera = struct {
     }
 
     /// Release captured camera input when the window loses focus.
+    /// Desktop editor only: clears drag/pinch/hover state without changing camera pose or
+    /// calling SDL to alter OS mouse capture.
+    ///
+    /// ```zig
+    /// camera.cancelNavigation(); // Existing SceneCamera when leaving navigation mode.
+    /// ```
     pub fn cancelNavigation(self: *SceneCamera) void {
         self.drag = null;
         self.pinch = null;
@@ -168,6 +188,13 @@ pub const SceneCamera = struct {
     }
 
     /// Fly by the keys held, over `seconds`, while looking around (right-drag).
+    /// Desktop editor only: pass a finite nonnegative frame duration in seconds. Reads SDL
+    /// keyboard state and translates focus at 8 metres/second (three times faster with Shift);
+    /// no-op without a look drag. Call once per frame, not once per key event.
+    ///
+    /// ```zig
+    /// camera.fly(1.0 / 60.0); // Existing SceneCamera, one 60 Hz navigation frame.
+    /// ```
     pub fn fly(self: *SceneCamera, seconds: f32) void {
         if (self.drag != .look) return;
         const keys = sdl3.keyboard.getState();
@@ -187,11 +214,23 @@ pub const SceneCamera = struct {
     }
 
     /// Where it is and which way it looks, to tell when it moved.
+    /// Editor-only: returns focus x/y/z in metres, yaw/pitch degrees, then distance metres.
+    /// Does not include FOV or transient navigation state.
+    ///
+    /// ```zig
+    /// const before = camera.pose(); // Existing SceneCamera, for change detection.
+    /// ```
     pub fn pose(self: *const SceneCamera) [6]f32 {
         return .{ self.focus[0], self.focus[1], self.focus[2], self.yaw_deg, self.pitch_deg, self.distance };
     }
 
     /// Look from `from`'s eye the way it looks, keeping the distance to the focus point.
+    /// Editor-only: requires a normalized forward vector; copies pose, ignores incoming up/
+    /// roll and lens fields, and clamps pitch away from vertical. No world/camera entity write.
+    ///
+    /// ```zig
+    /// camera.place(game_view); // Existing SceneCamera and copied eggy.camera.View.
+    /// ```
     pub fn place(self: *SceneCamera, from: View) void {
         const f = from.forward;
         self.yaw_deg = @mod(std.math.atan2(-f[0], -f[2]) * std.math.deg_per_rad, 360);
@@ -200,6 +239,12 @@ pub const SceneCamera = struct {
     }
 
     /// Look at `centre` from far enough away to see `radius` around it.
+    /// Editor-only: finite centre/radius use world metres; radius should be nonnegative.
+    /// Preserves yaw/pitch/FOV, setting distance from the vertical FOV with a 0.5 metre minimum.
+    ///
+    /// ```zig
+    /// camera.frame(.{ 0, 1, 0 }, 2); // Existing SceneCamera; frame a 2 m radius.
+    /// ```
     pub fn frame(self: *SceneCamera, centre: [3]f32, radius: f32) void {
         self.focus = centre;
         self.distance = @max(min_distance, radius / @sin(self.fov_deg * std.math.rad_per_deg / 2));

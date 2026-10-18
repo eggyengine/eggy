@@ -10,6 +10,13 @@ pub const Location = struct {
 
 /// Read `path:line:column` at the start of a diagnostic or reference-trace line.
 /// Log prefixes and Windows drive letters are allowed.
+/// Returns null for malformed/zero/overflowing positions; the result's path borrows `text`.
+/// This editor diagnostic parser does no filesystem access.
+///
+/// ```zig
+/// const at = location("src/main.zig:12:5: error: broken").?;
+/// std.debug.assert(at.line == 12 and at.column == 5);
+/// ```
 pub fn location(text: []const u8) ?Location {
     const line = std.mem.trim(u8, text, " \t\r");
     var at: usize = 0;
@@ -33,6 +40,14 @@ pub fn location(text: []const u8) ?Location {
 
 /// Prefer the project's declaration note over an engine call site, then its primary error.
 /// Generated cache files and references outside this project are not offered as its source.
+/// `project_dir` is the absolute project folder used to filter absolute paths.
+/// Returns null when no eligible line exists; returned path borrows `message` and retains
+/// the original absolute/relative spelling. This is link selection, not path canonicalization.
+///
+/// ```zig
+/// const at = projectSource("src/root.zig:69:9: note: function declared here", "/game").?;
+/// std.debug.assert(std.mem.eql(u8, at.path, "src/root.zig"));
+/// ```
 pub fn projectSource(message: []const u8, project_dir: []const u8) ?Location {
     var best: ?Location = null;
     var best_rank: u8 = 0;
@@ -63,6 +78,14 @@ pub fn projectSource(message: []const u8, project_dir: []const u8) ?Location {
 pub const Hint = struct { summary: []const u8, signature: []const u8 };
 
 /// Recognise the old editor UI hooks without guessing about unrelated argument errors.
+/// Returns static explanatory strings for known compiler patterns, otherwise null;
+/// does not retain or modify the borrowed diagnostic message.
+///
+/// ```zig
+/// if (hookHint(message)) |hint| {
+///     std.log.info("{s}\n{s}", .{ hint.summary, hint.signature });
+/// }
+/// ```
 pub fn hookHint(message: []const u8) ?Hint {
     if (std.mem.indexOf(u8, message, "member function expected 1 argument(s), found 2") != null and
         std.mem.indexOf(u8, message, ".editorUi(editor, context)") != null)

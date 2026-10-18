@@ -17,21 +17,53 @@ pub const State = struct {
     pointer_in_scene: bool = false,
     touches: std.AutoHashMapUnmanaged(TouchKey, void) = .empty,
 
+    /// Clear editor viewport focus, captured contacts/buttons, gameplay input, and any UI
+    /// layer interaction on focus loss/stop. Retains touch storage for reuse; emits no releases.
+    ///
+    /// ```zig
+    /// // Host, when the Scene loses input ownership:
+    /// state.cancel(app);
+    /// ```
     pub fn cancel(self: *State, app: *eggy.App) void {
         self.touches.clearRetainingCapacity();
         self.* = .{ .touches = self.touches };
         app.input.cancel();
         if (app.ui_layer) |layer| layer.cancel();
     }
+    /// Free captured-touch storage using the world's allocator used by `route`.
+    /// Does not cancel app/UI input; call `cancel` first if the host is still running.
+    ///
+    /// ```zig
+    /// state.cancel(app);
+    /// state.deinit(app.world.allocator);
+    /// ```
     pub fn deinit(self: *State, gpa: std.mem.Allocator) void {
         self.touches.deinit(gpa);
     }
+    /// Test whether a touch event's device/finger pair is captured by this viewport.
+    /// Non-touch events return false; ownership lasts until up/cancel or `cancel`.
+    ///
+    /// ```zig
+    /// // Host may route captured finger motion even outside the Scene.
+    /// const captured = state.ownsTouch(event);
+    /// _ = captured;
+    /// ```
     pub fn ownsTouch(self: *const State, event: eggy.Event) bool {
         return self.touches.contains(touchKey(event) orelse return false);
     }
 
-    /// Forward one viewport-local event to UI, then gameplay only if UI declined it.
+    /// Localize one window-space event for the viewport's UI, then gameplay if UI declined it.
     /// Pointer ownership survives leaving the viewport until its buttons are released.
+    /// Editor-host only: pass a window-space event, Scene rectangle in logical points, and
+    /// window width/height in points; it converts to viewport-local coordinates.
+    /// The host decides which events belong here. `game` supplies `uiEvent(app,event) bool`
+    /// and `event(app,event) void`; gameplay only receives declined input while `running`.
+    /// Touch allocation and input-backend errors propagate; zero-sized viewports are ignored.
+    ///
+    /// ```zig
+    /// // Host has already checked Scene focus/capture and event window ownership.
+    /// try state.route(app, game, event, scene_rect, window_points, play_mode.running());
+    /// ```
     pub fn route(self: *State, app: *eggy.App, game: anytype, event: eggy.Event, viewport: eggy.ui.Rect, window_points: [2]f32, running: bool) !void {
         if (eggy.game_ui.syntheticTouchMouse(event)) return;
         if (viewport.w <= 0 or viewport.h <= 0) return;
@@ -79,9 +111,20 @@ test "custom UI consumption withholds both gameplay polling and event hooks" {
     const Game = struct {
         consumed: bool = true,
         events: usize = 0,
+        /// Test game UI hook; returns the fixture's consumption flag without reading app/event.
+        ///
+        /// ```zig
+        /// var game = Game{};
+        /// try std.testing.expect(game.uiEvent(&app, event)); // Test's app/event fixtures.
+        /// ```
         pub fn uiEvent(self: *@This(), _: *eggy.App, _: eggy.Event) bool {
             return self.consumed;
         }
+        /// Test gameplay hook; counts events that viewport routing did not consume.
+        ///
+        /// ```zig
+        /// game.event(&app, event); // Test fixtures; increments game.events.
+        /// ```
         pub fn event(self: *@This(), _: *eggy.App, _: eggy.Event) void {
             self.events += 1;
         }
@@ -106,9 +149,19 @@ test "custom UI consumption withholds both gameplay polling and event hooks" {
 
 test "Scene touch ownership follows exact contacts outside the viewport and clears on cancel" {
     const Game = struct {
+        /// Touch-routing fixture UI hook; always declines without accessing its arguments.
+        ///
+        /// ```zig
+        /// try std.testing.expect(!game.uiEvent(&app, event)); // Test fixtures.
+        /// ```
         pub fn uiEvent(_: *@This(), _: *eggy.App, _: eggy.Event) bool {
             return false;
         }
+        /// Touch-routing fixture gameplay hook; deliberately ignores forwarded events.
+        ///
+        /// ```zig
+        /// game.event(&app, event); // No observable effect in this fixture.
+        /// ```
         pub fn event(_: *@This(), _: *eggy.App, _: eggy.Event) void {}
     };
     const gpa = std.testing.allocator;

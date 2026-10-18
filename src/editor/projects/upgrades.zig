@@ -24,6 +24,14 @@ pub const Upgrades = struct {
     /// Read which Eggy the project in `project_dir` (absolute; null without a project) uses,
     /// after recording `source_dir`, the Eggy this editor was built from, as the codebase being
     /// developed if it is a checkout. Failures leave the choices off.
+    /// Desktop editor only: owns two arenas using `gpa`; all displayed paths/labels borrow
+    /// them. May update the global developer-engine record; project/record failures are
+    /// logged or treated as unavailable. Pair with `deinit`.
+    ///
+    /// ```zig
+    /// var upgrades = Upgrades.init(gpa, project_dir, source_dir);
+    /// defer upgrades.deinit(); // Existing allocator and absolute optional project/source paths.
+    /// ```
     pub fn init(gpa: std.mem.Allocator, project_dir: ?[]const u8, source_dir: []const u8) Upgrades {
         var self = Upgrades{ .arena = .init(gpa), .records = .init(gpa) };
         const folders = job.editorFolders(gpa) catch return self;
@@ -52,6 +60,12 @@ pub const Upgrades = struct {
         };
     }
 
+    /// Free editor upgrade arenas once; invalidate current-engine, label and developer paths.
+    ///
+    /// ```zig
+    /// var upgrades = Upgrades.init(gpa, project_dir, source_dir); // Existing host inputs.
+    /// defer upgrades.deinit();
+    /// ```
     pub fn deinit(self: *Upgrades) void {
         self.records.deinit();
         self.arena.deinit();
@@ -59,6 +73,13 @@ pub const Upgrades = struct {
 
     /// Look again for a newer engine and the codebase being developed; another editor may have
     /// unpacked or recorded one since.
+    /// Desktop editor only: resets record storage, invalidating previous developer-path borrows;
+    /// current-engine/label storage is unchanged. Availability is best-effort and errors are
+    /// not returned; callers should inspect the updated fields after success.
+    ///
+    /// ```zig
+    /// upgrades.refresh(); // Existing Upgrades, e.g. when the editor regains focus.
+    /// ```
     pub fn refresh(self: *Upgrades) void {
         const gpa = self.arena.child_allocator;
         _ = self.records.reset(.retain_capacity);
@@ -75,6 +96,12 @@ pub const Upgrades = struct {
     }
 
     /// Log why File > Upgrade Editor (`.upgrade`) or Link Developer Eggy (`.link`) can't run.
+    /// Desktop editor only: reports the cached state; does not refresh records, show dialogs
+    /// or change a dependency.
+    ///
+    /// ```zig
+    /// upgrades.logUnavailable(.upgrade); // Existing Upgrades when its menu action is disabled.
+    /// ```
     pub fn logUnavailable(self: *const Upgrades, choice: enum { upgrade, link }) void {
         const current = self.current orelse return std.log.info("{t}: open a project first; it changes the open project's Eggy", .{choice});
         switch (current) {
@@ -92,6 +119,14 @@ pub const Upgrades = struct {
 
     /// Ask, over `window`, whether to link project `title` to the codebase being developed, with
     /// the warning that it can't be undone. Blocks until answered; false if it can't be shown.
+    /// Desktop editor only: borrows the parent SDL window and title, returns only consent and
+    /// performs no linking. Missing developer path, allocation failure or dialog failure returns
+    /// false; dialog errors are logged.
+    ///
+    /// ```zig
+    /// const approved = upgrades.confirmLink(app.window.window, "Space Game");
+    /// // Existing Upgrades and editor App pointer; start a link job only if approved.
+    /// ```
     pub fn confirmLink(self: *const Upgrades, window: sdl3.video.Window, title: []const u8) bool {
         // ponytail: blocks the editor's loop while the dialog is up; fine for a one-off question.
         const codebase = self.developer_dir orelse return false;

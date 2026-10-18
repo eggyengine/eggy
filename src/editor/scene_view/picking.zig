@@ -7,6 +7,15 @@ const ui = eggy.ui;
 
 /// The entity whose mesh (of `drawn`) is nearest the camera under `pointer`, seen through `view`
 /// in `scene` (the Scene panel's rect), model files' boxes from `models`; null over nothing.
+/// Editor-only: scene dimensions must be positive and pointer/rect use the same UI coordinates.
+/// Does not clip the pointer or load models; missing model bounds and singular transforms are
+/// skipped. Uses sphere hits or approximate bounding boxes, returning an id value without
+/// mutating selection or taking ownership of drawables/cache.
+///
+/// ```zig
+/// // Given current drawables, loaded model cache, camera view and Scene UI rect:
+/// const entity = pick(drawables, &graphics.models, view, scene, pointer);
+/// ```
 pub fn pick(drawn: []const eggy.mesh.Drawable, models: *const eggy.model_cache.ModelCache, view: eggy.camera.View, scene: ui.Rect, pointer: ui.Vec2) ?eggy.ecs.EntityId {
     const direction = rayThrough(view, scene, pointer);
 
@@ -36,6 +45,14 @@ pub fn pick(drawn: []const eggy.mesh.Drawable, models: *const eggy.model_cache.M
 }
 
 /// The direction from the camera through `pointer` on the view in `scene` (not unit length).
+/// Editor-only: requires positive scene width/height and a valid camera basis/FOV. Input
+/// coordinates are UI points; output is a world-space direction from `view.eye`, even for
+/// pointers outside the rect. Pure calculation; normalize only if distance units are needed.
+///
+/// ```zig
+/// // Given camera view, positive-sized Scene rect and UI-space pointer:
+/// const direction = rayThrough(view, scene, pointer);
+/// ```
 pub fn rayThrough(view: eggy.camera.View, scene: ui.Rect, pointer: ui.Vec2) [3]f32 {
     const x = (pointer.x - scene.x) / scene.w * 2 - 1;
     const y = 1 - (pointer.y - scene.y) / scene.h * 2;

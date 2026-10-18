@@ -23,6 +23,11 @@ pub const Source = union(enum) {
     model: AssetRef(.model),
 
     /// The built-in `shape`, as a `Mesh`'s shape.
+    /// Returns a source tag without loading or allocating geometry.
+    ///
+    /// ```zig
+    /// const source = Source.of(.sphere);
+    /// ```
     pub fn of(shape: Shape) Source {
         return switch (shape) {
             inline else => |tag| @unionInit(Source, @tagName(tag), {}),
@@ -60,17 +65,33 @@ pub const Drawable = extern struct {
     texture_file_len: u32 = 0,
     texture_file: ?[*]const u8 = null,
 
+    /// Reconstruct the source entity ID by value, without checking that it is still alive.
+    /// Resolve it only against the world from which this drawable was gathered.
+    ///
+    /// ```zig
+    /// const id = drawable.entity();
+    /// ```
     pub fn entity(self: Drawable) ecs.EntityId {
         return .init(self.entity_id, self.entity_generation);
     }
 
     /// The model file's path, or null for a built-in shape.
+    /// Borrows the originating Mesh's inline buffer; world storage changes invalidate it.
+    ///
+    /// ```zig
+    /// const model_path = drawable.modelFile() orelse return;
+    /// ```
     pub fn modelFile(self: Drawable) ?[]const u8 {
         const file = self.model_file orelse return null;
         return file[0..self.model_file_len];
     }
 
     /// The image's path, or null without one.
+    /// Borrows the originating Mesh's inline buffer; world storage changes invalidate it.
+    ///
+    /// ```zig
+    /// const texture_path = drawable.textureFile() orelse return;
+    /// ```
     pub fn textureFile(self: Drawable) ?[]const u8 {
         const file = self.texture_file orelse return null;
         return file[0..self.texture_file_len];
@@ -79,6 +100,14 @@ pub const Drawable = extern struct {
 
 /// Every entity of `world` with a `Mesh` and a `Transform`, placed through its parents'
 /// transforms, into `out`. Returns how many were written; any past `out.len` are left out.
+/// Skips model sources with unset paths. The caller owns `out`, but file paths inside
+/// results borrow Mesh storage and must not survive world changes.
+///
+/// ```zig
+/// var buffer: [256]Drawable = undefined;
+/// const count = gather(world, &buffer);
+/// const drawables = buffer[0..count];
+/// ```
 pub fn gather(world: *ecs.World, out: []Drawable) usize {
     var count: usize = 0;
     var meshes = world.query(.{ *const Mesh, *const Transform });
@@ -92,6 +121,13 @@ pub fn gather(world: *ecs.World, out: []Drawable) usize {
 
 /// Gather every drawable without truncation; free the result with `gpa.free`.
 /// File paths still borrow the world's Mesh components, as in `gather`.
+/// Skips unset model sources and propagates allocation failure; freeing the returned
+/// slice does not free any component-owned paths.
+///
+/// ```zig
+/// const drawables = try gatherAlloc(gpa, world);
+/// defer gpa.free(drawables);
+/// ```
 pub fn gatherAlloc(gpa: std.mem.Allocator, world: *ecs.World) ![]Drawable {
     var result: std.ArrayList(Drawable) = .empty;
     defer result.deinit(gpa);
@@ -135,6 +171,15 @@ pub const Geometry = struct {
     pub const Range = struct { first_index: u32, index_count: u32 };
 
     /// Build every shape in `arena`.
+    /// Host geometry helper: returns borrowed arena-backed vertex/index slices and ranges
+    /// indexed by `@intFromEnum(Shape)`. Release the arena after upload/use; allocation
+    /// errors propagate, including partial allocations that the arena must reclaim.
+    ///
+    /// ```zig
+    /// var arena = std.heap.ArenaAllocator.init(gpa);
+    /// defer arena.deinit();
+    /// const geometry = try Geometry.build(arena.allocator());
+    /// ```
     pub fn build(arena: std.mem.Allocator) !Geometry {
         var builder: Builder = .{ .arena = arena };
         var ranges: [shape_count]Range = undefined;

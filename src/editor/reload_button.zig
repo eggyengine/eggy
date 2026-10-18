@@ -11,6 +11,12 @@ const gap: f32 = 6;
 
 /// The button for a bar `bar_height` tall spanning `bar_width` from `bar_x`, beside the play
 /// button. `ready` lights it: a rebuilt editor is waiting.
+/// All geometry is logical points. Returns a frame-arena element; allocation errors
+/// propagate. The editor host handles its ID and owns rebuild/reload side effects.
+///
+/// ```zig
+/// context.element(try reload_button.element(b, rebuilt, 0, viewport.w, 34));
+/// ```
 pub fn element(b: L.Builder, ready: bool, bar_x: f32, bar_width: f32, bar_height: f32) !*L.Element {
     const glyph = try b.allocator.create(Glyph);
     glyph.* = .{ .ready = ready };

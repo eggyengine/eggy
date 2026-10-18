@@ -6,6 +6,12 @@ const std = @import("std");
 pub const Matrix = [3][3]f32;
 
 /// The rotation `Transform.rotation_deg` stands for: `z · y · x`.
+/// Editor gizmo math: degrees are local x/y/z Euler turns; returns a row-major value matrix.
+/// Pure calculation, with no allocation or normalization of non-finite inputs.
+///
+/// ```zig
+/// const matrix = fromEuler(.{ 0, 90, 0 });
+/// ```
 pub fn fromEuler(degrees: [3]f32) Matrix {
     const x = degrees[0] * std.math.rad_per_deg;
     const y = degrees[1] * std.math.rad_per_deg;
@@ -22,6 +28,12 @@ pub fn fromEuler(degrees: [3]f32) Matrix {
 
 /// The Euler angles (degrees) of `m`, a rotation; at a quarter turn about y, where x and z turn
 /// the same way, all of it goes to x.
+/// Editor gizmo math: requires an orthonormal row-major rotation matrix, not a scaled/sheared
+/// transform. Returns one equivalent x/y/z representation, not necessarily the original angles.
+///
+/// ```zig
+/// const degrees = toEuler(fromEuler(.{ 20, -35, 70 }));
+/// ```
 pub fn toEuler(m: Matrix) [3]f32 {
     const sy = std.math.clamp(-m[2][0], -1, 1);
     const y = std.math.asin(sy);
@@ -33,6 +45,12 @@ pub fn toEuler(m: Matrix) [3]f32 {
 }
 
 /// A turn of `degrees` about `axis` (unit length), counter-clockwise looking down it.
+/// Editor gizmo math: caller normalizes the axis; returns a row-major rotation value using
+/// the same right-handed convention as `fromEuler` (positive y maps +x toward -z).
+///
+/// ```zig
+/// const quarter_turn = aboutAxis(.{ 0, 1, 0 }, 90);
+/// ```
 pub fn aboutAxis(axis: [3]f32, degrees: f32) Matrix {
     const angle = degrees * std.math.rad_per_deg;
     const s, const c = .{ @sin(angle), @cos(angle) };
@@ -45,6 +63,12 @@ pub fn aboutAxis(axis: [3]f32, degrees: f32) Matrix {
     };
 }
 
+/// Compose editor gizmo row-major matrices as `a · b`: apply `b` first, then `a`.
+/// Pure value calculation with no ownership transfer.
+///
+/// ```zig
+/// const combined = mul(fromEuler(.{ 0, 30, 0 }), fromEuler(.{ 10, 0, 0 }));
+/// ```
 pub fn mul(a: Matrix, b: Matrix) Matrix {
     var out: Matrix = undefined;
     for (0..3) |row| for (0..3) |col| {
@@ -54,6 +78,12 @@ pub fn mul(a: Matrix, b: Matrix) Matrix {
 }
 
 /// `v` turned by `m`.
+/// Editor gizmo math: multiply a column vector by the row-major matrix; vector units are
+/// preserved for a rotation, with no translation or allocation.
+///
+/// ```zig
+/// const turned = apply(aboutAxis(.{ 0, 1, 0 }, 90), .{ 1, 0, 0 });
+/// ```
 pub fn apply(m: Matrix, v: [3]f32) [3]f32 {
     return .{
         m[0][0] * v[0] + m[0][1] * v[1] + m[0][2] * v[2],

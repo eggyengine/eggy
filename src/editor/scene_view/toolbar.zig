@@ -28,12 +28,23 @@ const gap_pt: f32 = 2;
 const padding_pt: f32 = 3;
 
 /// The button element `id` is, if it is one of these.
+/// Editor-only: decodes the reserved toolbar id range; returns null for unrelated UI ids
+/// and does not imply that the button is visible in the current folded state.
+///
+/// ```zig
+/// const button = buttonOf(activated_id); // Element id activated in the Scene UI.
+/// ```
 pub fn buttonOf(id: u32) ?Button {
     if (id < first_id) return null;
     return std.enums.fromInt(Button, id - first_id);
 }
 
 /// What a button does, for its tooltip.
+/// Editor-only: derives static borrowed text from current toolbar state without mutation.
+///
+/// ```zig
+/// const tooltip = describe(.snap, .{ .snapping = true });
+/// ```
 pub fn describe(button: Button, state: State) []const u8 {
     return switch (button) {
         .grip => "Drag to move the toolbar",
@@ -55,12 +66,23 @@ fn shown(state: State) []const Button {
 }
 
 /// The toolbar's size, for keeping it inside the panel.
+/// Editor-only: returns width/height in UI points, including gaps/padding and folded state.
+///
+/// ```zig
+/// const extent = size(.{ .folded = true });
+/// ```
 pub fn size(state: State) ui.Vec2 {
     const count: f32 = @floatFromInt(shown(state).len);
     return .{ .x = count * button_pt + (count - 1) * gap_pt + 2 * padding_pt, .y = button_pt + 2 * padding_pt };
 }
 
 /// `offset` moved, if need be, so the toolbar stays inside a panel `scene` big.
+/// Editor-only: offset is relative to the panel's top-left in UI points; scene x/y are ignored.
+/// If the toolbar cannot fit, that axis clamps to zero; no state is changed.
+///
+/// ```zig
+/// state.offset = keepInside(state, state.offset, scene); // Current toolbar State and Scene rect.
+/// ```
 pub fn keepInside(state: State, offset: ui.Vec2, scene: ui.Rect) ui.Vec2 {
     const extent = size(state);
     return .{
@@ -70,6 +92,14 @@ pub fn keepInside(state: State, offset: ui.Vec2, scene: ui.Rect) ui.Vec2 {
 }
 
 /// The toolbar over the Scene panel at `scene`, floating above it.
+/// Editor-only: allocates node/paint state in `b.allocator` for this UI frame; retain that
+/// arena through rendering and attach the returned element to the page. Does not handle
+/// presses or mutate State; builder/allocation failures propagate.
+///
+/// ```zig
+/// // Given a building UI context, toolbar State and Scene UI rect:
+/// context.element(try element(context.builder(), state, scene));
+/// ```
 pub fn element(b: L.Builder, state: State, scene: ui.Rect) !*L.Element {
     var buttons: std.ArrayList(*L.Element) = .empty;
     for (shown(state)) |button| {

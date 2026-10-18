@@ -23,6 +23,12 @@ pub const Manifest = struct {
     files: []const Entry = &.{},
 
     /// The entry for `path`, if packaged.
+    /// Matches project-relative paths byte-for-byte; the returned entry borrows its path
+    /// from this manifest and must not outlive its storage.
+    ///
+    /// ```zig
+    /// const entry = manifest.find("resources/ship.glb") orelse return error.MissingAsset;
+    /// ```
     pub fn find(self: Manifest, path: []const u8) ?Entry {
         for (self.files) |entry| if (std.mem.eql(u8, entry.path, path)) return entry;
         return null;
@@ -38,6 +44,12 @@ pub const Packaged = enum {
     /// Copied as it is.
     copy,
 
+    /// Choose conversion by filename: models import, supported raster images decode,
+    /// and everything else copies unchanged. Does not read the file.
+    ///
+    /// ```zig
+    /// const conversion = Packaged.of("resources/ship.glb"); // .model
+    /// ```
     pub fn of(path: []const u8) Packaged {
         if (Kind.of(path) == .model) return .model;
         if (Kind.isTexture(path)) return .texture;
@@ -45,6 +57,11 @@ pub const Packaged = enum {
     }
 
     /// What its name in `data/` ends in.
+    /// Returns static storage; copied resources have an empty extension.
+    ///
+    /// ```zig
+    /// const suffix = Packaged.model.extension(); // ".eggmodel"
+    /// ```
     pub fn extension(self: Packaged) []const u8 {
         return switch (self) {
             .model => ".eggmodel",
@@ -56,27 +73,59 @@ pub const Packaged = enum {
 
 /// The name in `data/` of what packaging made of `entry`, in `buffer`: its id in hexadecimal,
 /// then what it was made into (`000000000000002a.eggmodel` for a model with id 42).
+/// Requires enough space (27 bytes covers every kind); the result borrows `buffer`.
+///
+/// ```zig
+/// var buffer: [32]u8 = undefined;
+/// const filename = packagedName(&buffer, .{ .path = "resources/ship.glb", .id = 42 });
+/// ```
 pub fn packagedName(buffer: []u8, entry: Entry) []const u8 {
     return std.fmt.bufPrint(buffer, "{x:0>16}{s}", .{ entry.id, Packaged.of(entry.path).extension() }) catch unreachable;
 }
 
 /// Allocate `entry`'s name in `data/`; free the result with `gpa.free`.
+/// Propagates allocation failure and does not create a file.
+///
+/// ```zig
+/// const filename = try packagedNameAlloc(gpa, .{ .path = "resources/ship.glb", .id = 42 });
+/// defer gpa.free(filename);
+/// ```
 pub fn packagedNameAlloc(gpa: std.mem.Allocator, entry: Entry) ![]u8 {
     return std.fmt.allocPrint(gpa, "{x:0>16}{s}", .{ entry.id, Packaged.of(entry.path).extension() });
 }
 
 /// An id for a file without a descriptor, the same whenever its path is.
+/// Hashes the exact bytes without normalization; renames change this fallback id.
+///
+/// ```zig
+/// const fallback_id = pathId("resources/config.zon");
+/// ```
 pub fn pathId(path: []const u8) u64 {
     return std.hash.Wyhash.hash(0x6567_6779, path);
 }
 
 /// `manifest` as ZON.
+/// Appends a newline to `writer`; borrows the manifest and propagates writer errors.
+///
+/// ```zig
+/// var output: std.Io.Writer.Allocating = .init(gpa);
+/// defer output.deinit();
+/// try write(&output.writer, .{ .files = &.{.{ .path = "resources/ship.glb", .id = 42 }} });
+/// ```
 pub fn write(writer: *std.Io.Writer, manifest: Manifest) std.Io.Writer.Error!void {
     try std.zon.stringify.serialize(manifest, .{}, writer);
     try writer.writeByte('\n');
 }
 
 /// `text` (a manifest's ZON) read into `arena`.
+/// Requires sentinel-terminated input; returned paths live in `arena`.
+/// Ignores unknown fields and propagates parse/allocation errors.
+///
+/// ```zig
+/// var arena = std.heap.ArenaAllocator.init(gpa);
+/// defer arena.deinit();
+/// const manifest = try parse(arena.allocator(), ".{ .files = .{} }");
+/// ```
 pub fn parse(arena: std.mem.Allocator, text: [:0]const u8) !Manifest {
     return std.zon.parse.fromSliceAlloc(Manifest, arena, text, null, .{ .ignore_unknown_fields = true });
 }

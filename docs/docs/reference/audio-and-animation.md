@@ -1,18 +1,17 @@
 ---
-sidebar_position: 10
-title: Audio and animation
+slug: /guides/audio-and-animation
+sidebar_position: 5
+title: Audio and animation contracts
 ---
 
-# Audio and animation
+# Audio and animation contracts
 
-Audio and animation currently expose **contracts only**. Their support queries return
+Audio and animation have no playback backends. Their support queries return
 `.not_implemented`; playback, stopping, seeking, gain changes, and blending return
 `error.NotImplemented`. No output device, decoder, animation importer, or skinning
 backend is created.
 
-## Keep asset references in components
-
-References are useful even before a backend exists:
+## Asset references
 
 ```zig
 pub const CharacterAssets = struct {
@@ -61,10 +60,9 @@ contains static geometry, parts, and textures, not skeletons or animation clips.
 No controller graphs, retargeting, root motion, or physics integration is implied.
 Check `eggy.animation.support` rather than assuming a model file enables animation.
 
-## Simple motion still works
+## Component motion
 
-Game code can animate ordinary component values using frame time without claiming a
-skeletal-animation backend exists:
+Game code can animate ordinary component values using frame time:
 
 ```zig
 pub fn bob(
@@ -82,5 +80,6 @@ pub fn bob(
 ```
 
 Call it from `update`. It follows gameplay time and editor Play/pause behavior.
-See [Input and time](input-and-time.md), [Rendering and transforms](rendering-and-transforms.md),
-and the complete [capability support table](developer-api.md#capability-support).
+See [Input and gameplay time](../explanation/input-and-time.md),
+[Render entities and cameras](../how-to/render-scene.md), and the
+[capability support table](feature-support.md#capability-support).

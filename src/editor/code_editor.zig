@@ -11,12 +11,24 @@ const Position = struct { line: u32, column: u32 };
 
 /// Open `file` (absolute) of the project in `project_dir` with `choice`. Returns once the editor
 /// is started, not once it shows; fails when it isn't installed (not on the PATH).
-// ponytail: starts the command by name, so on Windows `code.cmd` and friends need a shell; go through `cmd /c` there if Windows users miss it.
+/// Paths are borrowed only for this call; temporary arguments use `gpa` and are freed.
+/// This editor-host helper launches an external process, not a game hook.
+/// ponytail: starts the command by name, so on Windows `code.cmd` and friends need a shell; go through `cmd /c` there if Windows users miss it.
+///
+/// ```zig
+/// try code_editor.open(gpa, .vscode, "/home/me/game", "/home/me/game/src/main.zig");
+/// ```
 pub fn open(gpa: std.mem.Allocator, choice: Choice, project_dir: []const u8, file: []const u8) !void {
     try openPosition(gpa, choice, project_dir, file, null);
 }
 
 /// Open the one-based source position. The system default opens the file without positioning.
+/// `project_dir` is the workspace/cwd and `file` is absolute; both are borrowed.
+/// Zero line/column returns `InvalidSourcePosition`; allocation/launch failures propagate.
+///
+/// ```zig
+/// try code_editor.openAt(gpa, .vscode, "/home/me/game", "/home/me/game/src/main.zig", 12, 5);
+/// ```
 pub fn openAt(gpa: std.mem.Allocator, choice: Choice, project_dir: []const u8, file: []const u8, line: u32, column: u32) !void {
     if (line == 0 or column == 0) return error.InvalidSourcePosition;
     try openPosition(gpa, choice, project_dir, file, .{ .line = line, .column = column });

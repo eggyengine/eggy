@@ -90,22 +90,47 @@ pub const Hierarchy = struct {
     /// A row's name: how far right of the row it starts, and how wide it is.
     const NameSpan = struct { entity: ecs.EntityId, left: f32, width: f32 };
 
+    /// Create editor hierarchy state, allocating rows later with `gpa`; pair with `deinit`.
+    ///
+    /// ```zig
+    /// var hierarchy = Hierarchy.init(gpa); // Existing allocator.
+    /// defer hierarchy.deinit();
+    /// ```
     pub fn init(gpa: std.mem.Allocator) Hierarchy {
         return .{ .rows_arena = .init(gpa) };
     }
 
+    /// Release copied editor rows/names once; invalidate borrowed row and drag-label text.
+    ///
+    /// ```zig
+    /// var hierarchy = Hierarchy.init(gpa); // Existing allocator.
+    /// defer hierarchy.deinit();
+    /// ```
     pub fn deinit(self: *Hierarchy) void {
         self.names.deinit(self.rows_arena.child_allocator);
         self.rows_arena.deinit();
     }
 
     /// The filter typed in, for `tree.collect`.
+    /// Editor-only: the returned text borrows the edit buffer until input changes.
+    ///
+    /// ```zig
+    /// const query = hierarchy.filterText(); // Existing Hierarchy.
+    /// ```
     pub fn filterText(self: *const Hierarchy) []const u8 {
         return self.filter.text();
     }
 
     /// Draw the page into `context`: `rows` (from `tree.collect`, with this filter), `selected`
     /// lit. Returns what the user did this frame, if anything.
+    /// Editor-only: call during UI construction; copies rows for subsequent pointer routing.
+    /// It never changes the world. Action rename text lives in the UI frame arena; dispatch
+    /// before resetting it. Allocation failures can produce incomplete UI or no action.
+    ///
+    /// ```zig
+    /// // Given hierarchy, building context, collected rows and optional selection:
+    /// const action = hierarchy.build(context, rows, selected);
+    /// ```
     pub fn build(self: *Hierarchy, context: *ui.Context, rows: []const Row, selected: ?ecs.EntityId) ?Action {
         var action: ?Action = null;
         self.keepRows(rows);
@@ -151,6 +176,13 @@ pub const Hierarchy = struct {
     /// Route a pointer event over the page, before the page's own UI sees it: right-clicks open
     /// the menu, double-clicks rename, and presses become drags. `context` is the page's, with
     /// last frame's layout. Returns whether the event was used, and the action it led to.
+    /// Editor-only: event positions use that context's UI coordinate space. Mutates drag/menu
+    /// state but not the ECS world; the host must apply returned select/move actions.
+    ///
+    /// ```zig
+    /// // Given hierarchy, its last-layout context and a UI event:
+    /// const handled = hierarchy.pointer(context, event);
+    /// ```
     pub fn pointer(self: *Hierarchy, context: *const ui.Context, event: ui.input.Event) struct { used: bool, action: ?Action = null } {
         switch (event) {
             .pointer_down => |down| {
@@ -201,6 +233,13 @@ pub const Hierarchy = struct {
     /// A key while the page has the keyboard: Ctrl+R renames `selected`, Delete deletes it,
     /// Escape closes the menu or stops renaming or dragging. Returns whether it was used, and
     /// the action.
+    /// Editor-only: the host applies returned actions; Enter merely ends an ongoing live
+    /// rename, while Escape clears transient interactions without changing the world.
+    ///
+    /// ```zig
+    /// // Given hierarchy, key_down payload and optional selected id:
+    /// const handled = hierarchy.key(key_down, selected);
+    /// ```
     pub fn key(self: *Hierarchy, key_down: @FieldType(ui.input.Event, "key_down"), selected: ?ecs.EntityId) struct { used: bool, action: ?Action = null } {
         switch (key_down.key) {
             .escape => {
@@ -226,6 +265,13 @@ pub const Hierarchy = struct {
     }
 
     /// Rename `entity`, whose name is `name`: its row becomes a text field.
+    /// Editor-only: copies `name`, falling back to empty when it exceeds the edit capacity;
+    /// closes the menu but does not immediately write a Name component.
+    ///
+    /// ```zig
+    /// // Given hierarchy and an entity shown in it:
+    /// hierarchy.startRename(entity, hierarchy.nameOf(entity));
+    /// ```
     pub fn startRename(self: *Hierarchy, entity: ecs.EntityId, name: []const u8) void {
         self.renaming = .{ .entity = entity, .edit = NameEdit.init(name) catch NameEdit.init("") catch unreachable };
         self.menu = null;
@@ -297,6 +343,13 @@ pub const Hierarchy = struct {
 
     /// The chip that follows the pointer while dragging: the entity's name, or why letting go
     /// here won't move it. Null while nothing is dragged. In `arena`.
+    /// Editor-only: existing names borrow copied rows until the next build; fallback names
+    /// live in `arena`, and blocked/error captions are static.
+    ///
+    /// ```zig
+    /// // Given hierarchy, a frame arena allocator and building context:
+    /// if (hierarchy.dragLabel(arena)) |label| context.text(label);
+    /// ```
     pub fn dragLabel(self: *const Hierarchy, arena: std.mem.Allocator) ?[]const u8 {
         const drag = self.drag orelse return null;
         if (!drag.moving) return null;
@@ -386,6 +439,11 @@ pub const Hierarchy = struct {
     }
 
     /// `entity`'s name as last shown; empty when it has none.
+    /// Editor-only: also empty for an unlisted entity; text borrows rows until the next build.
+    ///
+    /// ```zig
+    /// const name = hierarchy.nameOf(entity); // Existing hierarchy and entity id.
+    /// ```
     pub fn nameOf(self: *const Hierarchy, entity: ecs.EntityId) []const u8 {
         for (self.rows.items) |row| if (row.entity.eql(entity)) return row.name;
         return "";
@@ -402,6 +460,12 @@ pub const Hierarchy = struct {
     }
 
     /// The entity whose row is under `at` in last frame's layout.
+    /// Editor-only: `at` is in the context's UI coordinates; null means no retained row hit.
+    ///
+    /// ```zig
+    /// // Given hierarchy, its last-layout context and pointer position:
+    /// const entity = hierarchy.entityAt(context, at);
+    /// ```
     pub fn entityAt(self: *const Hierarchy, context: *const ui.Context, at: ui.Vec2) ?ecs.EntityId {
         return if (self.rowAt(context, at)) |row| row.entity else null;
     }

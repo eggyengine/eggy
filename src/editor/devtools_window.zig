@@ -21,6 +21,13 @@ pub const DevtoolsWindow = struct {
     focus: u32 = 0,
 
     /// Open the window. On the heap: the tools are large, and kept between frames.
+    /// Editor-host only: graphics and the borrowed font must outlive `close`.
+    /// Allocation/window/surface failures propagate.
+    ///
+    /// ```zig
+    /// const tools = try DevtoolsWindow.open(gpa, graphics, font);
+    /// defer tools.close(graphics);
+    /// ```
     pub fn open(gpa: std.mem.Allocator, graphics: *const eggy.Graphics, font: *ui.Font) !*DevtoolsWindow {
         const self = try gpa.create(DevtoolsWindow);
         errdefer gpa.destroy(self);
@@ -28,6 +35,12 @@ pub const DevtoolsWindow = struct {
         return self;
     }
 
+    /// Release tools, surface, UI, and heap-owned `self` before its shared font/device.
+    ///
+    /// ```zig
+    /// // Editor shutdown, after the final highlight draw:
+    /// tools.close(graphics);
+    /// ```
     pub fn close(self: *DevtoolsWindow, graphics: *eggy.Graphics) void {
         self.tools.deinit(self.gpa);
         self.window.close(graphics);
@@ -36,6 +49,15 @@ pub const DevtoolsWindow = struct {
 
     /// Whether `curr_event` asks to close the window: its close button, or Escape while no
     /// field is being edited (Escape cancels the edit first).
+    /// Pure query; the host must close and clear its pointer when true.
+    ///
+    /// ```zig
+    /// if (tools.closeRequested(event)) {
+    ///     tools.close(graphics);
+    ///     return;
+    /// }
+    /// _ = tools.handle(event);
+    /// ```
     pub fn closeRequested(self: *const DevtoolsWindow, curr_event: sdl3.events.Event) bool {
         if (!self.window.owns(curr_event)) return false;
         if (curr_event == .window_close_requested) return true;
@@ -46,6 +68,12 @@ pub const DevtoolsWindow = struct {
     /// Handle `curr_event` if it is for this window; returns whether it was. Presses on the
     /// tools' controls, and typing into their fields, go to the tools; the rest (tabs, scrolling)
     /// to the window's page.
+    /// Does not retain the event or close the window.
+    ///
+    /// ```zig
+    /// // After checking closeRequested:
+    /// if (tools.handle(event)) return;
+    /// ```
     pub fn handle(self: *DevtoolsWindow, curr_event: sdl3.events.Event) bool {
         if (!self.window.owns(curr_event)) return false;
         const input = weeoui_sdl3.translate(curr_event) orelse {
@@ -95,10 +123,25 @@ pub const DevtoolsWindow = struct {
 
     /// Draw a frame of the tools for `page`, the main window's tree from this frame (laid out).
     /// The page must stay alive until the main window draws the tools' highlight.
+    /// Borrows the editor's style; allocation/preparation/rendering errors propagate.
+    ///
+    /// ```zig
+    /// // Host: main_tree is this frame's laid-out main-window tree.
+    /// try tools.update(graphics, style, main_tree);
+    /// // Draw the main window's highlight before releasing main_tree.
+    /// ```
     pub fn update(self: *DevtoolsWindow, graphics: *eggy.Graphics, style: *const ui.Context, page: *const ui.Layout.Element) !void {
         try self.tools.prepare(self.gpa, page);
         const Page = struct {
             window: *DevtoolsWindow,
+            /// Internal page adapter used synchronously by `ToolWindow.present`.
+            /// Appends tool tabs/content in the active context frame, borrowing the window.
+            ///
+            /// ```zig
+            /// // Inside update:
+            /// var page_builder = Page{ .window = self };
+            /// try self.window.present(graphics, style, &page_builder);
+            /// ```
             pub fn build(p: *@This(), context: *ui.Context) void {
                 const tools_window = p.window;
                 _ = context.tabs(&tool_labels, &tools_window.tab);
@@ -115,12 +158,22 @@ pub const DevtoolsWindow = struct {
     }
 
     /// A pointer move over the main window, at (x, y): while inspecting, it moves the highlight.
+    /// Coordinates are main-window logical points, not this tool window's pixels.
+    ///
+    /// ```zig
+    /// tools.pointerMove(motion.x, motion.y); // Main-window SDL mouse motion.
+    /// ```
     pub fn pointerMove(self: *DevtoolsWindow, x: f32, y: f32) void {
         self.tools.pointerMove(x, y);
     }
 
     /// A press on the main window at (x, y); while inspecting it picks the element there, and
     /// returns true as the press is used.
+    /// Coordinates are main-window logical points; the host must withhold consumed presses.
+    ///
+    /// ```zig
+    /// if (tools.pointerDown(button.x, button.y)) return;
+    /// ```
     pub fn pointerDown(self: *DevtoolsWindow, x: f32, y: f32) bool {
         return self.tools.pointerDown(x, y);
     }

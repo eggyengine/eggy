@@ -100,6 +100,14 @@ pub const Layout = struct {
 
 /// The gizmo for `tool` on the entity placed by `placed` (its world matrix, as columns), seen
 /// through `view` in `scene` (the Scene panel's rect); null when it is behind the camera.
+/// Editor-only: requires positive scene dimensions and a valid camera/finite world transform.
+/// Returns copied geometry in UI points and world metres, hiding edge-on handles; Scale always
+/// uses local axes even when `space` is world. Does not allocate or mutate the entity.
+///
+/// ```zig
+/// const handles = layout(.move, .world, world_matrix, view, scene);
+/// // Existing column-major entity matrix, camera view and Scene UI rect.
+/// ```
 pub fn layout(tool: Tool, space: Space, placed: [4][4]f32, view: View, scene: ui.Rect) ?Layout {
     const origin_world = [3]f32{ placed[3][0], placed[3][1], placed[3][2] };
     const view_projection = view.viewProjection(scene.w / scene.h);
@@ -166,6 +174,12 @@ pub fn layout(tool: Tool, space: Space, placed: [4][4]f32, view: View, scene: ui
 
 /// The handle under `pointer`, if any: the middle first, then planes, then the nearest line or
 /// ring within reach.
+/// Editor-only: pointer must use the Layout's UI coordinates. Returns a handle value only;
+/// the caller starts a Drag and owns any scene/undo changes.
+///
+/// ```zig
+/// const handle = hit(layout_value, pointer); // Current gizmo Layout and UI-space pointer.
+/// ```
 pub fn hit(gizmo: Layout, pointer: ui.Vec2) ?Handle {
     if (distanceTo(pointer, gizmo.origin) < reach_pt) return switch (gizmo.tool) {
         .scale => .uniform,
@@ -219,6 +233,15 @@ pub const Drag = struct {
     /// Where the pointer's ray met the dragged plane when the drag began (plane and screen moves).
     plane_from: ?[3]f32 = null,
 
+    /// Snapshot an editor drag from a hit handle, UI-space press and matching gizmo Layout.
+    /// `start` contains the entity's local position/metres, Euler degrees and scale; `to_local`
+    /// is its parent's inverse world matrix in columns (identity for roots). Returns owned
+    /// value state; an unresolvable drag-plane intersection later keeps the starting position.
+    ///
+    /// ```zig
+    /// // Given a hit handle, UI pointer, Layout, local Start and inverse parent matrix:
+    /// const drag = Drag.init(handle, pointer, layout_value, start, inverse_parent);
+    /// ```
     pub fn init(handle: Handle, from: ui.Vec2, gizmo: Layout, start: Start, to_local: [4][4]f32) Drag {
         var drag = Drag{ .handle = handle, .from = from, .gizmo = gizmo, .start = start, .to_local = to_local };
         if (drag.planeNormal()) |normal| drag.plane_from = drag.onPlane(normal, from);
@@ -226,6 +249,14 @@ pub const Drag = struct {
     }
 
     /// The field's value with the pointer at `pointer`, snapped when `snapping`.
+    /// Editor-only: uses the original drag snapshot, not accumulated frame deltas; returns
+    /// an absolute local Transform field (position metres, rotation degrees or scale factor).
+    /// Snap steps come from `snap`; axis scale has a positive minimum. Does not write the world.
+    ///
+    /// ```zig
+    /// const change = drag.changeAt(pointer, true); // Existing Drag and current UI pointer.
+    /// // Apply change.value to the Transform field named by change.field through the game ABI.
+    /// ```
     pub fn changeAt(self: Drag, pointer: ui.Vec2, snapping: bool) Change {
         const moved = sub2(pointer, self.from);
         switch (self.handle) {
@@ -269,6 +300,14 @@ pub const Drag = struct {
     }
 
     /// What the drag shows beside the pointer: the angle, distance or factor so far. In `buffer`.
+    /// Editor-only: matches `changeAt` snapping; movement distance uses the local position delta
+    /// (labelled metres), rotation degrees and scale a dimensionless ratio. Returns borrowed
+    /// buffer text or static empty text when formatting does not fit.
+    ///
+    /// ```zig
+    /// var buffer: [64]u8 = undefined;
+    /// const label = drag.feedback(pointer, false, &buffer); // Existing Drag/UI pointer.
+    /// ```
     pub fn feedback(self: Drag, pointer: ui.Vec2, snapping: bool, buffer: []u8) []const u8 {
         const change = self.changeAt(pointer, snapping);
         return switch (self.handle) {
@@ -356,6 +395,14 @@ pub const Drag = struct {
 
 /// The gizmo as paint for a node covering the Scene panel: `hot` (under the pointer) and the
 /// dragged handle lit, with `drag`'s feedback (`text`, at `pointer`). In `arena`.
+/// Editor-only: copies geometry/interaction state and feedback text into the frame arena,
+/// which must survive rendering. Pointer uses the Layout's UI coordinates. Allocation failure
+/// yields `.none` or omits feedback text; no entity state changes.
+///
+/// ```zig
+/// const handle_paint = paint(arena, layout_value, hot_handle, drag, pointer, feedback_text);
+/// // Frame arena allocator and current Scene gizmo/interaction values.
+/// ```
 pub fn paint(arena: std.mem.Allocator, gizmo: Layout, hot: ?Handle, drag: ?Drag, pointer: ui.Vec2, text: []const u8) ui.Layout.Paint {
     const drawing = arena.create(Drawing) catch return .none;
     drawing.* = .{ .gizmo = gizmo, .hot = hot, .drag = drag, .pointer = pointer, .text = arena.dupe(u8, text) catch "" };

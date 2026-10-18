@@ -6,14 +6,37 @@ const config = @import("bindings.zig");
 const sdl = @import("vitellus_sdl3").sdl;
 
 pub const Change = struct { key: []const u8, bindings: []const t.Binding, trigger: t.Trigger };
+/// Host-only: borrow effective bindings, preferring a matching proposed edit, then saved
+/// overrides, then `control.defaults`. `control` supplies key/defaults; result lifetime is
+/// whichever source won, so do not retain it across source mutation/deinitialization.
+///
+/// ```zig
+/// // Host with a resolver control value and owned overrides:
+/// const bindings = mappings(control, &overrides, null);
+/// ```
 pub fn mappings(control: anytype, overrides: *const config.Overrides, change: ?Change) []const t.Binding {
     if (change) |value| if (std.mem.eql(u8, value.key, control.key)) return value.bindings;
     return overrides.get(control.key) orelse control.defaults;
 }
+/// Host-only: choose a proposed trigger, saved override or `control.trigger`, in that order.
+/// The returned value is copied, but a chord name borrows the selected source's storage.
+///
+/// ```zig
+/// const rule = trigger(control, &overrides, null); // Host resolver control and overrides.
+/// ```
 pub fn trigger(control: anytype, overrides: *const config.Overrides, change: ?Change) t.Trigger {
     if (change) |value| if (std.mem.eql(u8, value.key, control.key)) return value.trigger;
     return overrides.getTrigger(control.key) orelse control.trigger;
 }
+/// Host-only: validate effective value kinds and same-owner button chord graphs, optionally
+/// previewing one edit without installing it. Controls supply key/defaults/kind/trigger/
+/// owner/name fields. Reports `WrongControlKind` or `InvalidTrigger`; does not allocate or
+/// validate physical binding payloads (use `bindings.validate` for those).
+///
+/// ```zig
+/// // Host validating registered controls against a candidate configuration:
+/// try validate(state.controls.values(), &replacement, null);
+/// ```
 pub fn validate(controls: anytype, overrides: *const config.Overrides, change: ?Change) !void {
     for (controls) |control| {
         for (mappings(control, overrides, change)) |binding| if (modifiers.kind(binding) != control.kind) return error.WrongControlKind;
@@ -144,6 +167,15 @@ fn lengthSquared(value: [2]f32) f32 {
     return value[0] * value[0] + value[1] * value[1];
 }
 
+/// Host-only: recompute a State-shaped resolver's values from routed devices/buttons and
+/// map priority. Requires validated bindings/chords and registered owners; `edges` permits
+/// new press/release edges, while false avoids activating already-held input after a reset.
+/// Mutates revision, trigger timing and cached values; caller owns end-of-frame edge clearing.
+///
+/// ```zig
+/// // Host with a valid resolver state after changing routed physical input:
+/// update(&state, true);
+/// ```
 pub fn update(state: anytype, edges: bool) void {
     state.revision +%= 1;
     for (0..state.controls.count()) |index| resolve(state, index, edges, 0);

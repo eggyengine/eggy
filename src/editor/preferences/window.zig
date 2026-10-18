@@ -70,6 +70,13 @@ pub const PreferencesWindow = struct {
     scope_picked: bool = false,
 
     /// Open the window. On the heap, as its page keeps a pointer to it.
+    /// Desktop editor only: borrows live graphics/font resources and returns a caller-managed
+    /// pointer to close once. Allocation/window failures propagate with partial state cleaned up.
+    ///
+    /// ```zig
+    /// const window = try PreferencesWindow.open(gpa, graphics, font);
+    /// defer window.close(graphics); // Existing editor allocator, graphics and font.
+    /// ```
     pub fn open(gpa: std.mem.Allocator, graphics: *const eggy.Graphics, font: *ui.Font) !*PreferencesWindow {
         const self = try gpa.create(PreferencesWindow);
         errdefer gpa.destroy(self);
@@ -78,6 +85,12 @@ pub const PreferencesWindow = struct {
     }
 
     /// Show the section titled `title`, if `sections` has one.
+    /// Desktop editor only: exact-match lookup resets field synchronization; no match no-ops.
+    /// The same section ordering must be supplied on the following update.
+    ///
+    /// ```zig
+    /// window.show(sections, "Project"); // Existing PreferencesWindow and current sections.
+    /// ```
     pub fn show(self: *PreferencesWindow, sections: []const Section, title: []const u8) void {
         for (sections, 0..) |section, i| if (std.mem.eql(u8, section.title, title)) {
             self.section = i;
@@ -85,12 +98,23 @@ pub const PreferencesWindow = struct {
         };
     }
 
+    /// Destroy the desktop preference window/render surface and free this heap instance once.
+    /// Preferences were saved as edited; the pointer must not be used after this call.
+    ///
+    /// ```zig
+    /// window.close(graphics); // Existing PreferencesWindow and owning Graphics pointer.
+    /// ```
     pub fn close(self: *PreferencesWindow, graphics: *eggy.Graphics) void {
         self.window.close(graphics);
         self.gpa.destroy(self);
     }
 
     /// Whether `curr_event` asks to close the window: its close button, or Escape.
+    /// Desktop editor only: accepts raw SDL events, ignores other windows and does not close it.
+    ///
+    /// ```zig
+    /// if (window.closeRequested(event)) window.close(graphics); // Host SDL event/graphics.
+    /// ```
     pub fn closeRequested(self: *const PreferencesWindow, curr_event: sdl3.events.Event) bool {
         if (!self.window.owns(curr_event)) return false;
         if (curr_event == .window_close_requested) return true;
@@ -99,6 +123,11 @@ pub const PreferencesWindow = struct {
     }
 
     /// Handle `curr_event` if it is for this window; returns whether it was.
+    /// Desktop editor only: routes raw SDL events to the tool UI; does not process close intent.
+    ///
+    /// ```zig
+    /// const used = window.handle(event); // PreferencesWindow and raw SDL event.
+    /// ```
     pub fn handle(self: *PreferencesWindow, curr_event: sdl3.events.Event) bool {
         if (!self.window.owns(curr_event)) return false;
         self.window.handle(curr_event);
@@ -108,6 +137,15 @@ pub const PreferencesWindow = struct {
     /// Draw a frame of `sections` (the editor's first), whose values are in `store`; changes set
     /// them there and save them to `folders`, recording each in `history`. Returns a plugin's
     /// switch flipped this frame (its key lives as long as `sections`), for the caller to carry out.
+    /// Desktop editor only: borrows style, sections/metadata, store/folders and history for the
+    /// frame (history must remain valid while referenced by this window). Presentation errors
+    /// propagate; preference-save errors log in the page. Project settings are edited in their
+    /// Section pointer and must be saved by the caller.
+    ///
+    /// ```zig
+    /// // Given window, graphics/style, current sections, store, Folders and History:
+    /// const flipped = try window.update(graphics, style, sections, store, folders, &history);
+    /// ```
     pub fn update(self: *PreferencesWindow, graphics: *eggy.Graphics, style: *const ui.Context, sections: []const Section, store: *Store, folders: files.Folders, history: *History) !?Switch {
         self.history = history;
         self.flipped = null;
@@ -116,6 +154,14 @@ pub const PreferencesWindow = struct {
             sections: []const Section,
             store: *Store,
             folders: files.Folders,
+            /// ToolWindow callback for one desktop preference frame; borrows page inputs and
+            /// context synchronously, updating store/history and saving changed preferences.
+            /// Failures handled by the page are logged rather than returned.
+            ///
+            /// ```zig
+            /// // Inside PreferencesWindow.update, with its local Page and UI context:
+            /// page.build(context);
+            /// ```
             pub fn build(page: *@This(), context: *ui.Context) void {
                 page.window.build(context, page.sections, page.store, page.folders);
             }

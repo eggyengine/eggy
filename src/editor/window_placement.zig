@@ -14,6 +14,15 @@ pub const Placement = struct {
     maximized: bool,
 
     /// Where `window` is now; null if SDL can't say.
+    /// Editor reload helper: position uses SDL screen coordinates and size uses logical
+    /// window units, not drawable pixels. Borrows the live window and returns a value copy.
+    ///
+    /// ```zig
+    /// const placement = Placement.of(app.window.window) orelse return;
+    /// var buffer: [96]u8 = undefined;
+    /// const argument = try placement.format(&buffer);
+    /// _ = argument; // Host passes it after --window when launching the replacement.
+    /// ```
     pub fn of(window: sdl3.video.Window) ?Placement {
         const x, const y = window.getPosition() catch return null;
         const width, const height = window.getSize() catch return null;
@@ -21,7 +30,13 @@ pub const Placement = struct {
     }
 
     /// Put `window` here: maximized, or at this size and position.
-    // ponytail: Wayland ignores a window's own position, so there only the size and maximized state carry over.
+    /// Borrows a live SDL window; failed resize/reposition/maximize requests are ignored.
+    /// Maximized placement only maximizes, without applying the stored restore geometry.
+    /// ponytail: Wayland ignores a window's own position, so there only the size and maximized state carry over.
+    ///
+    /// ```zig
+    /// if (window_placement.fromArgs(args)) |placement| placement.apply(app.window.window);
+    /// ```
     pub fn apply(placement: Placement, window: sdl3.video.Window) void {
         if (placement.maximized) {
             window.maximize() catch {};
@@ -32,11 +47,27 @@ pub const Placement = struct {
     }
 
     /// The value for `flag`, in `buffer`.
+    /// Returns a slice borrowing caller storage until reused; `NoSpaceLeft` propagates.
+    /// Serializes position, logical size, and maximized as decimal comma-separated values.
+    ///
+    /// ```zig
+    /// var buffer: [96]u8 = undefined;
+    /// const text = try placement.format(&buffer);
+    /// const restored = Placement.parse(text).?;
+    /// _ = restored;
+    /// ```
     pub fn format(placement: Placement, buffer: []u8) ![]const u8 {
         return std.fmt.bufPrint(buffer, "{d},{d},{d},{d},{d}", .{ placement.x, placement.y, placement.width, placement.height, @intFromBool(placement.maximized) });
     }
 
     /// `flag`'s value parsed; null if it isn't five comma-separated numbers.
+    /// Requires positive u32 dimensions and i32 positions; any nonzero fifth number means
+    /// maximized. Borrows text only for parsing, returning an independent value.
+    ///
+    /// ```zig
+    /// const placement = Placement.parse("-1280,40,1280,1400,0").?;
+    /// std.debug.assert(!placement.maximized and placement.x == -1280);
+    /// ```
     pub fn parse(text: []const u8) ?Placement {
         var parts = std.mem.splitScalar(u8, text, ',');
         var numbers: [5]i64 = undefined;
@@ -53,6 +84,14 @@ pub const Placement = struct {
 };
 
 /// The placement `flag` gives in `args`, if any.
+/// `args` are borrowed sentinel-terminated process arguments. Reads the first `--window`
+/// followed by a value, returning null if that value is invalid or no such pair exists.
+///
+/// ```zig
+/// const args = [_][*:0]const u8{ "game_editor", "--window", "10,20,1280,720,0" };
+/// const placement = window_placement.fromArgs(&args).?;
+/// std.debug.assert(placement.width == 1280);
+/// ```
 pub fn fromArgs(args: []const [*:0]const u8) ?Placement {
     for (args, 0..) |arg, i| {
         if (std.mem.eql(u8, std.mem.span(arg), flag) and i + 1 < args.len) return Placement.parse(std.mem.span(args[i + 1]));

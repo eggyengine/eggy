@@ -17,6 +17,12 @@ pub const Kind = enum(u8) {
     input_map,
 
     /// The kind of the file at `path`; `any` for a kind Eggy doesn't know.
+    /// Does not inspect the filesystem or infer folders. Ordinary extensions ignore case;
+    /// the compound `.scene.zon` and `.inmap.zon` suffixes are case-sensitive.
+    ///
+    /// ```zig
+    /// const kind = Kind.of("resources/ship.GLB"); // .model
+    /// ```
     pub fn of(path: []const u8) Kind {
         if (std.mem.endsWith(u8, path, ".scene.zon")) return .scene;
         if (std.mem.endsWith(u8, path, ".inmap.zon")) return .input_map;
@@ -36,6 +42,11 @@ pub const Kind = enum(u8) {
 
     /// Whether the file at `path` is an image a mesh can be painted with: one stb_image decodes
     /// (not an SVG or WebP).
+    /// Checks the extension without decoding or opening the file.
+    ///
+    /// ```zig
+    /// const decodable = Kind.isTexture("resources/wood.png");
+    /// ```
     pub fn isTexture(path: []const u8) bool {
         const extension = std.fs.path.extension(path);
         for ([_][]const u8{ ".png", ".jpg", ".jpeg", ".gif", ".bmp" }) |known| {
@@ -45,6 +56,11 @@ pub const Kind = enum(u8) {
     }
 
     /// Whether a field of this kind takes the file at `path`.
+    /// `.any` accepts every name; other kinds compare against `of`, not file contents.
+    ///
+    /// ```zig
+    /// const accepted = Kind.audio.takes("resources/bell.ogg");
+    /// ```
     pub fn takes(self: Kind, path: []const u8) bool {
         return self == .any or Kind.of(path) == self;
     }

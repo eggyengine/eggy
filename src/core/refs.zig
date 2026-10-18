@@ -14,6 +14,12 @@ const ecs = @import("clutch");
 pub const AssetKind = @import("eggy_assets").Kind;
 
 /// An entity, if set, that has component `With` (`void`: any entity).
+/// Constructs a reference type, not a world lookup; references carry IDs by value.
+///
+/// ```zig
+/// const Target = EntityRef(void);
+/// const target = Target.init(entity);
+/// ```
 pub fn EntityRef(comptime With: type) type {
     return struct {
         entity: ?ecs.EntityId = null,
@@ -22,6 +28,13 @@ pub fn EntityRef(comptime With: type) type {
         pub const eggy_ref: RefKind = .entity;
         pub const Required = With;
 
+        /// Store an optional entity ID without checking liveness or required components.
+        /// Use `get` against the owning world to resolve it safely.
+        ///
+        /// ```zig
+        /// const target = EntityRef(void).init(entity);
+        /// const unset = EntityRef(void).init(null);
+        /// ```
         pub fn init(entity: ?ecs.EntityId) @This() {
             return .{ .entity = entity };
         }
@@ -29,6 +42,13 @@ pub fn EntityRef(comptime With: type) type {
         /// Resolve a live target. Typed references borrow its required component; `void`
         /// references return the entity ID. Component pointers expire when storage changes.
         /// Call `world.markChanged(entity, With)` after editing a borrowed component.
+        /// Returns null for unset, dead, or component-missing targets; `world` must be
+        /// the world from which the ID originated.
+        ///
+        /// ```zig
+        /// const target = EntityRef(void).init(entity);
+        /// const live_id = target.get(world) orelse return error.TargetGone;
+        /// ```
         pub fn get(self: @This(), world: *ecs.World) if (With == void) ?ecs.EntityId else ?*With {
             const entity = self.entity orelse return null;
             if (!world.isAlive(entity)) return null;
@@ -40,6 +60,12 @@ pub fn EntityRef(comptime With: type) type {
 
 /// A file of the project, if set, of kind `kind`: its path relative to the project, with `/`
 /// between parts. Kept in a fixed buffer, like `Name`, so it holds no pointers.
+/// `kind` controls filename validation, not file existence or decoding.
+///
+/// ```zig
+/// const Image = AssetRef(.image);
+/// const image = Image.init("resources/portrait.png");
+/// ```
 pub fn AssetRef(comptime kind: AssetKind) type {
     return struct {
         buffer: [max_path_len]u8 = undefined,
@@ -49,12 +75,22 @@ pub fn AssetRef(comptime kind: AssetKind) type {
         pub const accepts = kind;
 
         /// A checked path known at compile time. Use `parse` for paths received at runtime.
+        /// Invalid paths fail compilation; the returned value owns an inline copy.
+        ///
+        /// ```zig
+        /// const image = AssetRef(.image).init("resources/portrait.png");
+        /// ```
         pub fn init(comptime project_path: []const u8) @This() {
             return comptime parse(project_path) catch |err| @compileError("invalid asset path: " ++ @errorName(err));
         }
 
         /// Keep a relative project path by value. Empty means unset. Reject overlong paths,
         /// traversal, platform separators and files of the wrong kind without clearing a value.
+        /// Does not check whether the file exists; copies into the returned inline buffer.
+        ///
+        /// ```zig
+        /// const image = try AssetRef(.image).parse(selected_project_path);
+        /// ```
         pub fn parse(project_path: []const u8) error{ PathTooLong, InvalidPath, WrongAssetKind }!@This() {
             try validatePath(project_path);
             if (project_path.len != 0 and !kind.takes(project_path)) return error.WrongAssetKind;
@@ -64,6 +100,12 @@ pub fn AssetRef(comptime kind: AssetKind) type {
         }
 
         /// The path; empty when unset.
+        /// Returns a borrowed, non-sentinel slice valid until this reference moves or changes.
+        ///
+        /// ```zig
+        /// const image = AssetRef(.image).init("resources/portrait.png");
+        /// const project_path = image.path();
+        /// ```
         pub fn path(self: *const @This()) []const u8 {
             return self.buffer[0..self.len];
         }
@@ -76,6 +118,12 @@ pub const max_path_len = 256;
 pub const RefKind = enum { entity, asset };
 
 /// Validate an optional project-relative path, using `/` separators. Does not access files.
+/// Rejects paths over 256 bytes, absolute/traversing/empty segments, colons, backslashes
+/// and NUL bytes. An empty path is valid and means unset.
+///
+/// ```zig
+/// try validatePath("resources/portrait.png");
+/// ```
 pub fn validatePath(path: []const u8) error{ PathTooLong, InvalidPath }!void {
     if (path.len > max_path_len) return error.PathTooLong;
     if (path.len == 0) return;
@@ -87,6 +135,11 @@ pub fn validatePath(path: []const u8) error{ PathTooLong, InvalidPath }!void {
 }
 
 /// The reference kind of type `T`, if it is one.
+/// Uses the struct's `eggy_ref` declaration; unrelated types return null.
+///
+/// ```zig
+/// const kind = refKind(AssetRef(.image)); // .asset
+/// ```
 pub fn refKind(comptime T: type) ?RefKind {
     if (@typeInfo(T) != .@"struct" or !@hasDecl(T, "eggy_ref")) return null;
     return T.eggy_ref;

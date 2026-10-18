@@ -10,6 +10,14 @@ const dos_date: u16 = (0 << 9) | (1 << 5) | 1;
 /// Made by Unix (so file modes are kept), zip version 2.0.
 const made_by: u16 = (3 << 8) | 20;
 
+/// Build-tool entry point: archive regular files below a folder, under the supplied root name.
+/// Creates/overwrites output, sorts paths and fixes timestamps for reproducibility, preserving
+/// executable permissions. Requires exactly three arguments; allocation, traversal and write
+/// errors propagate and may leave a partial archive. Inputs come from the trusted export graph.
+///
+/// ```sh
+/// eggy_zip my_game.zip ./zig-out/export/my_game my_game
+/// ```
 pub fn main(init: std.process.Init) !void {
     const io = init.io;
     const gpa = init.gpa;

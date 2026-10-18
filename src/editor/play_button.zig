@@ -11,6 +11,13 @@ pub const height: f32 = 26;
 
 /// The button for a bar `bar_height` tall spanning `bar_width` from `bar_x`, centred on it. It
 /// floats over the bar, so it stays centred whatever the menus and window buttons take.
+/// Editor titlebar builder: all geometry is logical points, `playing` selects Play/Stop only.
+/// Returns a frame-arena element; allocation errors propagate. The host handles activation.
+///
+/// ```zig
+/// const button = try play_button.element(b, mode.playing(), 0, viewport.w, 34);
+/// context.element(button);
+/// ```
 pub fn element(b: L.Builder, playing: bool, bar_x: f32, bar_width: f32, bar_height: f32) !*L.Element {
     const glyph = try b.allocator.create(Glyph);
     glyph.* = .{ .playing = playing };
@@ -44,6 +51,13 @@ fn draw(context: *const anyopaque, c: *ui.Canvas, r: ui.Rect) anyerror!void {
 
 /// The bordered box behind a title bar button (this one, and Reload): `lit` in the theme's
 /// primary colour, else lighter under the pointer (`hot`).
+/// Appends draw vertices to the borrowed canvas in logical rect coordinates;
+/// canvas capacity/allocation errors propagate. Intended for editor button draw callbacks.
+///
+/// ```zig
+/// // Inside a custom paint callback:
+/// try play_button.drawBox(canvas, rect, false, canvas.hot_id == button_id);
+/// ```
 pub fn drawBox(c: *ui.Canvas, r: ui.Rect, lit: bool, hot: bool) !void {
     const radius = c.theme.radiusMd();
     try c.roundRect(r, c.theme.input, radius);

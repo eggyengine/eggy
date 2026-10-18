@@ -14,6 +14,11 @@ pub const Kind = enum {
     input_map,
 
     /// What a file is, by its name.
+    /// This editor classification inspects suffixes only; it never opens the file.
+    ///
+    /// ```zig
+    /// const kind = Kind.ofFile("player.inmap.zon"); // .input_map
+    /// ```
     pub fn ofFile(name: []const u8) Kind {
         if (std.mem.endsWith(u8, name, ".scene.zon")) return .scene;
         if (std.mem.endsWith(u8, name, ".inmap.zon")) return .input_map;
@@ -43,6 +48,14 @@ const skipped = [_][]const u8{ "zig-out", "zig-pkg", "node_modules" };
 
 /// The contents of `folder` (relative to `project`, empty for the project itself), into `arena`.
 /// A folder that can't be read lists as empty.
+/// Entries and their strings live in `arena`; iteration errors end the partial listing,
+/// while allocation errors propagate. Results put folders first, then names ignoring case.
+///
+/// ```zig
+/// // Given a scratch arena allocator, io and an open project directory:
+/// const entries = try list(arena, io, project, "resources");
+/// for (entries) |entry| std.log.info("{s}", .{entry.path});
+/// ```
 pub fn list(arena: std.mem.Allocator, io: std.Io, project: std.Io.Dir, folder: []const u8) ![]const Entry {
     var dir = (if (folder.len == 0) project.openDir(io, ".", .{ .iterate = true }) else project.openDir(io, folder, .{ .iterate = true })) catch return &.{};
     defer dir.close(io);
@@ -74,6 +87,14 @@ fn before(_: void, a: Entry, b: Entry) bool {
 }
 
 /// Every scene file under `folder` (relative to `project`), by path, in `arena`.
+/// Recurses in listing order, skipping unreadable folders; all slices live in `arena`.
+/// Allocation failures while collecting results propagate.
+///
+/// ```zig
+/// // Given a scratch arena allocator, io and an open project directory:
+/// const paths = try scenes(arena, io, project, "resources");
+/// for (paths) |path| std.log.info("Scene: {s}", .{path});
+/// ```
 pub fn scenes(arena: std.mem.Allocator, io: std.Io, project: std.Io.Dir, folder: []const u8) ![]const []const u8 {
     var found: std.ArrayList([]const u8) = .empty;
     try collectScenes(arena, io, project, folder, &found);
@@ -89,6 +110,11 @@ fn collectScenes(arena: std.mem.Allocator, io: std.Io, project: std.Io.Dir, fold
 }
 
 /// The folder holding `path`, empty for the project itself.
+/// Return a borrowed prefix of a slash-separated project-relative path.
+///
+/// ```zig
+/// const folder = parentOf("resources/main.scene.zon"); // "resources"
+/// ```
 pub fn parentOf(path: []const u8) []const u8 {
     return path[0 .. std.mem.lastIndexOfScalar(u8, path, '/') orelse 0];
 }

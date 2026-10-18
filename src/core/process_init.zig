@@ -9,6 +9,15 @@ const Environ = std.process.Environ;
 /// `std.process.Init` from SDL's `Init`: its arena, allocator, Io and arguments, with the
 /// process's environment and preopens, as Zig's start code would make them. It lives in SDL's
 /// process arena, freed at exit, so the pointer stays valid for the whole run.
+/// Host-only; may fail allocating the environment map or preopens. It borrows SDL's
+/// allocator/Io and does not add the environment to that Io's subprocess configuration.
+/// Do not free the returned pointer separately.
+///
+/// ```zig
+/// // In an SDL host's init callback, where init_data is sdl3.Init:
+/// const process = try eggy.entry.processInit(init_data);
+/// const home = process.environ_map.get("HOME");
+/// ```
 pub fn fromSdl(sdl_init: sdl3.Init) !*const std.process.Init {
     const arena = sdl_init.arena.allocator();
     const environ = Environ{ .block = environBlock() };

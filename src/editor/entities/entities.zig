@@ -25,10 +25,24 @@ pub const EntityEditor = struct {
     /// The top-level entities' order.
     root_order: RootOrder,
 
+    /// Create editor-only hierarchy, inspector and root-order state using `gpa`.
+    /// Does not create a world; pair with `deinit`.
+    ///
+    /// ```zig
+    /// var entities = EntityEditor.init(gpa); // Existing allocator.
+    /// defer entities.deinit();
+    /// ```
     pub fn init(gpa: std.mem.Allocator) EntityEditor {
         return .{ .gpa = gpa, .hierarchy = .init(gpa), .inspector = .init(gpa), .root_order = .{ .gpa = gpa } };
     }
 
+    /// Release editor UI/order storage once, without despawning entities or unloading the game.
+    /// Stop building/routing panel events before calling.
+    ///
+    /// ```zig
+    /// var entities = EntityEditor.init(gpa); // Existing allocator.
+    /// defer entities.deinit();
+    /// ```
     pub fn deinit(self: *EntityEditor) void {
         self.hierarchy.deinit();
         self.inspector.deinit();
@@ -36,11 +50,25 @@ pub const EntityEditor = struct {
     }
 
     /// `world`'s top-level entities in the Hierarchy's order, for capturing the scene in it.
+    /// Editor-only: reconciles dead/new/reparented roots; the slice borrows mutable root-order
+    /// storage until its next change. Allocation failure may return only the collected prefix.
+    ///
+    /// ```zig
+    /// const roots = entities.roots(&app.world); // Existing EntityEditor and App pointer.
+    /// ```
     pub fn roots(self: *EntityEditor, world: *ecs.World) []const ecs.EntityId {
         return self.root_order.of(world);
     }
 
     /// Draw the Hierarchy page into `context`, and carry out what it asks.
+    /// Editor-only: call during UI construction with the App owning this game's world.
+    /// May select/spawn/despawn/reparent/rename entities immediately; collection failures show
+    /// an empty tree, and mutation failures are logged or ignored rather than propagated.
+    ///
+    /// ```zig
+    /// // Given entities, building context, App pointer and optional loaded HotGame pointer:
+    /// entities.buildHierarchy(context, app, game);
+    /// ```
     pub fn buildHierarchy(self: *EntityEditor, context: *ui.Context, app: *eggy.App, game: ?*const HotGame) void {
         self.forgetDead(app);
         const access = if (game) |loaded| loaded.sceneAccess() else null;
@@ -50,6 +78,15 @@ pub const EntityEditor = struct {
 
     /// The entity being dragged out of the Hierarchy, described for other panels; null while
     /// none is. In `arena`.
+    /// Editor-only: the world must still contain the dragged entity. Generated fallback names
+    /// and component lists live in `arena`; existing names borrow hierarchy rows and component
+    /// names borrow the game library. Consume before rebuilding/unloading; allocation failures
+    /// may omit component names.
+    ///
+    /// ```zig
+    /// // Given entities, frame arena allocator, App and optional HotGame pointers:
+    /// const drag = entities.dragged(arena, app, game);
+    /// ```
     pub fn dragged(self: *const EntityEditor, arena: std.mem.Allocator, app: *eggy.App, game: ?*const HotGame) ?Dragged {
         const drag = self.hierarchy.drag orelse return null;
         if (!drag.moving or !app.world.isAlive(drag.entity)) return null;
@@ -67,6 +104,14 @@ pub const EntityEditor = struct {
 
     /// `dragging` let go over the Inspector page `context` at `at`: set the reference field
     /// there, if it takes it. Returns whether one did.
+    /// Editor-only: use the Inspector's last-layout UI coordinates before rebuilding it.
+    /// Writes the selected entity's field synchronously through the game ABI; false includes
+    /// missing selection/library, incompatible slots, oversized ZON and rejected writes.
+    ///
+    /// ```zig
+    /// // Given entities, Inspector context, App/game pointers, UI position and Dragged:
+    /// const applied = entities.dropOnInspector(context, app, game, at, dragging);
+    /// ```
     pub fn dropOnInspector(self: *EntityEditor, context: *const ui.Context, app: *eggy.App, game: ?*const HotGame, at: ui.Vec2, dragging: Dragged) bool {
         const entity = self.selected orelse return false;
         const loaded = game orelse return false;
@@ -81,6 +126,15 @@ pub const EntityEditor = struct {
     /// its reference fields light up for `dragging`. Returns false, drawing nothing, when no
     /// entity is selected.
     /// Components of the plugins keyed in `off` show as disabled, and can't be added.
+    /// Editor-only: call during UI construction with game metadata still loaded. Applies field,
+    /// name and component edits immediately; missing library shows an explanatory view.
+    /// Collection/allocation failures do not propagate, and true means an entity was selected,
+    /// not that an edit succeeded.
+    ///
+    /// ```zig
+    /// // Given entities, building context and App/optional HotGame pointers:
+    /// const shown = entities.buildInspector(context, app, game, null, &.{});
+    /// ```
     pub fn buildInspector(self: *EntityEditor, context: *ui.Context, app: *eggy.App, game: ?*const HotGame, dragging: ?Dragged, off: []const []const u8) bool {
         self.forgetDead(app);
         const entity = self.selected orelse return false;
@@ -109,6 +163,13 @@ pub const EntityEditor = struct {
 
     /// A pointer event over the Hierarchy page, before its UI sees it (see `Hierarchy.pointer`).
     /// Returns whether it was used.
+    /// Editor-only: use the page's last layout and UI-space event positions; any resulting
+    /// selection/world mutation is applied synchronously before returning.
+    ///
+    /// ```zig
+    /// const used = entities.hierarchyPointer(context, app, game, event);
+    /// // Existing EntityEditor, last-layout context, App/game pointers and UI event.
+    /// ```
     pub fn hierarchyPointer(self: *EntityEditor, context: *const ui.Context, app: *eggy.App, game: ?*const HotGame, event: ui.input.Event) bool {
         const result = self.hierarchy.pointer(context, event);
         if (result.action) |action| self.apply(app, game, action);
@@ -116,12 +177,25 @@ pub const EntityEditor = struct {
     }
 
     /// Rename the selected entity in the Hierarchy (F2).
+    /// Editor-only: begins a copied text edit without immediately changing the world;
+    /// no selection is a no-op.
+    ///
+    /// ```zig
+    /// entities.renameSelected(); // Existing EntityEditor with Hierarchy keyboard focus.
+    /// ```
     pub fn renameSelected(self: *EntityEditor) void {
         const entity = self.selected orelse return;
         self.hierarchy.startRename(entity, self.hierarchy.nameOf(entity));
     }
 
     /// A key while the Hierarchy page has the keyboard. Returns whether it was used.
+    /// Editor-only: pass a UI key-down payload; applies returned actions to the App's world,
+    /// while rename/menu/drag cancellation only updates panel state.
+    ///
+    /// ```zig
+    /// // Given entities, App/optional HotGame pointers and key-down payload:
+    /// const used = entities.hierarchyKey(app, game, key_down);
+    /// ```
     pub fn hierarchyKey(self: *EntityEditor, app: *eggy.App, game: ?*const HotGame, key: @FieldType(ui.input.Event, "key_down")) bool {
         const result = self.hierarchy.key(key, self.selected);
         if (result.action) |action| self.apply(app, game, action);
@@ -129,6 +203,12 @@ pub const EntityEditor = struct {
     }
 
     /// Delete the selected entity and its children, as the Hierarchy's Delete does.
+    /// Editor-only: clears selection; the library is not required for recursive despawning.
+    /// No selection is a no-op; the surrounding editor owns any undo snapshot.
+    ///
+    /// ```zig
+    /// entities.deleteSelected(app, game); // Existing EntityEditor and App/game pointers.
+    /// ```
     pub fn deleteSelected(self: *EntityEditor, app: *eggy.App, game: ?*const HotGame) void {
         const entity = self.selected orelse return;
         self.apply(app, game, .{ .delete = entity });
@@ -204,6 +284,15 @@ pub const EntityEditor = struct {
     /// after it, at `position` within `parent` (none: the top level), and selected: a model as
     /// its `Mesh`, a scene as its `SceneInstance`. Returns false, making nothing, for another
     /// kind of file or without the game's library.
+    /// Editor-only: `position` is in the requested parent's local scene units. A live parent
+    /// is attempted; invalid/unavailable parenting falls back to a root. Component/write
+    /// failures are not transactional: true does not guarantee every field write succeeded,
+    /// and a late failure can leave a partially configured entity.
+    ///
+    /// ```zig
+    /// // Given entities and App/optional HotGame pointers:
+    /// const made = entities.spawnFrom(app, game, "resources/ship.glb", .{ 0, 0, 0 }, null);
+    /// ```
     pub fn spawnFrom(self: *EntityEditor, app: *eggy.App, game: ?*const HotGame, path: []const u8, position: [3]f32, parent: ?ecs.EntityId) bool {
         const loaded = game orelse return false;
         const kind = eggy.assets.Kind.of(path);
@@ -242,6 +331,13 @@ pub const EntityEditor = struct {
 
     /// Paint `entity`'s `Mesh` with the image at `path` (relative to the project), and select
     /// it. Returns false, changing nothing, when it has no `Mesh` or there's no game library.
+    /// Editor-only: writes the texture reference through the game's field ABI; an oversized
+    /// path or rejected write also returns false. Selection changes only after success.
+    ///
+    /// ```zig
+    /// // Given entities, App/game pointers and a live entity with Mesh:
+    /// const painted = entities.paint(app, game, entity, "resources/ship.png");
+    /// ```
     pub fn paint(self: *EntityEditor, app: *eggy.App, game: ?*const HotGame, entity: ecs.EntityId, path: []const u8) bool {
         const loaded = game orelse return false;
         const component = loaded.builtinComponent("Mesh") orelse return false;
@@ -259,6 +355,12 @@ pub const EntityEditor = struct {
     /// Where the selected entity is among the world's entities in scene order (as
     /// `Scene.capture` lists them), so `reselect` can find it once the world is made anew from
     /// a scene; null with nothing selected, or no game library.
+    /// Editor-only: snapshot before replacing the world; allocation/capture failure or an
+    /// entity omitted from the saved scene also returns null. All temporary scene data is freed.
+    ///
+    /// ```zig
+    /// const place = entities.selectionPlace(app, game); // Before restoring the same scene order.
+    /// ```
     pub fn selectionPlace(self: *EntityEditor, app: *eggy.App, game: ?*const HotGame) ?usize {
         const entity = self.selected orelse return null;
         const loaded = game orelse return null;
@@ -269,6 +371,14 @@ pub const EntityEditor = struct {
     }
 
     /// Select the entity at `place` (from `selectionPlace`) in the world as it is now.
+    /// Editor-only: requires the same scene traversal order as the snapshot to recover the
+    /// intended entity. Clears selection first; missing game, null/out-of-range place or capture
+    /// failure leaves it clear. Temporary capture allocations are released before returning.
+    ///
+    /// ```zig
+    /// // Given entities, App/game pointers and a saved selectionPlace after world restoration:
+    /// entities.reselect(app, game, place);
+    /// ```
     pub fn reselect(self: *EntityEditor, app: *eggy.App, game: ?*const HotGame, place: ?usize) void {
         self.selected = null;
         const at = place orelse return;
@@ -279,6 +389,11 @@ pub const EntityEditor = struct {
     }
 
     /// Drop the selection once its entity is gone.
+    /// Editor-only: checks the App's world including entity generation; does not alter the world.
+    ///
+    /// ```zig
+    /// entities.forgetDead(app); // Existing EntityEditor after world mutation.
+    /// ```
     pub fn forgetDead(self: *EntityEditor, app: *eggy.App) void {
         if (self.selected) |entity| if (!app.world.isAlive(entity)) {
             self.selected = null;
@@ -333,6 +448,11 @@ fn neededBy(arena: std.mem.Allocator, app: *eggy.App, game: *const HotGame, enti
 }
 
 /// Whether plugin `owner` is among those keyed in `off`.
+/// Editor-only: compares complete plugin keys exactly without allocation or ownership transfer.
+///
+/// ```zig
+/// const disabled = isOff(&.{"game"}, "game"); // true
+/// ```
 pub fn isOff(off: []const []const u8, owner: []const u8) bool {
     for (off) |key| if (std.mem.eql(u8, key, owner)) return true;
     return false;

@@ -40,6 +40,13 @@ pub const Manifest = struct {
 };
 
 /// The manifest of `T`, a `Preferences` struct, kept under `key`.
+/// Host-only metadata: fields must be defaulted bools, integers, floats or enums.
+/// The returned names/literals have static lifetime and require no allocator.
+///
+/// ```zig
+/// const Settings = struct { volume: f32 = 0.8 };
+/// const info = manifest(Settings, "game");
+/// ```
 pub fn manifest(comptime T: type, comptime key: [:0]const u8) Manifest {
     return comptime .{ .key = key, .fields = fieldsOf(T) };
 }
@@ -97,29 +104,61 @@ pub const Store = struct {
 
     pub const Layer = enum(u1) { global, project };
 
+    /// Host-only: create an empty layered store backed by an owned arena using `gpa`.
+    /// Pair with `deinit`; no preferences files are read automatically.
+    ///
+    /// ```zig
+    /// var store = Store.init(gpa);
+    /// defer store.deinit();
+    /// ```
     pub fn init(gpa: std.mem.Allocator) Store {
         return .{ .arena = .init(gpa) };
     }
 
+    /// Host-only: free all copied keys, literals and type registrations.
+    /// Every slice borrowed from this store becomes invalid; do not deinitialize twice.
+    ///
+    /// ```zig
+    /// var store = Store.init(gpa);
+    /// defer store.deinit();
+    /// ```
     pub fn deinit(self: *Store) void {
         self.arena.deinit();
     }
 
     /// Keep `T`'s values under `key` from now on (see `Manifest`). `eggy.plugins.Set` registers
     /// each plugin's `Preferences` as it starts them.
+    /// Host-only: copies the key into the arena; allocation failures propagate.
+    ///
+    /// ```zig
+    /// const Settings = struct { volume: f32 = 0.8 };
+    /// try store.register(Settings, "game");
+    /// ```
     pub fn register(self: *Store, comptime T: type, key: []const u8) !void {
         try self.keys.put(self.arena.allocator(), typeMarker(T), try self.arena.allocator().dupe(u8, key));
     }
 
     /// Forget every registered type: their code is about to be unloaded (the editor swapping
     /// the game).
+    /// Host-only: preserves layered text so rebuilt types can register against it again.
+    ///
+    /// ```zig
+    /// // Before unloading the game library:
+    /// store.forgetTypes();
+    /// ```
     pub fn forgetTypes(self: *Store) void {
         self.keys.clearRetainingCapacity();
     }
 
     /// `T`'s values: its defaults, overridden by the global layer, then the project's. A value
-    /// that doesn't parse as its field's type keeps the default, and so does every field of a
-    /// type never registered.
+    /// that doesn't parse as its field's type keeps the lower layer's value (or default).
+    /// A type never registered gets all defaults. Returns a value, not borrowed store text.
+    /// Games normally use `app.preferences(T)` instead.
+    ///
+    /// ```zig
+    /// const Settings = struct { volume: f32 = 0.8 };
+    /// const settings = store.get(Settings);
+    /// ```
     pub fn get(self: *const Store, comptime T: type) T {
         const key = self.keys.get(typeMarker(T)) orelse return .{};
         return self.getKeyed(T, key);
@@ -127,6 +166,12 @@ pub const Store = struct {
 
     /// `T`'s values kept under `key`, as `get` finds them, for a type with a known key (the
     /// editor's own) rather than a registered one.
+    /// Host-only: invalid literals leave lower-layer values unchanged; does not register `T`.
+    ///
+    /// ```zig
+    /// const Settings = struct { volume: f32 = 0.8 };
+    /// const settings = store.getKeyed(Settings, "editor");
+    /// ```
     pub fn getKeyed(self: *const Store, comptime T: type, key: []const u8) T {
         var result: T = .{};
         for (self.layers) |layer| {
@@ -139,12 +184,25 @@ pub const Store = struct {
     }
 
     /// The literal `layer` gives `field` of `key`, if it sets one.
+    /// Host-only: the returned text is borrowed until store deinitialization; no fallback
+    /// to other layers or type validation is performed.
+    ///
+    /// ```zig
+    /// const explicit_volume = store.literal(.project, "game", "volume");
+    /// ```
     pub fn literal(self: *const Store, layer: Layer, key: []const u8, field: []const u8) ?[]const u8 {
         const values = self.layers[@intFromEnum(layer)].get(key) orelse return null;
         return values.get(field);
     }
 
     /// Set `field` of `key` in `layer` to `value` (a ZON literal), or clear it with null.
+    /// Host-only: copies text, but does not validate it or write to disk. Arena allocation
+    /// failures propagate; typed reads ignore literals they cannot parse.
+    ///
+    /// ```zig
+    /// try store.set(.project, "game", "volume", "0.5");
+    /// try store.set(.project, "game", "volume", null); // Reveal the lower layer.
+    /// ```
     pub fn set(self: *Store, layer: Layer, key: []const u8, field: []const u8, value: ?[]const u8) !void {
         const allocator = self.arena.allocator();
         const entry = try self.layers[@intFromEnum(layer)].getOrPut(allocator, key);
@@ -161,6 +219,13 @@ pub const Store = struct {
 
     /// Read `source` (a ZON struct of `field = value`) as `key`'s values in `layer`, replacing
     /// what it had. Fails with `error.ParseZon` if it isn't one.
+    /// Host-only: copies literals into the store; `source` need not outlive the call.
+    /// Not transactional: a bad root or allocation failure can leave previous values cleared
+    /// or partially replaced. Field types are checked only during typed reads.
+    ///
+    /// ```zig
+    /// try store.read(.project, "game", ".{ .volume = 0.5 }");
+    /// ```
     pub fn read(self: *Store, layer: Layer, key: []const u8, source: [:0]const u8) !void {
         const gpa = self.arena.child_allocator;
         var ast = try std.zig.Ast.parse(gpa, source, .zon);
@@ -180,6 +245,14 @@ pub const Store = struct {
     }
 
     /// `key`'s values in `layer` as a ZON file, its fields in the order they were set.
+    /// Host-only: serializes only explicit literals, not defaults or lower layers. Borrows
+    /// `writer` for the call and propagates write failures; does not flush or persist it.
+    ///
+    /// ```zig
+    /// var text: std.Io.Writer.Allocating = .init(gpa);
+    /// defer text.deinit();
+    /// try store.write(.project, "game", &text.writer);
+    /// ```
     pub fn write(self: *const Store, layer: Layer, key: []const u8, writer: *std.Io.Writer) !void {
         try writer.writeAll(".{\n");
         if (self.layers[@intFromEnum(layer)].get(key)) |values| {

@@ -14,6 +14,14 @@ extern fn eggy_import_error() [*:0]const u8;
 /// The model file at `path` (any path), imported with `settings` (from its descriptor), with its
 /// textures, in memory from `gpa` (see `assets.Model.deinit`). Fails with `error.ImportFailed`
 /// when assimp can't read it; `lastError` says why.
+/// Editor/tool-only: `path` is null-terminated, and `settings.scale` multiplies imported
+/// geometry. Also propagates packaged-format decoding and allocation errors; never returns
+/// borrowed importer memory. Games should use `app.resources().loadModel` instead.
+///
+/// ```zig
+/// var model = try model_import.import(gpa, "/project/resources/models/ship.glb", .{ .scale = 2 });
+/// defer model.deinit(gpa);
+/// ```
 pub fn import(gpa: std.mem.Allocator, path: [:0]const u8, settings: assets.descriptor.ModelImport) !assets.Model {
     var bytes: Bytes = undefined;
     if (!eggy_import_model(path.ptr, settings.scale, &bytes)) return error.ImportFailed;
@@ -25,6 +33,13 @@ pub fn import(gpa: std.mem.Allocator, path: [:0]const u8, settings: assets.descr
 /// The image file at `path` (any path: PNG, JPEG, BMP, TGA, GIF...), decoded, in memory from
 /// `gpa` (see `assets.Texture.deinit`). Fails with `error.ImportFailed` when it can't be;
 /// `lastError` says why.
+/// Editor/tool-only: requires a null-terminated path. The result owns RGBA8 pixels and must be
+/// freed even when no GPU texture is created. Also propagates format/allocation errors.
+///
+/// ```zig
+/// var texture = try model_import.decodeImage(gpa, "/project/resources/images/icon.png");
+/// defer texture.deinit(gpa);
+/// ```
 pub fn decodeImage(gpa: std.mem.Allocator, path: [:0]const u8) !assets.Texture {
     var bytes: Bytes = undefined;
     if (!eggy_decode_image(path.ptr, &bytes)) return error.ImportFailed;
@@ -34,6 +49,16 @@ pub fn decodeImage(gpa: std.mem.Allocator, path: [:0]const u8) !assets.Texture {
 }
 
 /// Why the last `import` or `decodeImage` on this thread failed.
+/// Borrowed importer diagnostics: copy before another import on this thread or library unload.
+/// Read immediately after `ImportFailed`; it is not a general description of other Zig errors.
+///
+/// ```zig
+/// var model = model_import.import(gpa, path, .{}) catch |err| {
+///     std.log.err("cannot import {s}: {s}", .{ path, model_import.lastError() });
+///     return err;
+/// };
+/// defer model.deinit(gpa);
+/// ```
 pub fn lastError() []const u8 {
     return std.mem.span(eggy_import_error());
 }

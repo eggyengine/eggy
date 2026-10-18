@@ -33,9 +33,18 @@ fn attachInput(app: *eggy.App, gpa: std.mem.Allocator) !*eggy.input_backend.Back
 test "the game's library loads, runs, swaps for a fresh copy, and unloads cleanly" {
     const gpa = std.testing.allocator;
     const io = std.testing.io;
+    const sdl = eggy.sdl_adapter.sdl;
+    const use_dummy = (try sdl.getEnvironment()).getVariable("SDL_VIDEODRIVER") == null;
+    if (use_dummy) try sdl.hints.set(.video_driver, "dummy");
+    defer if (use_dummy) sdl.hints.reset(.video_driver) catch @panic("cannot reset dummy video driver");
+    try sdl.init(.{ .video = true });
+    defer sdl.quit(.{ .video = true });
+    const window = try sdl.video.Window.init("SDL host", 320, 240, .{ .hidden = true });
+    defer window.deinit();
     const path = try std.fs.path.resolve(gpa, &.{@import("test_library").path});
     defer gpa.free(path);
     var app: eggy.App = undefined;
+    app.window = .init(window);
     app.world = .init(gpa);
     const backend = try attachInput(&app, gpa);
     defer backend.deinit();
@@ -50,8 +59,13 @@ test "the game's library loads, runs, swaps for a fresh copy, and unloads cleanl
     defer app.preference_values.deinit();
 
     var game = try HotGame.load(gpa, path);
+    var game_loaded = true;
+    defer if (game_loaded) game.deinit(&app);
     game.start(&app, &.{}, .keep);
     game.update(&app);
+    var editor = eggy.editor.Context{ .app = &app, .host = undefined };
+    game.editorCommand(3, &editor);
+    try std.testing.expectEqualStrings("SDL shared across reload", window.getTitle().?);
     try std.testing.expect(game.state != null);
     try std.testing.expectEqual(@as(usize, 2), backend.state.owners.count());
     try std.testing.expectEqualStrings("game/fixture", game.file_types[0].key);
@@ -62,8 +76,11 @@ test "the game's library loads, runs, swaps for a fresh copy, and unloads cleanl
 
     // A swap loads a copy of its own and deletes the old one.
     try game.reload(&app);
+    try window.setTitle("SDL host after reload");
     game.start(&app, &.{}, .keep);
     game.update(&app);
+    game.editorCommand(3, &editor);
+    try std.testing.expectEqualStrings("SDL shared across reload", window.getTitle().?);
     try std.testing.expect(game.state != null);
     try std.testing.expectEqualStrings("game/fixture", game.file_types[0].key);
     try std.testing.expectEqualStrings("ab\x00cd", game.file_types[0].contents);
@@ -73,6 +90,7 @@ test "the game's library loads, runs, swaps for a fresh copy, and unloads cleanl
     const last_copy = try gpa.dupe(u8, game.copy_path);
     defer gpa.free(last_copy);
     game.deinit(&app);
+    game_loaded = false;
     try std.testing.expectError(error.FileNotFound, std.Io.Dir.cwd().access(io, last_copy, .{}));
 }
 

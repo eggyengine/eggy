@@ -131,6 +131,16 @@ pub const Slot = struct {
     variant: []const u8 = "",
 
     /// The field's new text with `dragged` dropped on it, in `arena`.
+    /// Editor-only: check `dragged.fits(self.target)` first. Serializes the reference and
+    /// preserves the surrounding field text; formatting/allocation errors propagate.
+    ///
+    /// ```zig
+    /// // Given a drop Slot, Dragged value and arena allocator:
+    /// if (dragged.fits(slot.target)) {
+    ///     const zon = try slot.text(arena, dragged);
+    ///     _ = zon; // Write the field through the loaded game's access API.
+    /// }
+    /// ```
     pub fn text(self: Slot, arena: std.mem.Allocator, dragged: Dragged) ![]const u8 {
         var buffer: [512]u8 = undefined;
         const dropped = try dragged.zon(&buffer);
@@ -154,10 +164,23 @@ pub const FieldEditor = struct {
     slots: std.ArrayList(Slot) = .empty,
     slot_arena: std.heap.ArenaAllocator,
 
+    /// Create editor field interaction state; later allocations use `gpa`. Pair with `deinit`.
+    ///
+    /// ```zig
+    /// var fields = FieldEditor.init(gpa); // Existing allocator.
+    /// defer fields.deinit();
+    /// ```
     pub fn init(gpa: std.mem.Allocator) FieldEditor {
         return .{ .gpa = gpa, .slot_arena = .init(gpa) };
     }
 
+    /// Release editor-owned format/slot storage and invalidate every borrowed Slot string.
+    /// Call once after UI builds and drop handling have stopped.
+    ///
+    /// ```zig
+    /// var fields = FieldEditor.init(gpa); // Existing allocator.
+    /// defer fields.deinit();
+    /// ```
     pub fn deinit(self: *FieldEditor) void {
         self.rotation_formats.deinit(self.gpa);
         self.slots.deinit(self.gpa);
@@ -165,12 +188,22 @@ pub const FieldEditor = struct {
     }
 
     /// Forget last frame's slots, before building the next.
+    /// Editor-only: invalidates prior Slot text; handle drops against the old layout first.
+    ///
+    /// ```zig
+    /// fields.newFrame(); // Existing FieldEditor, before this frame's fieldRows calls.
+    /// ```
     pub fn newFrame(self: *FieldEditor) void {
         self.slots.clearRetainingCapacity();
         _ = self.slot_arena.reset(.retain_capacity);
     }
 
     /// Forget what is being typed or dragged: another entity is shown.
+    /// Editor-only: also closes a color picker; preserves display formats and slot storage.
+    ///
+    /// ```zig
+    /// fields.reset(); // Existing FieldEditor after changing the selected entity.
+    /// ```
     pub fn reset(self: *FieldEditor) void {
         self.typing = null;
         self.scrub = null;
@@ -178,11 +211,23 @@ pub const FieldEditor = struct {
     }
 
     /// Whether a number box is being dragged: its changes aren't an undo step until let go.
+    /// Editor-only: also true while a color popup is open, including a press before movement.
+    ///
+    /// ```zig
+    /// const coalesce_edits = fields.scrubbing(); // Existing FieldEditor.
+    /// ```
     pub fn scrubbing(self: *const FieldEditor) bool {
         return self.scrub != null or self.color != null;
     }
 
     /// The slot under `at` in last frame's layout.
+    /// Editor-only: `at` uses UI coordinates; call before `newFrame` clears old slots.
+    /// The returned value's text borrows the slot arena until the next `newFrame`.
+    ///
+    /// ```zig
+    /// // Given fields, last-layout context and a UI-space drop position:
+    /// const slot = fields.slotAt(context, at);
+    /// ```
     pub fn slotAt(self: *const FieldEditor, context: *const ui.Context, at: ui.Vec2) ?Slot {
         for (self.slots.items) |slot| {
             const bounds = context.last_bounds.get(slot.id) orelse continue;
@@ -194,6 +239,18 @@ pub const FieldEditor = struct {
     /// Field `field` of component `component`: a row with its `label` and the control for its
     /// type `parts` (`parts[0]`) showing `text` (its value as ZON), then rows for what it holds.
     /// `shown` names what a reference points at. Returns the field's new ZON when changed.
+    /// Editor-only: call after `newFrame`, during UI construction. Indices identify the game
+    /// component/field, `parts` must be a nonempty valid tree, and `control_width` is UI points.
+    /// New text lives in the UI frame arena; null also covers unchanged/unparseable values
+    /// or an allocation failure. The host must apply successful changes through the game ABI.
+    ///
+    /// ```zig
+    /// // Given fields, context, a component field's parts and current ZON:
+    /// const changed = fields.fieldRows(context, .{
+    ///     .component = 0, .field = 0, .label = "Position", .parts = parts,
+    ///     .text = zon, .shown = null, .control_width = 160, .dragging = null,
+    /// });
+    /// ```
     pub fn fieldRows(self: *FieldEditor, context: *ui.Context, request: struct {
         component: usize,
         field: usize,
@@ -689,6 +746,12 @@ fn shortNumber(arena: std.mem.Allocator, number: f64, this: Part) []const u8 {
 }
 
 /// `turns_per_second` as "Turns per second". In `arena`.
+/// Editor label helper: replaces underscores and capitalizes the first ASCII letter.
+/// Allocation failure returns the original borrowed name unchanged.
+///
+/// ```zig
+/// const label = displayName(arena, "turns_per_second"); // Existing arena allocator.
+/// ```
 pub fn displayName(arena: std.mem.Allocator, name: []const u8) []const u8 {
     const label = arena.dupe(u8, name) catch return name;
     for (label) |*char| if (char.* == '_') {

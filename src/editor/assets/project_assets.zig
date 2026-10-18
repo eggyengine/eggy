@@ -12,11 +12,28 @@ pub const ProjectAssets = struct {
     project_dir: []const u8,
 
     /// C-callable providers safe for a separately compiled game library.
+    /// Editor-only: `self` and its project directory string must outlive every provider call.
+    /// Reads/imports allocate caller-owned results with the allocator passed to the provider.
+    ///
+    /// ```zig
+    /// // Given a long-lived ProjectAssets named project_assets:
+    /// const providers = project_assets.resources();
+    /// _ = providers; // Pass to the editor's game/resource host.
+    /// ```
     pub fn resources(self: *ProjectAssets) eggy.resources.Resources {
         return eggy.resources.Resources.from(self, readFile, loadModel, loadImage);
     }
 
     /// Read project-relative files while keeping no open directory or transient I/O pointer.
+    /// The borrowed provider retains `self`; reads validate paths and return caller-owned,
+    /// zero-terminated bytes (at most 64 MiB), propagating filesystem/allocation failures.
+    ///
+    /// ```zig
+    /// // Given long-lived project_assets, allocator gpa, and a scene path:
+    /// const provider = project_assets.files();
+    /// const source = try provider.read(provider.context, gpa, path);
+    /// defer gpa.free(source);
+    /// ```
     pub fn files(self: *ProjectAssets) eggy.scene_instances.Files {
         return .{ .context = self, .read = readFile };
     }
@@ -32,11 +49,27 @@ pub const ProjectAssets = struct {
     }
 
     /// A loader for `eggy.model_cache.ModelCache`; `self` must outlive it.
+    /// Editor-only: imports project files with descriptor settings; errors reach the cache.
+    /// Loaded model storage belongs to the requesting allocator/cache, not this adapter.
+    ///
+    /// ```zig
+    /// // Given a long-lived ProjectAssets:
+    /// const loader = project_assets.models();
+    /// _ = loader; // Supply to the graphics model cache.
+    /// ```
     pub fn models(self: *ProjectAssets) eggy.model_cache.Loader {
         return .{ .context = self, .load = loadModel };
     }
 
     /// A loader for `eggy.texture_cache.TextureCache`; `self` must outlive it.
+    /// Editor-only: decodes project images on demand; the requesting allocator/cache owns
+    /// decoded pixels, and file/decode/allocation failures propagate through the loader.
+    ///
+    /// ```zig
+    /// // Given a long-lived ProjectAssets:
+    /// const loader = project_assets.textures();
+    /// _ = loader; // Supply to the graphics texture cache.
+    /// ```
     pub fn textures(self: *ProjectAssets) eggy.texture_cache.Loader {
         return .{ .context = self, .load = loadImage };
     }

@@ -18,6 +18,16 @@ const steps = c.aiProcess_Triangulate | c.aiProcess_PreTransformVertices | c.aiP
 
 /// Import the model file at `path`, `scale` times its size, into `out` as an `.eggmodel`'s
 /// bytes. False when it can't be (`eggy_import_error` says why).
+/// C ABI for editor/tools; `path` must be null-terminated and `out` writable.
+/// Only a true result initializes `out`; release those C-allocated bytes exactly once with
+/// `eggy_free_bytes`, not the caller's allocator. Resets this thread's Eggy diagnostic first.
+///
+/// ```zig
+/// var bytes: Bytes = undefined;
+/// if (!eggy_import_model("ship.glb", 1, &bytes)) return error.ImportFailed;
+/// defer eggy_free_bytes(&bytes);
+/// const encoded = bytes.ptr[0..bytes.len]; // Decode before the deferred free.
+/// ```
 export fn eggy_import_model(path: [*:0]const u8, scale: f32, out: *Bytes) bool {
     failure = null;
     const scene: *const c.struct_aiScene = c.aiImportFile(path, steps) orelse return false;
@@ -32,6 +42,14 @@ export fn eggy_import_model(path: [*:0]const u8, scale: f32, out: *Bytes) bool {
 
 /// Decode the image file at `path` into `out` as an `.eggtexture`'s bytes. False when it can't
 /// be (`eggy_import_error` says why).
+/// C ABI: `path` is null-terminated and `out` writable. Success initializes C-owned serialized
+/// RGBA8 texture bytes; failure leaves `out` unusable and exposes diagnostics on this thread.
+///
+/// ```zig
+/// var bytes: Bytes = undefined;
+/// if (!eggy_decode_image("icon.png", &bytes)) return error.ImportFailed;
+/// defer eggy_free_bytes(&bytes);
+/// ```
 export fn eggy_decode_image(path: [*:0]const u8, out: *Bytes) bool {
     failure = null;
     var width: c_int = 0;
@@ -44,11 +62,27 @@ export fn eggy_decode_image(path: [*:0]const u8, out: *Bytes) bool {
 }
 
 /// Free what `eggy_import_model` or `eggy_decode_image` put in `bytes`.
+/// C ABI; only pass a successful result from this library, exactly once. Does not clear
+/// the struct: its pointer becomes dangling. Never pass caller/Zig-allocator-owned storage.
+///
+/// ```zig
+/// if (!eggy_decode_image(path, &bytes)) return error.ImportFailed;
+/// defer eggy_free_bytes(&bytes);
+/// ```
 export fn eggy_free_bytes(bytes: *Bytes) void {
     gpa.free(bytes.ptr[0..bytes.len]);
 }
 
 /// Why the last import on this thread failed.
+/// C ABI returning a borrowed null-terminated string, not memory to free.
+/// Query immediately after a failed call, before another import or unloading the library.
+///
+/// ```zig
+/// if (!eggy_import_model(path, 1, &bytes)) {
+///     std.log.err("import failed: {s}", .{std.mem.span(eggy_import_error())});
+///     return error.ImportFailed;
+/// }
+/// ```
 export fn eggy_import_error() [*:0]const u8 {
     return failure orelse c.aiGetErrorString();
 }

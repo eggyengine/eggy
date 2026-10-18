@@ -25,13 +25,56 @@ pub const Game = struct {
         .{ .key = "increment", .title = "Increment" },
         .{ .key = "read-resource", .title = "Check resource errors" },
         .{ .key = "read-input", .title = "Check mapped input" },
+        .{ .key = "sdl-window", .title = "Check shared SDL window" },
     };
     pub const editor_panels = [_]eggy.plugins.EditorPanel{.{ .key = "counter", .title = "Counter" }};
 
+    /// Initialize the shared-library test game, reusing "API Entity" or spawning its Counter.
+    /// Fixture-only: ignores the allocator argument; the App world owns the entity and spawn
+    /// errors propagate. Reusing a named entity does not add a missing Counter.
+    ///
+    /// ```zig
+    /// // Fixture context: existing test App pointer and allocator.
+    /// var fixture = try Game.init(gpa, app);
+    /// ```
     pub fn init(_: std.mem.Allocator, app: *eggy.App) !Game {
         return .{ .entity = eggy.findNamed(&app.world, "API Entity") orelse try app.world.spawn(.{ eggy.Name.init("API Entity"), Counter{} }) };
     }
+    /// Exercise host services in the shared-library fixture: 0 increments with undo, 1 checks
+    /// missing resources then increments, 2 checks input/rebinding then increments, and 3
+    /// checks shared SDL state and changes the title without incrementing.
+    /// Fixture-only: requires initialized Counter, hook-local host services and each command's
+    /// prepared test environment; assertion/service/SDL errors propagate with prior side effects.
+    ///
+    /// ```zig
+    /// // Fixture context: initialized Game and editor service context for its App.
+    /// try fixture.editorCommand(0, &editor_context);
+    /// ```
     pub fn editorCommand(self: *Game, command: usize, editor: *eggy.editor.Context) !void {
+        if (command == 3) {
+            const sdl = eggy.sdl_adapter.sdl;
+            if (!sdl.wasInit(.{ .video = true }).video) return error.SdlVideoNotShared;
+            const window = editor.app.window.window;
+            try sdl.mouse.hide();
+            if (sdl.mouse.visible()) return error.CursorNotHidden;
+            try sdl.mouse.show();
+            if (!sdl.mouse.visible()) return error.CursorNotShown;
+            try sdl.mouse.setWindowRelativeMode(window, true);
+            if (!sdl.mouse.getWindowRelativeMode(window)) return error.MouseNotRelative;
+            // The game's releaseMouse hook must use the host's SDL instance too.
+            if (sdl.mouse.getWindowRelativeMode(window)) try sdl.mouse.setWindowRelativeMode(window, false);
+            if (sdl.mouse.getWindowRelativeMode(window)) return error.MouseStillRelative;
+            try sdl.mouse.setWindowRelativeMode(window, false);
+            try sdl.mouse.setWindowGrab(window, false);
+            try window.setKeyboardGrab(false);
+            // SDL's dummy driver deliberately has no OS capture or confinement.
+            if (!std.mem.eql(u8, sdl.video.getCurrentDriverName().?, "dummy")) {
+                try sdl.mouse.capture(false);
+                try sdl.mouse.setWindowRect(window, null);
+            }
+            try window.setTitle("SDL shared across reload");
+            return;
+        }
         if (command == 2) {
             const player = editor.app.input.map(Player);
             if (!try player.pressed(.jump)) return error.ExpectedMappedPress;
@@ -57,13 +100,31 @@ pub const Game = struct {
         const before = editor.app.world.get(self.entity, Counter) orelse return error.NoCounter;
         try editor.changeComponent(self.entity, eggy.Action(Counter){ .before = before.*, .after = .{ .value = before.value + 1 } });
     }
+    /// Draw the fixture Counter label into an active UI frame; return NoCounter if absent.
+    /// Fixture-only: the entity must belong to `app`; label storage belongs to the UI frame.
+    ///
+    /// ```zig
+    /// try fixture.gameUi(app, context); // Fixture Game, matching App, building UI context.
+    /// ```
     pub fn gameUi(self: *Game, app: *eggy.App, ui: *eggy.ui.Context) !void {
         const counter = app.world.get(self.entity, Counter) orelse return error.NoCounter;
         ui.label("Counter: {d}", .{counter.value});
     }
+    /// Draw the fixture's Counter panel through `gameUi`, ignoring the panel index.
+    /// Fixture-only: contexts are borrowed during the hook; a missing Counter error propagates.
+    ///
+    /// ```zig
+    /// try fixture.editorPanelUi(0, &editor_context, context); // Live fixture UI/host contexts.
+    /// ```
     pub fn editorPanelUi(self: *Game, _: usize, editor: *eggy.editor.Context, ui: *eggy.ui.Context) !void {
         try self.gameUi(editor.app, ui);
     }
+    /// Consume exactly key-down events to test priority routing; never fails or mutates state.
+    /// Fixture-only: no event pointer is retained.
+    ///
+    /// ```zig
+    /// const consumed = try fixture.uiEvent(app, event); // Fixture Game/App and Eggy event.
+    /// ```
     pub fn uiEvent(_: *Game, _: *eggy.App, event: eggy.Event) !bool {
         return event == .key_down;
     }

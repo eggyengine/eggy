@@ -27,6 +27,13 @@ pub const Slot = usize;
 pub const main_slot: Slot = 0;
 const slot_count = 1 + dock.max_windows;
 
+/// Convert a zero-based dock pop-out index into the editor host's window slot.
+/// `index` must be below `ui.dock.max_windows`; main-window slot zero is never returned.
+///
+/// ```zig
+/// const slot = workspace_zig.windowSlot(0);
+/// std.debug.assert(slot == 1);
+/// ```
 pub fn windowSlot(index: usize) Slot {
     return 1 + index;
 }
@@ -206,6 +213,15 @@ pub const Workspace = struct {
     shell: std.ArrayList(ui.Vertex) = .empty,
     vertices: std.ArrayList(ui.Vertex) = .empty,
 
+    /// Create the editor's default dock layout and owned tree/vertex storage.
+    /// `buttons` copies desktop titlebar policy; plugin declarations are borrowed until replaced
+    /// or deinit. No OS windows are created. Dock capacity/allocation errors propagate,
+    /// including `TooManyPluginPanels` for an oversized declaration slice.
+    ///
+    /// ```zig
+    /// var workspace = try Workspace.init(gpa, .default(.linux), &.{});
+    /// defer workspace.deinit();
+    /// ```
     pub fn init(gpa: std.mem.Allocator, buttons: titlebar.Layout, plugin_panels: []const eggy.plugins.EditorPanel) !Workspace {
         if (plugin_panels.len > panels.max_pages - 1) return error.TooManyPluginPanels;
         var self = Workspace{ .dock = undefined, .buttons = buttons, .plugin_panels = plugin_panels, .arena = .init(gpa) };
@@ -213,6 +229,13 @@ pub const Workspace = struct {
         return self;
     }
 
+    /// Free remembered panel identities, frame trees, and vertex buffers.
+    /// Does not close host-owned OS windows or free borrowed plugin metadata/fonts.
+    /// All returned tree/vertex pointers become invalid; do not reuse the workspace.
+    ///
+    /// ```zig
+    /// workspace.deinit(); // Host teardown after closing its pop-out windows.
+    /// ```
     pub fn deinit(self: *Workspace) void {
         for (self.seen_plugin_panels.items) |title| self.arena.child_allocator.free(title);
         self.seen_plugin_panels.deinit(self.arena.child_allocator);
@@ -224,6 +247,13 @@ pub const Workspace = struct {
     /// Show `plugin_panels`, the game's panels after it loaded or was swapped (they must last
     /// until the next call): panels it no longer has close, and new ones dock as tabs beside the
     /// Inspector, which stays in front.
+    /// Editor-host reload hook: borrows the accepted prefix, capped to available page slots.
+    /// Migrates old IDs and remembers seen keys; ID collisions disable plugin declarations
+    /// and log an error, while allocation/dock failures log without throwing.
+    ///
+    /// ```zig
+    /// workspace.setPluginPanels(game.panels); // Before unloading old borrowed declarations.
+    /// ```
     pub fn setPluginPanels(self: *Workspace, plugin_panels: []const eggy.plugins.EditorPanel) void {
         const max_plugin_panels = panels.max_pages - panels.first_plugin_page;
         const shown = plugin_panels[0..@min(plugin_panels.len, max_plugin_panels)];
@@ -320,6 +350,13 @@ pub const Workspace = struct {
     }
 
     /// The title for pop-out window `index`: its active panel's.
+    /// `index` must be below `dock.max_windows`; absent/empty windows return static "Panel".
+    /// The sentinel-terminated title borrows current plugin declarations or static storage.
+    ///
+    /// ```zig
+    /// const title = workspace.windowTitle(popout_index);
+    /// try popout.window.window.setTitle(title);
+    /// ```
     pub fn windowTitle(self: *const Workspace, index: usize) [:0]const u8 {
         const window = self.dock.windows[index] orelse return "Panel";
         const node = self.dock.nodes[window.root];
@@ -329,6 +366,16 @@ pub const Workspace = struct {
 
     /// Build and lay out every window's tree: the main window over `viewport`, and each pop-out
     /// window `i` over `window_viewports[i]` (null until the editor has opened it).
+    /// Editor-host frame step: all rectangles are window-local logical points, and `font`
+    /// must remain loaded through draw. Set time/style-dependent host fields beforehand.
+    /// Invalidates previous trees/placements by resetting the arena; borrowed metadata must
+    /// survive drawing. Allocation/layout-building errors propagate; no OS/GPU presentation occurs.
+    ///
+    /// ```zig
+    /// workspace.time_ms = now_ms;
+    /// try workspace.build(main_viewport, popout_viewports, context.font);
+    /// // Build panel pages using workspace.placed, then call workspace.draw per window.
+    /// ```
     pub fn build(self: *Workspace, viewport: ui.Rect, window_viewports: [dock.max_windows]?ui.Rect, font: *const ui.Font) !void {
         // Read the hovered menu item before the trees it's found in go away.
         const hot = if (self.pointer_slot == main_slot) self.controlAt(main_slot, self.pointer.x, self.pointer.y) else 0;
@@ -400,6 +447,13 @@ pub const Workspace = struct {
     }
 
     /// Show `message` in the bottom-right corner for a couple of seconds.
+    /// Copies at most 96 bytes, replacing any current toast, and expires 2500 ms after
+    /// `self.time_ms`; the host must keep that clock current. Does not allocate or retain text.
+    ///
+    /// ```zig
+    /// workspace.time_ms = now_ms;
+    /// workspace.toast("Saved");
+    /// ```
     pub fn toast(self: *Workspace, message: []const u8) void {
         self.toast_len = @min(message.len, self.toast_buffer.len);
         @memcpy(self.toast_buffer[0..self.toast_len], message[0..self.toast_len]);
@@ -483,6 +537,13 @@ pub const Workspace = struct {
     }
 
     /// Where the main window's drawn title bar is, for the OS to move and resize the window by it.
+    /// Return a by-value SDL hit-test description from the last build, including popup and
+    /// interactive exclusions. Before a tree exists returns an otherwise-empty frame.
+    ///
+    /// ```zig
+    /// try workspace.build(viewport, popout_viewports, context.font);
+    /// frame.* = workspace.titlebarFrame(); // Host's stable SDL hit-test Frame allocation.
+    /// ```
     pub fn titlebarFrame(self: *const Workspace) weeoui_sdl3.Frame {
         var frame = weeoui_sdl3.Frame{ .popup_open = self.menubar.open != 0 };
         const root = self.roots[main_slot] orelse return frame;
@@ -516,6 +577,16 @@ pub const Workspace = struct {
     /// Paint window `slot`'s tree from the last `build`: its background, panels and popups, with
     /// each page's UI (`pages[p]`, empty for pages not in this window) spliced in where that page
     /// was painted. The result stays valid until the next `draw`.
+    /// `slot` must be a valid main/pop-out slot. Borrows style/font and page vertices during
+    /// this call; pass empty slices for pages in other windows. Returns owned-buffer slices,
+    /// never caller-owned memory; no tree yields an empty result. Allocation/paint errors
+    /// propagate. Upload/use vertices before drawing another window.
+    ///
+    /// ```zig
+    /// const drawn = try workspace.draw(workspace_zig.main_slot, context, page_vertices);
+    /// // Host uploads drawn.vertices and inserts the Scene texture at drawn.scene_at.
+    /// _ = drawn;
+    /// ```
     pub fn draw(self: *Workspace, slot: Slot, style: *const ui.Context, pages: []const []const ui.Vertex) !Drawn {
         const root = self.roots[slot] orelse return .{ .vertices = &.{}, .scene_at = 0 };
         const gpa = self.arena.child_allocator;
@@ -588,6 +659,16 @@ pub const Workspace = struct {
     }
 
     /// Route an input event from window `slot`, in that window's coordinates.
+    /// Editor-host only: `slot` must index a valid window and coordinates are logical points
+    /// matching the last build. Mutates menus/dock/visual play state and returns the action
+    /// the host must carry out; `.ignored` should continue to the appropriate panel.
+    /// Does not itself run/stop the game or execute file/build commands.
+    ///
+    /// ```zig
+    /// const outcome = workspace.handle(slot, input);
+    /// if (outcome == .ignored) panel_context.handle(input);
+    /// // Host dispatches every other Outcome as appropriate.
+    /// ```
     pub fn handle(self: *Workspace, slot: Slot, event: ui.input.Event) Outcome {
         switch (event) {
             .pointer_move => |p| {
@@ -706,6 +787,13 @@ pub const Workspace = struct {
 
     /// Whether one of the workspace's controls (a menu, a tab, the Scene's toolbar) is under (x, y)
     /// in window `slot`, so a press there is the workspace's rather than what lies beneath.
+    /// Uses the last built tree in window-local logical points; `slot` must be valid.
+    /// Returns false without a tree; performs no state change or allocation.
+    ///
+    /// ```zig
+    /// const over_shell = workspace.hasControlAt(slot, pointer.x, pointer.y);
+    /// _ = over_shell; // Host uses this to keep shell presses out of Scene picking.
+    /// ```
     pub fn hasControlAt(self: *const Workspace, slot: Slot, x: f32, y: f32) bool {
         return self.controlAt(slot, x, y) != 0;
     }

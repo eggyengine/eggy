@@ -24,6 +24,14 @@ pub const BuildWindow = struct {
 
     /// Open the window over `parent`, modal to it, for project `title`. On the heap, as the
     /// output view keeps a pointer to itself.
+    /// The fonts and graphics must outlive it; `title` is copied into a fixed heading buffer.
+    /// Allocation/window errors propagate; unsupported modal/parent requests are ignored.
+    ///
+    /// ```zig
+    /// // Editor host: parent is its SDL window; fonts are shared.
+    /// const progress = try BuildWindow.open(gpa, graphics, font, mono, parent, "Space");
+    /// defer progress.close(graphics);
+    /// ```
     pub fn open(gpa: std.mem.Allocator, graphics: *const eggy.Graphics, font: *ui.Font, mono: *const ui.Font, parent: sdl3.video.Window, title: []const u8) !*BuildWindow {
         const self = try gpa.create(BuildWindow);
         errdefer gpa.destroy(self);
@@ -37,6 +45,13 @@ pub const BuildWindow = struct {
         return self;
     }
 
+    /// Free the build-output view, OS window, surface, and `self`, before shared fonts/device.
+    /// The background build job belongs to the host and is not canceled here.
+    ///
+    /// ```zig
+    /// // After the host finishes/cancels its job:
+    /// progress.close(graphics);
+    /// ```
     pub fn close(self: *BuildWindow, graphics: *eggy.Graphics) void {
         self.terminal.deinit();
         self.window.close(graphics);
@@ -45,6 +60,12 @@ pub const BuildWindow = struct {
 
     /// Handle `curr_event` if it is for this window; returns whether it was. The output view
     /// sees input first, so it can select and copy.
+    /// No ownership of `curr_event` is retained.
+    ///
+    /// ```zig
+    /// // Editor event loop, before routing events to the frozen main window:
+    /// if (progress.handle(event)) return;
+    /// ```
     pub fn handle(self: *BuildWindow, curr_event: sdl3.events.Event) bool {
         if (!self.window.owns(curr_event)) return false;
         if (weeoui_sdl3.translate(curr_event)) |input| if (self.terminal.handle(input)) return true;
@@ -54,12 +75,28 @@ pub const BuildWindow = struct {
 
     /// Draw a frame for the build's `status`; `changed` is whether a finished build made a new
     /// editor. Returns what the buttons asked for.
+    /// `status` and `style` are borrowed during the call; rendering errors propagate.
+    /// The host carries out `.cancel`, `.close`, or `.reload`, rather than this window.
+    ///
+    /// ```zig
+    /// // status is the host's current job snapshot; changed compares output stamps.
+    /// const action = try progress.update(graphics, style, status, changed);
+    /// if (action == .cancel) host.cancelBuild(); // Host owns/destroys the job.
+    /// ```
     pub fn update(self: *BuildWindow, graphics: *eggy.Graphics, style: *const ui.Context, status: Status, changed: bool) !Action {
         const Page = struct {
             window: *BuildWindow,
             status: Status,
             changed: bool,
             action: Action = .none,
+            /// Internal `ToolWindow.present` adapter; build into its active frame and
+            /// store the user's action on this stack-owned page.
+            ///
+            /// ```zig
+            /// // Inside update, after constructing page:
+            /// try self.window.present(graphics, style, &page);
+            /// // present invokes page.build(&self.window.ui).
+            /// ```
             pub fn build(page: *@This(), context: *ui.Context) void {
                 page.action = page.window.build(context, page.status, page.changed);
             }

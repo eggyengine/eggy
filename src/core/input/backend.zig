@@ -3,6 +3,7 @@ const std = @import("std");
 const sdl = @import("vitellus_sdl3").sdl;
 const snapshots = @import("state.zig");
 pub const State = snapshots.State;
+/// SDL button translation; see `state.buttonFromSdl` for its host-only contract and example.
 pub const buttonFromSdl = snapshots.buttonFromSdl;
 const types = @import("types.zig");
 
@@ -12,6 +13,15 @@ pub const Backend = struct {
     devices: std.AutoArrayHashMapUnmanaged(u32, sdl.gamepad.Gamepad) = .empty,
 
     /// Allocate a stable owner before publishing its interface to movable App/plugin values.
+    /// Host-only: SDL gamepad support must already be initialized on this thread.
+    /// Opens connected gamepads; allocation/SDL failures clean up partial ownership.
+    /// The returned pointer owns device handles and must be destroyed with `deinit`.
+    ///
+    /// ```zig
+    /// // Host after initializing SDL gamepad support:
+    /// const backend = try Backend.init(gpa);
+    /// defer backend.deinit();
+    /// ```
     pub fn init(gpa: std.mem.Allocator) !*Backend {
         const self = try gpa.create(Backend);
         self.* = .{ .gpa = gpa, .state = .init(gpa) };
@@ -23,6 +33,13 @@ pub const Backend = struct {
         return self;
     }
 
+    /// Host-only: close all gamepads, free resolver state and destroy the allocated backend.
+    /// Call on its owning thread before SDL shutdown; all published bridges become invalid.
+    ///
+    /// ```zig
+    /// const backend = try Backend.init(gpa);
+    /// defer backend.deinit();
+    /// ```
     pub fn deinit(self: *Backend) void {
         for (self.devices.values()) |device| device.deinit();
         self.devices.deinit(self.gpa);
@@ -51,6 +68,13 @@ pub const Backend = struct {
     }
 
     /// Connection and raw-state events are processed even when gameplay input is gated.
+    /// Host-only: feed SDL events on the initialization thread, separately from gameplay's
+    /// `Input.handle`. Hotplug may allocate/open handles and return SDL or allocation errors.
+    ///
+    /// ```zig
+    /// // Host polling SDL, regardless of play/capture state:
+    /// while (sdl.events.poll()) |event| try backend.event(event);
+    /// ```
     pub fn event(self: *Backend, value: sdl.events.Event) !void {
         switch (value) {
             .gamepad_added => |device| try self.open(device.id.value),

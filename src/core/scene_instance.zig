@@ -19,6 +19,11 @@ pub const SceneInstance = struct {
 };
 
 /// Where `SceneInstance` is among `types`, if it is there.
+/// Matches both the public name and the `"eggy"` owner; returns an index, not an ECS type ID.
+///
+/// ```zig
+/// const index = typeIndex(registry_infos) orelse return error.SceneInstancesUnavailable;
+/// ```
 pub fn typeIndex(types: []const components.Info) ?usize {
     for (types, 0..) |info, i| {
         if (std.mem.eql(u8, info.name, "SceneInstance") and std.mem.eql(u8, info.owner, "eggy")) return i;

@@ -9,9 +9,22 @@ pub const Light = union(enum) {
 
 // ponytail: scene lights are not rendered, add light gathering and shaders first.
 pub const Lighting = struct {
+    /// Request a directional light (lux) or point light (candela, range in metres) on an entity.
+    /// Currently returns `NotImplemented`, without changing components or built-in shading.
+    ///
+    /// ```zig
+    /// try app.lighting.setLight(entity, .{ .point = .{ .intensity_cd = 200, .range_m = 5 } });
+    /// // Currently returns NotImplemented.
+    /// ```
     pub fn setLight(_: Lighting, entity: ecs.EntityId, light: Light) api.Error!void {
         return api.notImplemented(.{ entity, light });
     }
+    /// Request removal of an entity's light, not deletion of the entity itself.
+    /// Currently returns `NotImplemented`, with no world or renderer changes.
+    ///
+    /// ```zig
+    /// try app.lighting.removeLight(entity); // Currently NotImplemented.
+    /// ```
     pub fn removeLight(_: Lighting, entity: ecs.EntityId) api.Error!void {
         return api.notImplemented(entity);
     }

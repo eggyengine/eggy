@@ -28,7 +28,10 @@ const Console = @import("console.zig").Console;
 const panels = @import("panels.zig");
 
 /// `std.Options.logFn` for editor executables: keeps every message for the Console panel.
+/// Alias of `console_log.zig`'s `logFn`; see its canonical docs for threading, formatting,
+/// allocation failure behavior, and a usage example.
 pub const logFn = @import("console_log.zig").logFn;
+pub const cli = @import("cli/cli.zig");
 const ProjectFlow = @import("projects/flow.zig").ProjectFlow;
 const HotGame = @import("hot_reload/hot_reload.zig").HotGame;
 const preferences = @import("preferences/preferences.zig");
@@ -61,6 +64,20 @@ const project_section = "Project";
 /// `file_name`, beside the editor). The game and its plugins run as they do in the runtime,
 /// inside a window of dockable panels, from a library the editor swaps for a rebuilt one when
 /// their code changes; each can add to the Inspector through `editorUi`.
+/// Returns a desktop host type, not a game/plugin interface. `project.name` is a comptime
+/// string and `project.game_library.file_name` names the generated shared library. Build
+/// configuration supplies this module; games normally use `addGame`, not construct it.
+/// The host owns its App, dock windows, scenes, UI, jobs, and loaded library. Keep initialized
+/// state at a stable address while callbacks/dialogs use it and pair `init` with `deinit`.
+///
+/// ```zig
+/// // Editor executable internals; project is the generated eggy_project module.
+/// const Host = Editor(@import("eggy_project"));
+/// var host = try Host.init(process_init, args);
+/// defer host.deinit();
+/// // SDL delivers host.event(...) between calls to host.iterate().
+/// _ = try host.iterate();
+/// ```
 pub fn Editor(comptime project: type) type {
     return struct {
         gpa: std.mem.Allocator,
@@ -195,6 +212,19 @@ pub fn Editor(comptime project: type) type {
         /// What would lose the scene's unsaved changes, and so asks first (see `mayLeave`).
         const Leaving = enum { quit, reload, new_project, open_project, open_project_linked };
 
+        /// Initialize the desktop editor host with SDL/App graphics, shared UI fonts,
+        /// persisted preferences/layout, project discovery, and the game's shared library.
+        /// Borrows `process_init` for App lifetime; `args` are sentinel process arguments
+        /// supporting project/window selection. Returns caller-owned state; keep it stable
+        /// once passed to host callbacks. Startup allocation/I/O/graphics errors propagate
+        /// with cleanup; an unavailable game library logs and leaves tools usable without it.
+        ///
+        /// ```zig
+        /// // Shared SDL entry infrastructure owns process_init for this lifetime:
+        /// var host = try Self.init(process_init, args);
+        /// defer host.deinit();
+        /// _ = try host.iterate();
+        /// ```
         pub fn init(process_init: *const std.process.Init, args: []const [*:0]const u8) !Self {
             const gpa = process_init.gpa;
             var app = try eggy.App.init(process_init, title);
@@ -313,6 +343,15 @@ pub fn Editor(comptime project: type) type {
             return self;
         }
 
+        /// Tear down the host's loaded game, jobs, tool/pop-out windows, UI, GPU resources,
+        /// and App, saving the dock layout for the next launch. Does not implicitly save the
+        /// scene; the leave-confirmation workflow must run first. Borrowed process init
+        /// remains caller-owned; no callbacks may access this host afterward.
+        ///
+        /// ```zig
+        /// var host = try Self.init(process_init, args);
+        /// defer host.deinit(); // Once after SDL stops delivering callbacks.
+        /// ```
         pub fn deinit(self: *Self) void {
             self.game_input.deinit(self.gpa);
             self.extension_state.deinit(self.gpa);
@@ -367,6 +406,18 @@ pub fn Editor(comptime project: type) type {
             self.gpa.destroy(self.frame);
         }
 
+        /// Advance one editor-host frame: service project/build flows, update game/editor
+        /// hooks, track undo/autosave, build dock pages, and present each live window.
+        /// Requires successful init and serialized main-thread lifecycle calls. Minimized
+        /// windows skip drawing; gameplay runs only in unpaused play, outside modal builds.
+        /// Frame/input/render/job errors propagate; `.success` means a replacement launched
+        /// or quit was approved, `.run` means continue. Does not destroy the host.
+        ///
+        /// ```zig
+        /// // SDL callback adapter, with a live host:
+        /// const result = try host.iterate();
+        /// if (result != .run) return result;
+        /// ```
         pub fn iterate(self: *Self) !sdl3.AppResult {
             // While a new project is created, only its loading screen shows. Hidden windows aren't
             // drawn to: presenting to one can block until it is shown again.
@@ -596,6 +647,17 @@ pub fn Editor(comptime project: type) type {
             return .run;
         }
 
+        /// SDL folder-dialog callback used only by this host; may execute off the main thread.
+        /// Copies the first borrowed path into a C-allocator atomic handoff for the next frame,
+        /// replacing/freeing any older choice. Ignores failed/empty results and allocation
+        /// failure; the filter index is unused. A successful choice requires non-null `self`
+        /// kept alive until dialog completion; no UI/GPU work runs on the callback thread.
+        ///
+        /// ```zig
+        /// // Editor main thread registers the callback; SDL invokes pickedProject:
+        /// sdl3.dialog.showOpenFolder(Self, Self.pickedProject, host, host.app.window.window, null, false);
+        /// // Keep host alive; host.iterate() later consumes the copied selection.
+        /// ```
         pub fn pickedProject(self: ?*Self, files: ?[]const [*:0]const u8, _: ?usize, failed: bool) void {
             const chosen = files orelse return;
             if (failed or chosen.len == 0) return;
@@ -614,6 +676,15 @@ pub fn Editor(comptime project: type) type {
         /// Whether the editor may go ahead with `leaving`: yes when the scene has no unsaved
         /// changes, or the person just answered "Save changes?" for it. Otherwise it opens the
         /// prompt (once) and says no; the answer carries `leaving` out (`answerSavePrompt`).
+        /// Internal host transition guard, not an extension/game API. Stops play before
+        /// comparing the saved scene; an unsaved input-map document blocks leaving first.
+        /// Prompt creation errors log and deny permission to avoid losing edits.
+        ///
+        /// ```zig
+        /// // Inside the host's quit command route:
+        /// if (self.mayLeave(.quit)) return .success;
+        /// return .run; // Continue frames/events to service the save prompt.
+        /// ```
         pub fn mayLeave(self: *Self, leaving: Leaving) bool {
             if (self.input_map_window) |window| if (window.document.modified()) {
                 window.view.confirm_close = true;
@@ -864,6 +935,16 @@ pub fn Editor(comptime project: type) type {
 
         /// Open the scene `action` names, or make a new one, as a step to undo: undoing it puts
         /// back the scene open before, as its world was.
+        /// Internal host/extension bridge: `action` must be `.open_scene` or `.create_scene`
+        /// with a borrowed project-relative path/folder; other tags are unreachable.
+        /// Stops play, records pending edits, replaces entities/selection, refreshes assets,
+        /// and owns before/after snapshots in history. No open scene is a no-op; missing
+        /// library, allocation, scene parse, and disk errors propagate, possibly after effects.
+        ///
+        /// ```zig
+        /// // Host has already handled any transition/unsaved-change policy.
+        /// try host.openSceneStep(.{ .open_scene = "resources/scene/main.scene.zon" });
+        /// ```
         pub fn openSceneStep(self: *Self, action: assets.Action) !void {
             self.stopPlaying();
             const scene = if (self.open_scene) |*open| open else return;
@@ -914,6 +995,16 @@ pub fn Editor(comptime project: type) type {
 
         /// The Assets panel's file changes: new folders, renaming, duplicating, deleting (into
         /// the project's trash). The open scene follows its file.
+        /// Internal host/extension bridge: `project_dir` is the current project's folder;
+        /// action paths are project-relative and borrowed only for this call. Supports only
+        /// create_folder/create_file/rename/duplicate/delete/move_into; other tags are unreachable.
+        /// Ctrl during move_into copies instead. Mutates files/descriptors and records undo;
+        /// refresh/remake is scheduled even on errors. I/O/allocation/document errors propagate
+        /// and can occur after mutation, so this is not an atomic batch operation.
+        ///
+        /// ```zig
+        /// try host.changeFiles(opened.dir, .{ .create_folder = "resources" });
+        /// ```
         pub fn changeFiles(self: *Self, project_dir: []const u8, action: assets.Action) !void {
             var threaded: std.Io.Threaded = .init_single_threaded;
             const io = threaded.io();
@@ -1007,6 +1098,16 @@ pub fn Editor(comptime project: type) type {
         }
 
         /// Apply one direction, filling in where files went. History owns group traversal.
+        /// Internal leaf handler for `History.apply/cancelGroup`; never pass `.group`.
+        /// Borrows/mutates a history-owned step, using its allocator-compatible paths/text;
+        /// `.undo` restores before-state, `.redo` reapplies it. Requires an open project and,
+        /// for scene leaves, its loaded game. May recreate entities, write files/preferences,
+        /// update trash locations, and refresh assets; errors propagate with possible effects.
+        ///
+        /// ```zig
+        /// // History owns ordering, group traversal, and moving entries between stacks:
+        /// _ = try host.history.apply(.undo, host, Self.carry);
+        /// ```
         pub fn carry(self: *Self, step: *history_zig.Step, direction: eggy.Direction) !void {
             const back = direction == .undo;
             const opened = self.project orelse return error.NoProject;
@@ -1129,6 +1230,15 @@ pub fn Editor(comptime project: type) type {
         }
 
         /// Checked save entry point used by synchronous editor-extension requests.
+        /// Internal bridge, not the plugin-facing API: rejects play with `NotEditing`,
+        /// missing project with `NoProject`, or absent library with `NoGameLibrary`.
+        /// Saves the current root order to the scene (creating a file if needed) and clears
+        /// the status asterisk only on success; scene/I/O/allocation errors propagate.
+        ///
+        /// ```zig
+        /// // Host implementation of an already-validated extension save request:
+        /// try host.saveSceneForExtension();
+        /// ```
         pub fn saveSceneForExtension(self: *Self) !void {
             if (self.play_mode.playing()) return error.NotEditing;
             const scene = if (self.open_scene) |*open| open else return error.NoProject;
@@ -1278,6 +1388,17 @@ pub fn Editor(comptime project: type) type {
             }
         }
 
+        /// Route one borrowed SDL event through the initialized desktop host on its main thread.
+        /// Handles tool/modal windows first, then Scene input, dock/menu commands, panel UI,
+        /// and gameplay/App input as appropriate; may start jobs, change files/world, or
+        /// prompt before leaving. Device/input/window/build errors propagate. Returns `.run`
+        /// to continue or a terminal SDL result without destroying the host.
+        ///
+        /// ```zig
+        /// // SDL callback adapter supplies current; do not bypass this with App.event:
+        /// const result = try host.event(current);
+        /// if (result != .run) return result;
+        /// ```
         pub fn event(self: *Self, curr_event: sdl3.events.Event) !sdl3.AppResult {
             try self.app.deviceEvent(curr_event);
             if (self.about_window) |window| {
@@ -1551,7 +1672,7 @@ pub fn Editor(comptime project: type) type {
             const discovery = @import("projects/discovery.zig");
             var threaded: std.Io.Threaded = .init_single_threaded;
             const io = threaded.io();
-            const dir = if (try discovery.explicitDirectory(args)) |requested|
+            const dir: [:0]u8 = if (try discovery.explicitDirectory(args)) |requested|
                 try std.Io.Dir.cwd().realPathFileAlloc(io, requested, gpa)
             else
                 (discovery.find(gpa, io, project.name, try sdl3.filesystem.getBasePath(), ".") catch |err| {
@@ -1651,6 +1772,16 @@ pub fn Editor(comptime project: type) type {
 
         /// Start `action`'s job on the open project as `rebuild`, and the Build progress window
         /// that follows it.
+        /// Internal host/extension operation: call only after canceling/clearing any previous
+        /// job; this does not dispose an existing `rebuild`. No project is a no-op. Captures
+        /// source stamps, starts a background process, and opens a modal progress window;
+        /// path/job/window errors propagate, cleaning the new job on failure.
+        ///
+        /// ```zig
+        /// host.cancelBuild();
+        /// try host.startBuild(.rebuild);
+        /// // Keep iterate/event running so the modal window can update and cancel.
+        /// ```
         pub fn startBuild(self: *Self, action: job_zig.Action) !void {
             const opened = self.project orelse return;
             const folders = try job_zig.editorFolders(self.gpa);
@@ -1707,6 +1838,12 @@ pub fn Editor(comptime project: type) type {
         }
 
         /// Whether `rebuild` is still under way.
+        /// Internal host query: snapshots job status using temporary arena storage.
+        /// Returns false for no job, done/failed stages, or status retrieval failure.
+        ///
+        /// ```zig
+        /// if (host.buildRunning()) host.cancelBuild();
+        /// ```
         pub fn buildRunning(self: *Self) bool {
             const job = self.rebuild orelse return false;
             var arena = std.heap.ArenaAllocator.init(self.gpa);
@@ -1716,6 +1853,12 @@ pub fn Editor(comptime project: type) type {
         }
 
         /// Stop `rebuild` (the build is killed) and forget it.
+        /// Clears automatic reload intent and destroys the owned job; no job is a no-op.
+        /// Does not close the progress window here; a later host frame notices the absent job.
+        ///
+        /// ```zig
+        /// host.cancelBuild(); // Host/extension cancellation on the main thread.
+        /// ```
         pub fn cancelBuild(self: *Self) void {
             self.reload_when_built = false;
             const job = self.rebuild orelse return;
@@ -1726,6 +1869,15 @@ pub fn Editor(comptime project: type) type {
         /// The title bar's Reload: open the rebuilt editor if a rebuild made one; otherwise
         /// rebuild (in the Build progress window) and open the result, changed or not. Returns
         /// whether the editor should quit, as the new one is open.
+        /// Internal host/extension bridge: an existing running job is reused and scheduled
+        /// to reload when done. A ready result still passes through save confirmation.
+        /// False means keep servicing frames/events, not failure; launch/job/window errors
+        /// propagate. Does not destroy this host; caller returns success to SDL when true.
+        ///
+        /// ```zig
+        /// if (try host.forceReload()) return .success;
+        /// return .run; // Rebuild or save confirmation is still pending.
+        /// ```
         pub fn forceReload(self: *Self) !bool {
             if (self.workspace.build_state == .ready) if (self.rebuild) |job| return try self.launchRebuilt(job);
             if (self.buildRunning()) {
@@ -1925,6 +2077,14 @@ pub fn Editor(comptime project: type) type {
 
         /// The project's files changed: the Assets panel lists them again, descriptors keep up,
         /// and scene instances are made again from their files.
+        /// Internal host notification after external/extension asset mutations. May create
+        /// or remove descriptors and invalidate GPU asset caches; failures log rather than
+        /// propagate. Instance rebuilding is deferred to subsequent synchronization.
+        ///
+        /// ```zig
+        /// // After a host extension has written project resources:
+        /// host.filesChanged();
+        /// ```
         pub fn filesChanged(self: *Self) void {
             self.assets_panel.refreshSoon();
             self.syncDescriptors();
@@ -2262,6 +2422,7 @@ pub fn Editor(comptime project: type) type {
 }
 
 test {
+    _ = cli;
     _ = @import("input_mappings.zig");
     _ = @import("input_map_asset/input_map_asset.zig");
     _ = @import("assets/creation.zig");

@@ -24,6 +24,14 @@ const View = struct {
         if (self.taps == hatch_taps) self.hatched_at_ms = now_ms;
     }
 
+    /// Build the internal About page in an active UI frame, recording link/close actions
+    /// for `AboutWindow.update`; frame allocations belong to `context`.
+    ///
+    /// ```zig
+    /// // Inside this file, with an active context frame:
+    /// var view = View{};
+    /// view.build(context);
+    /// ```
     pub fn build(self: *View, context: *ui.Context) void {
         const id = context.idFor(egg_id);
         if (context.activated(id)) self.tap(context.time_ms);
@@ -173,24 +181,65 @@ pub const AboutWindow = struct {
     window: ToolWindow,
     view: View = .{},
 
+    /// Allocate the editor's About window. SDL, `graphics`, and the borrowed `font`
+    /// must remain alive until `close`; allocation/window/surface errors propagate.
+    ///
+    /// ```zig
+    /// // Editor host with initialized graphics and shared font:
+    /// const about = try AboutWindow.open(gpa, graphics, font);
+    /// defer about.close(graphics);
+    /// ```
     pub fn open(gpa: std.mem.Allocator, graphics: *const eggy.Graphics, font: *ui.Font) !*AboutWindow {
         const self = try gpa.create(AboutWindow);
         errdefer gpa.destroy(self);
         self.* = .{ .gpa = gpa, .window = try ToolWindow.open(gpa, graphics, font, "About Eggy", .{ 480, 520 }, .{}) };
         return self;
     }
+    /// Destroy the About window and free `self`; use the graphics device that opened it.
+    ///
+    /// ```zig
+    /// // Editor shutdown, before destroying graphics or the shared font:
+    /// about.close(graphics); // `about` is invalid afterward.
+    /// ```
     pub fn close(self: *AboutWindow, graphics: *eggy.Graphics) void {
         self.window.close(graphics);
         self.gpa.destroy(self);
     }
+    /// Test for this window's close request or Escape without consuming the event.
+    /// Other windows' events return false; the host remains responsible for `close`.
+    ///
+    /// ```zig
+    /// if (about.closeRequested(event)) {
+    ///     about.close(graphics);
+    ///     return;
+    /// }
+    /// _ = about.handle(event);
+    /// ```
     pub fn closeRequested(self: *const AboutWindow, event: eggy.Event) bool {
         return self.window.owns(event) and (event == .window_close_requested or (event == .key_down and event.key_down.scancode == .escape));
     }
+    /// Route this window's event to its UI; true means the host must not route it again.
+    /// Does not destroy the window on close requests.
+    ///
+    /// ```zig
+    /// // After checking closeRequested in the editor event loop:
+    /// if (about.handle(event)) return;
+    /// ```
     pub fn handle(self: *AboutWindow, event: eggy.Event) bool {
         if (!self.window.owns(event)) return false;
         self.window.handle(event);
         return true;
     }
+    /// Present an About frame using the editor's borrowed style and open clicked URLs.
+    /// Return false when Close was pressed; rendering errors propagate, URL failures log.
+    ///
+    /// ```zig
+    /// // In the editor frame loop; clear the host's pointer after closing:
+    /// if (!try about.update(graphics, style)) {
+    ///     about.close(graphics);
+    ///     return;
+    /// }
+    /// ```
     pub fn update(self: *AboutWindow, graphics: *eggy.Graphics, style: *const ui.Context) !bool {
         try self.window.present(graphics, style, &self.view);
         if (self.view.open_url) |url| eggy.sdl_adapter.sdl.openURL(url) catch |err| std.log.err("cannot open {s}: {t}", .{ url, err });

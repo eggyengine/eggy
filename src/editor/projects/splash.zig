@@ -20,6 +20,15 @@ pub const Splash = struct {
     show_output: bool = false,
     terminal: TerminalView,
 
+    /// Create an editor loading page, copying up to 96 heading bytes and borrowing font/image.
+    /// The owner releases `terminal` and any owned `egg` after UI use ends; Splash has no
+    /// separate deinit. The monospace font must outlive the terminal.
+    ///
+    /// ```zig
+    /// // Given allocator gpa and a live monospace UI font:
+    /// var splash = Splash.init(gpa, mono, "Opening project", null);
+    /// defer splash.terminal.deinit();
+    /// ```
     pub fn init(gpa: std.mem.Allocator, mono: *const ui.Font, heading: []const u8, egg: ?ui.Image) Splash {
         var self = Splash{ .egg = egg, .terminal = .init(gpa, mono) };
         self.heading_len = @min(heading.len, self.heading_buffer.len);
@@ -27,6 +36,13 @@ pub const Splash = struct {
         return self;
     }
 
+    /// Build one editor loading frame from a job status snapshot; return close/cancel intent.
+    /// Borrows `status.detail`/`log` for the UI frame, so keep their arena/job storage alive
+    /// through rendering. Does not cancel the job; Copy all writes the system clipboard.
+    ///
+    /// ```zig
+    /// const action = splash.build(context, status); // Building UI context and live job Status.
+    /// ```
     pub fn build(self: *Splash, context: *ui.Context, status: Status) Action {
         if (self.egg) |*egg| context.image(egg, 56);
         context.heading(2, self.heading_buffer[0..self.heading_len]);

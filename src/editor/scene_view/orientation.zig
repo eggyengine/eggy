@@ -18,6 +18,12 @@ const axis_colors = [3][3]f32{ .{ 0.92, 0.27, 0.32 }, .{ 0.47, 0.85, 0.3 }, .{ 0
 pub const End = struct { axis: u2, positive: bool, at: ui.Vec2, nearness: f32 };
 
 /// The six ends as `view` sees them, in the corner of `scene`, furthest first.
+/// Editor-only: projects normalized camera axes into UI points, with axis indices 0/1/2 for
+/// x/y/z and a signed nearness used for ordering. Returns a value array without allocation.
+///
+/// ```zig
+/// const bubbles = ends(view, scene); // Current camera view and Scene UI rect.
+/// ```
 pub fn ends(view: View, scene: ui.Rect) [6]End {
     const centre = ui.Vec2{ .x = scene.x + scene.w - inset_pt, .y = scene.y + inset_pt };
     const right = eggy.camera.normalize(eggy.camera.cross(view.forward, view.up));
@@ -43,6 +49,12 @@ pub fn ends(view: View, scene: ui.Rect) [6]End {
 }
 
 /// The end under `pointer`, the nearest the camera first.
+/// Editor-only: pointer and scene rect use the same UI points. Tests square bubble bounds;
+/// null means none hit. Returns a copied End and does not move the camera.
+///
+/// ```zig
+/// const hovered = hit(view, scene, pointer); // Current view/Scene rect/UI pointer.
+/// ```
 pub fn hit(view: View, scene: ui.Rect, pointer: ui.Vec2) ?End {
     const all = ends(view, scene);
     var i: usize = all.len;
@@ -56,6 +68,15 @@ pub fn hit(view: View, scene: ui.Rect, pointer: ui.Vec2) ?End {
 
 /// The camera's turn to look at the scene from `end`'s side: yaw and pitch in degrees, as
 /// `SceneCamera` keeps them.
+/// Editor-only: use an End from `ends`/`hit` (axis 0..2); pole views use ±89 degrees to avoid
+/// a singular up vector. Returns angles only, leaving focus/distance unchanged.
+///
+/// ```zig
+/// // Given an End from hit and an existing SceneCamera:
+/// const turn = lookFrom(end);
+/// camera.yaw_deg = turn.yaw_deg;
+/// camera.pitch_deg = turn.pitch_deg;
+/// ```
 pub fn lookFrom(end: End) struct { yaw_deg: f32, pitch_deg: f32 } {
     const sign: f32 = if (end.positive) 1 else -1;
     return switch (end.axis) {
@@ -68,6 +89,12 @@ pub fn lookFrom(end: End) struct { yaw_deg: f32, pitch_deg: f32 } {
 
 /// The widget as paint for a node covering the Scene panel, seen through `view`, the end under
 /// the pointer (`hot`) lit. In `arena`.
+/// Editor-only: copies view-derived drawing state into the frame arena; keep it alive through
+/// painting. `hot` should come from this frame's hit test; allocation failure returns `.none`.
+///
+/// ```zig
+/// const widget_paint = paint(arena, view, scene, null); // Frame arena allocator and view/rect.
+/// ```
 pub fn paint(arena: std.mem.Allocator, view: View, scene: ui.Rect, hot: ?End) ui.Layout.Paint {
     const drawing = arena.create(Drawing) catch return .none;
     drawing.* = .{ .ends = ends(view, scene), .hot = hot, .centre = .{ .x = scene.x + scene.w - inset_pt, .y = scene.y + inset_pt } };

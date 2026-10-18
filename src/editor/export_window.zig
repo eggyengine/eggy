@@ -21,7 +21,7 @@ const project_settings = @import("project_settings.zig");
 /// Where a game can be exported to run: what people see, what `-Dtarget` it is, and what that
 /// needs beyond Zig.
 const Platform = struct { label: []const u8, target: []const u8, note: []const u8 };
-const platforms = [_]Platform{
+pub const platforms = [_]Platform{
     .{ .label = "This computer's system", .target = "native", .note = "Runs on any computer with the same system and kind of processor." },
     .{ .label = "Windows (x86-64)", .target = "x86_64-windows-gnu", .note = "Built from here: Zig carries what Windows needs." },
     .{ .label = "macOS (Apple silicon)", .target = "aarch64-macos", .note = "Needs a MacOSX.sdk in ~/SDKs (or -Dmacos-sdk)." },
@@ -51,6 +51,14 @@ pub const ExportWindow = struct {
 
     /// Open the window for the project in `project_dir`. On the heap, as the output view keeps a
     /// pointer to itself.
+    /// Copies `project_dir`; shared graphics/fonts must outlive the window.
+    /// Allocation/window errors propagate; failure to discover scenes leaves an empty list.
+    ///
+    /// ```zig
+    /// // Editor host with an open project:
+    /// const export_ui = try ExportWindow.open(gpa, graphics, font, mono, project_dir);
+    /// defer export_ui.close(graphics);
+    /// ```
     pub fn open(gpa: std.mem.Allocator, graphics: *const eggy.Graphics, font: *ui.Font, mono: *const ui.Font, project_dir: []const u8) !*ExportWindow {
         const self = try gpa.create(ExportWindow);
         errdefer gpa.destroy(self);
@@ -62,6 +70,12 @@ pub const ExportWindow = struct {
     }
 
     /// Close the window, stopping an export under way.
+    /// Releases any unclaimed settings change and all owned state, including `self`;
+    /// call before destroying shared fonts or graphics.
+    ///
+    /// ```zig
+    /// export_ui.close(graphics); // Do not use the pointer afterward.
+    /// ```
     pub fn close(self: *ExportWindow, graphics: *eggy.Graphics) void {
         if (self.job) |job| job.deinit();
         if (self.change) |change| {
@@ -77,6 +91,11 @@ pub const ExportWindow = struct {
 
     /// Handle `curr_event` if it is for this window; returns whether it was. The output view
     /// sees input first, so it can select and copy. Closing the window asks to close it.
+    /// The host must read `update().open` and perform destruction; events are not retained.
+    ///
+    /// ```zig
+    /// if (export_ui.handle(event)) return; // Editor event loop.
+    /// ```
     pub fn handle(self: *ExportWindow, curr_event: sdl3.events.Event) bool {
         if (!self.window.owns(curr_event)) return false;
         if (curr_event == .window_close_requested) {
@@ -90,6 +109,18 @@ pub const ExportWindow = struct {
 
     /// Draw a frame. Returns the project's default scene's change this frame (caller-owned, for
     /// the editor to record), and whether the window should stay open.
+    /// Both change texts were allocated with the window's `gpa`; transfer them to history
+    /// or free them. Status/render failures propagate before any pending change transfers.
+    ///
+    /// ```zig
+    /// const result = try export_ui.update(graphics, style);
+    /// if (result.change) |change|
+    ///     history.recordProjectSettings(change.before, change.after, now_ms);
+    /// if (!result.open) {
+    ///     export_ui.close(graphics);
+    ///     return;
+    /// }
+    /// ```
     pub fn update(self: *ExportWindow, graphics: *eggy.Graphics, style: *const ui.Context) !struct { change: ?project_settings.Change, open: bool } {
         var arena = std.heap.ArenaAllocator.init(self.gpa);
         defer arena.deinit();
@@ -97,6 +128,14 @@ pub const ExportWindow = struct {
         const Page = struct {
             window: *ExportWindow,
             status: ?job_zig.Status,
+            /// Internal synchronous tool-page adapter; borrows status and window for
+            /// this frame, recording export/settings actions in the window.
+            ///
+            /// ```zig
+            /// // Inside update, with its current status snapshot:
+            /// var page = Page{ .window = self, .status = status };
+            /// try self.window.present(graphics, style, &page);
+            /// ```
             pub fn build(page: *@This(), context: *ui.Context) void {
                 page.window.build(context, page.status);
             }

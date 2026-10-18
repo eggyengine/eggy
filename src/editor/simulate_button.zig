@@ -11,6 +11,13 @@ const gap: f32 = 6;
 
 /// The button for a bar `bar_height` tall spanning `bar_width` from `bar_x`, beside the play
 /// button.
+/// All geometry is logical points; show while not playing. Returns a frame-arena element
+/// or allocation error; activation merely produces an ID for the editor host to handle.
+///
+/// ```zig
+/// if (!mode.playing())
+///     context.element(try simulate_button.element(b, 0, viewport.w, 34));
+/// ```
 pub fn element(b: L.Builder, bar_x: f32, bar_width: f32, bar_height: f32) !*L.Element {
     const button = try b.node(id, .{ .width = play_button.width, .height = play_button.height, .z_index = 50 }, .{ .custom = .{ .context = undefined, .draw = draw } }, &.{});
     button.overlay = .{ .point = .init(bar_x + (bar_width - play_button.width) / 2 - gap - play_button.width, (bar_height - play_button.height) / 2) };

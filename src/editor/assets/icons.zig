@@ -18,6 +18,11 @@ pub const Icon = enum {
     list,
     grid,
 
+    /// Choose the editor icon for a listing kind; input maps share the text-file icon.
+    ///
+    /// ```zig
+    /// const icon = Icon.of(.scene); // .scene
+    /// ```
     pub fn of(kind: Kind) Icon {
         return switch (kind) {
             .folder => .folder,
@@ -56,6 +61,13 @@ pub const Icons = struct {
     on_light: [count]?ui.Image = @splat(null),
 
     /// Load every icon into `font`'s atlas. An icon that fails to load is left blank.
+    /// Editor-only: keep the font alive while using the images and release them with `deinit`.
+    ///
+    /// ```zig
+    /// // Given allocator gpa and a live UI font:
+    /// var icons = Icons.load(gpa, &font);
+    /// defer icons.deinit(gpa);
+    /// ```
     pub fn load(gpa: std.mem.Allocator, font: *ui.Font) Icons {
         var self = Icons{};
         inline for (std.meta.fields(Icon)) |field| {
@@ -67,12 +79,25 @@ pub const Icons = struct {
         return self;
     }
 
+    /// Release loaded editor images using the allocator supplied to `load`; call once.
+    /// Paint values borrowing these images must no longer be in use.
+    ///
+    /// ```zig
+    /// var icons = Icons.load(gpa, &font); // Existing allocator and live font.
+    /// defer icons.deinit(gpa);
+    /// ```
     pub fn deinit(self: *Icons, gpa: std.mem.Allocator) void {
         for (&self.on_dark) |*image| if (image.*) |*loaded| loaded.deinit(gpa);
         for (&self.on_light) |*image| if (image.*) |*loaded| loaded.deinit(gpa);
     }
 
     /// `icon`, tinted for `theme`, as layout paint; nothing where it didn't load.
+    /// The returned image frame borrows this icon set and its font atlas.
+    ///
+    /// ```zig
+    /// // Given loaded icons and the current UI theme:
+    /// const folder_paint = icons.paint(.folder, theme);
+    /// ```
     pub fn paint(self: *const Icons, icon: Icon, theme: ui.Theme) ui.Layout.Paint {
         const dark = (theme.background[0] + theme.background[1] + theme.background[2]) / 3 < 0.5;
         const image = (if (dark) self.on_dark else self.on_light)[@intFromEnum(icon)] orelse return .none;

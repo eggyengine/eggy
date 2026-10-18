@@ -4,6 +4,13 @@ const std = @import("std");
 const L = @import("weeoui").Layout;
 
 /// The id of the topmost interactive element (id not 0) under (x, y) in `root`, or 0.
+/// Host UI helper: use laid-out bounds/clip rectangles and coordinates in that same logical
+/// UI space. Higher overlay layers win, then smaller areas, then the later visited child.
+/// Borrows the tree without changing it.
+///
+/// ```zig
+/// const hovered_id = controlAt(layout_root, pointer_x, pointer_y);
+/// ```
 pub fn controlAt(root: *const L.Element, x: f32, y: f32) u32 {
     var best = Hit{};
     best.visit(root, 0, x, y);

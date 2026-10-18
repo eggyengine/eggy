@@ -25,6 +25,14 @@ pub const FolderFiles = struct {
     io: std.Io,
     dir: std.Io.Dir,
 
+    /// Borrow this folder as a scene-file provider; `self`, its directory and I/O must
+    /// outlive uses of the result. Reads are caller-owned, sentinel-terminated, and
+    /// limited to 64 MiB; paths are relative to `dir`.
+    ///
+    /// ```zig
+    /// var folder = FolderFiles{ .io = io, .dir = project_dir };
+    /// const provider = folder.files();
+    /// ```
     pub fn files(self: *FolderFiles) Files {
         return .{ .context = self, .read = read };
     }
@@ -50,10 +58,24 @@ pub const SceneInstances = struct {
         stale: bool = false,
     };
 
+    /// Create an empty host-side tracker; retains `gpa` for tracked paths and child lists.
+    /// Pair with `deinit`; no world entities are created yet.
+    ///
+    /// ```zig
+    /// var instances = SceneInstances.init(gpa);
+    /// defer instances.deinit();
+    /// ```
     pub fn init(gpa: std.mem.Allocator) SceneInstances {
         return .{ .gpa = gpa };
     }
 
+    /// Free tracking allocations once; does not despawn any world entities.
+    /// The tracker must no longer be used after this call.
+    ///
+    /// ```zig
+    /// var instances = SceneInstances.init(gpa);
+    /// defer instances.deinit();
+    /// ```
     pub fn deinit(self: *SceneInstances) void {
         var it = self.made.valueIterator();
         while (it.next()) |made| self.free(made.*);
@@ -62,6 +84,15 @@ pub const SceneInstances = struct {
 
     /// Make an instance synchronously and register its children so `sync` does not duplicate
     /// them. On failure the instance and every entity it created are removed.
+    /// Host operation: `files` and `access` must describe this world's project/registry.
+    /// Reads/parses the file immediately and propagates errors; returns the world-owned
+    /// instance root ID. `parent`, when supplied, must be a valid parent in this world.
+    ///
+    /// ```zig
+    /// const root = try instances.create(
+    ///     provider, world, access, .init("resources/scene/enemy.scene.zon"), null,
+    /// );
+    /// ```
     pub fn create(self: *SceneInstances, files: Files, world: *ecs.World, access: scene_zig.Access, file: refs.AssetRef(.scene), parent: ?ecs.EntityId) !ecs.EntityId {
         const root = try world.spawn(.{ Transform{}, SceneInstance{ .scene = file } });
         errdefer world.despawnRecursive(root);
@@ -75,6 +106,11 @@ pub const SceneInstances = struct {
     }
 
     /// Make every instance's entities again on the next `sync`, as their files may have changed.
+    /// Only marks tracking entries stale; does not read files or mutate the world now.
+    ///
+    /// ```zig
+    /// instances.remakeAll();
+    /// ```
     pub fn remakeAll(self: *SceneInstances) void {
         var it = self.made.valueIterator();
         while (it.next()) |made| made.stale = true;
@@ -84,6 +120,14 @@ pub const SceneInstances = struct {
     /// changed or whose entities are gone, from the scene files in `files`, and take away
     /// those of instances that are gone. `open_scene` (the scene being edited, relative to the
     /// project) is never made inside itself.
+    /// Host update: mutates/spawns/despawns ECS entities, invalidating borrowed component
+    /// pointers. File failures are logged and remembered until another remake/change;
+    /// nested instances newly created here are considered by a later call. Pass null
+    /// for `open_scene` outside the editor.
+    ///
+    /// ```zig
+    /// instances.sync(provider, world, access, null);
+    /// ```
     pub fn sync(self: *SceneInstances, files: Files, world: *ecs.World, access: scene_zig.Access, open_scene: ?[]const u8) void {
         const component = scene_instance.typeIndex(access.types()) orelse return;
         var seen: std.AutoHashMapUnmanaged(u32, void) = .empty;

@@ -33,6 +33,15 @@ pub const View = struct {
         self.last_error = null;
     }
 
+    /// Build the editor input-map page, mutating only the independent document and view state.
+    /// `path` is a display/project-relative asset path; context must be building a UI frame.
+    /// Returns a save/revert/close intent for the window host, not a disk write. UI errors
+    /// propagate; invalid control edits are retained as `last_error` and leave the document intact.
+    ///
+    /// ```zig
+    /// // Given View, building UI context and initialized Document:
+    /// const action = try view.build(context, &document, "resources/player.inmap.zon");
+    /// ```
     pub fn build(self: *View, context: *ui.Context, document: *Document, path: []const u8) !Action {
         // The file: its path and state, and saving it.
         context.begin(.row);
@@ -135,6 +144,14 @@ pub const View = struct {
 };
 
 /// Save only after the complete replacement is validated by the document.
+/// Editor-only: caller supplies validated bytes and a path relative to `dir`. Writes and
+/// flushes a sibling atomic file before replacing the destination; I/O errors propagate and
+/// atomic scratch state is cleaned up. Does not check for external changes or record history.
+///
+/// ```zig
+/// try writeFile(io, project, "resources/player.inmap.zon", validated_zon);
+/// // Existing I/O, open project directory and validated source.
+/// ```
 pub fn writeFile(io: std.Io, dir: std.Io.Dir, path: []const u8, text: []const u8) !void {
     var atomic = try dir.createFileAtomic(io, path, .{ .replace = true });
     defer atomic.deinit(io);
@@ -146,6 +163,15 @@ pub fn writeFile(io: std.Io, dir: std.Io.Dir, path: []const u8, text: []const u8
 }
 
 /// History must not overwrite a file edited outside the editor.
+/// Editor undo/redo helper: parse `text` before reading the existing file (limited to 1 MiB),
+/// require byte-for-byte `expected`, then replace atomically. Returns a caller-owned, saved
+/// Document to deinit; validation/conflict/I/O failures clean it up and propagate.
+///
+/// ```zig
+/// // Given allocator, I/O, project directory and a history step's before/after bytes:
+/// var restored = try restoreFile(gpa, io, project, path, after, before);
+/// defer restored.deinit();
+/// ```
 pub fn restoreFile(gpa: std.mem.Allocator, io: std.Io, dir: std.Io.Dir, path: []const u8, expected: []const u8, text: []const u8) !Document {
     var replacement = try Document.init(gpa, text);
     errdefer replacement.deinit();
@@ -165,6 +191,15 @@ pub const Window = struct {
     loaded_hash: u64,
     view: View = .{},
 
+    /// Open a desktop editor window for a project-relative input map, reading at most 1 MiB.
+    /// Owns the copied asset path, parsed document and heap window; borrows `project_dir` and
+    /// the live font/graphics resources until `close`. Parse/I/O/window failures unwind allocations.
+    ///
+    /// ```zig
+    /// // Given live editor graphics/font, allocator and project directory:
+    /// const window = try Window.open(gpa, graphics, font, project_dir, "resources/player.inmap.zon");
+    /// defer window.close(graphics);
+    /// ```
     pub fn open(gpa: std.mem.Allocator, graphics: *const eggy.Graphics, font: *ui.Font, project_dir: []const u8, path: []const u8) !*Window {
         var threaded: std.Io.Threaded = .init_single_threaded;
         const io = threaded.io();
@@ -189,6 +224,12 @@ pub const Window = struct {
         return self;
     }
 
+    /// Close desktop render/window resources and destroy this heap-owned editor window once.
+    /// Does not save: resolve unsaved-close confirmation before calling; the pointer becomes invalid.
+    ///
+    /// ```zig
+    /// window.close(graphics); // Existing Window pointer and its owning Graphics.
+    /// ```
     pub fn close(self: *Window, graphics: *eggy.Graphics) void {
         self.window.close(graphics);
         self.document.deinit();
@@ -196,12 +237,25 @@ pub const Window = struct {
         self.gpa.destroy(self);
     }
 
+    /// Test whether a project-relative path names this editor asset or an ancestor folder.
+    /// Uses slash boundaries, not a raw filename prefix; does not inspect disk.
+    ///
+    /// ```zig
+    /// const affected = window.affectedBy("resources"); // Existing input-map Window.
+    /// ```
     pub fn affectedBy(self: *const Window, path: []const u8) bool {
         return std.mem.eql(u8, self.path, path) or
             (std.mem.startsWith(u8, self.path, path) and self.path.len > path.len and self.path[path.len] == '/');
     }
 
     /// Follow a renamed asset or containing folder without discarding its working document.
+    /// Editor-only: `from`/`to` are project-relative slash-separated paths for an already
+    /// completed move. Does no filesystem work; unaffected paths no-op, allocation failures
+    /// propagate leaving the previous path intact.
+    ///
+    /// ```zig
+    /// try window.moved("resources/input", "resources/controls"); // After moving the folder.
+    /// ```
     pub fn moved(self: *Window, from: []const u8, to: []const u8) !void {
         if (!self.affectedBy(from)) return;
         const replacement = try std.fmt.allocPrint(self.gpa, "{s}{s}", .{ to, self.path[from.len..] });
@@ -209,6 +263,13 @@ pub const Window = struct {
         self.path = replacement;
     }
 
+    /// Route desktop editor events to this window, prioritizing an active binding capture.
+    /// Controller input may be captured without owning its window; returns true if consumed
+    /// or window-owned. Borrowed event data is not retained.
+    ///
+    /// ```zig
+    /// const used = window.handle(event); // Existing input-map Window and Eggy event.
+    /// ```
     pub fn handle(self: *Window, event: eggy.Event) bool {
         if (self.view.mappings.capture != null and (self.window.owns(event) or eggy.game_ui.isControllerInput(event))) {
             if (self.view.mappings.captureEvent(event)) return true;
@@ -218,6 +279,13 @@ pub const Window = struct {
         return true;
     }
 
+    /// Return true when this desktop editor window can close immediately for close/Escape.
+    /// Escape is ignored during binding capture; a modified document instead opens confirmation
+    /// and returns false. Does not destroy the window or write its file.
+    ///
+    /// ```zig
+    /// if (window.closeRequested(event)) window.close(graphics); // Host-owned event/graphics.
+    /// ```
     pub fn closeRequested(self: *Window, event: eggy.Event) bool {
         if (!self.window.owns(event)) return false;
         const requested = event == .window_close_requested or (self.view.mappings.capture == null and event == .key_down and event.key_down.scancode == .escape);
@@ -228,6 +296,13 @@ pub const Window = struct {
     }
 
     /// Refuse external changes, and reserve history before replacing the file atomically.
+    /// Editor-only: validates/serializes at most 1 MiB, checks the loaded file hash, and records
+    /// an owned before/after step only after replacement succeeds. Marks saved on success;
+    /// unchanged bytes need no history step. Conflict/validation/history/I/O errors propagate.
+    ///
+    /// ```zig
+    /// try window.save(&history); // Existing input-map Window and editor History.
+    /// ```
     pub fn save(self: *Window, history: *history_zig.History) !void {
         var text: std.Io.Writer.Allocating = .init(self.gpa);
         defer text.deinit();
@@ -256,6 +331,13 @@ pub const Window = struct {
         self.document.markSaved();
     }
 
+    /// Re-read the editor asset from disk, discarding unsaved changes only after a valid parse.
+    /// Replaces document/view state and loaded hash; I/O/parse failures preserve current state.
+    /// Does not record history or change the live game's input state.
+    ///
+    /// ```zig
+    /// try window.reload(); // Existing Window after the user chooses Revert.
+    /// ```
     pub fn reload(self: *Window) !void {
         var threaded: std.Io.Threaded = .init_single_threaded;
         const io = threaded.io();
@@ -270,6 +352,14 @@ pub const Window = struct {
         self.view = .{};
     }
 
+    /// Apply editor input-map undo/redo to disk and this window, rejecting unsaved/external edits.
+    /// `dir` is the project directory; `expected` is the current history side and `text` the
+    /// target side. Validates and atomically replaces before swapping document/view/hash;
+    /// conflicts, parse and I/O errors propagate without replacing the working document.
+    ///
+    /// ```zig
+    /// try window.restore(io, project, after, before); // Undo with history bytes.
+    /// ```
     pub fn restore(self: *Window, io: std.Io, dir: std.Io.Dir, expected: []const u8, text: []const u8) !void {
         if (self.document.modified()) return error.UnsavedInputMap;
         const replacement = try restoreFile(self.gpa, io, dir, self.path, expected, text);
@@ -279,10 +369,27 @@ pub const Window = struct {
         self.view = .{};
     }
 
+    /// Present one desktop editor frame, carrying out save/revert intents using `history`.
+    /// Borrows the main UI's style and owning graphics; presentation failures propagate,
+    /// while save/revert/build failures log and show in the view. The caller destroys the
+    /// window when `close` is true and refreshes asset state when `saved` is true.
+    ///
+    /// ```zig
+    /// const result = try window.update(graphics, style, &history); // Existing host objects.
+    /// if (result.close) window.close(graphics);
+    /// ```
     pub fn update(self: *Window, graphics: *eggy.Graphics, style: *const ui.Context, history: *history_zig.History) !struct { close: bool = false, saved: bool = false } {
         const Page = struct {
             owner: *Window,
             action: Action = .none,
+            /// ToolWindow callback for this editor frame: build a scrollable input-map page,
+            /// retaining its intent in `page.action`. Borrows owner/context synchronously;
+            /// UI failures are logged and stored in the view, not returned.
+            ///
+            /// ```zig
+            /// // Inside Window.update, with its local Page and a building UI context:
+            /// page.build(context);
+            /// ```
             pub fn build(page: *@This(), context: *ui.Context) void {
                 const view = &page.owner.view;
                 context.beginScroll(&view.scroll, @max(1, context.viewport.h - 24));

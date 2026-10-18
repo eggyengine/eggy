@@ -20,6 +20,13 @@ pub const Scenes = struct {
     /// Create a scene-instance root and its immediate scene entities synchronously. Nested
     /// instances synchronize at the normal scene-sync point. Returns the root; the world owns
     /// it. Read/parse/allocation failures remove everything this call spawned.
+    /// `options.parent`, when supplied, must be alive in this world. Requires a scene registry
+    /// and resource provider; do not retain the returned ID across world resets.
+    ///
+    /// ```zig
+    /// // In a game hook:
+    /// const root = try app.scenes().instantiate(.init("resources/enemy.scene.zon"), .{});
+    /// ```
     pub fn instantiate(self: Scenes, file: refs.AssetRef(.scene), options: Options) !ecs.EntityId {
         if (file.len == 0) return error.UnsetAsset;
         const access = self.access orelse return error.NoSceneRegistry;
@@ -29,9 +36,25 @@ pub const Scenes = struct {
     }
 
     // ponytail: scenes instantiate synchronously, add streaming ownership and completion before exposing loaded handles.
+    /// Reserved streaming API; always returns `NotImplemented` without creating entities.
+    /// Use `instantiate` for supported synchronous loading.
+    ///
+    /// ```zig
+    /// // With the current world's scenes view:
+    /// try std.testing.expectError(error.NotImplemented,
+    ///     scenes.stream(.init("resources/enemy.scene.zon"), .{}));
+    /// ```
     pub fn stream(_: Scenes, file: refs.AssetRef(.scene), options: Options) support.Error!ecs.EntityId {
         return support.notImplemented(.{ file, options });
     }
+    /// Reserved world-replacement API; always returns `NotImplemented`, leaving the world
+    /// untouched. Instantiation does not implicitly replace the current scene.
+    ///
+    /// ```zig
+    /// // With the current world's scenes view:
+    /// try std.testing.expectError(error.NotImplemented,
+    ///     scenes.replace(.init("resources/level.scene.zon")));
+    /// ```
     pub fn replace(_: Scenes, file: refs.AssetRef(.scene)) support.Error!void {
         return support.notImplemented(file);
     }

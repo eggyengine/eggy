@@ -52,6 +52,14 @@ pub const MeshRenderer = struct {
 
     /// Build the shapes and a pipeline drawing into `format`, with a `.d32_float` depth buffer,
     /// painting with textures bound as `texture_layout` describes (`TextureCache.layout`).
+    /// Host-only setup: `shaderSource` supplies backend shader modules. The device and
+    /// compatible texture layout must outlive rendering; GPU/shader errors propagate.
+    /// Release the returned renderer with `deinit` after queued draws finish.
+    ///
+    /// ```zig
+    /// var renderer = try MeshRenderer.init(device, color_format, shader_source_adapter, textures.layout);
+    /// defer renderer.deinit(); // Finish any GPU use before leaving this host scope.
+    /// ```
     pub fn init(device: vit.Device, format: vit.Format, shaderSource: *const fn ([]const u8, []const u8) vit.ShaderModule, texture_layout: vit.BindGroupLayout) !MeshRenderer {
         var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
         defer arena.deinit();
@@ -112,6 +120,12 @@ pub const MeshRenderer = struct {
     }
 
     /// Free everything. The GPU must be done with it.
+    /// Host teardown: call once before destroying the creating device.
+    ///
+    /// ```zig
+    /// try graphics.queue.waitIdle();
+    /// renderer.deinit();
+    /// ```
     pub fn deinit(self: *MeshRenderer) void {
         self.mask_pipeline.deinit();
         self.outline_pipeline.deinit();
@@ -129,6 +143,13 @@ pub const MeshRenderer = struct {
 
     /// Load the model files and textures `drawables` need from `sources`, and ready new
     /// textures for sampling. Call outside a render pass, before `draw`.
+    /// Host-only: considers at most `max_drawables`, borrowing valid component-backed
+    /// paths. Loads are cached (including failures); barrier errors propagate.
+    ///
+    /// ```zig
+    /// try renderer.prepare(scene_cmd, drawables, asset_sources);
+    /// // Begin the compatible scene render pass before calling renderer.draw.
+    /// ```
     pub fn prepare(self: *MeshRenderer, cmd: vit.CommandBuffer, drawables: []const mesh.Drawable, sources: Sources) !void {
         _ = self;
         for (drawables[0..@min(drawables.len, max_drawables)]) |drawable| {
@@ -142,6 +163,14 @@ pub const MeshRenderer = struct {
     /// progress, whose viewport is `viewport_px`, through `view_projection` (a `camera.View`'s),
     /// outlining `selected`'s, with model files and textures from `sources` (`prepare`d for
     /// them). `srgb`: whether the target encodes sRGB itself.
+    /// Host-only: `viewport_px` is `{ width, height }` in physical pixels, not a rectangle.
+    /// The pass needs the configured color format and `.d32_float` depth; caller owns
+    /// viewport/scissor and in-flight-slot fencing. Buffer upload errors propagate.
+    ///
+    /// ```zig
+    /// // Inside the compatible render pass, after prepare:
+    /// try renderer.draw(scene_cmd, drawables, asset_sources, clip_from_world, .{ 1280, 720 }, selected_entity, target_is_srgb);
+    /// ```
     pub fn draw(self: *MeshRenderer, cmd: vit.CommandBuffer, drawables: []mesh.Drawable, sources: Sources, view_projection: [4][4]f32, viewport_px: [2]f32, selected: ?ecs.EntityId, srgb: bool) !void {
         const sorted = drawables[0..@min(drawables.len, max_drawables)];
         if (sorted.len == 0) return;

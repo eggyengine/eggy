@@ -10,6 +10,13 @@ pub const file_variable = "EGGY_RUNNER_FILE";
 
 /// The command line that starts this build's runner for `b` (the project's own builder), less
 /// the steps and options to run: the runner, then the paths it is always given.
+/// Build-internal; returns arguments in `b`'s arena, not shell-quoted text. Append build
+/// steps/options separately. Fails configuration by panic if the runner cannot be located.
+///
+/// ```zig
+/// const nested = b.addSystemCommand(runner.argv(b));
+/// nested.addArgs(&.{ "runtime", "-Doptimize=ReleaseFast" });
+/// ```
 pub fn argv(b: *std.Build) []const []const u8 {
     const self_exe = std.process.executablePathAlloc(b.graph.io, b.allocator) catch |err| std.debug.panic("cannot find the build runner: {t}", .{err});
     return b.allocator.dupe([]const u8, &.{
@@ -25,6 +32,13 @@ pub fn argv(b: *std.Build) []const []const u8 {
 }
 
 /// When `EGGY_RUNNER_FILE` is set, write `argv(b)` into that file, an argument a line.
+/// Build-internal; unset means no side effects. Uses the build runner's environment and
+/// overwrites the named file. Write failures are warned, not propagated or treated as success.
+///
+/// ```zig
+/// // During build-graph setup, to cooperate with an editor-launched build:
+/// runner.record(b);
+/// ```
 pub fn record(b: *std.Build) void {
     const path = b.graph.environ_map.get(file_variable) orelse return;
     var text: std.ArrayList(u8) = .empty;

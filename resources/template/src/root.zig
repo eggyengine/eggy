@@ -37,6 +37,13 @@ pub const Plugin = struct {
     pub const components = .{Spin};
 
     /// Runs once at start-up: registers the `spin` system and spawns an entity to turn.
+    /// The App owns the entity/schedule; this plugin retains only value state and does not
+    /// use `gpa`. Entity allocation errors propagate. Reload calls this on a fresh instance.
+    ///
+    /// ```zig
+    /// // Engine startup dispatch after component/preference registration:
+    /// var plugin = try Plugin.init(gpa, app);
+    /// ```
     pub fn init(gpa: std.mem.Allocator, app: *eggy.App) !Plugin {
         _ = gpa;
         app.world.addSchedule(ecs.Schedule(.Update, .{spin}));
@@ -50,6 +57,12 @@ pub const Plugin = struct {
     pub const editor_commands = [_]eggy.plugins.EditorCommand{.{ .key = "reset-clicks", .title = "Reset Plugin Clicks" }};
 
     /// Commands appear in View and dispatch to this plugin, without stored callbacks.
+    /// Index 0 resets the plugin's own click counter, not world/scene state or history.
+    /// The host must supply an index from `editor_commands`; other indices are unreachable.
+    ///
+    /// ```zig
+    /// try plugin.editorCommand(0, editor); // "Reset Plugin Clicks".
+    /// ```
     pub fn editorCommand(self: *Plugin, command: usize, editor: *eggy.editor.Context) !void {
         _ = editor;
         switch (command) {
@@ -59,6 +72,12 @@ pub const Plugin = struct {
     }
 
     /// Draws panel `panel` (an index into `editor_panels`) every frame. Never called in the runtime.
+    /// The only declared panel is 0. Borrows both contexts, reads live project preferences
+    /// and increments plugin-owned state when clicked; does not own or render the UI context.
+    ///
+    /// ```zig
+    /// try plugin.editorPanelUi(0, editor, ui); // Host's dock-panel dispatch.
+    /// ```
     pub fn editorPanelUi(self: *Plugin, panel: usize, editor: *eggy.editor.Context, ui: *eggy.ui.Context) !void {
         _ = panel;
         ui.heading(3, "eggy_template_name");
@@ -68,6 +87,12 @@ pub const Plugin = struct {
     }
 
     /// Adds to the editor's Inspector. Never called in the runtime.
+    /// `editor` and `ui` are borrowed for this frame; the template only displays a label.
+    /// Keep gameplay simulation in `update`, not this editor-only hook.
+    ///
+    /// ```zig
+    /// try plugin.editorUi(editor, ui); // Project Inspector with no selected entity.
+    /// ```
     pub fn editorUi(self: *Plugin, editor: *eggy.editor.Context, ui: *eggy.ui.Context) !void {
         _ = editor;
         _ = self;

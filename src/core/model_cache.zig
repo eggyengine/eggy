@@ -55,12 +55,28 @@ pub const ModelCache = struct {
     /// By path, which the map owns; null for a model that didn't load, so it isn't tried again.
     entries: std.StringHashMapUnmanaged(?Gpu) = .empty,
 
+    /// Create an empty host model cache borrowing `device` and retaining `gpa`.
+    /// Configure `loader` before first use; no model can load without one.
+    /// Destroy with `deinit` before the texture cache and device.
+    ///
+    /// ```zig
+    /// var models = ModelCache.init(gpa, graphics.device);
+    /// defer models.deinit(&textures); // Finish GPU use before this host scope ends.
+    /// models.loader = model_loader;
+    /// ```
     pub fn init(gpa: std.mem.Allocator, device: vit.Device) ModelCache {
         return .{ .gpa = gpa, .device = device };
     }
 
     /// Free every model, and its textures from `textures`. The GPU must be done with them
     /// (`Graphics.queue.waitIdle`).
+    /// Host teardown: use the same texture cache used by `get`; invalidates all returned
+    /// `Gpu` values and borrowed part slices. Call once.
+    ///
+    /// ```zig
+    /// try graphics.queue.waitIdle();
+    /// models.deinit(&textures);
+    /// ```
     pub fn deinit(self: *ModelCache, textures: *TextureCache) void {
         self.forgetAll(textures);
         self.entries.deinit(self.gpa);
@@ -68,6 +84,14 @@ pub const ModelCache = struct {
 
     /// The model at `path`, loading it the first time (its textures into `textures`); null when
     /// it can't be drawn.
+    /// Host lookup: `path` is project-relative. Returns cache-owned GPU handles and parts;
+    /// do not free them or retain them past invalidation. Load/upload failures are logged
+    /// and cached until `forgetAll`; allocation failure can also return null.
+    /// Embedded textures need `textures.prepare` before sampling.
+    ///
+    /// ```zig
+    /// const gpu_model = models.get("resources/ship.glb", &textures) orelse return;
+    /// ```
     pub fn get(self: *ModelCache, path: []const u8, textures: *TextureCache) ?Gpu {
         if (self.entries.get(path)) |known| return known;
         const key = self.gpa.dupe(u8, path) catch return null;
@@ -82,6 +106,14 @@ pub const ModelCache = struct {
 
     /// The box round the model at `path`, in its own space, if it is loaded (this doesn't
     /// load it).
+    /// Returns `{ minimum, maximum }` by value in model-space units, or null for missing
+    /// and failed entries; does not transform the box to world space.
+    ///
+    /// ```zig
+    /// const box = models.bounds("resources/ship.glb") orelse return;
+    /// const minimum = box[0];
+    /// const maximum = box[1];
+    /// ```
     pub fn bounds(self: *const ModelCache, path: []const u8) ?[2][3]f32 {
         const known = self.entries.get(path) orelse return null;
         const gpu = known orelse return null;
@@ -90,6 +122,14 @@ pub const ModelCache = struct {
 
     /// Forget every model, so each loads again when next drawn (its file or import settings may
     /// have changed). The GPU must be done with them.
+    /// Host-only: releases embedded textures through the same `textures` cache used for
+    /// loading, clears failures too, and retains map capacity and loader configuration.
+    /// Invalidates all previously returned handles/parts.
+    ///
+    /// ```zig
+    /// try graphics.queue.waitIdle();
+    /// models.forgetAll(&textures);
+    /// ```
     pub fn forgetAll(self: *ModelCache, textures: *TextureCache) void {
         var it = self.entries.iterator();
         while (it.next()) |entry| {

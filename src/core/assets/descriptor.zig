@@ -25,21 +25,44 @@ pub const ModelImport = struct {
 };
 
 /// Whether `path` is a descriptor rather than a file of the project.
+/// Checks only the name; `.eggy` by itself is not a descriptor.
+///
+/// ```zig
+/// const descriptor_file = isDescriptor("resources/ship.glb.eggy");
+/// ```
 pub fn isDescriptor(path: []const u8) bool {
     return path.len > extension.len and std.mem.endsWith(u8, path, extension);
 }
 
 /// The descriptor of the file at `path`, in `buffer`.
+/// Returns a borrowed slice; fails with `error.NoSpaceLeft` if the suffix does not fit.
+///
+/// ```zig
+/// var buffer: [512]u8 = undefined;
+/// const descriptor_path = try pathOf(&buffer, "resources/ship.glb");
+/// ```
 pub fn pathOf(buffer: []u8, path: []const u8) ![]const u8 {
     return std.fmt.bufPrint(buffer, "{s}" ++ extension, .{path});
 }
 
 /// Allocate the descriptor's path; free the result with `gpa.free`.
+/// Propagates allocation failure; does not access the filesystem.
+///
+/// ```zig
+/// const descriptor_path = try pathOfAlloc(gpa, "resources/ship.glb");
+/// defer gpa.free(descriptor_path);
+/// ```
 pub fn pathOfAlloc(gpa: std.mem.Allocator, path: []const u8) ![]u8 {
     return std.fmt.allocPrint(gpa, "{s}" ++ extension, .{path});
 }
 
 /// A new descriptor for the file at `path`, with a random id from `io`.
+/// Infers the kind from the filename; folders need their kind set separately.
+/// Returns a value without writing a file.
+///
+/// ```zig
+/// const descriptor = new(io, "resources/ship.glb");
+/// ```
 pub fn new(io: std.Io, path: []const u8) Descriptor {
     var id: u64 = 0;
     io.random(std.mem.asBytes(&id));
@@ -47,12 +70,28 @@ pub fn new(io: std.Io, path: []const u8) Descriptor {
 }
 
 /// `text` (a descriptor file's ZON) as a descriptor, allocating in `arena`.
+/// Requires sentinel-terminated input, ignores unknown fields, and propagates parse errors.
+/// Release parse allocations with the arena.
+///
+/// ```zig
+/// var arena = std.heap.ArenaAllocator.init(gpa);
+/// defer arena.deinit();
+/// const descriptor = try parse(arena.allocator(), ".{ .id = 42, .kind = .model }");
+/// ```
 pub fn parse(arena: std.mem.Allocator, text: [:0]const u8) !Descriptor {
     return std.zon.parse.fromSliceAlloc(Descriptor, arena, text, null, .{ .ignore_unknown_fields = true });
 }
 
 /// The descriptor of the file at `path` in `dir`, read in `arena`; null when it has none.
 /// Fails with `error.ParseZon` when it doesn't parse.
+/// `path` names the asset, not its `.eggy` sidecar; other I/O and allocation errors propagate.
+/// The arena owns the loaded text and parse allocations.
+///
+/// ```zig
+/// var arena = std.heap.ArenaAllocator.init(gpa);
+/// defer arena.deinit();
+/// const descriptor = try read(arena.allocator(), io, project_dir, "resources/ship.glb");
+/// ```
 pub fn read(arena: std.mem.Allocator, io: std.Io, dir: std.Io.Dir, path: []const u8) !?Descriptor {
     var buffer: [std.fs.max_path_bytes]u8 = undefined;
     const text = dir.readFileAllocOptions(io, try pathOf(&buffer, path), arena, .limited(64 * 1024), .of(u8), 0) catch |err| switch (err) {
@@ -63,6 +102,11 @@ pub fn read(arena: std.mem.Allocator, io: std.Io, dir: std.Io.Dir, path: []const
 }
 
 /// Write `descriptor` as the descriptor of the file at `path` in `dir`.
+/// Creates or truncates the sidecar, not the asset; propagates formatting and I/O errors.
+///
+/// ```zig
+/// try write(io, project_dir, "resources/ship.glb", .{ .id = 42, .kind = .model });
+/// ```
 pub fn write(io: std.Io, dir: std.Io.Dir, path: []const u8, descriptor: Descriptor) !void {
     var name_buffer: [std.fs.max_path_bytes]u8 = undefined;
     var text_buffer: [1024]u8 = undefined;

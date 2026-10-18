@@ -17,6 +17,13 @@ pub const Dragged = union(enum) {
 
     /// Whether a reference part `target` takes this: an entity reference an entity with the
     /// component it requires, an asset reference a file of its kind.
+    /// Inspects borrowed drag metadata without changing it; no world/filesystem lookup occurs.
+    ///
+    /// ```zig
+    /// const dragged = Dragged{ .asset = "sounds/hum.ogg" };
+    /// const accepts = dragged.fits(.{ .kind = .asset, .accepts = .audio });
+    /// std.debug.assert(accepts);
+    /// ```
     pub fn fits(self: Dragged, target: eggy.components.Part) bool {
         const requires = std.mem.span(target.requires);
         return switch (self) {
@@ -28,6 +35,15 @@ pub const Dragged = union(enum) {
     }
 
     /// What a field set to this holds, as ZON, in `buffer`.
+    /// Returns a slice borrowing caller storage, valid until that storage changes.
+    /// Escapes asset paths; returns `NoSpaceLeft` if the buffer is too short.
+    ///
+    /// ```zig
+    /// var buffer: [256]u8 = undefined;
+    /// const text = try (Dragged{ .asset = "sounds/hum.ogg" }).zon(&buffer);
+    /// // Pass text to the editor's field setter before reusing buffer.
+    /// std.debug.assert(text[0] == '"');
+    /// ```
     pub fn zon(self: Dragged, buffer: []u8) ![]const u8 {
         return switch (self) {
             .entity => |dragged| std.fmt.bufPrint(buffer, ".{{ .id = {d}, .generation = {d} }}", .{ dragged.entity.id, dragged.entity.generation }),

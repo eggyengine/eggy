@@ -11,6 +11,14 @@ const runner = @import("runner.zig");
 /// Add the `export` step to `b` for the game `name` on `target`, starting in `scene` (`-Dscene`
 /// or `eggy.zon`'s `.default_scene`; without one the step fails, asking for one), with Eggy's
 /// builder `engine` (for the zip tool).
+/// Build-internal; adds graph-owned steps and does not export during configuration.
+/// The nested build uses ReleaseFast and a baseline CPU unless explicitly selected.
+/// Missing scenes, compiler/SDK problems and packaging failures fail the export step.
+///
+/// ```zig
+/// game_export.addExport(b, engine_builder, target, "my_game", startup_scene);
+/// // Users then run: zig build export
+/// ```
 pub fn addExport(b: *std.Build, engine: *std.Build, target: std.Build.ResolvedTarget, name: []const u8, scene: ?[]const u8) void {
     const step = b.step("export", "Build the game to ship for -Dtarget, as fast as it runs, into export/");
     const start = scene orelse {

@@ -3,6 +3,13 @@
 //! changes when the files do.
 const std = @import("std");
 
+/// Build-tool entry point: create/overwrite an uncompressed archive from archive-path/file pairs.
+/// Uses the process Io and stack buffering; missing arguments or file/write failures propagate.
+/// Does not roll back a partially written output. Paths are supplied by the trusted build graph.
+///
+/// ```sh
+/// tar template.tar build.zig resources/template/build.zig
+/// ```
 pub fn main(init: std.process.Init) !void {
     const io = init.io;
     var args = init.minimal.args.iterate();

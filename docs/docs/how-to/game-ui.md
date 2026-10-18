@@ -1,12 +1,17 @@
 ---
-sidebar_position: 5
-title: Game UI
+sidebar_position: 9
+title: Build game UI
+slug: /guides/game-ui
 ---
 
-# Game UI
+Add a Weeoui interface to a game with `gameUi`, or draw a custom interface with
+`draw` and route its input through `uiEvent`.
 
-Declare `gameUi` to describe a game's interface with Weeoui. Eggy supplies the context,
-font atlas, input routing, and renderer; you choose the layout, widgets, and style.
+## Add a UI hook
+
+Start with a [game or plugin](../how-to/create-plugins.md) registered with Eggy.
+Eggy supplies the Weeoui context, font atlas, input routing, and renderer.
+Keep durable UI state in plugin fields, without pointers to the plugin itself:
 
 ```zig
 pub const Game = struct {
@@ -25,16 +30,16 @@ pub const Game = struct {
 
 ![A custom-font game HUD over a 3D scene](/img/developer-api/hud.png)
 
-Use Weeoui's existing containers, custom widgets, and layout builder for your own designs;
-there is no second Eggy widget vocabulary. UI hooks run in plugin order. The interface is
-drawn after the scene and custom draw hooks, before Eggy presents the frame.
+Use Weeoui's containers, custom widgets, and layout builder to change the layout and style.
+UI hooks run in plugin order. The interface is drawn after the scene and custom draw
+hooks, before Eggy presents the frame.
 
-The same hook runs in the editor's **Play** Scene viewport, including while paused.
+The same hook runs in the editor's Play Scene viewport, including while paused.
 It uses viewport-local logical coordinates and the target window's pixel scale. It does
 not draw over editor chrome or run while the editor's Build window freezes the game.
 Stop/reload discards the old UI contexts before unloading the game library.
 
-## Fonts and lifetime
+## Load a font once {#fonts-and-lifetime}
 
 Select a font once during initialization:
 
@@ -55,8 +60,7 @@ resources safely; do not call it every frame. Customize `ui.theme` in the hook r
 replacing `ui.font` or changing the context's ownership fields.
 
 Contexts, widget trees, vertices, and draw targets are borrowed. Do not retain them beyond
-the hook/frame. Keep durable UI state in plugin fields, without pointers to the plugin itself.
-Clipboard and text-input ownership follow UI focus. Standalone UI uses the existing SDL
+the hook/frame. Clipboard and text-input ownership follow UI focus. Standalone UI uses the existing SDL
 accessibility adapter; embedded game widgets are not yet merged into the editor's
 accessibility tree.
 
@@ -81,7 +85,7 @@ pub fn draw(self: *Game, app: *eggy.App, target: eggy.DrawContext) !void {
 }
 ```
 
-For a real custom interface, own your pipelines and buffers and record its commands here.
+For a custom interface, own your pipelines and buffers and record its commands here.
 `target.beginPass()`/`endPass()` are convenient when preserving the scene instead of clearing
 it. Enter and leave the hook outside a render pass, with the target in color-attachment
 state. Pair a started pass with `defer target.endPass()` if later work can fail.
@@ -90,6 +94,8 @@ state. Pair a started pass with `defer target.endPass()` if later work can fail.
 target. `frame_owner` and `frame_slot` identify the already-waited reusable slot: keep
 per-surface/per-slot upload buffers when rendering into more than one surface. Do not
 submit, present, retain the command buffer, or destroy resources still used by the GPU.
+
+### Route custom UI input
 
 To handle your renderer's input, declare:
 
@@ -104,17 +110,30 @@ pub fn uiEvent(self: *Game, app: *eggy.App, event: eggy.Event) !bool {
 }
 ```
 
-Default UI gets first refusal, then custom `uiEvent` hooks run in reverse plugin order.
-Return true for every event your custom UI owns, including releases. Unconsumed input
-reaches gameplay's `event` hook and `app.input`; consumed input reaches neither. Default UI
-capture clears gameplay holds without inventing release actions. A custom modal interface
-can call `app.input.cancel()` when it takes focus. OS lifecycle events are never swallowed.
-Editor shortcuts and modal tools retain precedence.
+Return true for every event your custom UI owns, including releases. Default UI gets
+first refusal, then custom `uiEvent` hooks run in reverse plugin order. Unconsumed input
+reaches gameplay's `event` hook and `app.input`; consumed input reaches neither.
 
-## Exercise the examples
+Default UI capture clears gameplay holds without inventing release actions. Call
+`app.input.cancel()` when a custom modal interface takes focus. OS lifecycle events
+are never swallowed. Editor shortcuts and modal tools retain precedence.
 
-From an Eggy checkout, `zig build run-runtime -Dapi-demo=weeoui` runs the themed HUD with a
-copied custom font and a text field. Space in the focused field must not increase the
-gameplay counter. `-Dapi-demo=custom` runs the custom-renderer-only example, which asserts
-that no default overlay was created. Use `zig build run -Dapi-demo=weeoui` to open its editor
-and inspect the API Tools panel and commands.
+## Check layout and input ownership {#exercise-the-examples}
+
+With the first example, click Count and check that the displayed number increases.
+
+From an Eggy checkout, run `zig build run-runtime -Dapi-demo=weeoui` to display the
+themed HUD with a copied custom font and a text field. Focus the field and press
+Space: the gameplay counter must not increase.
+
+Use `-Dapi-demo=custom` to run the custom-renderer-only example, which asserts
+that no default overlay was created. Run `zig build run -Dapi-demo=weeoui` to open
+its editor and inspect the API Tools panel and commands. Check your own interface
+in the Play viewport, including while paused.
+
+## Related contracts
+
+The [hook reference](../reference/plugin-hooks.md#hooks) lists signatures and call order.
+[Input routing](../explanation/input-and-time.md) explains how UI ownership affects
+gameplay, and [ownership and reload](../explanation/ownership-and-reload.md) covers
+borrowed contexts and game-library lifetime.

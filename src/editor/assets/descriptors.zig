@@ -10,6 +10,11 @@ pub const Changes = struct {
     made: usize = 0,
     removed: usize = 0,
 
+    /// Report whether an editor descriptor sync created or removed anything.
+    ///
+    /// ```zig
+    /// const changed = (Changes{ .made = 1 }).any(); // true
+    /// ```
     pub fn any(self: Changes) bool {
         return self.made + self.removed > 0;
     }
@@ -17,6 +22,14 @@ pub const Changes = struct {
 
 /// Give every file and folder in `project`'s `resources/` a descriptor, and remove descriptors
 /// left without one. A project without `resources/` has nothing to do.
+/// Scratch allocations use `gpa`; the result owns no memory. I/O/allocation errors propagate,
+/// and earlier descriptor writes/deletions are not rolled back if a later operation fails.
+///
+/// ```zig
+/// // Given an open project directory, allocator gpa and I/O io:
+/// const changes = try sync(gpa, io, project);
+/// if (changes.any()) std.log.info("Asset descriptors updated", .{});
+/// ```
 pub fn sync(gpa: std.mem.Allocator, io: std.Io, project: std.Io.Dir) !Changes {
     var resources = project.openDir(io, eggy.project.resources_dir, .{ .iterate = true }) catch |err| switch (err) {
         error.FileNotFound => return .{},

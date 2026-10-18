@@ -9,6 +9,13 @@ const View = eggy.camera.View;
 
 /// The camera the game looks through: the first entity with a `Camera`, and its view; null when
 /// the scene has none.
+/// Editor-only: queries library-local component types in slot order; missing library or
+/// unreadable camera transforms also yield null. Returns copied view/entity values, not
+/// pointers into component storage.
+///
+/// ```zig
+/// const camera = find(game, app); // Loaded HotGame and its App pointer.
+/// ```
 pub fn find(game: *const HotGame, app: *eggy.App) ?struct { entity: eggy.ecs.EntityId, view: View } {
     const component = game.builtinComponent("Camera") orelse return null;
     for (app.world.slots.items, 0..) |slot, i| {
@@ -22,6 +29,12 @@ pub fn find(game: *const HotGame, app: *eggy.App) ?struct { entity: eggy.ecs.Ent
 
 /// The view through `entity`'s `Camera`, placed by its transform (down its -z, its +y up), as
 /// `eggy.camera.find` places one; null when it has no `Camera`.
+/// Editor-only: also returns null for missing library/dead entity. Copies transform/lens
+/// through the game ABI; unreadable lens fields retain View defaults. No ownership transfer.
+///
+/// ```zig
+/// const view = viewOf(game, app, entity); // Existing HotGame/App and entity id.
+/// ```
 pub fn viewOf(game: *const HotGame, app: *eggy.App, entity: eggy.ecs.EntityId) ?View {
     const component = game.builtinComponent("Camera") orelse return null;
     if (!game.hasComponent(app, entity, component)) return null;
@@ -43,7 +56,14 @@ pub fn viewOf(game: *const HotGame, app: *eggy.App, entity: eggy.ecs.EntityId) ?
 }
 
 /// Put `entity` (a camera) where `camera` is, looking where it looks, through its `Transform`.
-// ponytail: the pose is written as the entity's own, so a camera inside a moved parent ends up off; turn it into the parent's space once cameras are parented.
+/// ponytail: the pose is written as the entity's own, so a camera inside a moved parent ends up off; turn it into the parent's space once cameras are parented.
+/// Editor-only: caller supplies a live camera with Transform; writes position and Euler degrees
+/// synchronously through current ABI field indices. Missing Transform/library, formatting
+/// failure or rejected writes are silently ignored; undo tracking belongs to the host.
+///
+/// ```zig
+/// steer(game, app, entity, &scene_camera); // Existing host game/App, camera entity and SceneCamera.
+/// ```
 pub fn steer(game: *const HotGame, app: *eggy.App, entity: eggy.ecs.EntityId, camera: *const SceneCamera) void {
     const component = game.builtinComponent("Transform") orelse return;
     const view = camera.view();

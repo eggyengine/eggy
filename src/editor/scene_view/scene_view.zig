@@ -42,6 +42,14 @@ pub const Overlay = struct {
 
 /// The Scene panel's floating parts for its node at `scene`: the orientation, the gizmo, then
 /// the toolbar; while playing, only the play frame (and the missing-camera notice).
+/// Editor-only: `scene` uses UI points; allocates elements and paint state in `b.allocator`
+/// for this frame. Attach the returned slice to the dock node and retain its arena through
+/// rendering. Builder/allocation errors propagate; this creates UI, not the offscreen scene.
+///
+/// ```zig
+/// // Given a UI builder, current SceneView overlay and Scene rect:
+/// const floating = try overlayElements(builder, overlay, scene);
+/// ```
 pub fn overlayElements(b: L.Builder, overlay: Overlay, scene: ui.Rect) ![]*L.Element {
     var parts: std.ArrayList(*L.Element) = .empty;
     if (overlay.playing) {
@@ -135,6 +143,12 @@ pub const SceneView = struct {
     pub const Look = enum { editing, simulating, playing };
 
     /// What the dock draws over the panel.
+    /// Editor-only: call after `update`; returned geometry is copied, but feedback borrows
+    /// this SceneView's buffer until the next `overlay` call/mutation. Build paint before reuse.
+    ///
+    /// ```zig
+    /// const drawn_overlay = scene_view.overlay(); // Existing updated SceneView.
+    /// ```
     pub fn overlay(self: *SceneView) Overlay {
         const feedback = if (self.drag) |drag| drag.feedback(self.pointer, self.snapping(), &self.feedback_buffer) else "";
         const inset = if (self.preview != null) if (self.scene) |area| previewRect(area) else null else null;
@@ -143,6 +157,15 @@ pub const SceneView = struct {
 
     /// Before each frame: what the panel at `scene` is seen from, as `look` says, the selected
     /// camera's view, and where the gizmo goes.
+    /// Editor-only: `target` borrows the current App/library/selection and `scene` is its
+    /// window's UI rect (null when hidden). May write the game camera Transform while editing
+    /// through it; playing hides editing controls. Recompute before rendering/overlay hit tests;
+    /// missing target/components/camera degrade to absent controls rather than errors.
+    ///
+    /// ```zig
+    /// // Given SceneView, current host target and optional Scene UI rect:
+    /// scene_view.update(target, scene_rect, .editing);
+    /// ```
     pub fn update(self: *SceneView, target: ?Target, scene: ?ui.Rect, look: Look) void {
         self.view = self.camera.view();
         self.gizmo = null;
@@ -198,16 +221,34 @@ pub const SceneView = struct {
     }
 
     /// Whether the panel looks through the game's camera this frame (or would, without one).
+    /// Editor-only: reports the last `update`, not simply the toolbar toggle; playing also
+    /// selects the game's camera. Owns no camera reference.
+    ///
+    /// ```zig
+    /// const through_game = scene_view.throughGameCamera(); // Updated SceneView.
+    /// ```
     pub fn throughGameCamera(self: *const SceneView) bool {
         return self.looking_through_game;
     }
 
     /// Whether the panel's controls are moving a camera now, which history waits out.
+    /// Editor-only: true for gizmo dragging or camera drag/pinch, not toolbar dragging.
+    /// Use it to defer/coalesce history snapshots, not as a Play-mode indicator.
+    ///
+    /// ```zig
+    /// const hold_history_snapshot = scene_view.steeringNow(); // Existing SceneView.
+    /// ```
     pub fn steeringNow(self: *const SceneView) bool {
         return self.drag != null or self.camera.drag != null or self.camera.pinch != null;
     }
 
     /// A toolbar button was pressed.
+    /// Editor-only: changes tool/space/snap/camera/fold state or starts moving the toolbar
+    /// from the last pointer position. Does not immediately change the world or rebuild UI.
+    ///
+    /// ```zig
+    /// scene_view.press(.rotate); // Existing SceneView after toolbar activation.
+    /// ```
     pub fn press(self: *SceneView, button: toolbar.Button) void {
         switch (button) {
             .grip => self.toolbar_drag = .{ .from = self.pointer, .offset = self.tools.offset },
@@ -224,6 +265,13 @@ pub const SceneView = struct {
 
     /// Before the workspace sees `event`: the camera's drags, scroll and pinch over the panel at
     /// `scene`, and W, E, R and T over it. Returns whether it was used.
+    /// Desktop editor only: raw SDL event positions and the optional Scene rect use the event
+    /// window's points. Route only in an editor-navigation context, before ordinary workspace
+    /// handling; active camera navigation takes precedence over tool shortcut keys.
+    ///
+    /// ```zig
+    /// const used = scene_view.handleFirst(event, scene_rect); // Raw SDL event and optional rect.
+    /// ```
     pub fn handleFirst(self: *SceneView, event: sdl3.events.Event, scene: ?ui.Rect) bool {
         if (self.camera.handle(event, scene)) return true;
         const key_down = switch (event) {
@@ -246,6 +294,15 @@ pub const SceneView = struct {
     /// After the workspace let `event` through: a left press on the panel at `scene` takes a
     /// gizmo handle, looks from an orientation bubble's side, or selects what is under it
     /// (nothing: no selection); moves drag the handle or the toolbar. Returns whether it was used.
+    /// Desktop editor only: call for editing input not consumed by workspace, with current
+    /// `update` geometry and borrowed drawables valid for picking. May change selection or
+    /// write Transform fields through `target.game`; outer scene instances are selected instead
+    /// of their generated children. Host owns undo snapshots; rejected field writes are ignored.
+    ///
+    /// ```zig
+    /// const used = scene_view.handlePointer(event, scene_rect, target);
+    /// // Unconsumed raw SDL event, optional UI rect and live host Target.
+    /// ```
     pub fn handlePointer(self: *SceneView, event: sdl3.events.Event, scene: ?ui.Rect, target: Target) bool {
         switch (event) {
             .mouse_button_down => |down| {
@@ -299,12 +356,27 @@ pub const SceneView = struct {
 
     /// The entity whose mesh is under `at` on the panel at `scene`, as last drawn; null over
     /// nothing.
+    /// Editor-only: positive scene dimensions and matching UI coordinates are required;
+    /// `drawn` must still refer to valid current-frame drawables. Returns the mesh id directly,
+    /// without remapping instance roots or mutating selection; cache bounds are borrowed.
+    ///
+    /// ```zig
+    /// const entity = scene_view.entityAt(&graphics.models, scene, pointer);
+    /// // Updated SceneView and live Graphics/model cache.
+    /// ```
     pub fn entityAt(self: *const SceneView, models: *const eggy.model_cache.ModelCache, scene: ui.Rect, at: ui.Vec2) ?eggy.ecs.EntityId {
         return picking.pick(self.drawn, models, self.view, scene, at);
     }
 
     /// Where something let go at `at` on the panel at `scene` goes: on the ground (y = 0) under
     /// the pointer, or a few metres out when the ground there is behind the camera or far off.
+    /// Editor-only: requires a positive-sized Scene rect and UI-space drop point.
+    /// Returns world metres: ground intersection only when forward and within 100 m, otherwise
+    /// a point 5 m along the normalized ray. Does not create or parent an entity.
+    ///
+    /// ```zig
+    /// const world_position = scene_view.dropPoint(scene, pointer); // Updated view and UI rect/point.
+    /// ```
     pub fn dropPoint(self: *const SceneView, scene: ui.Rect, at: ui.Vec2) [3]f32 {
         const along = eggy.camera.normalize(picking.rayThrough(self.view, scene, at));
         const eye = self.view.eye;
@@ -321,6 +393,12 @@ pub const SceneView = struct {
 
 /// Where the selected camera's view goes in the panel at `scene`: its bottom right corner, a
 /// quarter of its width, as wide for its height as the panel.
+/// Editor-only: input/output use UI points; width has a 120-point minimum and a 12-point
+/// margin, so a very small panel can place the preview outside its bounds. Pure calculation.
+///
+/// ```zig
+/// const inset = previewRect(.{ .x = 0, .y = 0, .w = 800, .h = 600 });
+/// ```
 pub fn previewRect(scene: ui.Rect) ui.Rect {
     const margin: f32 = 12;
     const w = @max(120, scene.w * 0.25);

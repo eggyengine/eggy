@@ -125,6 +125,17 @@ const game = api.Game{
 /// Names go through the same code the runtime uses (`eggy.scene.registryAccess`).
 const access = eggy.scene.registryAccess(Plugins.Components);
 
+/// Expose the editor-only game ABI table to the dynamic-library host, without starting plugins.
+/// The table, metadata and callbacks are library-owned and valid only until unload. Consumers
+/// must check `version` before other table access, use the matching Eggy build, and stop/clear
+/// every world containing library code before closing the library. No allocation or failure.
+///
+/// ```zig
+/// // Host side, given an open std.DynLib named library and this boundary's api module:
+/// const entry = library.lookup(api.Entry, api.entry_symbol) orelse return error.NotAGameLibrary;
+/// const table = entry(); // C ABI function-pointer call, not a library-local invocation.
+/// if (table.version != api.version) return error.GameLibraryVersionMismatch;
+/// ```
 export fn eggy_game() callconv(.c) *const api.Game {
     return &game;
 }
@@ -169,7 +180,8 @@ fn report(hook: Hook, err: anyerror) void {
         .world_start => "a system in the world's Init stages",
         .world_update => "a system in the world's Update stages",
     };
-    std.log.err("{s} failed: {t}. The game keeps running; this is logged again only if it fails differently.", .{ what, err });
+    const detail = if (err == error.SdlError) eggy.sdl_adapter.sdl.errors.get() else null;
+    std.log.err("{s} failed: {t}{s}{s}. The game keeps running; this is logged again only if it fails differently.", .{ what, err, if (detail != null) ": " else "", detail orelse "" });
 }
 
 fn recovered(hook: Hook) void {

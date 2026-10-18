@@ -43,33 +43,95 @@ pub const Access = struct {
         set_name: *const fn (context: *const anyopaque, world: *ecs.World, entity: ecs.EntityId, text: []const u8) void,
     };
 
+    /// Borrow component metadata from the backing registry; do not retain it after
+    /// unloading the game library or destroying the provider.
+    ///
+    /// ```zig
+    /// const infos = access.types();
+    /// ```
     pub fn types(self: Access) []const components.Info {
         return self.vtable.types(self.context);
     }
+    /// Test whether the entity has the component indexed by `types()`.
+    /// Host adapter: the provider must belong to the same game/world type registry.
+    ///
+    /// ```zig
+    /// const present = access.has(world, entity, component_index);
+    /// ```
     pub fn has(self: Access, world: *ecs.World, entity: ecs.EntityId, component: usize) bool {
         return self.vtable.has(self.context, world, entity, component);
     }
+    /// Add the indexed component with defaults and dependencies; false means it could not
+    /// be added. Mutates ECS storage and may invalidate borrowed component pointers.
+    /// The registry adapter can leave already-added dependencies behind on failure.
+    ///
+    /// ```zig
+    /// if (!access.add(world, entity, component_index)) return error.CannotAddComponent;
+    /// ```
     pub fn add(self: Access, world: *ecs.World, entity: ecs.EntityId, component: usize) bool {
         return self.vtable.add(self.context, world, entity, component);
     }
+    /// Serialize an indexed field to ZON in caller storage; returns a borrowed slice or
+    /// null for missing/unreadable data or insufficient buffer capacity.
+    ///
+    /// ```zig
+    /// var buffer: [components.max_field_bytes]u8 = undefined;
+    /// const text = access.readField(world, entity, component_index, field_index, &buffer);
+    /// ```
     pub fn readField(self: Access, world: *ecs.World, entity: ecs.EntityId, component: usize, field: usize, buffer: []u8) ?[]const u8 {
         return self.vtable.read_field(self.context, world, entity, component, field, buffer);
     }
     /// Read a complete field as owned ZON; free with `gpa.free`. Missing fields/components fail.
+    /// Component and field are metadata indices; allocation failure is `OutOfMemory`.
+    ///
+    /// ```zig
+    /// const text = try access.readFieldAlloc(gpa, world, entity, component_index, field_index);
+    /// defer gpa.free(text);
+    /// ```
     pub fn readFieldAlloc(self: Access, gpa: std.mem.Allocator, world: *ecs.World, entity: ecs.EntityId, component: usize, field: usize) FieldReadError![]u8 {
         return self.vtable.read_field_alloc(self.context, gpa, world, entity, component, field);
     }
+    /// Set an indexed field from sentinel-terminated ZON; false means the write failed
+    /// (including missing/noneditable fields or invalid text). The registry adapter
+    /// marks successful edits changed and leaves a failed field assignment untouched.
+    ///
+    /// ```zig
+    /// if (!access.writeField(world, entity, component_index, field_index, "2.5"))
+    ///     return error.CannotEditField;
+    /// ```
     pub fn writeField(self: Access, world: *ecs.World, entity: ecs.EntityId, component: usize, field: usize, text: [:0]const u8) bool {
         return self.vtable.write_field(self.context, world, entity, component, field, text);
     }
+    /// Copy the entity's name into `buffer`, or return null without a Name component.
+    /// The registry adapter truncates to buffer capacity; the result borrows the buffer.
+    ///
+    /// ```zig
+    /// var buffer: [Name.max_len]u8 = undefined;
+    /// const label = access.name(world, entity, &buffer) orelse "Unnamed";
+    /// ```
     pub fn name(self: Access, world: *ecs.World, entity: ecs.EntityId, buffer: []u8) ?[]const u8 {
         return self.vtable.name(self.context, world, entity, buffer);
     }
     /// Copy the entity's complete Name, or null without one; free a result with `gpa.free`.
+    /// The copy survives ECS edits and library unloads; allocation errors propagate.
+    ///
+    /// ```zig
+    /// if (try access.nameAlloc(gpa, world, entity)) |label| {
+    ///     defer gpa.free(label);
+    ///     // Use the owned name here.
+    /// }
+    /// ```
     pub fn nameAlloc(self: Access, gpa: std.mem.Allocator, world: *ecs.World, entity: ecs.EntityId) !?[]u8 {
         var buffer: [Name.max_len]u8 = undefined;
         return try gpa.dupe(u8, self.name(world, entity, &buffer) orelse return null);
     }
+    /// Set a copied, length-limited Name, or remove it for empty text.
+    /// Host adapter: the registry implementation marks edits changed but cannot report
+    /// allocation failure when adding a previously absent Name.
+    ///
+    /// ```zig
+    /// access.setName(world, entity, "Player");
+    /// ```
     pub fn setName(self: Access, world: *ecs.World, entity: ecs.EntityId, text: []const u8) void {
         self.vtable.set_name(self.context, world, entity, text);
     }
@@ -121,6 +183,13 @@ test "allocated scene reads own complete names and large fields" {
 }
 
 /// `Access` straight through `Registry` (a `components.Registry`), for code that has the types.
+/// Returns a static host adapter without allocation; it remains valid only while this
+/// compilation is loaded and must not be carried across hot reloads.
+///
+/// ```zig
+/// const Health = struct { value: u32 = 100 };
+/// const access = registryAccess(components.Registry(&.{Health}, &.{"game"}));
+/// ```
 pub fn registryAccess(comptime Registry: type) Access {
     const Through = struct {
         fn types(_: *const anyopaque) []const components.Info {
@@ -193,12 +262,27 @@ pub const Scene = struct {
 
     pub const Field = struct { name: []const u8, value: []const u8 };
 
+    /// Release the scene's arena, invalidating all saved entities, fields and source IDs.
+    /// Does not despawn entities previously instantiated into a world; call once.
+    ///
+    /// ```zig
+    /// var saved = try Scene.capture(gpa, world, access, null);
+    /// defer saved.deinit();
+    /// ```
     pub fn deinit(self: *Scene) void {
         self.arena.deinit();
     }
 
     /// The entities of `world`, or with `roots` those and their descendants, parents first; a
     /// `SceneInstance`'s descendants are left out, as they come from its scene file.
+    /// Returns an owned snapshot independent of ECS storage and registry lifetime;
+    /// call `deinit`. Dead/duplicate roots are ignored. Allocation errors propagate;
+    /// unreadable fields are logged and omitted rather than failing the whole capture.
+    ///
+    /// ```zig
+    /// var saved = try Scene.capture(gpa, world, access, &.{selected_entity});
+    /// defer saved.deinit();
+    /// ```
     pub fn capture(gpa: std.mem.Allocator, world: *ecs.World, access: Access, roots: ?[]const ecs.EntityId) !Scene {
         var self = Scene{ .arena = .init(gpa) };
         errdefer self.deinit();
@@ -284,6 +368,15 @@ pub const Scene = struct {
     /// Spawn the scene's entities into `world`, parented as saved, the top-level ones under
     /// `parent` if given. Components whose type is gone or can't be added, and fields that are
     /// gone or don't parse, are skipped (logged, and counted).
+    /// The caller owns only the returned ID slice, not the spawned entities' lifetime.
+    /// Free the slice with `gpa`; despawn entities separately when needed. Allocation or
+    /// parenting errors remove entities spawned by this call before returning failure.
+    ///
+    /// ```zig
+    /// const made = try saved.instantiate(gpa, world, access, null);
+    /// defer gpa.free(made.entities);
+    /// const skipped_count = made.skipped;
+    /// ```
     pub fn instantiate(self: *const Scene, gpa: std.mem.Allocator, world: *ecs.World, access: Access, parent: ?ecs.EntityId) !Instantiated {
         const made = try gpa.alloc(ecs.EntityId, self.entities.len);
         errdefer gpa.free(made);
@@ -351,6 +444,14 @@ pub const Scene = struct {
     }
 
     /// The scene as a ZON file.
+    /// Borrows the scene and appends to `writer`; field values must already be valid ZON.
+    /// Does not open a file; writer errors propagate.
+    ///
+    /// ```zig
+    /// var output: std.Io.Writer.Allocating = .init(gpa);
+    /// defer output.deinit();
+    /// try saved.write(&output.writer);
+    /// ```
     pub fn write(self: *const Scene, writer: *std.Io.Writer) !void {
         try writer.writeAll(".{\n    .entities = .{\n");
         for (self.entities) |entity| {
@@ -369,6 +470,14 @@ pub const Scene = struct {
 
     /// A scene read from `source` (as `write` writes it). Fails with `error.ParseZon` when it
     /// isn't one.
+    /// Requires sentinel-terminated ZON and parents preceding their children.
+    /// Owns copied names/field text in the returned arena; `deinit` releases them.
+    /// Parsing does not instantiate entities or verify component names against a registry.
+    ///
+    /// ```zig
+    /// var saved = try Scene.parse(gpa, ".{ .entities = .{} }");
+    /// defer saved.deinit();
+    /// ```
     pub fn parse(gpa: std.mem.Allocator, source: [:0]const u8) !Scene {
         var self = Scene{ .arena = .init(gpa) };
         errdefer self.deinit();

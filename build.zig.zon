@@ -42,6 +42,11 @@
             // Only the editor and packaging import models; the web build never fetches it.
             .lazy = true,
         },
+        .cli = .{
+            .url = "git+https://github.com/sam701/zig-cli#d2ed91f8d7d4bed85d89a54f4cfc91e2fe66e7a7",
+            .hash = "cli-0.12.0-2eKe__kOAQC6VETttxaViKBGYMCGU3qGilpD78MenETi",
+            .lazy = true,
+        },
     },
     .paths = .{
         "build.zig",

@@ -58,6 +58,14 @@ pub const Bridge = extern struct {
     request: *const fn (*anyopaque, *const Request, *Response) callconv(.c) Status,
 };
 
+/// Host/library bridge helper: translate a stable C status into this compilation's Zig error.
+/// `.ok` succeeds; no allocation or state change occurs. Call after a synchronous request,
+/// rather than passing compilation-local error numbers across the library boundary.
+///
+/// ```zig
+/// // With a live bridge, initialized request and response:
+/// try check(bridge.request(bridge.context, &request, &response));
+/// ```
 pub fn check(status: Status) !void {
     return switch (status) {
         .ok => {},

@@ -8,6 +8,11 @@ pub const Entry = union(enum) {
     folder,
     file: FileType,
 
+    /// Return the editor menu caption, borrowing plugin title storage for file templates.
+    ///
+    /// ```zig
+    /// const caption = (Entry{ .scene = {} }).label(); // "Scene"
+    /// ```
     pub fn label(self: Entry) []const u8 {
         return switch (self) {
             .scene => "Scene",
@@ -34,16 +39,34 @@ const builtins = [_]Entry{
 pub const builtin_count = builtins.len;
 
 /// The plugin that offers `file_type`: its key's part before the first `/`.
+/// The returned slice borrows the template's key; no allocation or registry lookup occurs.
+///
+/// ```zig
+/// // Given a plugin's EditorFileType named template:
+/// const plugin_key = ownerOf(template);
+/// ```
 pub fn ownerOf(file_type: FileType) []const u8 {
     const key: []const u8 = file_type.key;
     return key[0 .. std.mem.indexOfScalar(u8, key, '/') orelse key.len];
 }
 
+/// Return the editor catalog size, including built-ins before the borrowed plugin templates.
+///
+/// ```zig
+/// const builtin_total = count(&.{});
+/// std.debug.assert(builtin_total == builtin_count);
+/// ```
 pub fn count(plugins: []const FileType) usize {
     return builtins.len + plugins.len;
 }
 
 /// The same catalog serves both the toolbar dropdown and the right-click submenu.
+/// Return the zero-based entry, or null beyond `count(plugins)`; template strings remain borrowed.
+///
+/// ```zig
+/// const first = at(0, &.{}).?;
+/// std.debug.assert(std.mem.eql(u8, first.label(), "Scene"));
+/// ```
 pub fn at(index: usize, plugins: []const FileType) ?Entry {
     if (index < builtins.len) return builtins[index];
     if (index - builtins.len < plugins.len) return .{ .file = plugins[index - builtins.len] };

@@ -15,6 +15,13 @@ pub const Value = struct {
     zoir: Zoir,
 
     /// `zon` parsed, in `arena`; null when it isn't ZON.
+    /// Editor field helper: source, AST and IR all live in the supplied arena; null also
+    /// represents allocation failure. Releasing the arena invalidates the value and its nodes.
+    ///
+    /// ```zig
+    /// // Given a scratch arena allocator:
+    /// const value = Value.parse(arena, ".{ .speed = 2 }") orelse return;
+    /// ```
     pub fn parse(arena: std.mem.Allocator, zon: []const u8) ?Value {
         const source = arena.dupeZ(u8, zon) catch return null;
         const ast = std.zig.Ast.parse(arena, source, .zon) catch return null;
@@ -24,16 +31,36 @@ pub const Value = struct {
         return .{ .source = source, .ast = ast, .zoir = zoir };
     }
 
+    /// Decode an IR node belonging to this parsed editor value; any embedded slices borrow it.
+    /// `node` must be valid for this value, not an index from another parse.
+    ///
+    /// ```zig
+    /// // Given a parsed Value:
+    /// const root = value.get(.root);
+    /// ```
     pub fn get(self: *const Value, node: Node) Zoir.Node {
         return node.get(self.zoir);
     }
 
     /// The node's own text.
+    /// `node` must belong to this value; the result borrows its source arena.
+    ///
+    /// ```zig
+    /// // Given a parsed Value:
+    /// const source = value.text(.root);
+    /// ```
     pub fn text(self: *const Value, node: Node) []const u8 {
         return self.ast.getNodeSource(node.getAstNode(self.zoir));
     }
 
     /// A number node's value; null for anything else.
+    /// Accepts integer, float and character literals plus infinities/NaN; `node` must belong
+    /// to this parsed value. The returned f64 owns no storage.
+    ///
+    /// ```zig
+    /// const value = Value.parse(arena, "2.5").?; // Existing arena allocator.
+    /// const speed = value.number(.root).?; // 2.5
+    /// ```
     pub fn number(self: *const Value, node: Node) ?f64 {
         return switch (self.get(node)) {
             .int_literal => |int| switch (int) {
@@ -50,6 +77,13 @@ pub const Value = struct {
     }
 
     /// The `index`th element of a list (`.{ a, b }`), or field of a struct (`.{ .x = a }`).
+    /// Uses zero-based source order; returns null for a non-container or out-of-range index.
+    /// Both input and returned nodes belong to this value.
+    ///
+    /// ```zig
+    /// const value = Value.parse(arena, ".{ 1, 2 }").?; // Existing arena allocator.
+    /// const second = value.child(.root, 1).?;
+    /// ```
     pub fn child(self: *const Value, node: Node, index: usize) ?Node {
         const range = switch (self.get(node)) {
             .array_literal => |range| range,
@@ -61,6 +95,13 @@ pub const Value = struct {
     }
 
     /// The field named `name` of a struct node.
+    /// Match is exact; return null for other node kinds or a missing field. The returned
+    /// node is meaningful only with this value.
+    ///
+    /// ```zig
+    /// const value = Value.parse(arena, ".{ .speed = 2 }").?; // Existing arena allocator.
+    /// const speed_node = value.field(.root, "speed").?;
+    /// ```
     pub fn field(self: *const Value, node: Node, name: []const u8) ?Node {
         const literal = switch (self.get(node)) {
             .struct_literal => |literal| literal,
@@ -74,6 +115,14 @@ pub const Value = struct {
 
     /// A union node's tag and its payload: `.cube` is `cube` with none, `.{ .model = x }`
     /// is `model` with `x`.
+    /// Returns null for other shapes; the tag borrows this value's arena and the payload,
+    /// when present, is a node in this same parse.
+    ///
+    /// ```zig
+    /// const value = Value.parse(arena, ".cube").?; // Existing arena allocator.
+    /// const chosen = value.variant(.root).?;
+    /// std.debug.assert(chosen.payload == null);
+    /// ```
     pub fn variant(self: *const Value, node: Node) ?struct { tag: []const u8, payload: ?Node } {
         return switch (self.get(node)) {
             .enum_literal => |tag| .{ .tag = tag.get(self.zoir), .payload = null },
@@ -83,6 +132,14 @@ pub const Value = struct {
     }
 
     /// The first numbers under `node`, depth first, into `out`; returns how many were found.
+    /// Stops when `out` is full without allocating; only `out[0..count]` is initialized.
+    /// Node indices remain tied to this parsed value.
+    ///
+    /// ```zig
+    /// // Given a parsed Value:
+    /// var nodes: [4]Node = undefined;
+    /// const count = value.numbers(.root, &nodes);
+    /// ```
     pub fn numbers(self: *const Value, node: Node, out: []Node) usize {
         var found: usize = 0;
         self.collectNumbers(node, out, &found);
@@ -101,6 +158,13 @@ pub const Value = struct {
     }
 
     /// The whole value's text with `node`'s replaced by `replacement`, in `arena`.
+    /// Does not mutate this parse or validate replacement ZON; `node` must belong to it.
+    /// The new string lives in `arena`; allocation errors propagate.
+    ///
+    /// ```zig
+    /// const value = Value.parse(arena, ".{ 1, 2 }").?; // Existing arena allocator.
+    /// const changed = try value.replace(arena, value.child(.root, 0).?, "3");
+    /// ```
     pub fn replace(self: *const Value, arena: std.mem.Allocator, node: Node, replacement: []const u8) ![]const u8 {
         const old = self.text(node);
         const start = @intFromPtr(old.ptr) - @intFromPtr(self.source.ptr);
@@ -109,6 +173,15 @@ pub const Value = struct {
 
     /// The whole value's text with each of `nodes` replaced by the matching `replacements`, in
     /// `arena`. The nodes mustn't hold one another.
+    /// Supply at most eight distinct, non-overlapping nodes from this parse and equally many
+    /// replacements. No ZON validation occurs; intermediate/result strings live in `arena`.
+    /// With no nodes the result borrows the original source. Allocation errors propagate.
+    ///
+    /// ```zig
+    /// const value = Value.parse(arena, ".{ 1, 2 }").?; // Existing arena allocator.
+    /// const changed = try value.replaceAll(arena,
+    ///     &.{ value.child(.root, 0).?, value.child(.root, 1).? }, &.{ "3", "4" });
+    /// ```
     pub fn replaceAll(self: *const Value, arena: std.mem.Allocator, nodes: []const Node, replacements: []const []const u8) ![]const u8 {
         // Spliced from the last in the text to the first, so earlier offsets stay put.
         var order: [8]usize = undefined;
@@ -133,6 +206,13 @@ pub const Value = struct {
 
 /// `number` as ZON for a part of kind `kind` (`.int` or `.float`): whole for an int, which is
 /// kept at 0 or above when `unsigned`.
+/// Editor-only: integer input must be finite; integer results round/clamp to the supported
+/// i64 range. Floats format through f32; non-finite input becomes "0". Text lives in `arena`,
+/// except the static "0" fallback on allocation failure.
+///
+/// ```zig
+/// const zon = numberText(arena, 2.6, .{ .kind = .int }); // Existing arena; "3".
+/// ```
 pub fn numberText(arena: std.mem.Allocator, number: f64, part: Part) []const u8 {
     if (part.kind == .int) {
         const whole = @round(if (part.unsigned) @max(number, 0) else number);
@@ -144,6 +224,14 @@ pub fn numberText(arena: std.mem.Allocator, number: f64, part: Part) []const u8 
 }
 
 /// The ZON a value of part `parts[index]` starts with: zeroes, false, the first tag, nothing set.
+/// Editor-only: `index` and all child ranges must describe a valid component part tree.
+/// These are structural defaults, not the component's declared field defaults; output lives
+/// in `arena` and writer/allocation errors propagate.
+///
+/// ```zig
+/// // Given a component field's nonempty parts and an arena allocator:
+/// const zon = try defaultText(arena, parts, 0);
+/// ```
 pub fn defaultText(arena: std.mem.Allocator, parts: []const Part, index: usize) ![]const u8 {
     var out: std.Io.Writer.Allocating = .init(arena);
     try writeDefault(&out.writer, parts, index);
@@ -194,6 +282,13 @@ fn writeDefault(writer: *std.Io.Writer, parts: []const Part, index: usize) std.I
 }
 
 /// The ZON for union `parts[index]` set to its variant `variant`, with that variant's defaults.
+/// Editor-only: provide valid part/variant indices from one field's part tree (variant zero
+/// is allowed for an empty union). Output lives in `arena`; writer failures propagate.
+///
+/// ```zig
+/// // Given union field parts with at least one variant and an arena allocator:
+/// const zon = try variantText(arena, parts, 0, 0);
+/// ```
 pub fn variantText(arena: std.mem.Allocator, parts: []const Part, index: usize, variant: usize) ![]const u8 {
     var out: std.Io.Writer.Allocating = .init(arena);
     try writeVariant(&out.writer, parts, index, variant);

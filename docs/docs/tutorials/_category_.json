@@ -1,0 +1,9 @@
+{
+  "label": "Tutorials",
+  "position": 2,
+  "link": {
+    "type": "generated-index",
+    "slug": "/tutorials",
+    "description": "Make a small game step by step, using scene files or building the world in Zig."
+  }
+}

@@ -34,6 +34,14 @@ pub const Grid = struct {
     pipeline: vit.GraphicsPipeline,
 
     /// A grid drawing into `format`, with a `.d32_float` depth buffer it tests against.
+    /// Host renderer setup: `shaderSource` adapts bundled shader bytes/entry names to this
+    /// device's backend. Owns pipelines and per-frame buffers; pair with `deinit` after GPU
+    /// completion. GPU allocation/shader errors propagate.
+    ///
+    /// ```zig
+    /// var grid = try Grid.init(device, color_format, shader_source_adapter);
+    /// defer grid.deinit(); // Finish any GPU use before leaving this host scope.
+    /// ```
     pub fn init(device: vit.Device, format: vit.Format, shaderSource: *const fn ([]const u8, []const u8) vit.ShaderModule) !Grid {
         const vertices = try vit.Buffer.init(device, .{ .label = "grid triangle", .size = @sizeOf(@TypeOf(triangle)), .usage = .{ .vertex = true }, .initial_data = std.mem.asBytes(&triangle) });
         errdefer vertices.deinit();
@@ -77,6 +85,12 @@ pub const Grid = struct {
     }
 
     /// Free everything. The GPU must be done with it.
+    /// Host teardown: call once while the creating device is alive.
+    ///
+    /// ```zig
+    /// try graphics.queue.waitIdle();
+    /// grid.deinit();
+    /// ```
     pub fn deinit(self: *Grid) void {
         self.pipeline.deinit();
         self.pipeline_layout.deinit();
@@ -90,6 +104,14 @@ pub const Grid = struct {
 
     /// Draw the grid seen from `view` in the render pass in progress, whose viewport covers
     /// `viewport_px` (in the target's pixels). `srgb`: whether the target encodes sRGB itself.
+    /// Host editor rendering only: the pass must use the configured color format and
+    /// `.d32_float` depth. The caller manages viewport/scissor and fences each in-flight
+    /// slot before reuse; mapping errors propagate. Empty rectangles draw nothing.
+    ///
+    /// ```zig
+    /// // Inside the host's scene render pass, after mesh drawing:
+    /// try grid.draw(scene_cmd, camera_view, viewport_pixels, target_is_srgb);
+    /// ```
     pub fn draw(self: *Grid, cmd: vit.CommandBuffer, view: camera.View, viewport_px: ui.Rect, srgb: bool) !void {
         if (viewport_px.w <= 0 or viewport_px.h <= 0) return;
         self.slot = (self.slot + 1) % frames_in_flight;

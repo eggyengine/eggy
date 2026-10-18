@@ -11,6 +11,15 @@ pub const InputSettings = struct {
 
     /// Connect a stable host writer before game controls register. Configuration failures
     /// propagate instead of quietly discarding developer mappings.
+    /// Editor-host only: borrows `state` and `project_dir` through `close`; allocate the
+    /// state first and close this writer before destroying it. Missing files mean defaults;
+    /// allocation/I/O/parse failures propagate without installing a writer.
+    ///
+    /// ```zig
+    /// const settings = try InputSettings.open(gpa, state, project_dir);
+    /// defer settings.close();
+    /// // Register game/plugin controls only after the overrides have loaded.
+    /// ```
     pub fn open(gpa: std.mem.Allocator, state: *eggy.input_backend.State, project_dir: []const u8) !*InputSettings {
         const self = try gpa.create(InputSettings);
         errdefer gpa.destroy(self);
@@ -19,6 +28,12 @@ pub const InputSettings = struct {
         state.persistence = .{ .context = self, .save = save };
         return self;
     }
+    /// Disconnect the input persistence callback, free pending history text, and destroy
+    /// this heap object. Does not free borrowed state/project path or undo saved settings.
+    ///
+    /// ```zig
+    /// settings.close(); // Before state.deinit or freeing project_dir.
+    /// ```
     pub fn close(self: *InputSettings) void {
         self.state.persistence = null;
         if (self.pending) |change| {
@@ -27,6 +42,12 @@ pub const InputSettings = struct {
         }
         self.gpa.destroy(self);
     }
+    /// Reload project control overrides into the borrowed backend; missing files reset them
+    /// to defaults. Propagates folder/read/parse errors and records no history entry.
+    ///
+    /// ```zig
+    /// try settings.reload(); // Host reload after an external mappings-file change.
+    /// ```
     pub fn reload(self: *InputSettings) !void {
         var threaded: std.Io.Threaded = .init_single_threaded;
         const io = threaded.io();
@@ -75,12 +96,27 @@ pub const InputSettings = struct {
         try writer.interface.flush();
         try atomic.replace(io);
     }
+    /// Transfer coalesced, already-saved mappings changes to editor undo history.
+    /// `history.gpa` must match this writer's allocator; no pending change is a no-op.
+    /// Reservation failure preserves the pending change for retry.
+    ///
+    /// ```zig
+    /// try settings.recordPending(&history); // Host frame, after mapping edits.
+    /// ```
     pub fn recordPending(self: *InputSettings, history: *history_zig.History) !void {
         const change = self.pending orelse return;
         try history.reserve();
         history.record(.{ .input_bindings = change });
         self.pending = null;
     }
+    /// Parse borrowed control-file text, atomically replace the project file, then install
+    /// those overrides without generating another history entry. Parse/allocation/write
+    /// errors propagate before the active resolver changes.
+    ///
+    /// ```zig
+    /// // In the editor's history handler for an input_bindings step:
+    /// try settings.restore(step.input_bindings.value(direction));
+    /// ```
     pub fn restore(self: *InputSettings, text: []const u8) !void {
         const source = try self.gpa.dupeZ(u8, text);
         defer self.gpa.free(source);

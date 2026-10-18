@@ -11,6 +11,14 @@ const Entry = assets_manifest.Entry;
 /// The scene the game starts in, relative to the project: `scene` (`-Dscene`), else `eggy.zon`'s
 /// `.default_scene`, else (unless `exporting`, which must be told) the scene the editor has open
 /// (`.eggy/scene.zon`), else the first scene file in `resources/`; null when there is none.
+/// Build-internal; returned text is borrowed from `scene` or allocated in `b`'s arena.
+/// An explicit scene is returned unchanged; invalid/missing saved configuration is skipped.
+/// This chooses a path, not scene contents, and does not update project settings.
+///
+/// ```zig
+/// const startup = resources.mainScene(b, b.option([]const u8, "scene", "Startup scene"), false);
+/// project_options.addOption(?[]const u8, "main_scene", startup);
+/// ```
 pub fn mainScene(b: *std.Build, scene: ?[]const u8, exporting: bool) ?[]const u8 {
     if (scene) |path| return path;
     const Chosen = struct { default_scene: ?[]const u8 = null, scene: ?[]const u8 = null };
@@ -29,6 +37,13 @@ pub fn mainScene(b: *std.Build, scene: ?[]const u8, exporting: bool) ?[]const u8
 
 /// Every file of the project's `resources/` but descriptors, with its descriptor's id (one from
 /// its path when it has none yet), sorted by path.
+/// The array and paths live in `b`'s arena. Missing/unopenable resource directories produce
+/// an empty list; invalid descriptors fall back to path IDs. No descriptors are written.
+///
+/// ```zig
+/// const files = resources.entries(b);
+/// if (resources.addData(b, files)) |step| runtime_step.dependOn(step);
+/// ```
 pub fn entries(b: *std.Build) []const Entry {
     const io = b.graph.io;
     var found: std.ArrayList(Entry) = .empty;
@@ -54,6 +69,14 @@ pub fn entries(b: *std.Build) []const Entry {
 
 /// Install the manifest and every file packaging copies as it is (all but models and textures)
 /// into `<prefix>/data/`, each under its packaged name; null when the project has no resources.
+/// Build-internal; returns a graph-owned step to attach to runtime installation. Models/images
+/// still appear in the manifest but need `models.addPackaging` for their converted bytes.
+///
+/// ```zig
+/// if (resources.addData(b, resources.entries(b))) |step| {
+///     runtime_step.dependOn(step);
+/// }
+/// ```
 pub fn addData(b: *std.Build, files: []const Entry) ?*std.Build.Step {
     if (files.len == 0) return null;
     const step = b.step("eggy-data", "Put the game's resources beside it");

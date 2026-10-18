@@ -15,6 +15,14 @@ const padding: f32 = 10;
 
 /// A clickable terminal line, sharing the output view's monospace face and severity colours.
 /// Its text and paint state live for the builder's frame; long lines wrap at whole characters.
+/// Editor Console helper: `id == 0` makes a noninteractive label; otherwise it is a button
+/// whose expanded/highlight state follows `selected`. Borrowed text/font must survive drawing;
+/// the returned element/state belong to `b.allocator`. Allocation errors propagate.
+///
+/// ```zig
+/// const line = try terminal_view.messageLine(b, mono, context.idFor("message-1"), "error: broken", false);
+/// context.element(line);
+/// ```
 pub fn messageLine(b: ui.Layout.Builder, mono: *const ui.Font, id: u32, text: []const u8, selected: bool) !*ui.Layout.Element {
     const state = try b.allocator.create(MessageLine);
     state.* = .{ .mono = mono, .id = id, .text = text, .selected = selected };
@@ -25,6 +33,14 @@ pub fn messageLine(b: ui.Layout.Builder, mono: *const ui.Font, id: u32, text: []
 }
 
 /// A continuous terminal background for independently clickable message lines.
+/// Width/height are logical points. Borrows persistent `scroll` and frame-owned `lines`
+/// through layout/draw; enables its overlay scrollbar. Returns a builder-arena element
+/// or allocation error without owning the scroll state.
+///
+/// ```zig
+/// const line = try terminal_view.messageLine(b, mono, 0, "No messages.", false);
+/// context.element(try terminal_view.messageList(b, context.contentWidth(), 240, &scroll, &.{line}));
+/// ```
 pub fn messageList(b: ui.Layout.Builder, width: f32, height: f32, scroll: *ui.Layout.ScrollState, lines: []const *ui.Layout.Element) !*ui.Layout.Element {
     const element = try b.node(0, .{
         .width = width,
@@ -108,10 +124,24 @@ pub const TerminalView = struct {
 
     const Row = struct { start: usize, end: usize };
 
+    /// Create a lazy editor output view borrowing a loaded monospaced companion font.
+    /// `mono` must outlive `deinit`; keep the view at a stable address while frame paint
+    /// callbacks refer to it. Owns copied output/row storage allocated on later use.
+    ///
+    /// ```zig
+    /// var terminal = TerminalView.init(gpa, mono);
+    /// defer terminal.deinit();
+    /// ```
     pub fn init(gpa: std.mem.Allocator, mono: *const ui.Font) TerminalView {
         return .{ .gpa = gpa, .mono = mono };
     }
 
+    /// Free copied text and wrapped rows, not the borrowed font. No live frame may still
+    /// draw this view; it and content/selection slices are invalid afterward.
+    ///
+    /// ```zig
+    /// terminal.deinit(); // Before deinitializing mono.
+    /// ```
     pub fn deinit(self: *TerminalView) void {
         self.text.deinit(self.gpa);
         self.rows.deinit(self.gpa);
@@ -119,6 +149,15 @@ pub const TerminalView = struct {
 
     /// Show `output` in a `height` tall view on `context`'s page. `version` changes whenever
     /// `output` does, so unchanged output costs nothing to show again.
+    /// `height` is logical points; call in an active context frame. Copies output only on
+    /// version change, so borrowed input can expire after this call. The view must remain
+    /// stable/alive through rendering; allocation failures silently skip adding the view
+    /// and may leave its copied output cleared or partially updated.
+    ///
+    /// ```zig
+    /// terminal.add(context, build_log, log_version, 280);
+    /// // The host renders context before moving or destroying terminal.
+    /// ```
     pub fn add(self: *TerminalView, context: *ui.Context, output: []const u8, version: u64, height: f32) void {
         if (self.version != version) {
             self.setText(output) catch return;
@@ -132,11 +171,22 @@ pub const TerminalView = struct {
     }
 
     /// The output so far, all of it.
+    /// Borrowed bytes from the last successful version update; invalidated by add/deinit.
+    ///
+    /// ```zig
+    /// terminal_view.copyToClipboard(terminal.content());
+    /// ```
     pub fn content(self: *const TerminalView) []const u8 {
         return self.text.items;
     }
 
     /// The selected text, or null without a selection.
+    /// Empty selections also return null. Returned bytes borrow copied output until it changes
+    /// or the view is destroyed; changing selection alone does not allocate.
+    ///
+    /// ```zig
+    /// if (terminal.selectedText()) |text| terminal_view.copyToClipboard(text);
+    /// ```
     pub fn selectedText(self: *const TerminalView) ?[]const u8 {
         const selection = self.selection orelse return null;
         const start = @min(selection.anchor, selection.focus);
@@ -146,6 +196,15 @@ pub const TerminalView = struct {
     }
 
     /// Handle an input event; returns whether the view used it.
+    /// Editor-host route before the surrounding page UI; event coordinates are window logical
+    /// points matching the last drawn `area`. Before the first draw returns false. Updates
+    /// focus/selection/scroll and may copy to the OS clipboard; retains no event payload.
+    ///
+    /// ```zig
+    /// // input is translated Weeoui input for this output view's window:
+    /// if (terminal.handle(input)) return;
+    /// context.handle(input);
+    /// ```
     pub fn handle(self: *TerminalView, event: ui.input.Event) bool {
         const area = self.area orelse return false;
         switch (event) {
@@ -454,6 +513,13 @@ fn locationLength(text: []const u8) ?usize {
 }
 
 /// Put `text` on the clipboard.
+/// Editor-host helper requiring SDL clipboard support. Copies borrowed bytes into a
+/// temporary C-allocator sentinel string, freed before return; allocation failure is ignored
+/// and SDL clipboard failure logs a warning.
+///
+/// ```zig
+/// terminal_view.copyToClipboard(terminal.selectedText() orelse terminal.content());
+/// ```
 pub fn copyToClipboard(text: []const u8) void {
     var buffer = std.heap.c_allocator.dupeZ(u8, text) catch return;
     defer std.heap.c_allocator.free(buffer);

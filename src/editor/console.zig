@@ -25,10 +25,23 @@ pub const Console = struct {
     counts: console_log.Snapshot = .{ .shown = 0, .total = 0 },
     filtered: ?Filtered = null,
 
+    /// Create the editor Console's lazy filter/selection state; `mono` is borrowed
+    /// until `deinit` and must be a loaded font before the first `build`.
+    ///
+    /// ```zig
+    /// var console = Console.init(gpa, mono);
+    /// defer console.deinit();
+    /// ```
     pub fn init(gpa: std.mem.Allocator, mono: *const ui.Font) Console {
         return .{ .gpa = gpa, .query = ui.TextEdit(128).init("") catch unreachable, .terminal = .init(gpa, mono) };
     }
 
+    /// Free cached snapshots, hidden IDs, and the terminal; does not free `mono`
+    /// or clear the process-wide log. Do not use the Console afterward.
+    ///
+    /// ```zig
+    /// console.deinit(); // Before unloading its borrowed monospaced font.
+    /// ```
     pub fn deinit(self: *Console) void {
         self.terminal.deinit();
         self.shown.deinit(self.gpa);
@@ -36,6 +49,16 @@ pub const Console = struct {
     }
 
     /// Draw the panel's page into `context`.
+    /// Call in an active UI frame. `project_dir` enables source links, or null disables them.
+    /// A clicked location borrows cached diagnostic text until the next refresh/deinit;
+    /// consume it promptly. Failures populate `context.err` and return null.
+    ///
+    /// ```zig
+    /// // Editor panel builder, after context.newFrame:
+    /// if (console.build(context, project_dir)) |source| {
+    ///     std.log.info("open {s}:{d}:{d}", .{ source.path, source.line, source.column });
+    /// }
+    /// ```
     pub fn build(self: *Console, context: *ui.Context, project_dir: ?[]const u8) ?diagnostic.Location {
         return self.buildPage(context, project_dir) catch |err| {
             context.err = context.err orelse err;

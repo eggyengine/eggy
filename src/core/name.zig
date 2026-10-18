@@ -12,6 +12,11 @@ pub const Name = struct {
     pub const max_len = 64;
 
     /// `value`, cut to `max_len` bytes without splitting a UTF-8 character.
+    /// Copies bytes into the returned value without allocation; does not validate UTF-8.
+    ///
+    /// ```zig
+    /// const name = Name.init("Player");
+    /// ```
     pub fn init(value: []const u8) Name {
         var end = @min(value.len, max_len);
         while (end > 0 and end < value.len and (value[end] & 0xC0) == 0x80) end -= 1;
@@ -20,12 +25,24 @@ pub const Name = struct {
         return name;
     }
 
+    /// Borrow the stored bytes, without a sentinel; valid until this name moves or changes.
+    ///
+    /// ```zig
+    /// const name = Name.init("Player");
+    /// const label = name.text();
+    /// ```
     pub fn text(self: *const Name) []const u8 {
         return self.buffer[0..self.len];
     }
 };
 
 /// The first entity of `world` named `name`, if any: `eggy.findNamed(&app.world, "Player")`.
+/// Compares exact bytes, not a prefix; duplicate names resolve in ECS query order.
+/// The returned ID is not a component pointer and must be checked if retained after despawns.
+///
+/// ```zig
+/// const player = find(world, "Player") orelse return error.PlayerMissing;
+/// ```
 pub fn find(world: *ecs.World, name: []const u8) ?ecs.EntityId {
     var named = world.query(.{*const Name});
     while (named.next()) |view| if (std.mem.eql(u8, view.get(*const Name).text(), name)) return view.entity;

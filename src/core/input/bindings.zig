@@ -18,6 +18,13 @@ pub const SavedBinding = union(enum) {
     mouse_delta: @FieldType(types.Binding, "mouse_delta"),
     mouse_wheel: @FieldType(types.Binding, "mouse_wheel"),
 
+    /// Host/tool helper: expand a portable saved binding into a runtime binding value.
+    /// Controller selectors become null (any device); no allocation or validation occurs.
+    ///
+    /// ```zig
+    /// const saved = SavedBinding{ .controller = .{ .button = .south } };
+    /// const runtime_binding = saved.binding();
+    /// ```
     pub fn binding(self: SavedBinding) types.Binding {
         return switch (self) {
             .key => |key| .{ .key = key },
@@ -32,6 +39,13 @@ pub const SavedBinding = union(enum) {
         };
     }
 
+    /// Host/tool helper: copy a runtime binding into its portable serialization form.
+    /// Device-specific controller bindings return `TransientControllerBinding`; other
+    /// payloads are copied without validation or allocation.
+    ///
+    /// ```zig
+    /// const saved = try SavedBinding.from(.{ .key = .space });
+    /// ```
     pub fn from(binding_value: types.Binding) !SavedBinding {
         return switch (binding_value) {
             .key => |key| .{ .key = key },
@@ -63,6 +77,13 @@ const Change = union(enum) {
     map: struct { owner: []const u8, value: ?types.MapDefaults },
 };
 
+/// Host-only: validate physical keys, finite scales and dead zones in `[0, 1)`.
+/// `persistent` additionally rejects physical controller IDs, which cannot survive a run.
+/// Reports `InvalidBinding`/`TransientControllerBinding`; does not check control kinds/chords.
+///
+/// ```zig
+/// try validate(&.{.{ .controller = .{ .button = .south } }}, true);
+/// ```
 pub fn validate(mappings: []const types.Binding, persistent: bool) !void {
     for (mappings) |binding| switch (binding) {
         .key => |key| if (@intFromEnum(key) == 0 or @intFromEnum(key) >= types.key_count) return error.InvalidBinding,
@@ -95,6 +116,14 @@ pub fn validate(mappings: []const types.Binding, persistent: bool) !void {
     };
 }
 
+/// Host-only: allocate an unambiguous owner/name lookup key, independent of type markers.
+/// Both inputs must be nonempty; returns `InvalidBinding` or allocation failure otherwise.
+/// Caller frees the result with `gpa.free`.
+///
+/// ```zig
+/// const key = try stableKey(gpa, "game/player", "jump");
+/// defer gpa.free(key);
+/// ```
 pub fn stableKey(gpa: std.mem.Allocator, owner: []const u8, name: []const u8) ![]u8 {
     if (owner.len == 0 or name.len == 0) return error.InvalidBinding;
     return std.fmt.allocPrint(gpa, "{d}:{s}{s}", .{ owner.len, owner, name });
@@ -107,9 +136,22 @@ pub const Overrides = struct {
     maps: std.StringArrayHashMapUnmanaged(types.MapDefaults) = .empty,
     const Entry = struct { owner: []u8, name: []u8, bindings: []types.Binding, trigger: ?types.Trigger = null };
 
+    /// Host-only: create empty owned overrides using `gpa`; no files are read or allocated yet.
+    ///
+    /// ```zig
+    /// var overrides = Overrides.init(gpa);
+    /// defer overrides.deinit();
+    /// ```
     pub fn init(gpa: std.mem.Allocator) Overrides {
         return .{ .gpa = gpa };
     }
+    /// Host-only: free all owned keys, names, mappings and chord strings.
+    /// Invalidates borrowed lookup results; do not reuse or deinitialize the value twice.
+    ///
+    /// ```zig
+    /// var overrides = Overrides.init(gpa);
+    /// defer overrides.deinit();
+    /// ```
     pub fn deinit(self: *Overrides) void {
         for (self.entries.keys(), self.entries.values()) |key, entry| {
             self.gpa.free(key);
@@ -125,12 +167,36 @@ pub const Overrides = struct {
         self.gpa.free(entry.bindings);
         if (entry.trigger) |trigger| if (trigger == .chord) self.gpa.free(trigger.chord);
     }
+    /// Host-only: borrow the explicit bindings under a `stableKey`, or null for no override.
+    /// An empty slice is an intentional unbind. The result expires on replacement/removal,
+    /// successful `read`, or deinitialization; defaults are not consulted.
+    ///
+    /// ```zig
+    /// const key = try stableKey(gpa, "game/player", "jump");
+    /// defer gpa.free(key);
+    /// const bindings = overrides.get(key);
+    /// ```
     pub fn get(self: *const Overrides, key: []const u8) ?[]const types.Binding {
         return if (self.entries.get(key)) |entry| entry.bindings else null;
     }
+    /// Host-only: return the explicit trigger override, or null for no trigger override.
+    /// `key` comes from `stableKey`; chord names borrow entry storage until it changes.
+    ///
+    /// ```zig
+    /// const key = try stableKey(gpa, "game/player", "jump");
+    /// defer gpa.free(key);
+    /// const rule = overrides.getTrigger(key);
+    /// ```
     pub fn getTrigger(self: *const Overrides, key: []const u8) ?types.Trigger {
         return if (self.entries.get(key)) |entry| entry.trigger else null;
     }
+    /// Host-only: copy/replace a nonempty owner's saved activation/priority defaults, or remove
+    /// them with null. If supplied, `persistence` synchronously saves the complete candidate
+    /// file before mutation. Allocation/save failure preserves existing map overrides.
+    ///
+    /// ```zig
+    /// try overrides.setMap("game/menu", .{ .priority = 10, .enabled = false }, null);
+    /// ```
     pub fn setMap(self: *Overrides, owner: []const u8, value: ?types.MapDefaults, persistence: ?Persistence) !void {
         if (owner.len == 0) return error.InvalidBinding;
         const existing = self.maps.contains(owner);
@@ -151,6 +217,15 @@ pub const Overrides = struct {
             self.maps.orderedRemoveAt(index);
         }
     }
+    /// Host-only: own a copy of one control override (including a chord string).
+    /// Empty bindings unbind; null trigger leaves trigger selection to registered defaults.
+    /// Validates bindings, not trigger graphs; caller validates kinds/chords before calling.
+    /// Optional synchronous persistence saves before mutation; allocation/save errors preserve
+    /// the previous entry. Persistent edits cannot contain physical controller IDs.
+    ///
+    /// ```zig
+    /// try overrides.set("game/player", "jump", &.{.{ .key = .j }}, null, null);
+    /// ```
     pub fn set(self: *Overrides, owner: []const u8, name: []const u8, mappings: []const types.Binding, trigger: ?types.Trigger, persistence: ?Persistence) !void {
         try validate(mappings, persistence != null);
         const key = try stableKey(self.gpa, owner, name);
@@ -178,6 +253,13 @@ pub const Overrides = struct {
         } else self.entries.putAssumeCapacity(key, owned);
     }
 
+    /// Host-only: remove a control override; absence is a no-op. Nonempty owner/name are
+    /// required. Optional persistence saves the candidate file first; allocation/save errors
+    /// preserve the entry. Successful removal invalidates its borrowed bindings/chord.
+    ///
+    /// ```zig
+    /// try overrides.remove("game/player", "jump", null);
+    /// ```
     pub fn remove(self: *Overrides, owner: []const u8, name: []const u8, persistence: ?Persistence) !void {
         const key = try stableKey(self.gpa, owner, name);
         defer self.gpa.free(key);
@@ -219,6 +301,13 @@ pub const Overrides = struct {
 
     /// Parse all overrides transactionally. Unknown/unregistered controls remain available for
     /// later plugin registration; malformed bindings never replace a working configuration.
+    /// Host-only: accepts sentinel-terminated version-1 ZON, copies all stored values and
+    /// invalidates previous borrowed results only on success. Does not validate registered
+    /// control kinds or chord graphs; `State.prepareOverrides` adds those checks.
+    ///
+    /// ```zig
+    /// try overrides.read(".{ .version = 1, .controls = .{} }");
+    /// ```
     pub fn read(self: *Overrides, source: [:0]const u8) !void {
         var arena = std.heap.ArenaAllocator.init(self.gpa);
         defer arena.deinit();
