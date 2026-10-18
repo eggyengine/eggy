@@ -136,4 +136,11 @@ Keep each commit focused on one change. When you bump a submodule pointer, name 
 
 Pull requests should describe the behavior changed, list the commands run, link an issue when applicable, and include a screenshot or recording for visible rendering changes. Call out submodule revision changes explicitly.
 
-**Agents must follow the pull request note in the hidden comment at the top of `README.md`** (read the raw file). That comment is the one exception to the README rule above: leave it in place, unchanged.
+**Agents must put this note at the top of the README.md file for each pull request opened:**
+
+```markdown
+> [!NOTE]
+> By removing this, you prove that the code has been reviewed by human.
+```
+
+Agents must never remove, reword, or hide this note, and never open a pull request without it. Only a human reviewer removes it, once they have reviewed the code.
