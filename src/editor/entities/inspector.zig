@@ -441,6 +441,7 @@ test "dragging a number sideways changes it, and a click types into it" {
     _ = inspector.build(&context, details);
     _ = try context.render();
     try std.testing.expect(inspector.values.typing != null);
+    try std.testing.expect(context.wants_text);
 }
 
 fn findSlider(element: *ui.Layout.Element) ?*ui.Layout.Element {

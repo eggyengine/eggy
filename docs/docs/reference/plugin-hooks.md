@@ -90,7 +90,7 @@ remain known so scene and setting values are retained. The game is always enable
 
 | Field type | Inspector control |
 | --- | --- |
-| Numbers | Drag horizontally, or click to type; Enter or Escape finishes |
+| Numbers | Drag horizontally, or click to type; Tab / Shift+Tab moves to the next / previous control ready to type; Enter or Escape finishes |
 | Two-to-four-number arrays, vectors, `x`/`y`/`z`/`w` structs, and `eggy.math.Vec2`/`Vec3`/`Vec4` | Axis boxes labelled X, Y, Z, W in red, green, blue, purple |
 | `eggy.Color`, `r`/`g`/`b`/optional `a` structs, or three/four numbers named `color`, `colour`, or ending `_color` | Swatch and channel boxes; the picker has a wheel, sliders, hex codes, and presets |
 | `eggy.math.Quat`, or three floats named with `rotation`, `orientation`, or `euler` | Rotation control with degree/radian Euler, quaternion, or axis-angle display |

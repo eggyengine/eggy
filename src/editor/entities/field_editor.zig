@@ -151,8 +151,8 @@ pub const Slot = struct {
 
 pub const FieldEditor = struct {
     gpa: std.mem.Allocator,
-    /// The number box being typed into: its key, its text, and whether it has the keyboard yet.
-    typing: ?struct { key: u64, edit: NumberEdit, focused: bool = false } = null,
+    /// The focused number box's key and text, kept while typing.
+    typing: ?struct { key: u64, edit: NumberEdit } = null,
     /// The number box being dragged: its key, where the pointer and the number were when pressed,
     /// and whether it has moved enough to count as a drag.
     scrub: ?struct { key: u64, from_x: f32, from: f64, moved: bool = false } = null,
@@ -558,36 +558,21 @@ const Draw = struct {
         const editor = self.editor;
         const arena = self.scratch();
 
-        // Being typed into: a text field until Enter, Escape or a press elsewhere.
-        if (editor.typing) |*typing| if (typing.key == key) {
-            const changed = context.textInput(std.fmt.allocPrint(arena, "##type {x}", .{key}) catch return null, &typing.edit, "");
-            const input = context.last_added orelse return null;
-            input.style.min_width = 0;
-            input.style.width = width;
-            input.style.height = 22;
-            if (!typing.focused) {
-                context.focus = input.id;
-                typing.edit.selectAll();
-                typing.focused = true;
-            } else if (context.focus != input.id) {
-                editor.typing = null;
-            }
-            for (context.pending.items) |item| if (item == .key) switch (item.key.key) {
-                .enter, .escape => {
-                    editor.typing = null;
-                    context.focus = 0;
-                },
-                else => {},
-            };
-            if (!changed) return null;
-            const typed = std.fmt.parseFloat(f64, std.mem.trim(u8, typing.edit.text(), " ")) catch return null;
-            return if (range) |limits| std.math.clamp(typed, limits[0], limits[1]) else typed;
-        };
+        // One widget identity keeps Tab/Shift+Tab editable, including text arriving this frame.
+        const continuing = if (editor.typing) |typing| typing.key == key else false;
+        var initial = NumberEdit.init(field_value.numberText(arena, number, this)) catch return null;
+        initial.selectAll();
+        const edit = if (continuing) &editor.typing.?.edit else &initial;
+        const changed = context.textInput(std.fmt.allocPrint(arena, "##number {x}", .{key}) catch return null, edit, "");
+        const box = context.last_added orelse return null;
+        const id = box.id;
+        box.style.min_width = 0;
+        box.style.width = width;
+        box.style.height = 22;
 
         // A press takes the pointer; moving sideways drags the number, letting go without
         // moving types into it.
-        const id = context.idFor(std.fmt.allocPrint(arena, "##number {x}", .{key}) catch return null);
-        if (pressedOn(context, id)) {
+        if (!continuing and pressedOn(context, id)) {
             context.active = id;
             editor.scrub = .{ .key = key, .from_x = context.pointer.x, .from = number };
         }
@@ -605,9 +590,41 @@ const Draw = struct {
                     if (new != number) result = new;
                 }
             } else {
-                if (!scrub.moved) editor.typing = .{ .key = key, .edit = NumberEdit.init(field_value.numberText(arena, number, this)) catch NumberEdit.init("") catch unreachable };
+                if (!scrub.moved) {
+                    context.focus = id;
+                } else if (context.focus == id) context.focus = 0;
                 editor.scrub = null;
             }
+        };
+
+        if (context.focus == id and editor.scrub == null) {
+            if (!continuing) {
+                initial.selectAll();
+                editor.typing = .{ .key = key, .edit = initial };
+            }
+            const typing = &editor.typing.?;
+            context.wants_text = true;
+            box.paint_kind.input.value = typing.edit.text();
+            box.paint_kind.input.focused = true;
+            box.paint_kind.input.cursor = typing.edit.cursor;
+            box.paint_kind.input.selection = typing.edit.selection();
+            if (changed) {
+                if (std.fmt.parseFloat(f64, std.mem.trim(u8, typing.edit.text(), " "))) |typed| {
+                    result = if (range) |limits| std.math.clamp(typed, limits[0], limits[1]) else typed;
+                } else |_| {}
+            }
+            for (context.pending.items) |item| if (item == .key) switch (item.key.key) {
+                .enter, .escape => {
+                    context.focus = 0;
+                },
+                else => {},
+            };
+            if (context.focus == id) {
+                return result;
+            }
+        }
+        if (editor.typing) |typing| if (typing.key == key) {
+            editor.typing = null;
         };
 
         const look = arena.create(NumberPaint) catch return null;
@@ -618,10 +635,9 @@ const Draw = struct {
             .fill = if (range) |limits| @floatCast(std.math.clamp((number - limits[0]) / (limits[1] - limits[0]), 0, 1)) else null,
             .dragging = context.active == id,
         };
-        const box = context.builder().node(id, .{ .width = width, .height = 22 }, .{ .custom = .{ .context = look, .draw = NumberPaint.draw } }, &.{}) catch return null;
+        box.paint_kind = .{ .custom = .{ .context = look, .draw = NumberPaint.draw } };
         box.cursor = .ew_resize;
         box.accessibility = .{ .role = .slider, .label = if (tag) |t| t.letter else "Number", .numeric_value = @floatCast(number) };
-        context.element(box);
         return result;
     }
 
@@ -888,5 +904,55 @@ test "a turn reads back the same in every format" {
     for (rotation_formats) |format| {
         const back = format.read(format.show(turn)).toEulerDeg();
         for (back, [_]f64{ 30, -45, 80 }) |got, want| try std.testing.expectApproxEqAbs(want, got, 1e-6);
+    }
+}
+
+test "Tab and Shift+Tab select numeric values for typing without a mouse click" {
+    const Fixture = struct {
+        fn frame(context: *ui.Context, editor: *FieldEditor, text: []const u8) !?[]const u8 {
+            context.newFrame(.{ .x = 0, .y = 0, .w = 400, .h = 200 });
+            editor.newFrame();
+            const changed = editor.fieldRows(context, .{
+                .component = 0,
+                .field = 0,
+                .label = "Position",
+                .parts = &.{ .{ .kind = .vector, .first = 1, .count = 1, .len = 3 }, .{ .kind = .float } },
+                .text = text,
+                .shown = null,
+                .control_width = 240,
+                .dragging = null,
+            });
+            _ = try context.render();
+            return changed;
+        }
+    };
+    var context = try ui.Context.init(std.testing.allocator);
+    defer context.deinit();
+    var editor = FieldEditor.init(std.testing.allocator);
+    defer editor.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var text: []const u8 = ".{ 1, 2, 3 }";
+    _ = try Fixture.frame(&context, &editor, text);
+    const ids = context.last_focusables.items[0..3].*;
+    const cases = [_]struct { backward: bool, input: []const u8, axis: usize, expected: [3]f64 }{
+        .{ .backward = false, .input = "12", .axis = 0, .expected = .{ 12, 2, 3 } },
+        .{ .backward = false, .input = "34", .axis = 1, .expected = .{ 12, 34, 3 } },
+        .{ .backward = false, .input = "56", .axis = 2, .expected = .{ 12, 34, 56 } },
+        .{ .backward = true, .input = "78", .axis = 1, .expected = .{ 12, 78, 56 } },
+        .{ .backward = true, .input = "90", .axis = 0, .expected = .{ 90, 78, 56 } },
+    };
+    for (cases) |case| {
+        context.handle(.{ .key_down = .{ .key = .tab, .modifiers = .{ .shift = case.backward }, .repeat = false } });
+        context.handle(.{ .text = case.input });
+        const changed = (try Fixture.frame(&context, &editor, text)).?;
+        const value = Value.parse(context.builder().allocator, changed).?;
+        var nodes: [3]Node = undefined;
+        try std.testing.expectEqual(@as(usize, 3), value.numbers(.root, &nodes));
+        for (nodes, case.expected) |node, expected| try std.testing.expectEqual(expected, value.number(node).?);
+        try std.testing.expectEqual(ids[case.axis], context.focus);
+        try std.testing.expectEqualSlices(u32, &ids, context.last_focusables.items);
+        try std.testing.expect(context.wants_text);
+        text = try arena.allocator().dupe(u8, changed);
     }
 }
