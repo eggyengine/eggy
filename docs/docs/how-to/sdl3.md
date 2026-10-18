@@ -70,8 +70,12 @@ if (sdl.mouse.getWindowRelativeMode(app.window.window)) {
 Relative mode itself manages cursor visibility; `hide()` is not required for it.
 Read accumulated movement from `app.input.mouse_delta`, not absolute cursor positions.
 Release the mode whenever the interaction ends, including when gameplay relinquishes
-control. In editor Play, this acts on the whole OS window, including the editor
-chrome outside the Scene panel.
+control. In editor Play, Eggy confines captured movement to the Scene's rendered image,
+updates its bounds as the layout changes, and keeps it out of the editor's controls.
+Relative movement continues even at the viewport's edge; it does not hover game UI.
+Stopping Play, losing focus, or hiding the viewport releases capture. Escape stops
+Play or Simulate immediately by default; change **Stop play key** in Edit > Preferences
+if the game needs Escape itself.
 
 ## Visibility and drag capture
 
@@ -91,7 +95,9 @@ try sdl.mouse.capture(true);
 try sdl.mouse.capture(false);
 ```
 
-Capture requires a focused window and backend support. It does not make gameplay input
+Capture requires a focused window and backend support. Wayland owns implicit drag
+capture and does not support `mouse.capture`, including `mouse.capture(false)`; use
+relative mode or viewport confinement there. Capture does not make gameplay input
 ignore UI ownership or guarantee delivery while the app is unfocused.
 
 ## Confine the pointer or grab the keyboard {#confinement-and-keyboard-grabs}

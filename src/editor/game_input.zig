@@ -15,6 +15,8 @@ pub const State = struct {
     focused: bool = false,
     buttons: u32 = 0,
     pointer_in_scene: bool = false,
+    mouse_captured: bool = false,
+    relative_mouse: bool = false,
     touches: std.AutoHashMapUnmanaged(TouchKey, void) = .empty,
 
     /// Clear editor viewport focus, captured contacts/buttons, gameplay input, and any UI
@@ -58,6 +60,7 @@ pub const State = struct {
     /// window width/height in points; it converts to viewport-local coordinates.
     /// The host decides which events belong here. `game` supplies `uiEvent(app,event) bool`
     /// and `event(app,event) void`; gameplay only receives declined input while `running`.
+    /// Relative mouse capture bypasses pointer UI so hidden movement cannot hover or consume it.
     /// Touch allocation and input-backend errors propagate; zero-sized viewports are ignored.
     ///
     /// ```zig
@@ -76,7 +79,7 @@ pub const State = struct {
             .finger_down, .finger_motion, .finger_up, .finger_canceled => |finger| .{ finger.x * viewport.w, finger.y * viewport.h },
             else => null,
         };
-        if (at) |position| self.pointer_in_scene = position[0] >= 0 and position[1] >= 0 and position[0] < viewport.w and position[1] < viewport.h;
+        if (at) |position| self.pointer_in_scene = self.mouse_captured or (position[0] >= 0 and position[1] >= 0 and position[0] < viewport.w and position[1] < viewport.h);
         switch (local) {
             .mouse_button_down => |button| {
                 self.focused = true;
@@ -90,8 +93,9 @@ pub const State = struct {
             .finger_up, .finger_canceled => _ = self.touches.remove(touchKey(local).?),
             else => {},
         }
-        const consumed = if (app.ui_layer) |layer| layer.handle(local, true) else false;
-        if (consumed or game.uiEvent(app, local)) {
+        const relative_pointer = self.relative_mouse and at != null and !eggy.game_ui.isTouchInput(local);
+        const consumed = if (!relative_pointer) if (app.ui_layer) |layer| layer.handle(local, true) else false else false;
+        if (!relative_pointer and (consumed or game.uiEvent(app, local))) {
             app.input.suppress(local);
             return;
         }
@@ -181,4 +185,45 @@ test "Scene touch ownership follows exact contacts outside the viewport and clea
     try std.testing.expect(!state.ownsTouch(.{ .finger_motion = other }));
     state.cancel(&app);
     try std.testing.expect(!state.ownsTouch(.{ .finger_motion = finger }));
+}
+
+test "relative capture keeps tracking outside the viewport without hovering or consuming game UI" {
+    const Game = struct {
+        ui_events: usize = 0,
+        events: usize = 0,
+        pub fn uiEvent(self: *@This(), _: *eggy.App, _: eggy.Event) bool {
+            self.ui_events += 1;
+            return true;
+        }
+        pub fn event(self: *@This(), _: *eggy.App, _: eggy.Event) void {
+            self.events += 1;
+        }
+    };
+    var app: eggy.App = undefined;
+    app.input = .{};
+    app.ui_layer = null;
+    var game = Game{};
+    var state = State{ .focused = true, .mouse_captured = true, .relative_mouse = true };
+    const motion = eggy.Event{ .mouse_motion = .{
+        .common = .{ .timestamp = 0 },
+        .state = .{ .left = false, .middle = false, .right = false, .side1 = false, .side2 = false },
+        .x = 900,
+        .y = 500,
+        .x_rel = 400,
+        .y_rel = -250,
+    } };
+    const viewport = eggy.ui.Rect{ .x = 100, .y = 50, .w = 300, .h = 200 };
+    try state.route(&app, &game, motion, viewport, .{ 1200, 800 }, true);
+    try state.route(&app, &game, motion, viewport, .{ 1200, 800 }, true);
+    try std.testing.expectEqual([2]f32{ 800, -500 }, app.input.mouse_delta);
+    try std.testing.expect(state.pointer_in_scene);
+    try std.testing.expectEqual(@as(usize, 0), game.ui_events);
+    try std.testing.expectEqual(@as(usize, 2), game.events);
+
+    state.mouse_captured = false;
+    state.relative_mouse = false;
+    try state.route(&app, &game, motion, viewport, .{ 1200, 800 }, true);
+    try std.testing.expect(!state.pointer_in_scene);
+    try std.testing.expectEqual(@as(usize, 1), game.ui_events);
+    try std.testing.expectEqual(@as(usize, 2), game.events);
 }

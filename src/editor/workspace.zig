@@ -155,6 +155,8 @@ pub const Workspace = struct {
     window_state: titlebar.State = .{},
     /// Whether the game is playing, which turns the play button into a stop button.
     playing: bool = false,
+    /// Current Stop binding, supplied by the host for the titlebar tooltip.
+    stop_tooltip: []const u8 = "Stop (Escape)",
     /// Whether play is paused, which lights the pause button.
     paused: bool = false,
     /// Whether the game runs as Simulate started it, rather than Play.
@@ -476,7 +478,7 @@ pub const Workspace = struct {
     /// does, for its tooltip; null for others.
     fn tooltipText(self: *const Workspace, id: u32) ?[]const u8 {
         if (scene_view.toolbar.buttonOf(id)) |button| return scene_view.toolbar.describe(button, self.scene_overlay.tools);
-        if (id == play_button.id) return if (self.playing) "Stop (Esc three times)" else "Play";
+        if (id == play_button.id) return if (self.playing) self.stop_tooltip else "Play";
         if (id == pause_button.id and self.playing) return if (self.paused) "Resume" else "Pause";
         if (id == simulate_button.id and !self.playing) return "Simulate: run the game, seen through the Scene panel's camera";
         if (id == reload_button.id) return if (self.build_state == .ready) "Reload (ready)" else "Reload";

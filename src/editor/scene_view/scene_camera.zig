@@ -3,7 +3,7 @@
 //! them apart by each scroll event:
 //!
 //! - right-drag looks around, and while it is held W, A, S, D fly, Q and E go down and up
-//!   (Shift faster);
+//!   (Shift faster); the host captures relative movement inside the rendered Scene for drags;
 //! - Alt+left-drag orbits the focus point; middle-drag pans;
 //! - the wheel zooms towards the focus point; F frames what is selected;
 //! - on a touchpad, two-finger scroll orbits, Shift+scroll pans, Ctrl+scroll or pinch zooms.

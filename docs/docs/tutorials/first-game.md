@@ -86,8 +86,10 @@ While the camera is selected, the Scene shows what it sees in the corner:
 ![The Camera entity, with its view in the corner of the Scene](/img/first-game/camera.png)
 
 Save the scene. Press Play at the top of the window. You should see the orange cube
-and green floor through the camera. Press Play again, or Escape three times, to
-stop. The cube does not move yet.
+and green floor through the camera. Press Play again, or press Escape once, to
+stop. The same shortcut stops Simulate. Change **Stop play key** in Edit > Preferences
+to use another key. Play and Simulate start with no entity selected; selecting one
+while they run keeps it selected. The cube does not move yet.
 
 ## 6. Make the player move {#make-the-player-move}
 

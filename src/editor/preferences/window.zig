@@ -68,6 +68,8 @@ pub const PreferencesWindow = struct {
     /// Whether the scope was picked yet: with a project, the window starts on This project,
     /// where changes usually belong.
     scope_picked: bool = false,
+    capturing_stop_key: bool = false,
+    captured_stop_key: ?eggy.Key = null,
 
     /// Open the window. On the heap, as its page keeps a pointer to it.
     /// Desktop editor only: borrows live graphics/font resources and returns a caller-managed
@@ -119,7 +121,7 @@ pub const PreferencesWindow = struct {
         if (!self.window.owns(curr_event)) return false;
         if (curr_event == .window_close_requested) return true;
         const input = weeoui_sdl3.translate(curr_event) orelse return false;
-        return input == .key_down and input.key_down.key == .escape;
+        return !self.capturing_stop_key and input == .key_down and input.key_down.key == .escape;
     }
 
     /// Handle `curr_event` if it is for this window; returns whether it was.
@@ -130,6 +132,13 @@ pub const PreferencesWindow = struct {
     /// ```
     pub fn handle(self: *PreferencesWindow, curr_event: sdl3.events.Event) bool {
         if (!self.window.owns(curr_event)) return false;
+        if (self.capturing_stop_key and curr_event == .key_down) {
+            if (!curr_event.key_down.repeat) if (curr_event.key_down.scancode) |key| {
+                self.captured_stop_key = key;
+                self.capturing_stop_key = false;
+            };
+            return true;
+        }
         self.window.handle(curr_event);
         return true;
     }
@@ -313,6 +322,17 @@ pub const PreferencesWindow = struct {
                 break :blk if (context.toggle(hidden, &on)) (if (on) "true" else "false") else null;
             },
             .@"enum" => blk: {
+                if (std.mem.eql(u8, key, files.editor_key) and std.mem.eql(u8, field.name, "stop_play_key")) {
+                    const code = (if (value.len > 1) std.meta.stringToEnum(eggy.Key, value[1..]) else null) orelse (files.Editor{}).stop_play_key;
+                    const label = if (self.capturing_stop_key) "Press a key..." else sdl3.keyboard.getScancodeName(code) orelse @tagName(code);
+                    if (context.buttonVariant(label, .outline)) self.capturing_stop_key = true;
+                    if (self.capturing_stop_key and context.buttonVariant("Cancel binding", .link)) self.capturing_stop_key = false;
+                    if (self.captured_stop_key) |captured| {
+                        self.captured_stop_key = null;
+                        break :blk std.fmt.allocPrint(arena, ".{t}", .{captured}) catch null;
+                    }
+                    break :blk null;
+                }
                 const options = arena.alloc([]const u8, field.options.len) catch break :blk null;
                 var selected: usize = 0;
                 for (options, field.options, 0..) |*option, name, index| {

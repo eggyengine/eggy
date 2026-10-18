@@ -22,6 +22,7 @@ pub const Editor = struct {
     assets_view: enum { list, grid } = .list,
     autosave_seconds: u32 = 60,
     code_editor: @import("../code_editor.zig").Choice = .vscode,
+    stop_play_key: eggy.Key = .escape,
 
     pub const descriptions = .{
         .code_editor = "What double-clicking a code or text file in Assets opens it in. System uses the app your desktop opens it with.",
@@ -30,6 +31,7 @@ pub const Editor = struct {
         .theme = "The editor's colours. System follows the desktop's light or dark setting.",
         .rebuild_on_focus = "Rebuild the project when you come back to the editor after changing its code.",
         .show_debug_logs = "Show debug messages in the Console when the editor starts.",
+        .stop_play_key = "Press this key once to stop Play or Simulate and release the mouse. Click the binding to choose another key.",
     };
 };
 
@@ -238,7 +240,20 @@ test "the registry lists each plugin, whether it is on, and its preferences" {
 }
 
 test "the editor's preferences have a manifest" {
-    try std.testing.expectEqual(@as(usize, 6), editor_manifest.fields.len);
+    try std.testing.expectEqual(@as(usize, 7), editor_manifest.fields.len);
     try std.testing.expectEqualStrings("system", editor_manifest.fields[0].options[0]);
     try std.testing.expectEqualStrings("vscode", editor_manifest.fields[5].default[1..]);
+    try std.testing.expectEqualStrings(".escape", editor_manifest.fields[6].default);
+}
+
+test "the stop key defaults to Escape and follows preference scopes" {
+    var store = Store.init(std.testing.allocator);
+    defer store.deinit();
+    try std.testing.expectEqual(eggy.Key.escape, editor(&store).stop_play_key);
+    try store.set(.global, editor_key, "stop_play_key", ".func8");
+    try std.testing.expectEqual(eggy.Key.func8, editor(&store).stop_play_key);
+    try store.set(.project, editor_key, "stop_play_key", ".func10");
+    try std.testing.expectEqual(eggy.Key.func10, editor(&store).stop_play_key);
+    try store.set(.project, editor_key, "stop_play_key", null);
+    try std.testing.expectEqual(eggy.Key.func8, editor(&store).stop_play_key);
 }

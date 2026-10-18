@@ -69,7 +69,8 @@ pub const Game = struct {
             try window.setKeyboardGrab(false);
             // SDL's dummy driver deliberately has no OS capture or confinement.
             if (!std.mem.eql(u8, sdl.video.getCurrentDriverName().?, "dummy")) {
-                try sdl.mouse.capture(false);
+                // Wayland's implicit grab is released by the compositor, not SDL_CaptureMouse.
+                if (!std.mem.eql(u8, sdl.video.getCurrentDriverName().?, "wayland")) try sdl.mouse.capture(false);
                 try sdl.mouse.setWindowRect(window, null);
             }
             try window.setTitle("SDL shared across reload");

@@ -54,6 +54,7 @@ const descriptors = @import("assets/descriptors.zig");
 const ProjectAssets = @import("assets/project_assets.zig").ProjectAssets;
 const extensions = @import("extensions/extensions.zig");
 const GameInput = @import("game_input.zig").State;
+const ViewportMouse = @import("viewport_mouse.zig").State;
 const InputSettings = @import("input_settings.zig").InputSettings;
 const InputMappingsWindow = @import("input_mappings.zig").InputMappingsWindow;
 const input_map_asset = @import("input_map_asset/input_map_asset.zig");
@@ -84,6 +85,7 @@ pub fn Editor(comptime project: type) type {
         app: eggy.App,
         extension_state: extensions.State = .{},
         game_input: GameInput = .{},
+        viewport_mouse: ViewportMouse = .{},
         input_settings: ?*InputSettings = null,
         input_mappings_window: ?*InputMappingsWindow = null,
         input_map_window: ?*input_map_asset.Window = null,
@@ -353,6 +355,7 @@ pub fn Editor(comptime project: type) type {
         /// defer host.deinit(); // Once after SDL stops delivering callbacks.
         /// ```
         pub fn deinit(self: *Self) void {
+            self.releaseViewportMouse();
             self.game_input.deinit(self.gpa);
             self.extension_state.deinit(self.gpa);
             if (self.game) |*game| game.deinit(&self.app);
@@ -428,6 +431,7 @@ pub fn Editor(comptime project: type) type {
             self.setHidden(false);
 
             try self.app.graphics.syncSize(self.app.window);
+            try self.syncViewportMouse();
             self.applyPendingMaximize(false);
             const viewport = try self.uiViewport() orelse return .run; // minimized
             // The game stays paused while the Build progress window is up.
@@ -498,7 +502,10 @@ pub fn Editor(comptime project: type) type {
             self.workspace.developer_known = self.upgrades.developer_dir != null;
             const modifiers = sdl3.keyboard.getModState();
             self.workspace.shift_held = modifiers.left_shift or modifiers.right_shift;
+            const stop_key = preferences.editor(&self.app.preference_values).stop_play_key;
+            self.workspace.stop_tooltip = try std.fmt.allocPrint(frame_arena.allocator(), "Stop ({s})", .{sdl3.keyboard.getScancodeName(stop_key) orelse @tagName(stop_key)});
             try self.workspace.build(viewport, window_viewports, self.ui.font);
+            try self.syncViewportMouse();
             // Help > DevTools, on this frame's main window, before that draws their highlight.
             self.workspace.devtools = null;
             if (self.devtools_window) |window| {
@@ -616,7 +623,7 @@ pub fn Editor(comptime project: type) type {
 
             const pointer = self.workspace.pointer;
             const hovered = self.pageAt(self.workspace.pointer_slot, pointer.x, pointer.y);
-            const over_game = self.play_mode.playing() and !self.workspace.simulating and (self.game_input.pointer_in_scene or self.game_input.buttons != 0);
+            const over_game = self.play_mode.playing() and !self.workspace.simulating and (self.game_input.mouse_captured or self.game_input.pointer_in_scene or self.game_input.buttons != 0);
             const game_cursor: ?ui.Cursor = if (over_game) if (self.app.ui_layer) |layer| layer.context.cursor else null else null;
             const dock_cursor = self.workspace.dock.cursor();
             if (!over_game or self.app.ui_layer != null or dock_cursor != null) {
@@ -799,7 +806,7 @@ pub fn Editor(comptime project: type) type {
             return std.fmt.bufPrint(&self.play_warning_buffer, "Play mode warning: {d} entit{s} use{s} components of {s}, which is turned off. Turn it on, or remove them, to play.", .{ count, if (count == 1) "y" else "ies", if (count == 1) "s" else "", plugin }) catch "Play mode warning: the scene uses a turned-off plugin";
         }
 
-        /// Play: keep the scene, then run the game.
+        /// Play or Simulate: keep the scene, then run the game with nothing selected.
         fn startPlaying(self: *Self) void {
             // Not with components whose plugin is off: their code isn't there to run them.
             if (self.playWarning()) |warning| {
@@ -813,17 +820,15 @@ pub fn Editor(comptime project: type) type {
                 self.workspace.simulating = false;
                 return std.log.err("play: the game's library isn't loaded", .{});
             };
-            // The game starts over on the scene, as it does when shipped, with no keys held and its
-            // clock at zero; the selection follows.
+            // Start as the shipped game does, with no keys held and its clock at zero.
             self.app.input.cancel();
             self.app.time.reset();
-            const place = self.entity_editor.selectionPlace(&self.app, game);
             self.play_mode.play(self.gpa, &self.app, game, self.entity_editor.roots(&self.app.world), self.plugin_switches.off()) catch |err| {
                 self.workspace.playing = false;
                 self.workspace.simulating = false;
                 return std.log.err("cannot start playing: {t}", .{err});
             };
-            self.entity_editor.reselect(&self.app, game, place);
+            self.entity_editor.selected = null;
             self.workspace.playing = true;
             self.game_input = .{ .focused = true };
         }
@@ -831,6 +836,8 @@ pub fn Editor(comptime project: type) type {
         /// Stop: the game starts over on the scene kept by Play. Entities are made anew; the
         /// selection follows its entity there.
         fn stopPlaying(self: *Self) void {
+            self.releaseViewportMouse();
+            self.scene_view.camera.cancelNavigation();
             self.game_input.cancel(&self.app);
             self.workspace.playing = false;
             self.workspace.simulating = false;
@@ -1379,7 +1386,10 @@ pub fn Editor(comptime project: type) type {
         fn syncPopOuts(self: *Self) !void {
             for (self.workspace.dock.windows, &self.popouts, 0..) |wanted, *popout, i| {
                 if (wanted == null) {
-                    if (popout.*) |*open| open.close(&self.app.graphics);
+                    if (popout.*) |*open| {
+                        if (self.viewport_mouse.confined) |confined| if (confined.window.value == open.window.window.value) self.releaseViewportMouse();
+                        open.close(&self.app.graphics);
+                    }
                     popout.* = null;
                 } else if (popout.* == null) {
                     popout.* = try PopOut.open(&self.app.graphics, self.ui.font, self.workspace.windowTitle(i), wanted.?.size, .{ .resizable = true });
@@ -1426,6 +1436,7 @@ pub fn Editor(comptime project: type) type {
                 if (window.handle(curr_event)) return self.toolWindowTook(curr_event);
             }
             if (curr_event == .window_focus_lost) {
+                self.releaseViewportMouse();
                 self.scene_view.camera.cancelNavigation();
                 self.game_input = .{};
                 self.app.input.releaseAll();
@@ -1476,13 +1487,18 @@ pub fn Editor(comptime project: type) type {
                     return .run;
                 }
                 if (window.handle(curr_event)) return self.toolWindowTook(curr_event);
-                if (self.slotOf(curr_event) == main_slot) if (weeoui_sdl3.translate(curr_event)) |input| switch (input) {
+                if (self.viewport_mouse.confined == null and self.slotOf(curr_event) == main_slot) if (weeoui_sdl3.translate(curr_event)) |input| switch (input) {
                     .pointer_move => |p| window.pointerMove(p.x, p.y),
                     .pointer_down => |down| if (window.pointerDown(down.position.x, down.position.y)) return .run,
                     else => {},
                 };
             }
-            const slot = if (eggy.game_ui.isControllerInput(curr_event) and self.game_input.focused and self.workspace.placed.scene != null)
+            try self.syncViewportMouse();
+            if (self.play_mode.stopPressed(curr_event, preferences.editor(&self.app.preference_values).stop_play_key)) {
+                self.stopPlaying();
+                return .run;
+            }
+            const slot = if ((eggy.game_ui.isControllerInput(curr_event) or self.game_input.mouse_captured) and self.game_input.focused and self.workspace.placed.scene != null and eggy.game_ui.isInput(curr_event))
                 self.workspace.placed.scene.?.slot
             else
                 self.slotOf(curr_event);
@@ -1497,7 +1513,7 @@ pub fn Editor(comptime project: type) type {
             // While the game plays, the Scene panel is the game's: the mouse over it goes to it.
             const game_has_scene = self.play_mode.playing() and !self.workspace.simulating;
             if (game_has_scene) if (self.sceneRect(slot)) |rect| {
-                if (self.overScene(slot, curr_event) or (self.game_input.buttons != 0 and !eggy.game_ui.isTouchInput(curr_event) and pointerOf(curr_event) != null) or self.game_input.ownsTouch(curr_event)) {
+                if (self.overScene(slot, curr_event) or ((self.game_input.mouse_captured or self.game_input.buttons != 0) and !eggy.game_ui.isTouchInput(curr_event) and pointerOf(curr_event) != null) or self.game_input.ownsTouch(curr_event)) {
                     if (self.game) |*game| try self.routeGameInput(game, curr_event, slot, rect);
                     return .run;
                 }
@@ -1514,8 +1530,13 @@ pub fn Editor(comptime project: type) type {
             // selection, and Delete deletes it.
             if (!game_has_scene) if (self.scene_view.handleFirst(curr_event, self.sceneRectFor(slot, curr_event))) {
                 if (curr_event == .mouse_button_down) self.unfocusOnPress(slot, .{ .x = curr_event.mouse_button_down.x, .y = curr_event.mouse_button_down.y }, false);
+                if (curr_event == .mouse_button_down and self.scene_view.camera.drag != null) {
+                    if (self.windowOf(slot)) |window| try sdl3.mouse.setWindowRelativeMode(window, true);
+                }
+                try self.syncViewportMouse();
                 return .run;
             };
+            if (!game_has_scene and self.scene_view.camera.drag != null and eggy.game_ui.isInput(curr_event)) return .run;
             if (!game_has_scene) if (curr_event == .key_down) if (curr_event.key_down.key) |key| if (self.scene_view.camera.hovered and self.scene_view.camera.drag == null and self.scene_view.drag == null) switch (key) {
                 .f => {
                     self.frameSelected();
@@ -1533,14 +1554,6 @@ pub fn Editor(comptime project: type) type {
             if (curr_event == .key_down) if (curr_event.key_down.key) |key| if (key == .k and !curr_event.key_down.repeat and curr_event.key_down.mod.controlDown() and curr_event.key_down.mod.shiftDown() and self.play_mode.playing()) {
                 self.keepSelectedTransform();
                 return .run;
-            };
-
-            // Escape three times in a row stops play, whatever else each press does.
-            if (curr_event == .key_down) if (curr_event.key_down.key) |key| if (key == .escape and !curr_event.key_down.repeat) {
-                if (self.play_mode.escapePressed(sdl3.timer.getMillisecondsSinceInit())) {
-                    self.stopPlaying();
-                    return .run;
-                }
             };
 
             // A pop-out window's close button docks its panels back into the main window.
@@ -1663,7 +1676,41 @@ pub fn Editor(comptime project: type) type {
         fn routeGameInput(self: *Self, game: *HotGame, value: eggy.Event, slot: Slot, rect: ui.Rect) !void {
             const window = self.windowOf(slot) orelse return;
             const width, const height = try window.getSize();
+            if (value == .mouse_button_down) self.unfocusOnPress(slot, .{ .x = value.mouse_button_down.x, .y = value.mouse_button_down.y }, false);
+            self.clearEditorHover();
             try self.game_input.route(&self.app, game, value, rect, .{ @floatFromInt(width), @floatFromInt(height) }, self.play_mode.running());
+            try self.syncViewportMouse();
+        }
+
+        fn clearEditorHover(self: *Self) void {
+            self.workspace.pointer = .init(-1, -1);
+            self.workspace.hover_id = 0;
+            self.scene_view.hot = null;
+            self.scene_view.hot_end = null;
+            for (0..self.pageCount()) |index| self.page(index).pointer = .init(-1, -1);
+        }
+
+        fn syncViewportMouse(self: *Self) !void {
+            const game_owns_scene = self.play_mode.playing() and !self.workspace.simulating and self.game_input.focused;
+            const navigating = self.scene_view.camera.drag != null;
+            const allowed = (game_owns_scene or navigating) and self.save_prompt == null and self.project_flow == null and self.build_window == null;
+            const scene = if (allowed) self.workspace.placed.scene else null;
+            const window = if (scene) |placed| self.windowOf(placed.slot) else null;
+            const focused_window = if (window) |target| if (target.getFlags().input_focus) target else null else null;
+            try self.viewport_mouse.sync(self.app.window.window, focused_window, if (scene) |placed| placed.rect else null, self.game_input.pointer_in_scene or self.game_input.buttons != 0);
+            self.game_input.mouse_captured = game_owns_scene and self.viewport_mouse.confined != null;
+            self.game_input.relative_mouse = game_owns_scene and self.viewport_mouse.relative;
+            if (self.viewport_mouse.confined != null) self.clearEditorHover();
+            if (self.game_input.relative_mouse) if (self.app.ui_layer) |layer| {
+                layer.context.pointer = .init(-1, -1);
+                layer.pointer_active = false;
+            };
+        }
+
+        fn releaseViewportMouse(self: *Self) void {
+            self.viewport_mouse.release(self.app.window.window) catch |err| std.log.err("cannot release viewport mouse capture: {t}: {s}", .{ err, sdl3.errors.get() orelse "no SDL detail" });
+            self.game_input.mouse_captured = false;
+            self.game_input.relative_mouse = false;
         }
 
         /// Open the explicit project, else discover this editor's matching source project.
@@ -1991,6 +2038,7 @@ pub fn Editor(comptime project: type) type {
         /// One of the editor's own windows (Preferences, DevTools, Build, a project's) took
         /// `curr_event`: a press there takes the keyboard off every page's field.
         fn toolWindowTook(self: *Self, curr_event: sdl3.events.Event) sdl3.AppResult {
+            self.releaseViewportMouse();
             self.game_input.cancel(&self.app);
             if (curr_event == .mouse_button_down) for (0..self.pageCount()) |index| {
                 self.page(index).focus = 0;
@@ -2428,6 +2476,7 @@ test {
     _ = @import("assets/creation.zig");
     _ = @import("input_settings.zig");
     _ = @import("game_input.zig");
+    _ = @import("viewport_mouse.zig");
     _ = extensions;
     _ = @import("workspace.zig");
     _ = @import("menus.zig");
