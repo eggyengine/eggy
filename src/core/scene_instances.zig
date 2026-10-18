@@ -60,6 +60,20 @@ pub const SceneInstances = struct {
         self.made.deinit(self.gpa);
     }
 
+    /// Make an instance synchronously and register its children so `sync` does not duplicate
+    /// them. On failure the instance and every entity it created are removed.
+    pub fn create(self: *SceneInstances, files: Files, world: *ecs.World, access: scene_zig.Access, file: refs.AssetRef(.scene), parent: ?ecs.EntityId) !ecs.EntityId {
+        const root = try world.spawn(.{ Transform{}, SceneInstance{ .scene = file } });
+        errdefer world.despawnRecursive(root);
+        if (parent) |up| try world.setParent(root, up);
+        const path = try self.gpa.dupe(u8, file.path());
+        errdefer self.gpa.free(path);
+        const roots = try self.instantiate(files, world, access, root, path);
+        errdefer self.gpa.free(roots);
+        try self.made.put(self.gpa, root.id, .{ .generation = root.generation, .path = path, .roots = roots });
+        return root;
+    }
+
     /// Make every instance's entities again on the next `sync`, as their files may have changed.
     pub fn remakeAll(self: *SceneInstances) void {
         var it = self.made.valueIterator();
@@ -237,6 +251,24 @@ test "an instance gets its scene's entities, again when they go, and none inside
     std.testing.log_level = .err;
     defer std.testing.log_level = .warn;
     instances.sync(files, &world, access, "rat.scene.zon");
+    try std.testing.expectEqual(@as(usize, 2), aliveCount(&world));
+}
+
+test "explicit instances synchronize without duplicate children and failed reads roll back" {
+    var world = ecs.World.init(std.testing.allocator);
+    defer world.deinit();
+    var made = SceneInstances.init(std.testing.allocator);
+    defer made.deinit();
+    const Registry = components.Registry(&.{ Transform, SceneInstance }, &.{ "eggy", "eggy" });
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "one.scene.zon", .data = ".{ .entities = .{ .{ .name = \"One\", .components = .{} } } }" });
+    var folder = FolderFiles{ .io = std.testing.io, .dir = tmp.dir };
+    const root = try made.create(folder.files(), &world, scene_zig.registryAccess(Registry), .init("one.scene.zon"), null);
+    try std.testing.expect(firstChild(&world, root) != null);
+    made.sync(folder.files(), &world, scene_zig.registryAccess(Registry), null);
+    try std.testing.expectEqual(@as(usize, 2), aliveCount(&world));
+    try std.testing.expectError(error.FileNotFound, made.create(folder.files(), &world, scene_zig.registryAccess(Registry), .init("missing.scene.zon"), null));
     try std.testing.expectEqual(@as(usize, 2), aliveCount(&world));
 }
 

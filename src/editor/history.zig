@@ -15,11 +15,13 @@ const typing_pause_ms = 1000;
 /// One change, owning its text. The editor fills in what it learns while carrying a step out
 /// (where a file went in the trash) so it can carry it back.
 /// A change as the text before and after it, owned.
-pub const Texts = struct { before: []u8, after: []u8 };
+pub const Texts = eggy.Action([]u8);
 
 pub const Step = union(enum) {
     /// The world went from `before` to `after` (both scene files' text).
-    scene: struct { before: []u8, after: []u8 },
+    scene: Texts,
+    /// Several changes presented as one user operation, owning the label and children.
+    group: struct { label: []u8, steps: []Step },
     /// A file or folder was renamed (or moved).
     rename: struct { from: []u8, to: []u8 },
     /// A file or folder was deleted: moved into the trash at `trashed`.
@@ -32,6 +34,9 @@ pub const Step = union(enum) {
     preference: struct { layer: eggy.preferences.Store.Layer, key: []u8, field: []u8, before: ?[]u8, after: ?[]u8 },
     /// The project's settings (`eggy.zon`) went from `before` to `after` (its text).
     project_settings: Texts,
+    input_bindings: Texts,
+    /// The complete defaults in one `.inmap.zon` asset.
+    input_map: struct { path: []u8, text: Texts },
     /// The dock's panels were rearranged from `before` to `after` (layout snapshots).
     layout: Texts,
     /// Another scene was opened, or a new one made (`created`; undone, its file waits in
@@ -50,6 +55,11 @@ pub const Step = union(enum) {
 
     pub fn deinit(self: *Step, gpa: std.mem.Allocator) void {
         switch (self.*) {
+            .group => |group| {
+                for (group.steps) |*step| step.deinit(gpa);
+                gpa.free(group.steps);
+                gpa.free(group.label);
+            },
             .scene => |step| {
                 gpa.free(step.before);
                 gpa.free(step.after);
@@ -67,7 +77,12 @@ pub const Step = union(enum) {
                 if (step.trashed) |trashed| gpa.free(trashed);
             },
             .plugin => |step| gpa.free(step.key),
-            .layout, .project_settings => |step| {
+            .input_map => |step| {
+                gpa.free(step.path);
+                gpa.free(step.text.before);
+                gpa.free(step.text.after);
+            },
+            .layout, .project_settings, .input_bindings => |step| {
                 gpa.free(step.before);
                 gpa.free(step.after);
             },
@@ -90,6 +105,7 @@ pub const Step = union(enum) {
     /// What it was, for the Console and the Edit menu.
     pub fn describe(self: Step) []const u8 {
         return switch (self) {
+            .group => |group| group.label,
             .scene => "a scene change",
             .rename => "a rename",
             .delete => "a deletion",
@@ -97,6 +113,8 @@ pub const Step = union(enum) {
             .preference => "a preference",
             .layout => "a layout change",
             .project_settings => "a project setting",
+            .input_bindings => "input mappings",
+            .input_map => "an input map",
             .open_scene => |step| if (step.created) "a new scene" else "opening a scene",
             .plugin => |step| if (step.on) "turning a plugin on" else "turning a plugin off",
         };
@@ -114,6 +132,8 @@ pub const History = struct {
     changed_since_ms: ?u64 = null,
     /// When a preference change was last recorded, to join typing into one step.
     preference_at_ms: u64 = 0,
+    group: ?struct { label: []u8, steps: std.ArrayList(Step) = .empty } = null,
+    recovery_required: bool = false,
 
     pub fn deinit(self: *History) void {
         self.clear();
@@ -124,11 +144,18 @@ pub const History = struct {
 
     /// Forget every step: a different scene was opened.
     pub fn clear(self: *History) void {
+        if (self.group) |*group| {
+            for (group.steps.items) |*step| step.deinit(self.gpa);
+            group.steps.deinit(self.gpa);
+            self.gpa.free(group.label);
+            self.group = null;
+        }
         for (self.undo_steps.items) |*step| step.deinit(self.gpa);
         for (self.redo_steps.items) |*step| step.deinit(self.gpa);
         self.undo_steps.clearRetainingCapacity();
         self.redo_steps.clearRetainingCapacity();
         self.changed_since_ms = null;
+        self.recovery_required = false;
     }
 
     /// Take `scene_text` (owned now) as the world as it stands, without recording a step: it was
@@ -157,34 +184,95 @@ pub const History = struct {
             self.gpa.free(scene_text);
             return;
         }
+        const after = self.gpa.dupe(u8, scene_text) catch |err| {
+            self.gpa.free(scene_text);
+            return std.log.err("cannot snapshot undo history: {t}", .{err});
+        };
+        self.reserve() catch |err| {
+            self.gpa.free(after);
+            self.gpa.free(scene_text);
+            return std.log.err("cannot reserve undo history: {t}", .{err});
+        };
         const before = self.baseline.?;
         self.baseline = null;
-        self.record(.{ .scene = .{ .before = before, .after = self.gpa.dupe(u8, scene_text) catch {
-            self.gpa.free(before);
-            self.gpa.free(scene_text);
-            return;
-        } } });
+        self.record(.{ .scene = .{ .before = before, .after = after } });
         self.setBaseline(scene_text);
+    }
+
+    /// Reserve before a mutation whose history must be recorded. Does not clear redo entries.
+    pub fn reserve(self: *History) !void {
+        if (self.recovery_required) return error.HistoryNeedsRecovery;
+        if (self.group) |*group| return group.steps.ensureUnusedCapacity(self.gpa, 1);
+        try self.undo_steps.ensureUnusedCapacity(self.gpa, 1);
     }
 
     /// Record `step` (owned now), made just now: it can be undone, and what was undone before
     /// can't be redone any more.
     pub fn record(self: *History, step: Step) void {
         var owned = step;
+        self.reserve() catch |err| {
+            owned.deinit(self.gpa);
+            return std.log.err("cannot record undo history: {t}", .{err});
+        };
+        if (self.group) |*group| {
+            group.steps.appendAssumeCapacity(owned);
+            return;
+        }
         for (self.redo_steps.items) |*old| old.deinit(self.gpa);
         self.redo_steps.clearRetainingCapacity();
         if (self.undo_steps.items.len == max_steps) {
             var oldest = self.undo_steps.orderedRemove(0);
             oldest.deinit(self.gpa);
         }
-        self.undo_steps.append(self.gpa, owned) catch owned.deinit(self.gpa);
+        self.undo_steps.appendAssumeCapacity(owned);
+    }
+
+    /// Begin one named operation. Nested groups are rejected; use `cancelGroup` on failure.
+    pub fn beginGroup(self: *History, label: []const u8) !void {
+        if (self.group != null) return error.GroupAlreadyOpen;
+        try self.reserve();
+        self.group = .{ .label = try self.gpa.dupe(u8, label) };
+    }
+
+    /// Commit the pending group as one entry. On allocation failure it remains open.
+    pub fn commitGroup(self: *History) !void {
+        const group = if (self.group) |*group| group else return error.NoActionGroup;
+        if (group.steps.items.len == 0) {
+            group.steps.deinit(self.gpa);
+            self.gpa.free(group.label);
+            self.group = null;
+            return;
+        }
+        try self.undo_steps.ensureUnusedCapacity(self.gpa, 1);
+        const steps = try group.steps.toOwnedSlice(self.gpa);
+        const label = group.label;
+        self.group = null;
+        self.record(.{ .group = .{ .label = label, .steps = steps } });
+    }
+
+    /// Revert a pending group, in reverse order. Successfully reverted children are removed;
+    /// on failure the remaining group stays open for recovery and the error is propagated.
+    pub fn cancelGroup(self: *History, context: anytype, comptime applyStep: anytype) !void {
+        const group = if (self.group) |*group| group else return error.NoActionGroup;
+        while (group.steps.items.len != 0) {
+            const step = &group.steps.items[group.steps.items.len - 1];
+            invoke(step, .undo, context, applyStep) catch |err| {
+                if (err == error.HistoryNeedsRecovery) self.recovery_required = true;
+                return err;
+            };
+            step.deinit(self.gpa);
+            group.steps.items.len -= 1;
+        }
+        group.steps.deinit(self.gpa);
+        self.gpa.free(group.label);
+        self.group = null;
     }
 
     /// Record that preference `field` of `key` in `layer` went from `before` to `after` (ZON
     /// literals; null: not set). Typing into a field changes it on every key, so a change to the
     /// same preference as the last step, within `typing_pause_ms`, joins that step.
     pub fn recordPreference(self: *History, layer: eggy.preferences.Store.Layer, key: []const u8, field: []const u8, before: ?[]const u8, after: ?[]const u8, now_ms: u64) void {
-        if (self.undo_steps.items.len > 0 and self.redo_steps.items.len == 0 and now_ms -| self.preference_at_ms < typing_pause_ms) {
+        if (self.group == null and self.undo_steps.items.len > 0 and self.redo_steps.items.len == 0 and now_ms -| self.preference_at_ms < typing_pause_ms) {
             const last = &self.undo_steps.items[self.undo_steps.items.len - 1];
             if (last.* == .preference and last.preference.layer == layer and std.mem.eql(u8, last.preference.key, key) and std.mem.eql(u8, last.preference.field, field)) {
                 const copy = if (after) |text| self.gpa.dupe(u8, text) catch return else null;
@@ -210,7 +298,7 @@ pub const History = struct {
     /// changes them on every key, so a change within `typing_pause_ms` of the last one, when
     /// that was one too, joins it.
     pub fn recordProjectSettings(self: *History, before: []u8, after: []u8, now_ms: u64) void {
-        if (self.undo_steps.items.len > 0 and self.redo_steps.items.len == 0 and now_ms -| self.preference_at_ms < typing_pause_ms) {
+        if (self.group == null and self.undo_steps.items.len > 0 and self.redo_steps.items.len == 0 and now_ms -| self.preference_at_ms < typing_pause_ms) {
             const last = &self.undo_steps.items[self.undo_steps.items.len - 1];
             if (last.* == .project_settings) {
                 self.gpa.free(last.project_settings.after);
@@ -224,28 +312,58 @@ pub const History = struct {
         self.preference_at_ms = now_ms;
     }
 
-    /// The step to undo, moved onto the redo stack; the caller carries it back. Null with none.
-    pub fn undo(self: *History) ?*Step {
-        const step = self.undo_steps.pop() orelse return null;
-        self.redo_steps.append(self.gpa, step) catch {
-            var lost = step;
-            lost.deinit(self.gpa);
-            return null;
-        };
-        return &self.redo_steps.items[self.redo_steps.items.len - 1];
+    /// Inspect the next operation without changing history.
+    pub fn peek(self: *History, direction: eggy.Direction) ?*Step {
+        const source = if (direction == .undo) &self.undo_steps else &self.redo_steps;
+        return if (source.items.len == 0) null else &source.items[source.items.len - 1];
     }
 
-    /// The step to redo, moved back onto the undo stack; the caller carries it out again.
-    pub fn redo(self: *History) ?*Step {
-        const step = self.redo_steps.pop() orelse return null;
-        self.undo_steps.append(self.gpa, step) catch {
-            var lost = step;
-            lost.deinit(self.gpa);
-            return null;
+    /// Apply with one directional handler. Only a successful application moves the entry;
+    /// allocation failure happens before effects. False means history is empty.
+    pub fn apply(self: *History, direction: eggy.Direction, context: anytype, comptime applyStep: anytype) !bool {
+        if (self.recovery_required) return error.HistoryNeedsRecovery;
+        if (self.group != null) return error.ActionGroupOpen;
+        const step = self.peek(direction) orelse return false;
+        const source = if (direction == .undo) &self.undo_steps else &self.redo_steps;
+        const target = if (direction == .undo) &self.redo_steps else &self.undo_steps;
+        try target.ensureUnusedCapacity(self.gpa, 1);
+        invoke(step, direction, context, applyStep) catch |err| {
+            if (err == error.HistoryNeedsRecovery) self.recovery_required = true;
+            return err;
         };
-        return &self.undo_steps.items[self.undo_steps.items.len - 1];
+        target.appendAssumeCapacity(source.pop().?);
+        return true;
     }
 };
+
+fn invoke(step: *Step, direction: eggy.Direction, context: anytype, comptime applyStep: anytype) anyerror!void {
+    if (step.* != .group) return applyStep(context, step, direction);
+    const steps = step.group.steps;
+    var applied: usize = 0;
+    while (applied < steps.len) : (applied += 1) {
+        const index = if (direction == .undo) steps.len - 1 - applied else applied;
+        invoke(&steps[index], direction, context, applyStep) catch |err| {
+            while (applied != 0) {
+                applied -= 1;
+                const rollback_index = if (direction == .undo) steps.len - 1 - applied else applied;
+                invoke(&steps[rollback_index], if (direction == .undo) .redo else .undo, context, applyStep) catch |rollback_error| {
+                    std.log.err("history rollback failed: {t}; original error: {t}", .{ rollback_error, err });
+                    return error.HistoryNeedsRecovery;
+                };
+            }
+            return err;
+        };
+    }
+}
+
+fn moveForTest(history: *History, direction: eggy.Direction) ?*Step {
+    const Ignore = struct {
+        fn apply(_: void, _: *Step, _: eggy.Direction) !void {}
+    };
+    if (!(history.apply(direction, {}, Ignore.apply) catch unreachable)) return null;
+    const target = if (direction == .undo) &history.redo_steps else &history.undo_steps;
+    return &target.items[target.items.len - 1];
+}
 
 test "scene changes become steps, typing once it pauses, and undo and redo walk them" {
     const gpa = std.testing.allocator;
@@ -265,15 +383,15 @@ test "scene changes become steps, typing once it pauses, and undo and redo walk 
     try std.testing.expectEqualStrings("a", history.undo_steps.items[0].scene.before);
     try std.testing.expectEqualStrings("abc", history.undo_steps.items[0].scene.after);
 
-    const undone = history.undo().?;
+    const undone = moveForTest(&history, .undo).?;
     try std.testing.expectEqualStrings("a", undone.scene.before);
-    try std.testing.expect(history.undo() == null);
-    try std.testing.expect(history.redo() != null);
+    try std.testing.expect(moveForTest(&history, .undo) == null);
+    try std.testing.expect(moveForTest(&history, .redo) != null);
 
     // A new change after an undo drops what could be redone.
-    _ = history.undo();
+    _ = moveForTest(&history, .undo);
     history.record(.{ .rename = .{ .from = try gpa.dupe(u8, "x"), .to = try gpa.dupe(u8, "y") } });
-    try std.testing.expect(history.redo() == null);
+    try std.testing.expect(moveForTest(&history, .redo) == null);
 }
 
 test "layout and scene-opening steps own their text" {
@@ -290,8 +408,8 @@ test "layout and scene-opening steps own their text" {
         .to_saved = 1,
         .created = true,
     } });
-    try std.testing.expectEqualStrings("a new scene", history.undo().?.describe());
-    try std.testing.expectEqualStrings("a layout change", history.undo().?.describe());
+    try std.testing.expectEqualStrings("a new scene", moveForTest(&history, .undo).?.describe());
+    try std.testing.expectEqualStrings("a layout change", moveForTest(&history, .undo).?.describe());
 }
 
 test "typing into the project's settings is one step" {
@@ -306,4 +424,69 @@ test "typing into the project's settings is one step" {
     // After a pause, another.
     history.recordProjectSettings(try gpa.dupe(u8, "abc"), try gpa.dupe(u8, "abcd"), 5000);
     try std.testing.expectEqual(@as(usize, 2), history.undo_steps.items.len);
+}
+
+test "failed applications and failed reservations leave history in place" {
+    const Handler = struct {
+        fn apply(fail: *bool, _: *Step, _: eggy.Direction) !void {
+            if (fail.*) return error.CannotApply;
+        }
+    };
+    const gpa = std.testing.allocator;
+    var history = History{ .gpa = gpa };
+    defer history.deinit();
+    history.record(.{ .project_settings = .{ .before = try gpa.dupe(u8, "a"), .after = try gpa.dupe(u8, "b") } });
+    var fail = true;
+    try std.testing.expectError(error.CannotApply, history.apply(.undo, &fail, Handler.apply));
+    try std.testing.expectEqual(@as(usize, 1), history.undo_steps.items.len);
+    try std.testing.expectEqual(@as(usize, 0), history.redo_steps.items.len);
+
+    history.redo_steps.deinit(gpa);
+    history.redo_steps = .empty;
+    var allocator = std.testing.FailingAllocator.init(gpa, .{ .fail_index = 0 });
+    history.gpa = allocator.allocator();
+    fail = false;
+    try std.testing.expectError(error.OutOfMemory, history.apply(.undo, &fail, Handler.apply));
+    history.gpa = gpa;
+    try std.testing.expectEqual(@as(usize, 1), history.undo_steps.items.len);
+    try std.testing.expect(try history.apply(.undo, &fail, Handler.apply));
+    try std.testing.expect(try history.apply(.redo, &fail, Handler.apply));
+}
+
+test "grouped actions undo together and failed redo rolls earlier children back" {
+    const State = struct {
+        value: u32 = 2,
+        reject: ?u32 = null,
+        fn apply(self: *@This(), step: *Step, direction: eggy.Direction) !void {
+            const value = try std.fmt.parseInt(u32, step.project_settings.value(direction), 10);
+            if (self.reject == value) return error.RejectedValue;
+            self.value = value;
+        }
+    };
+    const gpa = std.testing.allocator;
+    var history = History{ .gpa = gpa };
+    defer history.deinit();
+    try history.beginGroup("two edits");
+    try std.testing.expectError(error.GroupAlreadyOpen, history.beginGroup("nested"));
+    history.record(.{ .project_settings = .{ .before = try gpa.dupe(u8, "0"), .after = try gpa.dupe(u8, "1") } });
+    history.record(.{ .project_settings = .{ .before = try gpa.dupe(u8, "1"), .after = try gpa.dupe(u8, "2") } });
+    try history.commitGroup();
+    var state = State{};
+    try std.testing.expect(try history.apply(.undo, &state, State.apply));
+    try std.testing.expectEqual(@as(u32, 0), state.value);
+    state.reject = 2;
+    try std.testing.expectError(error.RejectedValue, history.apply(.redo, &state, State.apply));
+    try std.testing.expectEqual(@as(u32, 0), state.value);
+    try std.testing.expectEqual(@as(usize, 1), history.redo_steps.items.len);
+    state.reject = null;
+    try std.testing.expect(try history.apply(.redo, &state, State.apply));
+    try std.testing.expectEqual(@as(u32, 2), state.value);
+
+    try history.beginGroup("cancel me");
+    history.record(.{ .project_settings = .{ .before = try gpa.dupe(u8, "2"), .after = try gpa.dupe(u8, "3") } });
+    state.value = 3;
+    try history.cancelGroup(&state, State.apply);
+    try std.testing.expectEqual(@as(u32, 2), state.value);
+    try std.testing.expect(history.group == null);
+    try std.testing.expectEqual(@as(usize, 1), history.undo_steps.items.len);
 }

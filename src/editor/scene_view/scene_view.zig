@@ -34,14 +34,24 @@ pub const Overlay = struct {
     no_camera: bool = false,
     /// Where the selected camera's view is shown, in the panel's points.
     preview: ?ui.Rect = null,
+    /// The game owns the panel: no editor controls, just a frame saying it is playing.
+    playing: bool = false,
 
     pub const none: Overlay = .{};
 };
 
 /// The Scene panel's floating parts for its node at `scene`: the orientation, the gizmo, then
-/// the toolbar.
+/// the toolbar; while playing, only the play frame (and the missing-camera notice).
 pub fn overlayElements(b: L.Builder, overlay: Overlay, scene: ui.Rect) ![]*L.Element {
     var parts: std.ArrayList(*L.Element) = .empty;
+    if (overlay.playing) {
+        const frame = try b.node(0, .{ .width = scene.w, .height = scene.h, .z_index = 10 }, .{ .custom = .{ .context = undefined, .draw = drawPlayFrame } }, &.{});
+        frame.overlay = .{ .point = .init(scene.x, scene.y) };
+        frame.accessibility = .{ .role = .ignored };
+        try parts.append(b.allocator, frame);
+        if (overlay.no_camera) try parts.append(b.allocator, try noCameraNotice(b, scene));
+        return parts.items;
+    }
     const drawn = try b.node(0, .{ .width = scene.w, .height = scene.h, .z_index = 10 }, orientation.paint(b.allocator, overlay.view, scene, overlay.hot_end), &.{});
     drawn.overlay = .{ .point = .init(scene.x, scene.y) };
     drawn.accessibility.role = .ignored;
@@ -52,14 +62,7 @@ pub fn overlayElements(b: L.Builder, overlay: Overlay, scene: ui.Rect) ![]*L.Ele
         handles.accessibility.role = .ignored;
         try parts.append(b.allocator, handles);
     }
-    // Nothing to see through: say so, in the middle.
-    if (overlay.no_camera) {
-        const notice = try b.node(0, .{ .width = scene.w, .height = scene.h, .z_index = 12, .align_items = .center, .justify = .center }, .{ .surface = .card }, &.{
-            try b.node(0, .{ .width = scene.w }, .{ .text = .{ .value = "No camera available", .size = 16, .tone = .muted, .alignment = .center } }, &.{}),
-        });
-        notice.overlay = .{ .point = .init(scene.x, scene.y) };
-        try parts.append(b.allocator, notice);
-    }
+    if (overlay.no_camera) try parts.append(b.allocator, try noCameraNotice(b, scene));
     // The selected camera's view, framed and named.
     if (overlay.preview) |inset| {
         const frame = try b.node(0, .{ .width = inset.w, .height = inset.h, .z_index = 12 }, .{ .custom = .{ .context = undefined, .draw = drawPreviewFrame } }, &.{});
@@ -69,6 +72,20 @@ pub fn overlayElements(b: L.Builder, overlay: Overlay, scene: ui.Rect) ![]*L.Ele
     }
     try parts.append(b.allocator, try toolbar.element(b, overlay.tools, scene));
     return parts.items;
+}
+
+/// Nothing to see through: say so, in the middle of the panel at `scene`.
+fn noCameraNotice(b: L.Builder, scene: ui.Rect) !*L.Element {
+    const notice = try b.node(0, .{ .width = scene.w, .height = scene.h, .z_index = 12, .align_items = .center, .justify = .center }, .{ .surface = .card }, &.{
+        try b.node(0, .{ .width = scene.w }, .{ .text = .{ .value = "No camera available", .size = 16, .tone = .muted, .alignment = .center } }, &.{}),
+    });
+    notice.overlay = .{ .point = .init(scene.x, scene.y) };
+    return notice;
+}
+
+/// The accent border round the panel while the game plays, so play is never mistaken for editing.
+fn drawPlayFrame(_: *const anyopaque, c: *ui.Canvas, r: ui.Rect) anyerror!void {
+    try c.roundRectStroke(r, c.theme.accent, 0, 2);
 }
 
 /// The border round the selected camera's view, and its name.
@@ -110,6 +127,8 @@ pub const SceneView = struct {
     steered_pose: [6]f32 = @splat(0),
     /// The selected camera's view, while one is selected and not looked through.
     preview: ?eggy.camera.View = null,
+    /// Whether the game owns the panel this frame (`Look.playing`), hiding the editor's controls.
+    playing: bool = false,
 
     /// How the panel looks at the scene: through its own camera (the game camera when the
     /// toolbar says), or through the game's while it plays.
@@ -119,7 +138,7 @@ pub const SceneView = struct {
     pub fn overlay(self: *SceneView) Overlay {
         const feedback = if (self.drag) |drag| drag.feedback(self.pointer, self.snapping(), &self.feedback_buffer) else "";
         const inset = if (self.preview != null) if (self.scene) |area| previewRect(area) else null else null;
-        return .{ .tools = self.tools, .view = self.view, .gizmo = self.gizmo, .hot = self.hot, .drag = self.drag, .hot_end = self.hot_end, .pointer = self.pointer, .feedback = feedback, .no_camera = self.no_camera, .preview = inset };
+        return .{ .tools = self.tools, .view = self.view, .gizmo = self.gizmo, .hot = self.hot, .drag = self.drag, .hot_end = self.hot_end, .pointer = self.pointer, .feedback = feedback, .no_camera = self.no_camera, .preview = inset, .playing = self.playing };
     }
 
     /// Before each frame: what the panel at `scene` is seen from, as `look` says, the selected
@@ -131,11 +150,13 @@ pub const SceneView = struct {
         self.no_camera = false;
         self.looking_through_game = false;
         self.preview = null;
+        self.playing = look == .playing;
         const working = target orelse {
             self.steering = null;
             return;
         };
         self.lookThroughGame(working, look);
+        if (self.playing) return;
         if (working.selected.*) |selected| if (self.steering == null or !self.steering.?.eql(selected)) {
             self.preview = game_camera.viewOf(working.game, working.app, selected);
         };
@@ -183,7 +204,7 @@ pub const SceneView = struct {
 
     /// Whether the panel's controls are moving a camera now, which history waits out.
     pub fn steeringNow(self: *const SceneView) bool {
-        return self.drag != null or self.camera.drag != null;
+        return self.drag != null or self.camera.drag != null or self.camera.pinch != null;
     }
 
     /// A toolbar button was pressed.
@@ -201,7 +222,7 @@ pub const SceneView = struct {
         }
     }
 
-    /// Before the workspace sees `event`: the camera's drags and wheel over the panel at
+    /// Before the workspace sees `event`: the camera's drags, scroll and pinch over the panel at
     /// `scene`, and W, E, R and T over it. Returns whether it was used.
     pub fn handleFirst(self: *SceneView, event: sdl3.events.Event, scene: ?ui.Rect) bool {
         if (self.camera.handle(event, scene)) return true;

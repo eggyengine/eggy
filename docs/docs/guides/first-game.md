@@ -42,7 +42,7 @@ When it is done, the project's own editor opens:
 
 ## Make a scene
 
-A scene is a file holding entities. Press **New scene** in Assets: the editor makes `untitled.scene.zon` and opens it. Save it with **Ctrl+S** whenever you change it; the status bar marks it with `*` while it has unsaved changes.
+A scene is a file holding entities. Choose **New > Scene** in Assets: the editor makes `untitled.scene.zon` and opens it. Save it with **Ctrl+S** whenever you change it; the status bar marks it with `*` while it has unsaved changes.
 
 ## Add the player
 
@@ -74,7 +74,9 @@ Save the scene. Press **Play** at the top of the window to see the game through 
 
 ## Make the player move
 
-Your game is the `Game` type in your project's `src/main.zig`. Open the file in your code editor and replace it with this:
+Your game is the `Game` type in your project's `src/main.zig`. `update` is one of the
+[optional game and plugin hooks](plugins.md#hooks); that reference lists every signature
+and when it runs. Open the file in your code editor and replace it with this:
 
 ```zig
 //! cube_runner: the game. A cube you drive with WASD, turned by the mouse, with the camera
@@ -107,8 +109,7 @@ pub const Game = struct {
             }
 
             // W and S go ahead and back, A and D to the sides, the way the cube faces.
-            const ahead = app.input.axis(.s, .w);
-            const across = app.input.axis(.a, .d);
+            const across, const ahead = app.input.direction(.{});
             const forward = transform.forward();
             const right = transform.right();
             const step = player.speed_m_per_s * app.time.delta_s;
@@ -127,6 +128,7 @@ pub const Game = struct {
                 transform.position[2] - forward[2] * 6,
             };
             eye.rotation_deg = .{ -20, transform.rotation_deg[1], 0 };
+            app.world.markChanged(camera, eggy.Transform);
         }
     }
 };
@@ -136,7 +138,7 @@ What it does:
 
 - `Player` is a component of your own. Any struct can be one; listing it in `components` lets the editor show it, add it and edit its fields.
 - `update` runs every frame while the game plays. It asks the world for every entity with both a `Transform` and a `Player`, and moves each one.
-- `app.input` says which keys and mouse buttons are held, and how far the mouse moved. `app.input.axis(.s, .w)` is `1` while W is held, `-1` while S is, and `0` otherwise.
+- `app.input` says which keys and mouse buttons are held, and how far the mouse moved. `direction(.{})` reads A/D across and S/W ahead, each `-1`, `0`, or `1`. You can choose other keys or read one axis with `axis`.
 - Multiplying by `app.time.delta_s`, the length of the last frame in seconds, keeps the speed in metres per second however fast frames come.
 - `eggy.findNamed` finds the entity named Camera, so the camera can follow.
 
@@ -158,3 +160,6 @@ When you stop, everything goes back to where the scene has it: play never change
 
 - [Plugins](plugins.md) covers every hook your game can have, panels of its own, and sharing code between games.
 - `zig build run-runtime` in your project runs the game on its own, as players see it.
+- [Code-only games](code-only-games.md) creates the world without scene files.
+- [Input mappings](input-mappings.md) replaces physical-key gameplay logic with named controls.
+- [Error handling](error-handling.md) covers failures in the runtime and editor.

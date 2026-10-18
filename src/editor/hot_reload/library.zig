@@ -21,7 +21,23 @@ const State = struct {
 
 const panels = blk: {
     var list: [Plugins.editor_panels.len]api.Panel = undefined;
-    for (&list, Plugins.editor_panels) |*panel, editor_panel| panel.* = .{ .title = editor_panel.title.ptr };
+    for (&list, Plugins.editor_panels) |*panel, editor_panel| panel.* = .{ .key = editor_panel.key.ptr, .title = editor_panel.title.ptr };
+    break :blk list;
+};
+const commands = blk: {
+    var list: [Plugins.editor_commands.len]api.Command = undefined;
+    for (&list, Plugins.editor_commands) |*command, source| command.* = .{ .key = source.key.ptr, .title = source.title.ptr };
+    break :blk list;
+};
+const file_types = blk: {
+    var list: [Plugins.editor_file_types.len]api.FileType = undefined;
+    for (&list, Plugins.editor_file_types) |*file_type, source| file_type.* = .{
+        .key = source.key.ptr,
+        .title = source.title.ptr,
+        .extension = source.extension.ptr,
+        .contents = source.contents.ptr,
+        .contents_len = source.contents.len,
+    };
     break :blk list;
 };
 
@@ -73,12 +89,22 @@ const game = api.Game{
     .plugin_count = plugin_keys.len,
     .stop = stop,
     .update = update,
+    .has_game_ui = hasGameUi,
+    .has_draw = hasDraw,
+    .game_ui = gameUi,
+    .draw = draw,
+    .ui_event = uiEvent,
     .editor_update = editorUpdate,
     .event = event,
     .editor_ui = editorUi,
     .editor_panel_ui = editorPanelUi,
     .panels = &panels,
     .panel_count = panels.len,
+    .commands = &commands,
+    .command_count = commands.len,
+    .file_types = &file_types,
+    .file_type_count = file_types.len,
+    .editor_command = editorCommand,
     .preferences = &preference_sets,
     .preference_count = preference_sets.len,
     .components = &component_types,
@@ -107,6 +133,7 @@ fn start(editor: *const api.Host, gpa_ptr: *const anyopaque, app_ptr: *anyopaque
     const gpa: *const std.mem.Allocator = @ptrCast(@alignCast(gpa_ptr));
     const state = gpa.create(State) catch return null;
     const app = appOf(app_ptr);
+    app.scene_access = access;
     const plugins = Plugins.init(gpa.*, app, enabled[0..plugin_keys.len].*) catch |err| {
         std.log.err("the game failed to start: {t}", .{err});
         gpa.destroy(state);
@@ -121,7 +148,7 @@ fn start(editor: *const api.Host, gpa_ptr: *const anyopaque, app_ptr: *anyopaque
 
 /// What can fail each frame, and the error each last failed with: one failing every frame is
 /// logged once, and again only when it fails differently or after it recovers.
-const Hook = enum { update, editor_update, event, world_start, world_update };
+const Hook = enum { update, game_ui, draw, ui_event, editor_update, editor_ui, editor_panel_ui, editor_command, event, world_start, world_update };
 var failures: [std.meta.fields(Hook).len]?anyerror = @splat(null);
 
 fn report(hook: Hook, err: anyerror) void {
@@ -130,7 +157,13 @@ fn report(hook: Hook, err: anyerror) void {
     last.* = err;
     const what = switch (hook) {
         .update => "an update hook",
+        .game_ui => "a gameUi hook",
+        .draw => "a draw hook",
+        .ui_event => "a uiEvent hook",
         .editor_update => "an editorUpdate hook",
+        .editor_ui => "an editorUi hook",
+        .editor_panel_ui => "an editorPanelUi hook",
+        .editor_command => "an editorCommand hook",
         .event => "an event hook",
         .world_start => "a system in the world's Init stages",
         .world_update => "a system in the world's Update stages",
@@ -163,13 +196,50 @@ fn update(state_ptr: *anyopaque, app_ptr: *anyopaque) callconv(.c) bool {
     return ok;
 }
 
-fn editorUpdate(state_ptr: *anyopaque, app_ptr: *anyopaque) callconv(.c) bool {
-    stateOf(state_ptr).plugins.editorUpdate(appOf(app_ptr)) catch |err| {
+fn editorUpdate(state_ptr: *anyopaque, editor_ptr: *anyopaque) callconv(.c) bool {
+    stateOf(state_ptr).plugins.editorUpdate(@ptrCast(@alignCast(editor_ptr))) catch |err| {
         report(.editor_update, err);
         return false;
     };
     recovered(.editor_update);
     return true;
+}
+
+fn hasGameUi(state: *anyopaque) callconv(.c) bool {
+    return stateOf(state).plugins.hasGameUi();
+}
+
+fn hasDraw(state: *anyopaque) callconv(.c) bool {
+    return stateOf(state).plugins.hasDraw();
+}
+
+fn gameUi(state_ptr: *anyopaque, app_ptr: *anyopaque, context: *anyopaque) callconv(.c) bool {
+    stateOf(state_ptr).plugins.gameUi(appOf(app_ptr), @ptrCast(@alignCast(context))) catch |err| {
+        report(.game_ui, err);
+        return false;
+    };
+    recovered(.game_ui);
+    return true;
+}
+
+fn draw(state_ptr: *anyopaque, app_ptr: *anyopaque, context: *const anyopaque) callconv(.c) bool {
+    const target: *const eggy.DrawContext = @ptrCast(@alignCast(context));
+    stateOf(state_ptr).plugins.draw(appOf(app_ptr), target.*) catch |err| {
+        report(.draw, err);
+        return false;
+    };
+    recovered(.draw);
+    return true;
+}
+
+fn uiEvent(state_ptr: *anyopaque, app_ptr: *anyopaque, event_ptr: *const anyopaque) callconv(.c) i32 {
+    const input: *const eggy.Event = @ptrCast(@alignCast(event_ptr));
+    const consumed = stateOf(state_ptr).plugins.uiEvent(appOf(app_ptr), input.*) catch |err| {
+        report(.ui_event, err);
+        return -1;
+    };
+    recovered(.ui_event);
+    return if (consumed) 1 else 0;
 }
 
 fn event(state_ptr: *anyopaque, app_ptr: *anyopaque, event_ptr: *const anyopaque) callconv(.c) bool {
@@ -182,12 +252,19 @@ fn event(state_ptr: *anyopaque, app_ptr: *anyopaque, event_ptr: *const anyopaque
     return true;
 }
 
-fn editorUi(state_ptr: *anyopaque, context: *anyopaque) callconv(.c) void {
-    stateOf(state_ptr).plugins.editorUi(@ptrCast(@alignCast(context)));
+fn editorUi(state_ptr: *anyopaque, editor_ptr: *anyopaque, context: *anyopaque) callconv(.c) void {
+    stateOf(state_ptr).plugins.editorUi(@ptrCast(@alignCast(editor_ptr)), @ptrCast(@alignCast(context))) catch |err| return report(.editor_ui, err);
+    recovered(.editor_ui);
 }
 
-fn editorPanelUi(state_ptr: *anyopaque, panel: usize, context: *anyopaque) callconv(.c) void {
-    stateOf(state_ptr).plugins.editorPanelUi(panel, @ptrCast(@alignCast(context)));
+fn editorPanelUi(state_ptr: *anyopaque, panel: usize, editor_ptr: *anyopaque, context: *anyopaque) callconv(.c) void {
+    stateOf(state_ptr).plugins.editorPanelUi(panel, @ptrCast(@alignCast(editor_ptr)), @ptrCast(@alignCast(context))) catch |err| return report(.editor_panel_ui, err);
+    recovered(.editor_panel_ui);
+}
+
+fn editorCommand(state_ptr: *anyopaque, command: usize, editor_ptr: *anyopaque) callconv(.c) void {
+    stateOf(state_ptr).plugins.editorCommand(command, @ptrCast(@alignCast(editor_ptr))) catch |err| return report(.editor_command, err);
+    recovered(.editor_command);
 }
 
 fn hasComponent(world: *anyopaque, entity: api.Entity, component: usize) callconv(.c) bool {

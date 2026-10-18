@@ -4,15 +4,28 @@
 //!     pub fn init(gpa: std.mem.Allocator, app: *eggy.App) !Self
 //!     pub fn deinit(self: *Self) void
 //!     pub fn event(self: *Self, app: *eggy.App, event: eggy.Event) !void
-//!     pub fn update(self: *Self, app: *eggy.App) !void  // in the editor, only while playing
-//!     pub fn editorUpdate(self: *Self, app: *eggy.App) !void  // in the editor while not playing
-//!     pub fn editorUi(self: *Self, ui: *eggy.ui.Context) void  // in the editor only
+//!     pub fn update(self: *Self, app: *eggy.App) !void  // in the editor, playing and not paused
+//!     pub fn gameUi(self: *Self, app: *eggy.App, ui: *eggy.ui.Context) !void
+//!     pub fn draw(self: *Self, app: *eggy.App, draw: eggy.DrawContext) !void
+//!     pub fn uiEvent(self: *Self, app: *eggy.App, event: eggy.Event) !bool  // true consumes input
+//!     pub fn editorUpdate(self: *Self, editor: *eggy.editor.Context) !void  // editing or paused
+//!     pub fn editorUi(self: *Self, editor: *eggy.editor.Context, ui: *eggy.ui.Context) !void  // project Inspector
+//!
+//! These signatures apply equally to `Game` and `Plugin`; hooks belong inside that type,
+//! not beside it in the module. `init` constructs each instance; editor restarts/reloads can
+//! construct it again. Most hooks run game-first; `deinit` and `uiEvent` run in reverse order.
+//! See `docs/docs/guides/plugins.md` for the hook reference and lifecycle.
 //!
 //! A plugin can also add panels of its own to the editor's dock, each a page of UI it fills
 //! every frame. Declare them, then draw panel `panel` (an index into the declaration):
 //!
 //!     pub const editor_panels = [_]eggy.plugins.EditorPanel{.{ .title = "Stats" }};
-//!     pub fn editorPanelUi(self: *Self, panel: usize, ui: *eggy.ui.Context) void  // in the editor only
+//!     pub fn editorPanelUi(self: *Self, panel: usize, editor: *eggy.editor.Context, ui: *eggy.ui.Context) !void
+//!
+//! Commands declared in `editor_commands` appear in View and dispatch their local index:
+//!
+//!     pub const editor_commands = [_]eggy.plugins.EditorCommand{.{ .key = "raise", .title = "Raise" }};
+//!     pub fn editorCommand(self: *Self, command: usize, editor: *eggy.editor.Context) !void
 //!
 //! A plugin can declare preferences, which people set in the editor's Preferences window, kept in
 //! the project's `.eggy/` folder and baked into the runtime (see `preferences.zig`):
@@ -24,6 +37,17 @@
 //! add and edit (see `components.zig`):
 //!
 //!     pub const components = .{ Spin, Health };
+//!
+//! Named input maps register before `init`, under the published plugin key and map key:
+//!
+//!     pub const input_maps = .{PlayerInput}; // an eggy.input.Map or FileMap
+//!     // in a hook: try app.input.map(PlayerInput).pressed(.jump)
+//!
+//! File templates extend both Assets > New menus without a creation hook:
+//!
+//!     pub const editor_file_types = [_]eggy.plugins.EditorFileType{.{
+//!         .key = "material", .title = "Material", .extension = ".material.zon", .contents = ".{}\n",
+//!     }};
 //!
 //! Eggy's own components (`builtin_components`: `Transform`, `Mesh`, which the scene draws, and
 //! `Camera`, which the runtime looks through, and `SceneInstance`, a scene file made under an
@@ -39,13 +63,16 @@
 //!
 //! In the editor, the game and its plugins run from a library that is swapped for a rebuilt one
 //! when their code changes (`src/editor/hot_reload`): every `deinit` runs, the world is emptied,
-//! and every `init` runs again. Errors from hooks stop the game there rather than the editor.
+//! and every `init` runs again. The editor logs hook failures and keeps running; standalone
+//! uncaught hook errors are fatal.
 const std = @import("std");
 const App = @import("app.zig").App;
 const Event = @import("vitellus_sdl3").sdl.events.Event;
 const ui = @import("weeoui");
 const preferences = @import("preferences.zig");
 const components = @import("components.zig");
+const EditorContext = @import("editor_api/editor_api.zig").Context;
+const DrawContext = @import("game_ui/game_ui.zig").DrawContext;
 
 /// The components every project has, before its plugins' own.
 pub const builtin_components = .{ @import("transform.zig").Transform, @import("mesh.zig").Mesh, @import("camera.zig").Camera, @import("scene_instance.zig").SceneInstance };
@@ -75,12 +102,27 @@ pub fn parseOff(arena: std.mem.Allocator, source: [:0]const u8) ![]const []const
 
 /// A panel a plugin adds to the editor's dock (see `editor_panels` above).
 pub const EditorPanel = struct {
+    /// A stable local identity; set it to keep the layout when changing the title.
+    key: [:0]const u8 = "",
     /// Its tab's label, and its window's title when popped out.
     title: [:0]const u8,
 };
 
+/// A command shown in the editor's View menu. Keys are local to the declaring plugin.
+pub const EditorCommand = struct { key: [:0]const u8, title: [:0]const u8 };
+
+/// A file template offered by Assets > New. Its identity is scoped to the published plugin.
+/// The editor creates a uniquely named file with these bytes and tracks it in undo history.
+pub const EditorFileType = struct {
+    key: [:0]const u8,
+    title: [:0]const u8,
+    extension: [:0]const u8,
+    contents: []const u8 = "",
+};
+
 /// One instance of each type in `types` (a tuple such as `.{ Game, Stats }`). Hooks run in list
-/// order, so the game, listed first, sees each frame before its plugins; `deinit` runs in reverse.
+/// order, so the game, listed first, sees each frame before its plugins; `deinit` and `uiEvent`
+/// run in reverse.
 /// `keys` names each one's preferences (see `preferences.Manifest`), in the same order.
 pub fn Set(comptime types: anytype, comptime keys: []const [:0]const u8) type {
     const list: [types.len]type = types;
@@ -92,12 +134,60 @@ pub fn Set(comptime types: anytype, comptime keys: []const [:0]const u8) type {
         enabled: [list.len]bool,
 
         const Self = @This();
+        pub fn hasGameUi(self: *const Self) bool {
+            inline for (list, 0..) |T, i| if (@hasDecl(T, "gameUi") and self.enabled[i]) return true;
+            return false;
+        }
+        pub fn hasDraw(self: *const Self) bool {
+            inline for (list, 0..) |T, i| if (@hasDecl(T, "draw") and self.enabled[i]) return true;
+            return false;
+        }
 
         /// Every plugin's `editor_panels`, in plugin order.
         pub const editor_panels: []const EditorPanel = blk: {
             var all: []const EditorPanel = &.{};
-            for (list) |T| if (@hasDecl(T, "editor_panels")) {
-                all = all ++ T.editor_panels;
+            for (list, keys) |T, key| if (@hasDecl(T, "editor_panels")) {
+                for (T.editor_panels) |panel| {
+                    const local_key = if (panel.key.len != 0) panel.key else panel.title;
+                    const identity = std.fmt.comptimePrint("{s}/{s}", .{ key, local_key });
+                    for (all) |previous| if (std.mem.eql(u8, previous.key, identity)) @compileError("duplicate editor panel key");
+                    all = all ++ .{EditorPanel{ .key = identity, .title = panel.title }};
+                }
+            };
+            break :blk all;
+        };
+
+        /// Commands with stable published-plugin/key identities, independent of their labels.
+        pub const editor_commands: []const EditorCommand = blk: {
+            var all: []const EditorCommand = &.{};
+            for (list, keys) |T, key| if (@hasDecl(T, "editor_commands")) {
+                for (T.editor_commands) |command| {
+                    if (command.key.len == 0) @compileError("editor command keys cannot be empty");
+                    const identity = std.fmt.comptimePrint("{s}/{s}", .{ key, command.key });
+                    for (all) |previous| if (std.mem.eql(u8, previous.key, identity)) @compileError("duplicate editor command key");
+                    all = all ++ .{EditorCommand{ .key = identity, .title = command.title }};
+                }
+            };
+            break :blk all;
+        };
+
+        /// File templates copied by the editor before a game library can be unloaded.
+        pub const editor_file_types: []const EditorFileType = blk: {
+            var all: []const EditorFileType = &.{};
+            for (list, keys) |T, key| if (@hasDecl(T, "editor_file_types")) {
+                for (T.editor_file_types) |file_type| {
+                    if (file_type.key.len == 0 or file_type.title.len == 0 or
+                        file_type.extension.len < 2 or file_type.extension[0] != '.' or
+                        std.mem.indexOfScalar(u8, file_type.key, 0) != null or
+                        std.mem.indexOfScalar(u8, file_type.title, 0) != null or
+                        std.mem.indexOfScalar(u8, file_type.extension, 0) != null or
+                        std.mem.indexOfAny(u8, file_type.title, "/\\") != null or
+                        std.mem.indexOfAny(u8, file_type.extension, "/\\") != null)
+                        @compileError("editor file types need a key, title and path-free .extension");
+                    const identity = std.fmt.comptimePrint("{s}/{s}", .{ key, file_type.key });
+                    for (all) |previous| if (std.mem.eql(u8, previous.key, identity)) @compileError("duplicate editor file type key");
+                    all = all ++ .{EditorFileType{ .key = identity, .title = file_type.title, .extension = file_type.extension, .contents = file_type.contents }};
+                }
             };
             break :blk all;
         };
@@ -147,6 +237,15 @@ pub fn Set(comptime types: anytype, comptime keys: []const [:0]const u8) type {
             // Their preferences first (even those off, which keep their values), so each `init`
             // can read them.
             inline for (list, keys) |T, key| if (@hasDecl(T, "Preferences")) try app.preference_values.register(T.Preferences, key);
+            inline for (list, keys, 0..) |T, key, i| if (enabled[i] and @hasDecl(T, "input_maps")) {
+                inline for (T.input_maps) |Mapping| {
+                    const owner = comptime std.fmt.comptimePrint("{s}/{s}", .{ key, Mapping.key });
+                    if (@hasDecl(Mapping, "file")) {
+                        try registerFileMap(Mapping, gpa, app, owner);
+                    } else try app.input.registerMap(Mapping, owner);
+                }
+            };
+
             var self: Self = undefined;
             self.enabled = enabled;
             inline for (list, 0..) |T, i| if (enabled[i]) {
@@ -170,26 +269,80 @@ pub fn Set(comptime types: anytype, comptime keys: []const [:0]const u8) type {
             inline for (list, 0..) |T, i| if (@hasDecl(T, "update") and self.enabled[i]) try self.instances[i].update(app);
         }
 
-        /// A frame in the editor while the game isn't playing: each plugin's `editorUpdate`.
-        pub fn editorUpdate(self: *Self, app: *App) !void {
-            inline for (list, 0..) |T, i| if (@hasDecl(T, "editorUpdate") and self.enabled[i]) try self.instances[i].editorUpdate(app);
+        /// Default UI content in plugin order, after scene/custom drawing.
+        pub fn gameUi(self: *Self, app: *App, context: *ui.Context) !void {
+            inline for (list, 0..) |T, i| if (@hasDecl(T, "gameUi") and self.enabled[i]) try self.instances[i].gameUi(app, context);
         }
 
-        pub fn editorUi(self: *Self, context: *ui.Context) void {
-            inline for (list, 0..) |T, i| if (@hasDecl(T, "editorUi") and self.enabled[i]) self.instances[i].editorUi(context);
+        /// Custom rendering outside a pass; the engine still owns frame submission.
+        pub fn draw(self: *Self, app: *App, context: DrawContext) !void {
+            inline for (list, 0..) |T, i| if (@hasDecl(T, "draw") and self.enabled[i]) try self.instances[i].draw(app, context);
+        }
+
+        /// Custom UI consumers are consulted in reverse visual order.
+        pub fn uiEvent(self: *Self, app: *App, curr_event: Event) !bool {
+            comptime var i = list.len;
+            inline while (i > 0) {
+                i -= 1;
+                if (@hasDecl(list[i], "uiEvent") and self.enabled[i]) if (try self.instances[i].uiEvent(app, curr_event)) return true;
+            }
+            return false;
+        }
+
+        /// A frame in the editor while editing or paused: each plugin's `editorUpdate`.
+        pub fn editorUpdate(self: *Self, editor: *EditorContext) !void {
+            inline for (list, 0..) |T, i| if (@hasDecl(T, "editorUpdate") and self.enabled[i]) try self.instances[i].editorUpdate(editor);
+        }
+
+        pub fn editorUi(self: *Self, editor: *EditorContext, context: *ui.Context) !void {
+            inline for (list, 0..) |T, i| if (@hasDecl(T, "editorUi") and self.enabled[i]) try self.instances[i].editorUi(editor, context);
         }
 
         /// Fill panel `panel` of `editor_panels` through the plugin that declared it.
-        pub fn editorPanelUi(self: *Self, panel: usize, context: *ui.Context) void {
+        pub fn editorPanelUi(self: *Self, panel: usize, editor: *EditorContext, context: *ui.Context) !void {
             comptime var first: usize = 0;
             inline for (list, 0..) |T, i| if (@hasDecl(T, "editor_panels")) {
                 const count = T.editor_panels.len;
                 if (panel >= first and panel < first + count) {
                     if (!self.enabled[i]) return context.muted("This plugin is turned off, in Preferences > Plugins.");
-                    if (@hasDecl(T, "editorPanelUi")) self.instances[i].editorPanelUi(panel - first, context);
+                    if (@hasDecl(T, "editorPanelUi")) try self.instances[i].editorPanelUi(panel - first, editor, context);
                     return;
                 }
                 first += count;
+            };
+        }
+
+        /// Dispatch a current-generation command to its declaring plugin's local index.
+        pub fn editorCommand(self: *Self, command: usize, editor: *EditorContext) !void {
+            comptime var first: usize = 0;
+            inline for (list, 0..) |T, i| if (@hasDecl(T, "editor_commands")) {
+                const count = T.editor_commands.len;
+                if (command >= first and command < first + count) {
+                    if (!self.enabled[i]) return error.PluginDisabled;
+                    if (@hasDecl(T, "editorCommand")) return self.instances[i].editorCommand(command - first, editor);
+                    return error.NoEditorCommandHook;
+                }
+                first += count;
+            };
+            return error.NoEditorCommand;
+        }
+
+        /// Load through the executable's resource bridge, never library-local filesystem I/O.
+        fn registerFileMap(comptime Mapping: type, gpa: std.mem.Allocator, app: *App, owner: []const u8) !void {
+            const source = app.resources().read(gpa, @import("refs.zig").AssetRef(.input_map).init(Mapping.file)) catch |err| {
+                std.log.err("cannot load input map {s} ({s}): {t}", .{ owner, Mapping.file, err });
+                return err;
+            };
+            defer gpa.free(source);
+            var arena = std.heap.ArenaAllocator.init(gpa);
+            defer arena.deinit();
+            const file = @import("input/asset.zig").File.parse(arena.allocator(), source) catch |err| {
+                std.log.err("invalid input map {s} ({s}): {t}", .{ owner, Mapping.file, err });
+                return err;
+            };
+            app.input.registerFileMap(Mapping, owner, file) catch |err| {
+                std.log.err("cannot register input map {s} ({s}): {t}; match the FileMap enum to the file's control names", .{ owner, Mapping.file, err });
+                return err;
             };
         }
 
@@ -215,6 +368,34 @@ test "plugins start in order, stop in reverse, and skip hooks they don't declare
         fn add(entry: u8) void {
             entries[len] = entry;
             len += 1;
+        }
+
+        test "editor command keys include their plugin and dispatch local indices" {
+            const Game = struct {
+                last: ?usize = null,
+                pub const editor_commands = [_]EditorCommand{ .{ .key = "raise", .title = "Raise" }, .{ .key = "lower", .title = "Lower" } };
+                pub fn editorCommand(self: *@This(), command: usize, _: *EditorContext) !void {
+                    self.last = command;
+                }
+
+                test "disabled UI plugins do not opt a game into overlay rendering" {
+                    const Widget = struct {
+                        pub fn gameUi(_: *@This(), _: *App, _: *ui.Context) !void {}
+                        pub fn draw(_: *@This(), _: *App, _: DrawContext) !void {}
+                    };
+                    const Plugins = Set(.{ struct {}, Widget }, &.{ "game", "widgets" });
+                    var plugins = try Plugins.init(std.testing.allocator, undefined, .{ true, true });
+                    try std.testing.expect(plugins.hasGameUi() and plugins.hasDraw());
+                    plugins.enabled[1] = false;
+                    try std.testing.expect(!plugins.hasGameUi() and !plugins.hasDraw());
+                }
+            };
+            const Plugins = Set(.{Game}, &.{"game"});
+            var plugins = try Plugins.init(std.testing.allocator, undefined, @splat(true));
+            try std.testing.expectEqualStrings("game/lower", Plugins.editor_commands[1].key);
+            try plugins.editorCommand(1, undefined);
+            try std.testing.expectEqual(@as(?usize, 1), plugins.instances[0].last);
+            try std.testing.expectError(error.NoEditorCommand, plugins.editorCommand(2, undefined));
         }
     };
     const Game = struct {
@@ -253,14 +434,14 @@ test "editor panels from every plugin are listed in order and reach the plugin t
     };
     const Game = struct {
         pub const editor_panels = [_]EditorPanel{.{ .title = "Level" }};
-        pub fn editorPanelUi(_: *@This(), panel: usize, _: *ui.Context) void {
+        pub fn editorPanelUi(_: *@This(), panel: usize, _: *EditorContext, _: *ui.Context) !void {
             Log.drawn[Log.len] = 10 + panel;
             Log.len += 1;
         }
     };
     const Stats = struct {
         pub const editor_panels = [_]EditorPanel{ .{ .title = "Frames" }, .{ .title = "Memory" } };
-        pub fn editorPanelUi(_: *@This(), panel: usize, _: *ui.Context) void {
+        pub fn editorPanelUi(_: *@This(), panel: usize, _: *EditorContext, _: *ui.Context) !void {
             Log.drawn[Log.len] = 20 + panel;
             Log.len += 1;
         }
@@ -269,7 +450,7 @@ test "editor panels from every plugin are listed in order and reach the plugin t
     try std.testing.expectEqual(@as(usize, 3), Plugins.editor_panels.len);
     try std.testing.expectEqualStrings("Memory", Plugins.editor_panels[2].title);
     var set = try Plugins.init(std.testing.allocator, undefined, @splat(true));
-    for (0..3) |panel| set.editorPanelUi(panel, undefined);
+    for (0..3) |panel| try set.editorPanelUi(panel, undefined, undefined);
     try std.testing.expectEqualSlices(usize, &.{ 10, 20, 21 }, Log.drawn[0..Log.len]);
 }
 

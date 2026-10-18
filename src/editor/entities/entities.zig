@@ -24,15 +24,12 @@ pub const EntityEditor = struct {
     selected: ?ecs.EntityId = null,
     /// The top-level entities' order.
     root_order: RootOrder,
-    /// What each scene instance's file made in the world.
-    instances: SceneInstances,
 
     pub fn init(gpa: std.mem.Allocator) EntityEditor {
-        return .{ .gpa = gpa, .hierarchy = .init(gpa), .inspector = .init(gpa), .root_order = .{ .gpa = gpa }, .instances = .init(gpa) };
+        return .{ .gpa = gpa, .hierarchy = .init(gpa), .inspector = .init(gpa), .root_order = .{ .gpa = gpa } };
     }
 
     pub fn deinit(self: *EntityEditor) void {
-        self.instances.deinit();
         self.hierarchy.deinit();
         self.inspector.deinit();
         self.root_order.deinit();

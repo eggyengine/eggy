@@ -18,6 +18,7 @@
 const std = @import("std");
 const ecs = @import("clutch");
 const refs = @import("refs.zig");
+pub const max_field_bytes = 4096;
 
 /// How the Inspector edits a field: references (`refs.zig`) take what is dragged onto them.
 pub const Kind = enum(u8) { bool, int, float, @"enum", other, entity, asset };
@@ -176,11 +177,8 @@ pub fn Registry(comptime types: []const type, comptime owners: []const [:0]const
                 const value = world.get(entity, T) orelse return error.NoComponent;
                 inline for (@typeInfo(T).@"struct".fields, 0..) |struct_field, j| if (j == field) {
                     if (comptime !editableType(struct_field.type)) return error.NotEditable;
-                    var scratch: [16 * 1024]u8 = undefined;
-                    var fba = std.heap.FixedBufferAllocator.init(&scratch);
                     const target = &@field(value.*, struct_field.name);
-                    const stored = try std.zon.parse.fromSliceAlloc(Stored(struct_field.type), fba.allocator(), text, null, .{});
-                    target.* = try restore(struct_field.type, stored);
+                    target.* = try parseFieldValue(struct_field.type, text);
                     world.markChanged(entity, T);
                     return;
                 };
@@ -263,7 +261,8 @@ fn shortName(comptime T: type) [:0]const u8 {
 
 /// Whether values of `T` are plain data: no pointers, functions or other things ZON can't parse
 /// without allocating.
-fn editableType(comptime T: type) bool {
+/// Whether scene/editor values can be changed without retaining arbitrary owned pointers.
+pub fn editableType(comptime T: type) bool {
     return switch (@typeInfo(T)) {
         .bool, .int, .float, .@"enum" => true,
         .array => |info| editableType(info.child),
@@ -353,13 +352,53 @@ fn store(comptime T: type, value: *const T) Stored(T) {
     return out;
 }
 
-/// `stored` back as a `T`. Fails with `error.ParseZon` for a path too long for an `AssetRef`.
+fn parseFieldValue(comptime T: type, text: [:0]const u8) error{ ParseZon, OutOfMemory }!T {
+    var scratch: [16 * 1024]u8 = undefined;
+    var fba = std.heap.FixedBufferAllocator.init(&scratch);
+    const stored = try std.zon.parse.fromSliceAlloc(Stored(T), fba.allocator(), text, null, .{});
+    return restore(T, stored);
+}
+
+/// Check that every field fits the current scene buffer and can be parsed back before an
+/// editor action changes it. Runtime-only pointer data is rejected by `editableType`.
+pub fn validateSnapshot(comptime T: type, value: *const T) !void {
+    if (T == @import("name.zig").Name) return;
+    // ponytail: fields have a 4 KiB text/16 KiB parse budget, add sized field reads to the ABI before accepting larger snapshots.
+    inline for (std.meta.fields(T)) |field| {
+        var buffer: [max_field_bytes + 1]u8 = undefined;
+        var writer: std.Io.Writer = .fixed(buffer[0..max_field_bytes]);
+        std.zon.stringify.serialize(store(field.type, &@field(value.*, field.name)), .{ .whitespace = false }, &writer) catch return error.ValueTooLarge;
+        buffer[writer.end] = 0;
+        _ = try parseFieldValue(field.type, buffer[0..writer.end :0]);
+    }
+}
+
+test "typed snapshots preflight the actual field size and parse budget" {
+    const Small = struct { value: u32 = 42, texture: refs.AssetRef(.image) = .init("ship.png") };
+    try validateSnapshot(Small, &Small{});
+    const Large = struct { values: [max_field_bytes]u8 = @splat(1) };
+    try std.testing.expectError(error.ValueTooLarge, validateSnapshot(Large, &Large{}));
+}
+
+/// Compare values as scenes store them, excluding unused reference buffers. Allocates
+/// temporary serialization buffers; never compares borrowed addresses.
+pub fn valuesEqual(gpa: std.mem.Allocator, comptime T: type, a: *const T, b: *const T) !bool {
+    if (T == @import("name.zig").Name) return std.mem.eql(u8, a.text(), b.text());
+    var left: std.Io.Writer.Allocating = .init(gpa);
+    defer left.deinit();
+    var right: std.Io.Writer.Allocating = .init(gpa);
+    defer right.deinit();
+    try std.zon.stringify.serialize(store(T, a), .{ .whitespace = false }, &left.writer);
+    try std.zon.stringify.serialize(store(T, b), .{ .whitespace = false }, &right.writer);
+    return std.mem.eql(u8, left.written(), right.written());
+}
+
+/// `stored` back as a `T`. Fails with `error.ParseZon` for an invalid `AssetRef`.
 fn restore(comptime T: type, stored: Stored(T)) error{ParseZon}!T {
     if (comptime refs.refKind(T)) |kind| switch (kind) {
         .entity => return .init(stored),
         .asset => {
-            if (stored.len > refs.max_path_len) return error.ParseZon;
-            return .init(stored);
+            return T.parse(stored) catch return error.ParseZon;
         },
     };
     if (comptime !holdsRef(T)) return stored;

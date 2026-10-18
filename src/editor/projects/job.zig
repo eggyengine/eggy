@@ -10,8 +10,8 @@ const eggy = @import("eggy");
 const template = @import("template.zig");
 const engine = @import("engine.zig");
 const log = std.log.scoped(.projects);
-const build_log = std.log.scoped(.zig_build);
-/// The most of the build's output kept; past it, the rest is dropped.
+const build_output = @import("build_output.zig");
+/// The progress window's raw-output limit; Console diagnostics stream independently.
 const max_output = 1 << 20;
 
 pub const Options = struct {
@@ -457,7 +457,6 @@ pub const Job = struct {
         // doesn't pass it on to the build runner it starts, so the runner is started directly
         // (see Eggy's `src/build/runner.zig`), by a shell that sets the variable for it. A project
         // on an Eggy that can't say how runs `zig build`, without the steps' progress.
-        // `--summary all` lists every step, so the output says what was built even when all is well.
         var progress_fds: ?[2]std.c.fd_t = null;
         var fd_text: [16]u8 = undefined;
         var argv: std.ArrayList([]const u8) = .empty;
@@ -472,10 +471,10 @@ pub const Job = struct {
         };
         if (progress_fds == null) try argv.appendSlice(gpa, &.{ "zig", "build" });
         try argv.appendSlice(gpa, steps);
-        try argv.appendSlice(gpa, &.{ "--color", "off", "--summary", "all" });
+        try argv.appendSlice(gpa, &.{ "--color", "off", "--summary", "none" });
         const shown = try std.mem.join(gpa, " ", steps);
         defer gpa.free(shown);
-        self.say("$ zig build {s} --summary all   (in {s})", .{ shown, self.dir });
+        self.say("$ zig build {s} --summary none   (in {s})", .{ shown, self.dir });
         var child = std.process.spawn(io_, .{
             .argv = argv.items,
             .cwd = .{ .path = self.dir },
@@ -498,15 +497,17 @@ pub const Job = struct {
         } else null;
         defer if (progress) |*task| task.cancel(io_);
 
-        // Keep the build's output, stdout and stderr alike, for the loading screen and Build
-        // progress window, and log it for the Console.
+        // Keep raw output for progress, with each pipe grouping its own Console diagnostics.
+        const output_start = self.output.items.len;
         var stdout = try io_.concurrent(followOutput, .{ self, child.stdout.? });
-        defer stdout.cancel(io_) catch {};
-        try self.followOutput(child.stderr.?);
-        try stdout.await(io_);
+        defer _ = stdout.cancel(io_) catch false;
+        const stderr_errors = try self.followOutput(child.stderr.?);
+        const stdout_errors = try stdout.await(io_);
 
         const term = try child.wait(io_);
-        if (term != .exited or term.exited != 0) return error.BuildFailed;
+        const failed = term != .exited or term.exited != 0;
+        if (failed and !stderr_errors and !stdout_errors) try build_output.log(gpa, self.output.items[output_start..], true, self.dir);
+        if (failed) return error.BuildFailed;
     }
 
     /// The command line starting the project's build runner, as its build records it through
@@ -534,26 +535,33 @@ pub const Job = struct {
         return if (args.items.len > 0) args.items else null;
     }
 
-    /// Read the build's output from `file` line by line until it ends: keep it for `status`, and
-    /// log it for the Console, its errors as errors.
-    fn followOutput(self: *Job, file: std.Io.File) !void {
+    /// Read a pipe through EOF, keeping progress output and streaming grouped diagnostics.
+    /// Return whether this pipe reported an error.
+    fn followOutput(self: *Job, file: std.Io.File) !bool {
         const io_ = self.io();
+        var diagnostics = build_output.Stream{ .gpa = self.gpa, .project_dir = self.dir };
+        defer diagnostics.deinit();
         var buffer: [4096]u8 = undefined;
         var reader = file.readerStreaming(io_, &buffer);
+        var continuation = false;
         while (true) {
             const line = reader.interface.takeDelimiterInclusive('\n') catch |err| switch (err) {
                 // A last line without a newline, else the end.
-                error.EndOfStream => if (reader.interface.bufferedLen() > 0) reader.interface.take(reader.interface.bufferedLen()) catch return else return,
-                error.StreamTooLong => reader.interface.take(reader.interface.bufferedLen()) catch return,
+                error.EndOfStream => if (reader.interface.bufferedLen() > 0) try reader.interface.take(reader.interface.bufferedLen()) else break,
+                error.StreamTooLong => try reader.interface.take(reader.interface.bufferedLen()),
                 else => return reader.err orelse err,
             };
-            self.mutex.lockUncancelable(io_);
-            if (self.output.items.len < max_output) self.output.appendSlice(self.gpa, line) catch {};
-            self.mutex.unlock(io_);
-            const text = std.mem.trimEnd(u8, line, "\r\n");
-            if (text.len == 0) continue;
-            if (std.mem.indexOf(u8, text, "error:") != null) build_log.err("{s}", .{text}) else build_log.info("{s}", .{text});
+            {
+                self.mutex.lockUncancelable(io_);
+                defer self.mutex.unlock(io_);
+                const kept = @min(line.len, max_output -| self.output.items.len);
+                try self.output.appendSlice(self.gpa, line[0..kept]);
+            }
+            if (continuation) try diagnostics.continueLine(line) else try diagnostics.line(line);
+            continuation = !std.mem.endsWith(u8, line, "\n");
         }
+        try diagnostics.finish();
+        return diagnostics.has_error;
     }
 
     /// Read Zig's progress snapshots from `file` until the build closes it, keeping the overall

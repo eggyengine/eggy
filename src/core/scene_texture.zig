@@ -97,6 +97,21 @@ pub const SceneTexture = struct {
         target.rendered = true;
     }
 
+    /// Reopen the rendered target for custom drawing, outside a pass. Pair with `endOverlay`
+    /// before sampling it. The returned view is borrowed until resize/deinit.
+    pub fn beginOverlay(self: *SceneTexture, cmd: vit.CommandBuffer) !vit.TextureView {
+        const target = if (self.target) |*target| target else return error.SceneNotRendered;
+        if (!target.rendered) return error.SceneNotRendered;
+        try cmd.barrier(&.{.{ .texture = .{ .texture = target.texture, .before = .sampled, .after = .color_attachment } }});
+        return target.view;
+    }
+
+    /// Return the overlay target to the sampled state used by `draw`.
+    pub fn endOverlay(self: *SceneTexture, cmd: vit.CommandBuffer) !void {
+        const target = if (self.target) |*target| target else return error.SceneNotRendered;
+        try cmd.barrier(&.{.{ .texture = .{ .texture = target.texture, .before = .color_attachment, .after = .sampled } }});
+    }
+
     // ponytail: waits for the GPU on every size change, so dragging a splitter stalls a little; keep a spare texture per frame in flight if that shows.
     fn targetSized(self: *SceneTexture, graphics: *Graphics, extent_px: vit.Extent2D) !*Target {
         if (self.target) |*target| if (target.extent.width == extent_px.width and target.extent.height == extent_px.height) return target;

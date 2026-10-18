@@ -4,18 +4,34 @@
 const std = @import("std");
 
 pub const Entry = struct {
+    /// Stable across snapshots, trimming and Clear, so views can hide/select a message.
+    id: u64,
     level: std.log.Level,
     /// The formatted line (`level(scope): message`), as a range of `text`.
     start: usize,
+    /// End of the first line; everything after it is expandable detail.
+    summary_end: usize,
     end: usize,
+};
+
+/// A caller-owned snapshot, including message boundaries in its copied text.
+pub const Messages = struct {
+    text: std.ArrayList(u8) = .empty,
+    entries: std.ArrayList(Entry) = .empty,
+
+    pub fn deinit(self: *Messages, allocator: std.mem.Allocator) void {
+        self.text.deinit(allocator);
+        self.entries.deinit(allocator);
+    }
 };
 
 /// What `snapshot` shows.
 pub const Filter = struct {
     /// Levels shown, indexed by `std.log.Level`.
     levels: [4]bool = .{ true, true, true, false },
-    /// Only lines containing this (case-insensitive); empty shows every line.
+    /// Match the whole message, including collapsed details (case-insensitive).
     query: []const u8 = "",
+    hidden: ?*const std.AutoHashMapUnmanaged(u64, void) = null,
 };
 
 /// Past this many bytes, the oldest half of the log is dropped.
@@ -28,6 +44,7 @@ var entries: std.ArrayList(Entry) = .empty;
 var generation: u64 = 0;
 /// Bumped by every change, so the Console filters the log again only when it changed.
 var version: u64 = 0;
+var next_id: u64 = 0;
 const gpa = std.heap.smp_allocator;
 
 /// `std.Options.logFn` for the editor: logs as usual, and keeps the message for the Console.
@@ -41,7 +58,9 @@ pub fn logFn(comptime level: std.log.Level, comptime scope: @EnumLiteral(), comp
     if (text.items.len > max_text) trimOldest();
     const start = text.items.len;
     text.print(gpa, prefix ++ format ++ "\n", args) catch return;
-    entries.append(gpa, .{ .level = level, .start = start, .end = text.items.len }) catch text.shrinkRetainingCapacity(start);
+    const summary_end = std.mem.indexOfScalarPos(u8, text.items, start, '\n').?;
+    entries.append(gpa, .{ .id = next_id, .level = level, .start = start, .summary_end = summary_end, .end = text.items.len }) catch text.shrinkRetainingCapacity(start);
+    next_id +%= 1;
     _ = @atomicRmw(u64, &version, .Add, 1, .release);
 }
 
@@ -65,17 +84,27 @@ pub const Snapshot = struct { shown: usize, total: usize };
 
 /// The messages `filter` shows, joined, into `out` (replacing what it held, allocating with
 /// `allocator`); and how many there were in all.
-pub fn snapshot(allocator: std.mem.Allocator, out: *std.ArrayList(u8), filter: Filter) !Snapshot {
+pub fn snapshot(allocator: std.mem.Allocator, out: *Messages, filter: Filter) !Snapshot {
     const io = std.Options.debug_io;
     mutex.lockUncancelable(io);
     defer mutex.unlock(io);
-    out.clearRetainingCapacity();
+    out.text.clearRetainingCapacity();
+    out.entries.clearRetainingCapacity();
     var shown: usize = 0;
     for (entries.items) |entry| {
         if (!filter.levels[@intFromEnum(entry.level)]) continue;
+        if (filter.hidden) |hidden| if (hidden.contains(entry.id)) continue;
         const line = text.items[entry.start..entry.end];
         if (filter.query.len > 0 and std.ascii.indexOfIgnoreCase(line, filter.query) == null) continue;
-        try out.appendSlice(allocator, line);
+        const start = out.text.items.len;
+        try out.text.appendSlice(allocator, line);
+        try out.entries.append(allocator, .{
+            .id = entry.id,
+            .level = entry.level,
+            .start = start,
+            .summary_end = start + entry.summary_end - entry.start,
+            .end = out.text.items.len,
+        });
         shown += 1;
     }
     return .{ .shown = shown, .total = entries.items.len };
@@ -89,6 +118,7 @@ fn trimOldest() void {
     text.shrinkRetainingCapacity(text.items.len - keep_from);
     for (kept) |*entry| {
         entry.start -= keep_from;
+        entry.summary_end -= keep_from;
         entry.end -= keep_from;
     }
     std.mem.copyForwards(Entry, entries.items[0..kept.len], kept);
@@ -101,17 +131,65 @@ test "the log keeps messages and filters them by level and text" {
     logFn(.info, .projects, "opened {s}", .{"Space Game"});
     logFn(.warn, .default, "slow frame", .{});
     logFn(.debug, .default, "noise", .{});
-    var out: std.ArrayList(u8) = .empty;
+    var out: Messages = .{};
     defer out.deinit(std.testing.allocator);
     const all = try snapshot(std.testing.allocator, &out, .{});
     try std.testing.expectEqual(@as(usize, 3), all.total);
-    try std.testing.expectEqualStrings("info(projects): opened Space Game\nwarning: slow frame\n", out.items);
+    try std.testing.expectEqualStrings("info(projects): opened Space Game\nwarning: slow frame\n", out.text.items);
     _ = try snapshot(std.testing.allocator, &out, .{ .levels = .{ false, true, false, false } });
-    try std.testing.expectEqualStrings("warning: slow frame\n", out.items);
+    try std.testing.expectEqualStrings("warning: slow frame\n", out.text.items);
     const searched = try snapshot(std.testing.allocator, &out, .{ .query = "SPACE" });
     try std.testing.expectEqual(@as(usize, 1), searched.shown);
     // Each message changes the log.
     const before = changes();
     logFn(.info, .default, "one more", .{});
     try std.testing.expect(changes() != before);
+}
+
+test "multiline diagnostics filter and hide as one error, even with info hidden" {
+    defer clear();
+    logFn(.err, .zig_build, "src/main.zig:12:5: error: wrong argument\n    broken();\n    ~~~~~~^~\nreferenced by:\n    game: src/root.zig:8:2", .{});
+    logFn(.info, .default, "another message", .{});
+    var out: Messages = .{};
+    defer out.deinit(std.testing.allocator);
+    const filtered = try snapshot(std.testing.allocator, &out, .{ .levels = .{ true, false, false, false }, .query = "REFERENCED" });
+    try std.testing.expectEqual(@as(usize, 1), filtered.shown);
+    try std.testing.expectEqual(@as(usize, 2), filtered.total);
+    const entry = out.entries.items[0];
+    try std.testing.expectEqualStrings("error(zig_build): src/main.zig:12:5: error: wrong argument", out.text.items[entry.start..entry.summary_end]);
+    try std.testing.expect(std.mem.indexOf(u8, out.text.items[entry.summary_end..entry.end], "broken();") != null);
+
+    var hidden: std.AutoHashMapUnmanaged(u64, void) = .empty;
+    defer hidden.deinit(std.testing.allocator);
+    try hidden.put(std.testing.allocator, entry.id, {});
+    const hiding = try snapshot(std.testing.allocator, &out, .{ .hidden = &hidden });
+    try std.testing.expectEqual(@as(usize, 1), hiding.shown);
+    try std.testing.expectEqualStrings("info: another message\n", out.text.items);
+    hidden.clearRetainingCapacity();
+    const restored = try snapshot(std.testing.allocator, &out, .{});
+    try std.testing.expectEqual(@as(usize, 2), restored.shown);
+    try std.testing.expectEqual(entry.id, out.entries.items[0].id);
+
+    clear();
+    logFn(.err, .default, "new message after Clear", .{});
+    _ = try snapshot(std.testing.allocator, &out, .{});
+    try std.testing.expect(out.entries.items[0].id != entry.id);
+}
+
+test "trimming keeps message identities and summary boundaries" {
+    defer clear();
+    logFn(.info, .default, "old", .{});
+    logFn(.err, .zig_build, "kept\n    detail", .{});
+    var out: Messages = .{};
+    defer out.deinit(std.testing.allocator);
+    _ = try snapshot(std.testing.allocator, &out, .{});
+    const kept_id = out.entries.items[1].id;
+    mutex.lockUncancelable(std.Options.debug_io);
+    trimOldest();
+    mutex.unlock(std.Options.debug_io);
+    _ = try snapshot(std.testing.allocator, &out, .{});
+    try std.testing.expectEqual(@as(usize, 1), out.entries.items.len);
+    const entry = out.entries.items[0];
+    try std.testing.expectEqual(kept_id, entry.id);
+    try std.testing.expectEqualStrings("error(zig_build): kept", out.text.items[entry.start..entry.summary_end]);
 }

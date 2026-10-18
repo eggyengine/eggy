@@ -1,5 +1,5 @@
 //! Opening a project's code in the code editor people chose (Edit > Preferences, Code editor):
-//! the file, with the project's folder so the editor knows the workspace.
+//! the file and optional source position, with the project's folder as the workspace.
 const builtin = @import("builtin");
 const std = @import("std");
 const file_manager = @import("file_manager.zig");
@@ -7,22 +7,51 @@ const file_manager = @import("file_manager.zig");
 /// The code editors Eggy knows how to start, or the system's default app for the file.
 pub const Choice = enum { vscode, vscodium, cursor, zed, sublime_text, system };
 
+const Position = struct { line: u32, column: u32 };
+
 /// Open `file` (absolute) of the project in `project_dir` with `choice`. Returns once the editor
 /// is started, not once it shows; fails when it isn't installed (not on the PATH).
 // ponytail: starts the command by name, so on Windows `code.cmd` and friends need a shell; go through `cmd /c` there if Windows users miss it.
 pub fn open(gpa: std.mem.Allocator, choice: Choice, project_dir: []const u8, file: []const u8) !void {
-    const program = command(choice) orelse return file_manager.openFile(gpa, file);
-    try start(gpa, program, project_dir, file);
+    try openPosition(gpa, choice, project_dir, file, null);
 }
 
-/// Start `program` with the project's folder and `file`, from the project's folder.
-fn start(gpa: std.mem.Allocator, program: []const u8, project_dir: []const u8, file: []const u8) !void {
+/// Open the one-based source position. The system default opens the file without positioning.
+pub fn openAt(gpa: std.mem.Allocator, choice: Choice, project_dir: []const u8, file: []const u8, line: u32, column: u32) !void {
+    if (line == 0 or column == 0) return error.InvalidSourcePosition;
+    try openPosition(gpa, choice, project_dir, file, .{ .line = line, .column = column });
+}
+
+fn openPosition(gpa: std.mem.Allocator, choice: Choice, project_dir: []const u8, file: []const u8, position: ?Position) !void {
+    if (choice == .system) return file_manager.openFile(gpa, file);
+    var arena = std.heap.ArenaAllocator.init(gpa);
+    defer arena.deinit();
+    try start(gpa, project_dir, try arguments(arena.allocator(), choice, project_dir, file, position));
+}
+
+fn arguments(arena: std.mem.Allocator, choice: Choice, project_dir: []const u8, file: []const u8, position: ?Position) ![]const []const u8 {
+    const program = command(choice) orelse return error.NoCodeEditorCommand;
+    const target = if (position) |at| try std.fmt.allocPrint(arena, "{s}:{d}:{d}", .{ file, at.line, at.column }) else file;
+    const goto = position != null and switch (choice) {
+        .vscode, .vscodium, .cursor => true,
+        else => false,
+    };
+    const argv = try arena.alloc([]const u8, if (goto) 4 else 3);
+    argv[0] = program;
+    argv[1] = project_dir;
+    if (goto) argv[2] = "--goto";
+    argv[argv.len - 1] = target;
+    return argv;
+}
+
+/// Start the code editor from the project's folder, inheriting the editor's environment.
+fn start(gpa: std.mem.Allocator, project_dir: []const u8, argv: []const []const u8) !void {
     // The editor's own environment, so the command is looked up on its PATH.
     var threaded: std.Io.Threaded = .init(gpa, .{ .environ = processEnviron() });
     defer threaded.deinit();
     // ponytail: the child isn't waited for, so a launcher that exits (`code` does) lingers as a zombie until the editor quits; reap it if that ever piles up.
     _ = try std.process.spawn(threaded.io(), .{
-        .argv = &.{ program, project_dir, file },
+        .argv = argv,
         .cwd = .{ .path = project_dir },
         .stdin = .ignore,
     });
@@ -54,5 +83,19 @@ test "each code editor has its command, and the system's default has none" {
 
 test "a command on the PATH starts, given the folder and the file" {
     if (builtin.os.tag == .windows) return error.SkipZigTest;
-    try start(std.testing.allocator, "true", "/", "/");
+    try start(std.testing.allocator, "/", &.{ "true", "/", "/" });
+}
+
+test "source links use each editor's line and column arguments without splitting paths" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    for ([_]Choice{ .vscode, .vscodium, .cursor, .zed, .sublime_text }) |choice| {
+        const argv = try arguments(arena.allocator(), choice, "/my game", "/my game/src/root.zig", .{ .line = 69, .column = 9 });
+        try std.testing.expectEqualStrings("/my game", argv[1]);
+        try std.testing.expectEqualStrings("/my game/src/root.zig:69:9", argv[argv.len - 1]);
+        if (choice == .vscode or choice == .vscodium or choice == .cursor) try std.testing.expectEqualStrings("--goto", argv[2]);
+    }
+    const ordinary = try arguments(arena.allocator(), .vscode, "/game", "/game/src/root.zig", null);
+    try std.testing.expectEqual(@as(usize, 3), ordinary.len);
+    try std.testing.expectEqualStrings("/game/src/root.zig", ordinary[2]);
 }

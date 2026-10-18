@@ -1,7 +1,7 @@
 //! Which interactive element of a laid-out Weeoui tree is under a point, as Weeoui's `Context`
 //! decides it: the highest overlay layer wins, then the smallest box.
 const std = @import("std");
-const L = @import("eggy").ui.Layout;
+const L = @import("weeoui").Layout;
 
 /// The id of the topmost interactive element (id not 0) under (x, y) in `root`, or 0.
 pub fn controlAt(root: *const L.Element, x: f32, y: f32) u32 {

@@ -13,6 +13,9 @@ Eggy is a game engine for Zig 0.16. Your game is a Zig package that depends on E
 
 Everything your game does goes through **plugins**. Your game is the first plugin, and other packages can add more. See the [Plugins guide](guides/plugins.md).
 
+Prefer code to scene files? [Code-only games](guides/code-only-games.md) starts a world
+without opening the editor.
+
 ## Packages
 
 An Eggy package follows Zig's layout:
@@ -35,4 +38,7 @@ From your package's directory:
 | `zig build all` | Build both into `zig-out/bin/` without running them. |
 | `zig build test` | Run your tests. |
 
-The UI in the editor, and in your editor panels, is [Weeoui](https://eggyengine.github.io/weeoui/), an immediate-mode UI library for Zig.
+The editor, plugin panels, and optional game UI use [Weeoui](https://eggyengine.github.io/weeoui/),
+an immediate-mode UI library for Zig. Games can instead supply their own renderer. See
+[Developer API](guides/developer-api.md), [Game UI](guides/game-ui.md), and
+[Editor tools](guides/editor-tools.md).
