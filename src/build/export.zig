@@ -5,6 +5,7 @@
 //! zips that folder beside it. The build runs as a nested `zig build runtime` (this build's
 //! runner, started directly so its steps show under this one: see `runner.zig`), so the export
 //! never shares a compilation with the debug build.
+//! Android exports install a test-signed APK instead of a desktop folder and ZIP.
 const std = @import("std");
 const runner = @import("runner.zig");
 
@@ -48,6 +49,13 @@ pub fn addExport(b: *std.Build, engine: *std.Build, target: std.Build.ResolvedTa
     nested.expectExitCode(0);
     nested.has_side_effects = true;
     nested.setName(b.fmt("zig build runtime for {s} (ReleaseFast)", .{triple}));
+
+    // Android is an installable test-signed APK, not a directory of desktop executables.
+    if (result.abi.isAndroid()) {
+        const apk = built.path(b, b.fmt("bin/{s}-android-test.apk", .{name}));
+        step.dependOn(&b.addInstallFileWithDir(apk, .prefix, b.fmt("export/{s}-test.apk", .{folder})).step);
+        return;
+    }
 
     // The folder, zipped to hand out.
     const zip_tool = b.addExecutable(.{

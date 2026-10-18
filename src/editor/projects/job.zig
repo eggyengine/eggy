@@ -11,6 +11,7 @@ const template = @import("template.zig");
 const engine = @import("engine.zig");
 const log = std.log.scoped(.projects);
 const build_output = @import("build_output.zig");
+const export_process = @import("export_process.zig");
 /// The progress window's raw-output limit; Console diagnostics stream independently.
 const max_output = 1 << 20;
 
@@ -533,20 +534,21 @@ pub const Job = struct {
         const shown = try std.mem.join(gpa, " ", steps);
         defer gpa.free(shown);
         self.say("$ zig build {s} --summary none   (in {s})", .{ shown, self.dir });
-        var child = std.process.spawn(io_, .{
+        var process = export_process.Process.spawn(io_, .{
             .argv = argv.items,
             .cwd = .{ .path = self.dir },
             .stdin = .ignore,
             .stdout = .pipe,
             .stderr = .pipe,
-        }) catch |err| {
+        }, self.action == .export_game) catch |err| {
             if (progress_fds) |fds| {
                 for (fds) |fd| _ = std.c.close(fd);
             }
             return if (err == error.FileNotFound) error.ZigNotFound else err;
         };
         // Stop the build if the job is cancelled, or fails, before it ends.
-        defer child.kill(io_);
+        defer process.stop(io_);
+        const child = &process.child;
 
         // The child has the write end now; ours would keep the pipe open past the build.
         var progress = if (progress_fds) |fds| blk: {
@@ -577,14 +579,15 @@ pub const Job = struct {
         const file = std.fs.path.join(arena, &.{ self.dir, ".zig-cache", "eggy_runner.txt" }) catch return null;
         std.Io.Dir.cwd().createDirPath(io_, std.fs.path.dirname(file).?) catch return null;
         std.Io.Dir.cwd().deleteFile(io_, file) catch {};
-        var child = std.process.spawn(io_, .{
+        var process = export_process.Process.spawn(io_, .{
             .argv = &.{ "/bin/sh", "-c", "EGGY_RUNNER_FILE=\"$1\" exec zig build --help", "sh", file },
             .cwd = .{ .path = self.dir },
             .stdin = .ignore,
             .stdout = .ignore,
             .stderr = .ignore,
-        }) catch return null;
-        const term = child.wait(io_) catch return null;
+        }, self.action == .export_game) catch return null;
+        defer process.stop(io_);
+        const term = process.child.wait(io_) catch return null;
         if (term != .exited or term.exited != 0) return null;
         const text = std.Io.Dir.cwd().readFileAlloc(io_, file, arena, .limited(64 * 1024)) catch return null;
         var args: std.ArrayList([]const u8) = .empty;
@@ -609,6 +612,8 @@ pub const Job = struct {
                 error.StreamTooLong => try reader.interface.take(reader.interface.bufferedLen()),
                 else => return reader.err orelse err,
             };
+            if (self.action == .export_game and std.mem.startsWith(u8, line, "[Export SDK] "))
+                self.setStage(.exporting, std.mem.trimEnd(u8, line["[Export SDK] ".len..], "\r\n"));
             {
                 self.mutex.lockUncancelable(io_);
                 defer self.mutex.unlock(io_);
@@ -749,6 +754,7 @@ fn describe(err: anyerror) []const u8 {
     return switch (err) {
         error.ZigNotFound => "Zig 0.16 isn't on your PATH. Install it, then try again.",
         error.BuildFailed => "The project's build failed. Its output is below.",
+        error.ExportProcessGroupFailed => "The system could not isolate the export's processes for safe cancellation.",
         error.ProjectDirNotEmpty => "The project's folder isn't empty.",
         error.NotAProject => "That folder isn't an Eggy project: it has no eggy.zon.",
         error.UnreadableConfig => "The project's eggy.zon couldn't be read. It needs a .name (the package name) and a .title.",

@@ -29,7 +29,7 @@ pub fn Runtime(comptime project: type) type {
         drawables: []eggy.mesh.Drawable,
         /// "No camera available", made the first time the scene has no camera to look through.
         notice: ?eggy.Notice = null,
-        /// What packaging put beside the game (null where there is none: the web), and the
+        /// What packaging put beside or inside the game (null when data cannot be read), and the
         /// entities each scene instance made from it.
         data: ?*packaged_assets.Data,
 
@@ -67,7 +67,7 @@ pub fn Runtime(comptime project: type) type {
             errdefer app.deinit();
             if (@hasDecl(project, "input_bindings")) try app.input_backend.?.state.readOverrides(project.input_bindings);
             // Model and image files, and scenes, as packaging made them.
-            const data: ?*packaged_assets.Data = if (web) null else packaged_assets.Data.open(gpa) catch |err| blk: {
+            const data: ?*packaged_assets.Data = packaged_assets.Data.open(gpa, process_init.io) catch |err| blk: {
                 std.log.warn("the game's data folder can't be read ({t}): it starts with no scene, models or textures", .{err});
                 break :blk null;
             };
@@ -147,6 +147,7 @@ pub fn Runtime(comptime project: type) type {
         /// if (result != .run) return result;
         /// ```
         pub fn iterate(self: *Self) !sdl3.AppResult {
+            if (builtin.abi.isAndroid() and !self.app.graphics.surface_active) return .run;
             try self.app.graphics.syncSize(self.app.window);
             // The browser already paces frames to the display.
             if (!web) _ = self.fps_capper.delay();
@@ -203,6 +204,14 @@ pub fn Runtime(comptime project: type) type {
         /// if (result != .run) return result; // Honor the host lifecycle decision.
         /// ```
         pub fn event(self: *Self, curr_event: sdl3.events.Event) !sdl3.AppResult {
+            if (builtin.abi.isAndroid()) switch (curr_event) {
+                .will_enter_background => {
+                    self.app.input.cancel();
+                    try self.app.graphics.suspendSurface();
+                },
+                .did_enter_foreground => try self.app.graphics.resumeSurface(self.app.window),
+                else => {},
+            };
             try self.app.deviceEvent(curr_event);
             const lifecycle = try self.app.event(curr_event);
             if (lifecycle != .run) return lifecycle;

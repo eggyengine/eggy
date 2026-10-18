@@ -80,14 +80,29 @@ pub fn entries(b: *std.Build) []const Entry {
 pub fn addData(b: *std.Build, files: []const Entry) ?*std.Build.Step {
     if (files.len == 0) return null;
     const step = b.step("eggy-data", "Put the game's resources beside it");
+    step.dependOn(&b.addInstallDirectory(.{ .source_dir = dataDirectory(b, files), .install_dir = .prefix, .install_subdir = "data" }).step);
+    return step;
+}
+
+/// Manifest and unchanged resources in one build-owned directory, also usable as APK assets.
+pub fn dataDirectory(b: *std.Build, files: []const Entry) std.Build.LazyPath {
+    const output = b.addWriteFiles();
     var text: std.Io.Writer.Allocating = .init(b.allocator);
     assets_manifest.write(&text.writer, .{ .files = files }) catch @panic("OOM");
-    const manifest = b.addWriteFiles().add(assets_manifest.file_name, text.written());
-    step.dependOn(&b.addInstallFileWithDir(manifest, .prefix, "data/" ++ assets_manifest.file_name).step);
+    _ = output.add(assets_manifest.file_name, text.written());
     for (files) |entry| {
         if (assets_manifest.Packaged.of(entry.path) != .copy) continue;
         var name: [32]u8 = undefined;
-        step.dependOn(&b.addInstallFileWithDir(b.path(entry.path), .prefix, b.fmt("data/{s}", .{assets_manifest.packagedName(&name, entry)})).step);
+        _ = output.addCopyFile(b.path(entry.path), assets_manifest.packagedName(&name, entry));
     }
-    return step;
+    return output.getDirectory();
+}
+
+/// All runtime resources beneath `data/`, ready for APK assets or an Emscripten preload.
+pub fn bundledDirectory(b: *std.Build, engine: *std.Build, optimize: std.builtin.OptimizeMode, files: []const Entry) std.Build.LazyPath {
+    const output = b.addWriteFiles();
+    _ = output.addCopyDirectory(dataDirectory(b, files), "data", .{});
+    if (@import("models.zig").packagedDirectory(b, engine, optimize, files)) |converted|
+        _ = output.addCopyDirectory(converted, "data", .{});
+    return output.getDirectory();
 }

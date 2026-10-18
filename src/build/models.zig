@@ -108,6 +108,12 @@ pub fn installedPath(target: std.Target, library: *std.Build.Step.Compile) []con
 /// }
 /// ```
 pub fn addPackaging(b: *std.Build, eggy: *std.Build, optimize: std.builtin.OptimizeMode, files: []const manifest.Entry) ?*std.Build.Step {
+    const output = packagedDirectory(b, eggy, optimize, files) orelse return null;
+    return &b.addInstallDirectory(.{ .source_dir = output, .install_dir = .prefix, .install_subdir = "data" }).step;
+}
+
+/// Convert models and textures for embedding in an APK or installing beside a desktop runtime.
+pub fn packagedDirectory(b: *std.Build, eggy: *std.Build, optimize: std.builtin.OptimizeMode, files: []const manifest.Entry) ?std.Build.LazyPath {
     var converted: std.ArrayList(manifest.Entry) = .empty;
     for (files) |entry| if (manifest.Packaged.of(entry.path) != .copy) converted.append(b.allocator, entry) catch @panic("OOM");
     if (converted.items.len == 0) return null;
@@ -140,5 +146,5 @@ pub fn addPackaging(b: *std.Build, eggy: *std.Build, optimize: std.builtin.Optim
             package.addFileInput(b.path(b.fmt("{s}.eggy", .{entry.path})));
         } else |_| {}
     }
-    return &b.addInstallDirectory(.{ .source_dir = output, .install_dir = .prefix, .install_subdir = "data" }).step;
+    return output;
 }

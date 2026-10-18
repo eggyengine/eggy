@@ -98,11 +98,12 @@ eggy_editor export --project ./space_game --scene resources/scene/main.scene.zon
 
 Interactive mode lists scenes and common target triples. Any valid Zig target triple
 can be supplied, including `x86_64-windows-gnu`, `aarch64-macos`, and
-`wasm32-emscripten`; the usual cross-platform SDK requirements still apply.
+`wasm32-emscripten` and `aarch64-linux-android.35`.
 
 The scene must exist under `resources/`. This command leaves the saved default scene
 unchanged; the GUI's export dialog saves its selection. The command writes
-the directory and ZIP under the project's `zig-out/export/`.
+the directory and ZIP under the project's `zig-out/export/`, or a test-signed APK
+when targeting Android.
 
 Distribute the complete directory, including `data/` and shared libraries, not only the
 executable.
@@ -133,10 +134,18 @@ See [Startup scene selection](project-configuration.md#startup-scene-selection).
 | `native` | Uses the host platform and its native dependencies |
 | `x86_64-windows-gnu` | Builds a Windows desktop runtime; keep its bundled DLLs |
 | `aarch64-macos` | Requires a macOS SDK as well as the Zig target selection |
-| `wasm32-emscripten` | Requires emsdk; no editor, and the default browser resource provider is unavailable |
+| `wasm32-emscripten` | Automatic emsdk/WebGPU-port setup; packaged assets preload into the browser; no editor |
+| `aarch64-linux-android.35` | Test-signed APK; automatic Android SDK/NDK/JDK setup on Linux x86-64 and macOS hosts |
 
-The CLI accepts valid Zig target triples but does not install their SDKs. Build settings
-such as SDK locations belong to the package's `build.zig`; the CLI exposes no SDK flags.
-Eggy's own checkout accepts `--sysroot` or `-Dmacos-sdk` for a macOS SDK and `-Demsdk`
-for web builds. Games using `addGame` find emsdk through `$EMSDK`, then `~/emsdk`.
+Automatic Web/Android setup requires Python 3.12+. It reuses configured SDKs or caches
+pinned official distributions in `$XDG_CACHE_HOME/eggy/sdks` (default
+`~/.cache/eggy/sdks`), `~/Library/Caches/Eggy/SDKs` on macOS, or
+`%LOCALAPPDATA%/Eggy/SDKs` on Windows (Web only). Starting an Android export accepts
+Google's Android SDK licenses. SDK downloads and installation errors appear in build output.
+
+The CLI exposes no SDK flags: set `EMSDK`, `ANDROID_HOME`/`ANDROID_SDK_ROOT` and
+`JAVA_HOME`/`JDK_HOME` to reuse installed tools. Web also checks `~/emsdk`.
+Eggy's own checkout accepts `-Demsdk` and `-Dandroid-sdk` overrides.
+macOS builds still require `--sysroot` or `-Dmacos-sdk`; that SDK is not downloaded.
+See [Android and Web export details](../how-to/build-and-export.md#export-for-web-or-android).
 See [Feature support](feature-support.md#capability-support) before choosing a web target.

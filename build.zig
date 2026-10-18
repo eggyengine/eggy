@@ -7,6 +7,9 @@ const build_runner = @import("src/build/runner.zig");
 const game_resources = @import("src/build/resources.zig");
 const game_metadata = @import("src/build/metadata.zig");
 const sdl_build = @import("src/build/sdl.zig");
+const sdk_setup = @import("src/build/sdk_setup.zig");
+const android_build = @import("src/build/android.zig");
+const web_build = @import("src/build/web.zig");
 
 /// Configure Eggy's own runtime/editor, tests, package resources and API-reference steps.
 /// Zig owns `b` and invokes this once per build-graph evaluation; games use `addGame` instead.
@@ -30,7 +33,8 @@ pub fn build(b: *std.Build) void {
             std.process.exit(1);
         };
     }
-    const emscripten = Emscripten.init(b, target, b.option([]const u8, "emsdk", "Path to emsdk for web builds (default: $EMSDK, then ~/emsdk)"));
+    const emsdk = sdk_setup.prepare(b, target, b.option([]const u8, "emsdk", "Use this installed emsdk instead of automatically setting it up"), b.option([]const u8, "android-sdk", "Use this Android SDK instead of Eggy's cached SDK"));
+    const emscripten = Emscripten.init(b, target, emsdk);
     // On a fresh checkout Slang isn't fetched yet: Zig fetches it and runs this build again.
     const engine = addEngine(b, target, optimize, emscripten) orelse return;
 
@@ -111,7 +115,8 @@ pub const GameOptions = struct {
 /// only), and the steps `all`, `runtime`, `editor`, `run` (the editor; on the web, the runtime in
 /// a browser) and `run-runtime`. The game and each plugin get `@import("eggy")`, this package's
 /// eggy even for plugins from other packages, so every part shares one engine. Web builds find
-/// emsdk through `$EMSDK`, then `~/emsdk`. `export` builds the game to ship (`src/build/export.zig`).
+/// installed emsdk through `$EMSDK`, then `~/emsdk`; missing Web/Android SDKs are set up
+/// automatically. `export` builds the game to ship (`src/build/export.zig`).
 /// Call once from a game's `build`, with a module declaring `pub const Game`; the build
 /// graph owns all resulting modules and steps. Options' target/optimization default to
 /// the caller's standard build options. See `GameOptions` for plugin ordering.
@@ -222,16 +227,22 @@ fn addProject(b: *std.Build, engine: *std.Build, emscripten: Emscripten, target:
             .{ .name = "eggy", .module = eggy },
             .{ .name = "eggy_runtime", .module = runtime },
             .{ .name = "eggy_project", .module = runtime_project },
+            .{ .name = "weeoui_sdl3", .module = eggy.import_table.get("weeoui_sdl3").? },
         },
     });
     const all_step = b.step("all", "Build every executable for this target");
     game_export.addExport(b, engine, target, runtime_name, if (own) null else game_resources.mainScene(b, scene_option, true));
     build_runner.record(b);
     if (target.result.os.tag == .emscripten) {
-        const app = emscripten.addApp(b, .{ .name = runtime_name, .root_module = runtime_module });
+        const app = web_build.addApp(b, engine, emscripten, runtime_module, runtime_name, if (own) &.{} else game_resources.entries(b));
         b.step("runtime", "Build the game for the browser").dependOn(&app.install.step);
         b.step("run", "Open the game in a browser").dependOn(&app.run.step);
         all_step.dependOn(&app.install.step);
+        return null;
+    }
+    if (target.result.abi.isAndroid()) {
+        const android = engine.lazyImport(@This(), "android") orelse return null;
+        android_build.addApp(b, engine, android, runtime_module, runtime_name, if (own) &.{} else game_resources.entries(b));
         return null;
     }
     const runtime_app = addDesktopApp(b, target, runtime_module, runtime_name);
@@ -379,6 +390,7 @@ fn addEngine(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.buil
     const web = target.result.os.tag == .emscripten;
     // On Windows DirectX 12 comes first, running the SPIR-V shaders through SPIRV-Cross and DXC.
     const windows = target.result.os.tag == .windows;
+    const android = target.result.abi.isAndroid();
     const vitellus = b.dependency("vitellus", .{
         .target = target,
         .optimize = optimize,
@@ -387,7 +399,7 @@ fn addEngine(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.buil
         .enable_spirv_cross = windows,
         .vk = !web,
         .emsdk = emscripten.emsdk,
-        .enable_slang = true,
+        .enable_slang = !android,
     });
 
     // Built-in shaders: WGSL on the web, SPIR-V elsewhere.
@@ -439,9 +451,10 @@ fn addEngine(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.buil
     const emath = b.dependency("eggenvector", .{ .target = target, .optimize = optimize });
     // Eggy wires Weeoui's SDL adapter below, against the same SDL as the game.
     const weeoui = b.dependency("weeoui", .{ .target = target, .optimize = optimize, .sdl3 = false });
+    if (android) b.addNamedLazyPath("android_java", weeoui.path("examples/android/java"));
     const nvdialog = b.dependency("nvdialog", .{});
     const fatal_dialog = b.createModule(.{ .root_source_file = b.path("src/core/fatal_dialog.zig"), .target = target, .optimize = optimize, .link_libc = true });
-    if (!web) addNvdialog(b, fatal_dialog, nvdialog, target.result);
+    if (!web and !android) addNvdialog(b, fatal_dialog, nvdialog, target.result);
     const sdl3 = sdl_build.dependency(b, target, optimize, if (web) emscripten.include else null) orelse return null;
     const sdl_adapter = b.createModule(.{
         .root_source_file = vitellus.path("src/windowing/sdl3.zig"),
@@ -475,7 +488,20 @@ fn addEngine(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.buil
         .imports = &.{ .{ .name = "weeoui", .module = weeoui.module("weeoui") }, .{ .name = "vitellus", .module = vitellus.module("vitellus") }, .{ .name = "vitellus_spirv", .module = vitellus.module("vitellus_spirv") } },
     });
     engine.addImport("weeoui_vitellus", weeoui_vitellus);
-    engine.addImport("vitellus_slangc", vitellus.module("vitellus_slangc"));
+    const slangc = if (!android) vitellus.module("vitellus_slangc") else blk: {
+        const disabled = b.addOptions();
+        disabled.addOption(bool, "available", false);
+        const module = b.createModule(.{
+            .root_source_file = vitellus.path("src/slangc.zig"),
+            .target = target,
+            .optimize = optimize,
+            .link_libc = true,
+            .imports = &.{.{ .name = "vitellus", .module = vitellus.module("vitellus") }},
+        });
+        module.addOptions("slang_options", disabled);
+        break :blk module;
+    };
+    engine.addImport("vitellus_slangc", slangc);
     engine.addImport("scene_shaders", shader_module);
     engine.addImport("sdl3", sdl3.module("sdl3"));
     engine.addImport("vitellus_sdl3", sdl_adapter);
@@ -490,7 +516,7 @@ fn addEngine(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.buil
     switch (target.result.os.tag) {
         .linux => {
             engine.linkSystemLibrary("m", .{});
-            engine.linkSystemLibrary("unwind", .{});
+            if (!android) engine.linkSystemLibrary("unwind", .{});
         },
         .windows => {},
         .macos => {
@@ -527,7 +553,7 @@ fn addEngine(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.buil
     });
 
     // eggy_editor: a game with Weeoui tooling over it, desktop only.
-    if (!web) {
+    if (!web and !android) {
         const cli = b.lazyDependency("cli", .{ .target = target, .optimize = optimize }) orelse return null;
         const editor = b.addModule("eggy_editor", .{
             .root_source_file = b.path("src/editor/editor.zig"),
@@ -799,6 +825,7 @@ fn defaultMacSdk(b: *std.Build) ?[]const u8 {
 }
 
 fn addMacSdk(b: *std.Build, mod: *std.Build.Module) void {
+    if (mod.resolved_target.?.result.os.tag != .macos) return;
     const sysroot = b.sysroot orelse return;
     mod.addSystemIncludePath(.{ .cwd_relative = b.pathJoin(&.{ sysroot, "usr/include" }) });
     mod.addSystemFrameworkPath(.{ .cwd_relative = b.pathJoin(&.{ sysroot, "System/Library/Frameworks" }) });

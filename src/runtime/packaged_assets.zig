@@ -1,16 +1,17 @@
-//! The game's resources as packaging installed them in `data/` beside its `bin/` (see
+//! The game's resources in desktop `data/`, Android assets or a browser preload (see
 //! `addGame`): each named after its id, found by its path in the project through
 //! `data/manifest.zon`. Models and images come as the `.eggmodel`s and `.eggtexture`s made of
 //! them, read with no importer or decoder; every other file (scenes...) as it was.
-// ponytail: the web build has no `data/` to read; embed or fetch its resources once web games need them.
 const std = @import("std");
 const eggy = @import("eggy");
 const sdl3 = eggy.sdl_adapter.sdl;
 const manifest = eggy.assets.manifest;
+const android = @import("builtin").abi.isAndroid();
+const bundled = android or @import("builtin").os.tag == .emscripten;
 
 pub const Data = struct {
     gpa: std.mem.Allocator,
-    threaded: std.Io.Threaded = .init_single_threaded,
+    io: std.Io,
     dir: std.Io.Dir,
     arena: std.heap.ArenaAllocator,
     files: manifest.Manifest,
@@ -28,25 +29,30 @@ pub const Data = struct {
 
     /// The game's `data/` folder and its manifest. On the heap, as the loaders keep a pointer to
     /// it.
-    /// Host-only, desktop layout `<executable>/../data/`. Owns a directory, parsed manifest
-    /// arena and heap allocation; pair with `close`. Filesystem, manifest parse and allocation
+    /// Uses `<executable>/../data/` on desktop and SDL's bundled filesystem on Android/Web.
+    /// Borrows `io` through `close`; owns its parsed manifest arena and desktop directory.
+    /// Pair with `close`. Filesystem, manifest parse and allocation
     /// failures propagate without leaving a partially initialized owner.
     ///
     /// ```zig
-    /// const data = try Data.open(gpa);
+    /// const data = try Data.open(gpa, process.io);
     /// defer data.close();
     /// ```
-    pub fn open(gpa: std.mem.Allocator) !*Data {
+    pub fn open(gpa: std.mem.Allocator, io: std.Io) !*Data {
         const self = try gpa.create(Data);
         errdefer gpa.destroy(self);
-        self.* = .{ .gpa = gpa, .dir = undefined, .arena = .init(gpa), .files = .{} };
+        self.* = .{ .gpa = gpa, .io = io, .dir = undefined, .arena = .init(gpa), .files = .{} };
         errdefer self.arena.deinit();
-        const io = self.threaded.io();
-        const base = try sdl3.filesystem.getBasePath();
-        var path_buffer: [std.fs.max_path_bytes]u8 = undefined;
-        self.dir = try std.Io.Dir.cwd().openDir(io, try std.fmt.bufPrint(&path_buffer, "{s}../data", .{base}), .{});
-        errdefer self.dir.close(io);
-        const text = try self.dir.readFileAllocOptions(io, manifest.file_name, self.arena.allocator(), .limited(16 << 20), .of(u8), 0);
+        if (!bundled) {
+            const base = try sdl3.filesystem.getBasePath();
+            var path_buffer: [std.fs.max_path_bytes]u8 = undefined;
+            self.dir = try std.Io.Dir.cwd().openDir(io, try std.fmt.bufPrint(&path_buffer, "{s}../data", .{base}), .{});
+        }
+        errdefer if (!bundled) self.dir.close(io);
+        const text = if (bundled)
+            try self.readBundled(self.arena.allocator(), manifest.file_name)
+        else
+            try self.dir.readFileAllocOptions(io, manifest.file_name, self.arena.allocator(), .limited(16 << 20), .of(u8), 0);
         self.files = try manifest.parse(self.arena.allocator(), text);
         return self;
     }
@@ -55,11 +61,11 @@ pub const Data = struct {
     /// Call once, after all providers/caches using it have stopped; borrowed views become invalid.
     ///
     /// ```zig
-    /// const data = try Data.open(gpa);
+    /// const data = try Data.open(gpa, process.io);
     /// defer data.close(); // Must run after users of data.resources()/models()/textures().
     /// ```
     pub fn close(self: *Data) void {
-        self.dir.close(self.threaded.io());
+        if (!bundled) self.dir.close(self.io);
         self.arena.deinit();
         self.gpa.destroy(self);
     }
@@ -103,7 +109,7 @@ pub const Data = struct {
     fn openPackaged(self: *Data, path: []const u8) !std.Io.File {
         const entry = self.files.find(path) orelse return error.NotPackaged;
         var name: [32]u8 = undefined;
-        return self.dir.openFile(self.threaded.io(), manifest.packagedName(&name, entry), .{});
+        return self.dir.openFile(self.io, manifest.packagedName(&name, entry), .{});
     }
 
     fn loadModel(context: *anyopaque, gpa: std.mem.Allocator, path: []const u8) !eggy.assets.Model {
@@ -118,7 +124,12 @@ pub const Data = struct {
 
     fn readCopy(context: *anyopaque, gpa: std.mem.Allocator, path: []const u8) anyerror![:0]u8 {
         const self: *Data = @ptrCast(@alignCast(context));
-        const io = self.threaded.io();
+        if (bundled) {
+            const entry = self.files.find(path) orelse return error.NotPackaged;
+            var name: [32]u8 = undefined;
+            return self.readBundled(gpa, manifest.packagedName(&name, entry));
+        }
+        const io = self.io;
         var file = try self.openPackaged(path);
         defer file.close(io);
         var buffer: [64 * 1024]u8 = undefined;
@@ -128,12 +139,35 @@ pub const Data = struct {
 
     /// What packaging made of the project's file at `path`, read by `format`'s `read`.
     fn readPackaged(self: *Data, comptime T: type, comptime format: type, gpa: std.mem.Allocator, path: []const u8) !T {
-        const io = self.threaded.io();
+        if (bundled) {
+            const entry = self.files.find(path) orelse return error.NotPackaged;
+            var name: [32]u8 = undefined;
+            const bytes = try self.readBundled(gpa, manifest.packagedName(&name, entry));
+            defer gpa.free(bytes);
+            var reader: std.Io.Reader = .fixed(bytes);
+            return format.read(gpa, &reader);
+        }
+        const io = self.io;
         var file = try self.openPackaged(path);
         defer file.close(io);
         var buffer: [64 * 1024]u8 = undefined;
         var reader = file.reader(io, &buffer);
         return format.read(gpa, &reader.interface);
+    }
+
+    fn readBundled(_: *Data, gpa: std.mem.Allocator, name: []const u8) ![:0]u8 {
+        var path_buffer: [128]u8 = undefined;
+        const path = try std.fmt.bufPrintZ(&path_buffer, "data/{s}", .{name});
+        // SDL reads Android's AssetManager or Emscripten's preloaded filesystem.
+        const stream = sdl3.c.SDL_IOFromFile(path, "rb") orelse return error.AssetNotFound;
+        defer _ = sdl3.c.SDL_CloseIO(stream);
+        const size = sdl3.c.SDL_GetIOSize(stream);
+        // ponytail: bundled assets are read whole (up to 256 MiB); stream SDL IO for larger assets.
+        if (size < 0 or size > 256 << 20) return error.AssetTooLarge;
+        const bytes = try gpa.allocSentinel(u8, @intCast(size), 0);
+        errdefer gpa.free(bytes);
+        if (sdl3.c.SDL_ReadIO(stream, bytes.ptr, bytes.len) != bytes.len) return error.AssetReadFailed;
+        return bytes;
     }
 };
 
@@ -150,6 +184,7 @@ test "packaged input maps are copied resources readable through the runtime brid
     });
     var data = Data{
         .gpa = gpa,
+        .io = std.testing.io,
         .dir = tmp.dir,
         .arena = .init(gpa),
         .files = .{ .files = &.{entry} },

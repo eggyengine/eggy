@@ -2,7 +2,7 @@
 //! the game starts in on launch (the project's default scene picked; the choice becomes the new
 //! default, a step to undo), then where it runs; Export runs `zig build export` (see
 //! `src/build/export.zig`) in the background, showing the step under way, a bar for the whole
-//! build, and Zig's output as it comes. Once done, the folder and its zip are in the project's
+//! build, and Zig's output as it comes. Once done, the folder/ZIP or Android test APK is in the project's
 //! `zig-out/export/`, which it can show.
 const std = @import("std");
 const eggy = @import("eggy");
@@ -25,8 +25,12 @@ pub const platforms = [_]Platform{
     .{ .label = "This computer's system", .target = "native", .note = "Runs on any computer with the same system and kind of processor." },
     .{ .label = "Windows (x86-64)", .target = "x86_64-windows-gnu", .note = "Built from here: Zig carries what Windows needs." },
     .{ .label = "macOS (Apple silicon)", .target = "aarch64-macos", .note = "Needs a MacOSX.sdk in ~/SDKs (or -Dmacos-sdk)." },
-    .{ .label = "Web", .target = "wasm32-emscripten", .note = "Needs emsdk ($EMSDK, or ~/emsdk)." },
-};
+    .{ .label = "Web", .target = "wasm32-emscripten", .note = "Downloads and sets up emsdk automatically if needed. Reuses $EMSDK or ~/emsdk." },
+} ++ if (@import("builtin").os.tag == .macos or
+    (@import("builtin").os.tag == .linux and @import("builtin").cpu.arch == .x86_64))
+    [_]Platform{.{ .label = "Android APK (ARM64)", .target = "aarch64-linux-android.35", .note = "Android 15+, Vulkan 1.3. Downloads SDK, NDK and JDK if needed; accepts Android SDK licenses. Test-signed APK, not for store release." }}
+else
+    [_]Platform{};
 
 pub const ExportWindow = struct {
     gpa: std.mem.Allocator,
@@ -155,7 +159,7 @@ pub const ExportWindow = struct {
         switch (status.stage) {
             .failed => context.alert("The export failed", status.detail, true),
             .done => {
-                context.label("Exported to zig-out/export/, as a folder and a zip to hand out.", .{});
+                context.label("Exported to zig-out/export/ ({s}).", .{if (std.mem.indexOf(u8, platforms[self.platform].target, "android") != null) "installable test-signed APK" else "folder and ZIP"});
                 context.progress(1);
             },
             else => {

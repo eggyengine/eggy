@@ -21,6 +21,8 @@ pub const Graphics = struct {
     color_format: vit.Format,
     /// The main window's swapchain.
     surface: Surface,
+    /// Android destroys the window's native surface while the application is backgrounded.
+    surface_active: bool = true,
     preview: viewport3d.Preview,
     /// The model files meshes are drawn as, shared by every scene drawn; set its `loader`.
     models: ModelCache,
@@ -125,10 +127,29 @@ pub const Graphics = struct {
     /// try graphics.syncSize(main_window_adapter);
     /// ```
     pub fn syncSize(self: *Graphics, window: sdl_adapter.Sdl3Window) !void {
+        if (!self.surface_active) return;
         const before = self.surface.extent;
         try self.surface.syncSize(self.queue, window);
         if (std.meta.eql(before, self.surface.extent)) return;
         try self.preview.resize(self.device, self.surface.extent);
+    }
+
+    /// Release the native surface before Android backgrounds the window, retaining GPU assets.
+    pub fn suspendSurface(self: *Graphics) !void {
+        if (!self.surface_active) return;
+        try self.queue.waitIdle();
+        self.surface.deinit();
+        self.surface_active = false;
+    }
+
+    /// Recreate the main surface after Android restores the window; failures leave it suspended.
+    pub fn resumeSurface(self: *Graphics, window: sdl_adapter.Sdl3Window) !void {
+        if (self.surface_active) return;
+        var surface = try self.addSurface(window);
+        errdefer surface.deinit();
+        try self.preview.resize(self.device, surface.extent);
+        self.surface = surface;
+        self.surface_active = true;
     }
 
     /// Tear down host graphics and all cached assets once, waiting for queued work first.
@@ -144,7 +165,7 @@ pub const Graphics = struct {
         self.models.deinit(&self.textures);
         self.preview.deinit();
         self.textures.deinit();
-        self.surface.deinit();
+        if (self.surface_active) self.surface.deinit();
         self.queue.deinit();
         self.device.deinit();
         self.adapter.deinit();

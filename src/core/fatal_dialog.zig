@@ -1,12 +1,13 @@
+//! Fatal errors through desktop dialogs or the browser/Android platform logger.
 const std = @import("std");
-const web = @import("builtin").os.tag == .emscripten;
-const nvd = if (web) struct {} else @cImport({
+const no_dialog = @import("builtin").os.tag == .emscripten or @import("builtin").abi.isAndroid();
+const nvd = if (no_dialog) struct {} else @cImport({
     @cDefine("NVD_STATIC_LINKAGE", "1");
     @cInclude("nvdialog.h");
 });
 
 /// Log a fatal `stage` failure, appending optional borrowed backend diagnostics, then show it.
-/// Desktop may block for a native dialog; web logs only. Truncates long detail for bounded
+/// Desktop may block for a native dialog; Web/Android log only. Truncates long detail for bounded
 /// stack storage. Reporting/dialog failures are logged, not returned; does not exit.
 ///
 /// ```zig
@@ -26,13 +27,13 @@ pub fn report(stage: []const u8, err: anyerror, detail: ?[]const u8) void {
 
 /// Show a bounded fatal message in a native desktop dialog, borrowing both slices during
 /// the call. May block until dismissed; logs native-dialog failures and does not exit.
-/// On web this does nothing: use `report` when a browser-console message is needed.
+/// On Web/Android this does nothing: use `report` for a console/logcat message.
 ///
 /// ```zig
 /// fatal_dialog.show("panic", "A required renderer resource is missing.");
 /// ```
 pub fn show(stage: []const u8, message: []const u8) void {
-    if (web) return; // `report` already logged it to the browser console
+    if (no_dialog) return; // `report` already logged it to the platform console.
     var buffer: [2048]u8 = undefined;
     const description = formatMessage(&buffer, stage, message);
     const init_result = nvd.nvd_init();

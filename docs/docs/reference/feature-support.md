@@ -46,15 +46,17 @@ time scaling are implemented. Streaming and async resource loading are not:
 | Value timers and gameplay time scaling | Implemented | Same allocation-free API |
 | Named input maps, priorities, modifiers, hold/tap/chord triggers | Implemented; project editor included | Shared runtime API |
 | Controllers, rumble, and touch contacts | SDL3; hardware-dependent | SDL3/browser-dependent |
-| Synchronous project/packaged resource and scene providers | Implemented | Default provider unavailable |
+| Synchronous project/packaged resource and scene providers | Implemented | Packaged assets preloaded at startup |
 | Weeoui game UI and custom draw hooks | Implemented | Shared runtime API; no editor import |
 | Editor context, panels, commands, actions | Desktop only | Not run or linked |
 | Missing-backend contracts listed above | `NotImplemented` | `NotImplemented` |
 
 See [Audio and animation contracts](audio-and-animation.md) for request syntax and working alternatives
 to those unimplemented playback contracts.
-The current Zig 0.16 browser toolchain may reject its own Emscripten wait-status types;
-that is a build limitation, not an implementation of browser resource loading.
+Browser builds preload packaged resources through Emscripten, then read them synchronously
+through SDL. Keep the generated `.data` file beside the WebAssembly, JavaScript and HTML.
+Android APKs contain the same packaged data and read it through SDL's AssetManager adapter;
+APK export currently targets Android 15+ devices with Vulkan 1.3.
 
 ## Migrating existing code
 

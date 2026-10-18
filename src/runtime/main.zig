@@ -13,7 +13,7 @@ pub const _start = void;
 pub const WinMainCRTStartup = void;
 
 pub const panic = std.debug.FullPanic(eggy.entry.panic);
-pub const std_options = eggy.vit.web.std_options;
+pub const std_options = if (@import("builtin").abi.isAndroid()) @import("weeoui_sdl3").std_options else eggy.vit.web.std_options;
 
 const callbacks = eggy.entry.Callbacks(Runtime);
 pub const init = callbacks.init;

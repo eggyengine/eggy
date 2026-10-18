@@ -68,8 +68,45 @@ eggy_editor export --project ./space_game --scene resources/scene/main.scene.zon
 ```
 
 The CLI leaves the saved default scene unchanged. The GUI export dialog saves its scene
-selection. Target SDKs must already be installed; see
+selection. Web and Android exports set up missing SDKs automatically; see
 [Targets and SDKs](../reference/editor-cli.md#targets-and-sdks).
+
+### Export for Web or Android
+
+Choose **Web** or **Android APK (ARM64)** in File > Export, or use:
+
+```sh
+zig build export -Dtarget=wasm32-emscripten
+zig build export -Dtarget=aarch64-linux-android.35
+```
+
+Python 3.12 or newer is required for automatic setup. The first export downloads
+official tools into Eggy's SDK cache; later exports reuse them. Setup output and
+errors appear in the export window. Cancel stops the build and SDK installers on
+Linux and macOS; completed SDK downloads remain available for the next attempt.
+
+Web setup installs emsdk 4.0.14 and prepares its WebGPU port. An installed SDK set
+through `EMSDK`, or an installation in `~/emsdk`, takes precedence. Browser builds
+preload the game's scenes and converted assets into their packaged filesystem;
+distribute the generated `.data` file together with the HTML, JavaScript and WebAssembly.
+
+Android export currently requires a Linux x86-64 or macOS host, `sh`, and `patch`.
+It installs missing Android command-line tools, API 35, build-tools 36.0.0, NDK
+27.1.12297006 and, if no JDK is installed, Temurin JDK 17. **Starting an Android
+export accepts Google's Android SDK licenses.** An existing `ANDROID_HOME` or
+`ANDROID_SDK_ROOT` is reused; `JAVA_HOME`, `JDK_HOME`, or `javac` on PATH selects
+an installed JDK. The setup may need several gigabytes of disk space.
+
+The Android result is `zig-out/export/<name>-aarch64-linux-android-test.apk`.
+Install it on an Android 15+ device with Vulkan 1.3, for example with
+`adb install -r <file>.apk`. Its scene, converted models and textures are inside
+the APK. The runtime pauses rendering when backgrounded and recreates its surface
+when foregrounded.
+
+**APKs are test-signed**, not signed for a store release. The generated test key
+lives in the build cache, not your source tree; clearing that cache can change
+the key and require uninstalling the old app before reinstalling it. Store signing,
+Android App Bundles and multi-ABI APKs are not part of this export.
 
 ### Distribute the whole export
 
@@ -79,7 +116,7 @@ loses assets and runtime dependencies.
 
 Keep the installed `bin/` and `lib/` layout intact. Desktop distributions include
 shared SDL3; Windows DLLs are installed beside the executable. Browser builds have no
-editor and the default browser resource provider is unavailable, so check
+editor and require browser WebGPU support, so check
 [feature support](../reference/feature-support.md#capability-support) before choosing web.
 
 ## Verify

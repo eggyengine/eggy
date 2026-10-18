@@ -35,6 +35,10 @@ const web = builtin.os.tag == .emscripten;
 /// ```
 pub fn Callbacks(comptime AppState: type) type {
     return struct {
+        const android = builtin.abi.isAndroid();
+        var callback_io: std.Io = undefined;
+        var callback_mutex: std.Io.Mutex = .init;
+
         /// Adapt SDL's startup data into a process context and owned `AppState`.
         /// Returns the state plus `.run`; process/state initialization errors are reported
         /// and propagated. SDL's callback adapter owns the returned state's storage.
@@ -47,6 +51,7 @@ pub fn Callbacks(comptime AppState: type) type {
                 reportError("init", err);
                 return err;
             };
+            if (android) callback_io = process.io;
             return .{ AppState.init(process, init_data.args) catch |err| {
                 reportError("init", err);
                 return err;
@@ -60,6 +65,8 @@ pub fn Callbacks(comptime AppState: type) type {
         /// pub const iterate = eggy.entry.Callbacks(State).iterate;
         /// ```
         pub fn iterate(app_state: *AppState) !sdl3.AppResult {
+            if (android) callback_mutex.lockUncancelable(callback_io);
+            defer if (android) callback_mutex.unlock(callback_io);
             return app_state.iterate() catch |err| {
                 reportError("frame", err);
                 return err;
@@ -73,6 +80,9 @@ pub fn Callbacks(comptime AppState: type) type {
         /// pub const event = eggy.entry.Callbacks(State).event;
         /// ```
         pub fn event(app_state: *AppState, curr_event: sdl3.events.Event) !sdl3.AppResult {
+            // Android delivers lifecycle events from its UI thread, even during a render frame.
+            if (android) callback_mutex.lockUncancelable(callback_io);
+            defer if (android) callback_mutex.unlock(callback_io);
             return app_state.event(curr_event) catch |err| {
                 reportError("event", err);
                 return err;
@@ -87,6 +97,9 @@ pub fn Callbacks(comptime AppState: type) type {
         /// ```
         pub fn quit(app_state: ?*AppState, result: sdl3.AppResult) void {
             _ = result;
+            if (app_state == null) return;
+            if (android) callback_mutex.lockUncancelable(callback_io);
+            defer if (android) callback_mutex.unlock(callback_io);
             if (app_state) |state| state.deinit();
         }
     };
