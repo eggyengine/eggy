@@ -66,6 +66,11 @@ Without it, a model uses its imported textures; an untextured shape uses plain c
 The renderer owns GPU caches and prepares texture uploads outside render passes.
 Use [resource loaders](assets-and-scenes.md) when you need owned CPU data instead.
 
+For custom rendering, `eggy.mesh.gatherAlloc(gpa, &app.world)` returns all drawables
+without a fixed buffer limit. Free the slice with `gpa.free`; model and texture paths
+still borrow the world's Mesh components. The non-allocating `gather(world, buffer)`
+continues to return only as many drawables as fit.
+
 ## Cameras and custom drawing
 
 The game looks through the first matching Camera entity, placed by its world transform.

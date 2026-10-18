@@ -44,6 +44,7 @@ pub const Request = extern struct {
     control: types.ControlId = .{ .type_marker = 0, .tag = 0 },
     device: u32 = 0,
     data: ?*const anyopaque = null,
+    /// Null probes the required element count for controllers, touches, or get_bindings.
     output: ?*anyopaque = null,
     count: usize = 0,
     low: u16 = 0,

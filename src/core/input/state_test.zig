@@ -23,6 +23,66 @@ fn key(input: *input_api.Input, code: input_api.Key, down: bool) !void {
     try input.handle(if (down) .{ .key_down = event } else .{ .key_up = event });
 }
 
+test "allocated input lists own complete snapshots and clean up on allocation failure" {
+    const Check = struct {
+        fn run(gpa: std.mem.Allocator) !void {
+            var state = State.init(std.testing.allocator);
+            defer state.deinit();
+            var input = input_api.Input{ .backend = state.interface() };
+            const no_devices = try input.controllersAlloc(gpa);
+            defer gpa.free(no_devices);
+            const no_touches = try input.touchesAlloc(gpa);
+            defer gpa.free(no_touches);
+            try std.testing.expectEqual(@as(usize, 0), no_devices.len);
+            try std.testing.expectEqual(@as(usize, 0), no_touches.len);
+
+            const Controls = enum { jump, unbound };
+            try input.registerControls(Controls, "game", &.{.{ .control = .jump, .bindings = &.{.{ .key = .q }} }});
+            try input.registerMap(Player, "game/player");
+            try state.addController(7, .{});
+            try state.addController(9, .{});
+            try input.handle(.{ .finger_down = .{ .common = undefined, .id = .{ .value = 1 }, .finger_id = .{ .value = 2 }, .x = 0.5, .y = 0.25, .dx = 0, .dy = 0, .pressure = 1 } });
+
+            const devices = try input.controllersAlloc(gpa);
+            defer gpa.free(devices);
+            const touches = try input.touchesAlloc(gpa);
+            defer gpa.free(touches);
+            const bindings = try input.getBindingsAlloc(gpa, Controls.jump);
+            defer gpa.free(bindings);
+            const mapped = try input.map(Player).getBindingsAlloc(gpa, .jump);
+            defer gpa.free(mapped);
+            const unbound = try input.getBindingsAlloc(gpa, Controls.unbound);
+            defer gpa.free(unbound);
+            try std.testing.expectEqual(@as(usize, 2), devices.len);
+            try std.testing.expectEqual(@as(usize, 1), touches.len);
+            try std.testing.expectEqual(@as(usize, 1), bindings.len);
+            try std.testing.expectEqual(@as(usize, 2), mapped.len);
+            try std.testing.expectEqual(@as(usize, 0), unbound.len);
+
+            state.removeController(7);
+            input.cancel();
+            try input.rebind(Controls.jump, .{ .key = .j });
+            try input.map(Player).rebind(.jump, .{ .key = .j });
+            try std.testing.expectEqual(@as(u32, 7), @intFromEnum(devices[0]));
+            try std.testing.expectEqual(@as(@TypeOf(touches[0].phase), .began), touches[0].phase);
+            try std.testing.expectEqual(input_api.Key.q, bindings[0].key);
+            try std.testing.expectEqual(input_api.Key.space, mapped[0].key);
+        }
+    };
+    try std.testing.checkAllAllocationFailures(std.testing.allocator, Check.run, .{});
+}
+
+test "allocated bindings propagate unknown controls and missing input backends" {
+    const Controls = enum { unknown };
+    var state = State.init(std.testing.allocator);
+    defer state.deinit();
+    const input = input_api.Input{ .backend = state.interface() };
+    try std.testing.expectError(error.UnknownControl, input.getBindingsAlloc(std.testing.allocator, Controls.unknown));
+    try std.testing.expectError(error.UnknownControl, input.map(Player).getBindingsAlloc(std.testing.allocator, .jump));
+    try std.testing.expectError(error.NoInputBackend, (input_api.Input{}).controllersAlloc(std.testing.allocator));
+    try std.testing.expectError(error.NoInputBackend, (input_api.Input{}).touchesAlloc(std.testing.allocator));
+}
+
 test "file maps match enum names, coexist with code maps and retain project overrides" {
     const FilePlayer = input_api.FileMap(enum(u8) { jump = 7, move = 12 }, .{ .key = "file-player", .file = "resources/player.inmap.zon" });
     const FileMenu = input_api.FileMap(enum { accept }, .{ .key = "file-menu", .file = "resources/menu.inmap.zon" });

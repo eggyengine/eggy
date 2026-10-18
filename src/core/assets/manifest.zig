@@ -60,6 +60,11 @@ pub fn packagedName(buffer: []u8, entry: Entry) []const u8 {
     return std.fmt.bufPrint(buffer, "{x:0>16}{s}", .{ entry.id, Packaged.of(entry.path).extension() }) catch unreachable;
 }
 
+/// Allocate `entry`'s name in `data/`; free the result with `gpa.free`.
+pub fn packagedNameAlloc(gpa: std.mem.Allocator, entry: Entry) ![]u8 {
+    return std.fmt.allocPrint(gpa, "{x:0>16}{s}", .{ entry.id, Packaged.of(entry.path).extension() });
+}
+
 /// An id for a file without a descriptor, the same whenever its path is.
 pub fn pathId(path: []const u8) u64 {
     return std.hash.Wyhash.hash(0x6567_6779, path);
@@ -88,4 +93,19 @@ test "a manifest reads back, and names what it packaged after ids, not files" {
     try std.testing.expectEqualStrings("000000000000002a.eggmodel", packagedName(&buffer, rat));
     try std.testing.expectEqualStrings("0000000000000007", packagedName(&buffer, read.find("resources/scene/sewer.scene.zon").?));
     try std.testing.expect(read.find("resources/rat.glb") == null);
+}
+
+test "allocated packaged names match buffer names for each resource kind" {
+    const Check = struct {
+        fn run(gpa: std.mem.Allocator) !void {
+            for ([_][]const u8{ "rat.glb", "rat.png", "sewer.scene.zon" }) |path| {
+                const entry = Entry{ .path = path, .id = 0x2a };
+                const name = try packagedNameAlloc(gpa, entry);
+                defer gpa.free(name);
+                var buffer: [32]u8 = undefined;
+                try std.testing.expectEqualStrings(packagedName(&buffer, entry), name);
+            }
+        }
+    };
+    try std.testing.checkAllAllocationFailures(std.testing.allocator, Check.run, .{});
 }

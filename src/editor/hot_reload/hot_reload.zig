@@ -414,6 +414,20 @@ const scene_vtable = eggy.scene.Access.VTable{
             return if (len == 0 or len > buffer.len) null else buffer[0..len];
         }
     }.f,
+    .read_field_alloc = struct {
+        fn f(context: *const anyopaque, gpa: std.mem.Allocator, world: *eggy.ecs.World, entity: eggy.ecs.EntityId, component: usize, field: usize) eggy.scene.Access.FieldReadError![]u8 {
+            const game = gameOf(context);
+            if (game.library == null) return error.NoComponent;
+            if (component >= game.component_types.len) return error.NoSuchComponent;
+            var result: api.FieldBytes = undefined;
+            switch (game.game.read_field_alloc(world, &gpa, entityOf(entity), component, field, &result)) {
+                .ok => return result.ptr[0..result.len],
+                .no_component => return error.NoComponent,
+                .no_such_component => return error.NoSuchComponent,
+                .out_of_memory => return error.OutOfMemory,
+            }
+        }
+    }.f,
     .write_field = struct {
         fn f(context: *const anyopaque, world: *eggy.ecs.World, entity: eggy.ecs.EntityId, component: usize, field: usize, text: [:0]const u8) bool {
             return gameOf(context).writeField(appOf(world), entity, component, field, text);

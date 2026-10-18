@@ -162,6 +162,7 @@ pub const State = struct {
             .controller_count => response.count = self.devices.count(),
             .controllers => {
                 response.count = self.devices.count();
+                if (input.output == null) return;
                 if (input.count < response.count) return error.BufferTooSmall;
                 if (response.count != 0) {
                     const ids: [*]types.Controller = @ptrCast(@alignCast(input.output.?));
@@ -178,6 +179,7 @@ pub const State = struct {
             .touch_count => response.count = self.contacts.items.len,
             .touches => {
                 response.count = self.contacts.items.len;
+                if (input.output == null) return;
                 if (input.count < response.count) return error.BufferTooSmall;
                 if (response.count != 0) {
                     const touches: [*]types.Touch = @ptrCast(@alignCast(input.output.?));
@@ -205,6 +207,7 @@ pub const State = struct {
                 const control = self.controls.get(input.control) orelse return error.UnknownControl;
                 const mappings = self.overrides.get(control.key) orelse control.defaults;
                 response.count = mappings.len;
+                if (input.output == null) return;
                 if (input.count < mappings.len) return error.BufferTooSmall;
                 if (mappings.len != 0) {
                     const buffer: [*]types.Binding = @ptrCast(@alignCast(input.output.?));

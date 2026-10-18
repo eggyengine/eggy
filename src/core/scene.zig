@@ -24,6 +24,8 @@ pub const Access = struct {
     context: *const anyopaque,
     vtable: *const VTable,
 
+    pub const FieldReadError = error{ NoComponent, NoSuchComponent, OutOfMemory };
+
     pub const VTable = struct {
         types: *const fn (context: *const anyopaque) []const components.Info,
         has: *const fn (context: *const anyopaque, world: *ecs.World, entity: ecs.EntityId, component: usize) bool,
@@ -31,6 +33,8 @@ pub const Access = struct {
         add: *const fn (context: *const anyopaque, world: *ecs.World, entity: ecs.EntityId, component: usize) bool,
         /// A field as ZON in `buffer`; null if it can't be read whole.
         read_field: *const fn (context: *const anyopaque, world: *ecs.World, entity: ecs.EntityId, component: usize, field: usize, buffer: []u8) ?[]const u8,
+        /// A complete field as caller-owned ZON; errors distinguish missing fields and allocation failure.
+        read_field_alloc: *const fn (context: *const anyopaque, gpa: std.mem.Allocator, world: *ecs.World, entity: ecs.EntityId, component: usize, field: usize) FieldReadError![]u8,
         /// Set a field from ZON; false if it doesn't parse.
         write_field: *const fn (context: *const anyopaque, world: *ecs.World, entity: ecs.EntityId, component: usize, field: usize, text: [:0]const u8) bool,
         /// The entity's `Name` in `buffer`; null without one.
@@ -51,11 +55,20 @@ pub const Access = struct {
     pub fn readField(self: Access, world: *ecs.World, entity: ecs.EntityId, component: usize, field: usize, buffer: []u8) ?[]const u8 {
         return self.vtable.read_field(self.context, world, entity, component, field, buffer);
     }
+    /// Read a complete field as owned ZON; free with `gpa.free`. Missing fields/components fail.
+    pub fn readFieldAlloc(self: Access, gpa: std.mem.Allocator, world: *ecs.World, entity: ecs.EntityId, component: usize, field: usize) FieldReadError![]u8 {
+        return self.vtable.read_field_alloc(self.context, gpa, world, entity, component, field);
+    }
     pub fn writeField(self: Access, world: *ecs.World, entity: ecs.EntityId, component: usize, field: usize, text: [:0]const u8) bool {
         return self.vtable.write_field(self.context, world, entity, component, field, text);
     }
     pub fn name(self: Access, world: *ecs.World, entity: ecs.EntityId, buffer: []u8) ?[]const u8 {
         return self.vtable.name(self.context, world, entity, buffer);
+    }
+    /// Copy the entity's complete Name, or null without one; free a result with `gpa.free`.
+    pub fn nameAlloc(self: Access, gpa: std.mem.Allocator, world: *ecs.World, entity: ecs.EntityId) !?[]u8 {
+        var buffer: [Name.max_len]u8 = undefined;
+        return try gpa.dupe(u8, self.name(world, entity, &buffer) orelse return null);
     }
     pub fn setName(self: Access, world: *ecs.World, entity: ecs.EntityId, text: []const u8) void {
         self.vtable.set_name(self.context, world, entity, text);
@@ -77,6 +90,36 @@ test "captured scenes own component metadata independently of their registry" {
     try std.testing.expectEqualStrings("count", saved.fields[0].name);
 }
 
+test "allocated scene reads own complete names and large fields" {
+    const Check = struct {
+        fn run(gpa: std.mem.Allocator) !void {
+            const Value = struct { text: [4096]u8 = @splat('x') };
+            const Registry = components.Registry(&.{Value}, &.{"game"});
+            const access = registryAccess(Registry);
+            var world = ecs.World.init(std.testing.allocator);
+            defer world.deinit();
+            const entity = try world.spawn(.{ Value{}, Name.init("A" ** Name.max_len) });
+            const unnamed = try world.spawn(.{});
+            try std.testing.expect(try access.nameAlloc(gpa, &world, unnamed) == null);
+            try std.testing.expectError(error.NoComponent, access.readFieldAlloc(gpa, &world, unnamed, 0, 0));
+            try std.testing.expectError(error.NoSuchComponent, access.readFieldAlloc(gpa, &world, entity, 1, 0));
+            try std.testing.expectError(error.NoSuchComponent, access.readFieldAlloc(gpa, &world, entity, 0, 1));
+            const name = (try access.nameAlloc(gpa, &world, entity)).?;
+            defer gpa.free(name);
+            const field = try access.readFieldAlloc(gpa, &world, entity, 0, 0);
+            defer gpa.free(field);
+            var buffer: [64 * 1024]u8 = undefined;
+            const expected = access.readField(&world, entity, 0, 0, &buffer).?;
+            try std.testing.expectEqualStrings(expected, field);
+            access.setName(&world, entity, "Changed");
+            world.get(entity, Value).?.text[0] = 'y';
+            try std.testing.expectEqualStrings("A" ** Name.max_len, name);
+            try std.testing.expectEqualStrings(expected, field);
+        }
+    };
+    try std.testing.checkAllAllocationFailures(std.testing.allocator, Check.run, .{});
+}
+
 /// `Access` straight through `Registry` (a `components.Registry`), for code that has the types.
 pub fn registryAccess(comptime Registry: type) Access {
     const Through = struct {
@@ -95,6 +138,16 @@ pub fn registryAccess(comptime Registry: type) Access {
             Registry.writeField(world, entity, component, field, &writer) catch return null;
             return writer.buffered();
         }
+        fn readFieldAlloc(_: *const anyopaque, gpa: std.mem.Allocator, world: *ecs.World, entity: ecs.EntityId, component: usize, field: usize) Access.FieldReadError![]u8 {
+            var writer: std.Io.Writer.Allocating = .init(gpa);
+            defer writer.deinit();
+            Registry.writeField(world, entity, component, field, &writer.writer) catch |err| return switch (err) {
+                error.WriteFailed => error.OutOfMemory,
+                error.NoComponent => error.NoComponent,
+                error.NoSuchComponent => error.NoSuchComponent,
+            };
+            return writer.toOwnedSlice();
+        }
         fn writeField(_: *const anyopaque, world: *ecs.World, entity: ecs.EntityId, component: usize, field: usize, text: [:0]const u8) bool {
             Registry.setField(world, entity, component, field, text) catch return false;
             return true;
@@ -112,7 +165,7 @@ pub fn registryAccess(comptime Registry: type) Access {
                 world.markChanged(entity, Name);
             } else world.addComponent(entity, Name.init(text)) catch {};
         }
-        const vtable = Access.VTable{ .types = types, .has = has, .add = add, .read_field = readField, .write_field = writeField, .name = name, .set_name = setName };
+        const vtable = Access.VTable{ .types = types, .has = has, .add = add, .read_field = readField, .read_field_alloc = readFieldAlloc, .write_field = writeField, .name = name, .set_name = setName };
     };
     return .{ .context = &Through.vtable, .vtable = &Through.vtable };
 }

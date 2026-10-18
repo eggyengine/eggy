@@ -111,7 +111,21 @@ for (try app.input.controllers(&controllers)) |controller| {
 ```
 
 Enumeration copies into caller storage; `BufferTooSmall` never silently truncates. Query
-`controllerCount` or `touchCount` when sizing an allocated buffer. A disconnected controller
+`controllerCount` or `touchCount` when sizing your own buffer, or let `controllersAlloc(gpa)`
+and `touchesAlloc(gpa)` allocate complete lists:
+
+```zig
+const controllers = try app.input.controllersAlloc(gpa);
+defer gpa.free(controllers);
+for (controllers) |controller| {
+    const state = try app.input.controllerState(controller);
+    if (state.buttons_pressed.contains(.south)) jump();
+}
+```
+
+The allocator is required; free each returned slice with the same allocator. Empty lists
+are successful results, and allocation failures return `OutOfMemory`. The existing buffer
+APIs still allocate nothing. A disconnected controller
 returns `ControllerDisconnected`. Controller IDs are session-local, not save-file identities.
 Sticks use -1..1 with right/down positive; triggers use 0..1. Raw snapshots have no dead zone.
 `rumble(controller, low, high, duration_s)` takes finite strengths in 0..1 and seconds;

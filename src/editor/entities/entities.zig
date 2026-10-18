@@ -341,21 +341,17 @@ pub fn isOff(off: []const []const u8, owner: []const u8) bool {
 /// A reference field's value (`zon`) as people read it: the entity's name, or the file's;
 /// empty when unset; null for other kinds of field.
 fn referenceLabel(arena: std.mem.Allocator, app: *eggy.App, game: *const HotGame, kind: eggy.components.Kind, zon: []const u8) !?[]const u8 {
-    var scratch: [1024]u8 = undefined;
-    var fba = std.heap.FixedBufferAllocator.init(&scratch);
+    // Parsing builds a syntax tree, so it takes the arena rather than a small fixed buffer.
     const source = try arena.dupeZ(u8, zon);
     switch (kind) {
         .entity => {
-            const target = (std.zon.parse.fromSlice(?ecs.EntityId, fba.allocator(), source, null, .{}) catch return "") orelse return "";
+            const target = (std.zon.parse.fromSlice(?ecs.EntityId, arena, source, null, .{}) catch return "") orelse return "";
             if (!app.world.isAlive(target)) return try std.fmt.allocPrint(arena, "Entity {d} (gone)", .{target.id});
             var name_buffer: [eggy.Name.max_len]u8 = undefined;
             if (game.readName(app, target, &name_buffer)) |name| if (name.len > 0) return try arena.dupe(u8, name);
             return try std.fmt.allocPrint(arena, "Entity {d}", .{target.id});
         },
-        .asset => {
-            const path = std.zon.parse.fromSliceAlloc([]const u8, fba.allocator(), source, null, .{}) catch return "";
-            return try arena.dupe(u8, path);
-        },
+        .asset => return std.zon.parse.fromSliceAlloc([]const u8, arena, source, null, .{}) catch "",
         else => return null,
     }
 }

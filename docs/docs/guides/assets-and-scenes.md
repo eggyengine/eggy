@@ -84,6 +84,12 @@ Components/fields no longer known by the project are logged and skipped, as when
 editor opens an older scene. Public low-level `Scene.capture`, `parse`, `write`, and
 `instantiate` remain available for tools that need their diagnostics and entity lists.
 
+Low-level `scene.Access` also provides `readFieldAlloc(gpa, world, entity, component, field)`
+for complete field ZON and `nameAlloc(gpa, world, entity)` for an entity name. Free each
+returned string with `gpa.free`; `nameAlloc` returns null without a name, while field reads
+report missing components/fields as errors. The buffer-based `readField` and `name` remain
+available when you manage storage yourself.
+
 Service views and component pointers do not survive a world reset or reload. Use fresh
 App access and typed `EntityRef` resolution instead of retaining borrowed storage.
 
@@ -113,6 +119,10 @@ tool.root_module.addImport("eggy_assets", engine.module("eggy_assets"));
 
 Its descriptors, manifest, model, and texture formats use explicit readers, writers,
 allocators, and `std.Io` where needed. It is also re-exported as `eggy.assets` for games.
+
+`descriptor.pathOfAlloc(gpa, path)` and `manifest.packagedNameAlloc(gpa, entry)` allocate
+their resulting paths/names; free them with `gpa.free`. Their original buffer-based
+counterparts remain allocation-free.
 
 Browser resource providers are not implemented. Async reads, streaming, and scene
 replacement currently return `NotImplemented`; a typed reference is not a promise that

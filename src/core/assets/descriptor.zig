@@ -34,6 +34,11 @@ pub fn pathOf(buffer: []u8, path: []const u8) ![]const u8 {
     return std.fmt.bufPrint(buffer, "{s}" ++ extension, .{path});
 }
 
+/// Allocate the descriptor's path; free the result with `gpa.free`.
+pub fn pathOfAlloc(gpa: std.mem.Allocator, path: []const u8) ![]u8 {
+    return std.fmt.allocPrint(gpa, "{s}" ++ extension, .{path});
+}
+
 /// A new descriptor for the file at `path`, with a random id from `io`.
 pub fn new(io: std.Io, path: []const u8) Descriptor {
     var id: u64 = 0;
@@ -77,4 +82,16 @@ test "a descriptor reads back as written, and unknown fields are skipped" {
     try std.testing.expect(isDescriptor("ships/fighter.glb.eggy"));
     try std.testing.expect(!isDescriptor("ships/fighter.glb"));
     try std.testing.expect(!isDescriptor(".eggy")); // the project's own folder
+}
+
+test "allocated descriptor paths match buffer paths" {
+    const Check = struct {
+        fn run(gpa: std.mem.Allocator) !void {
+            const path = try pathOfAlloc(gpa, "ships/fighter.glb");
+            defer gpa.free(path);
+            var buffer: [64]u8 = undefined;
+            try std.testing.expectEqualStrings(try pathOf(&buffer, "ships/fighter.glb"), path);
+        }
+    };
+    try std.testing.checkAllAllocationFailures(std.testing.allocator, Check.run, .{});
 }

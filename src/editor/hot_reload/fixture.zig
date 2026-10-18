@@ -35,12 +35,16 @@ pub const Game = struct {
         if (command == 2) {
             const player = editor.app.input.map(Player);
             if (!try player.pressed(.jump)) return error.ExpectedMappedPress;
-            var bindings: [1]eggy.input.Binding = undefined;
-            if ((try player.getBindings(.jump, &bindings))[0].key != .j) return error.ExpectedProjectBinding;
+            const gpa = editor.app.world.allocator;
+            const bindings = try player.getBindingsAlloc(gpa, .jump);
+            defer gpa.free(bindings);
+            if (bindings[0].key != .j) return error.ExpectedProjectBinding;
             if (player.axis(.jump)) |_| return error.ExpectedWrongKind else |err| if (err != error.WrongControlKind) return err;
             const asset_player = editor.app.input.map(AssetPlayer);
             if (!try asset_player.pressed(.jump)) return error.ExpectedAssetMappedPress;
-            if ((try asset_player.getBindings(.jump, &bindings))[0].key != .j) return error.ExpectedProjectAssetBinding;
+            const asset_bindings = try asset_player.getBindingsAlloc(gpa, .jump);
+            defer gpa.free(asset_bindings);
+            if (asset_bindings[0].key != .j) return error.ExpectedProjectAssetBinding;
             try player.rebind(.jump, .{ .key = .j });
             try player.setTrigger(.jump, .immediate);
         }

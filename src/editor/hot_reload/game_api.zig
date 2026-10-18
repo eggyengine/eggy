@@ -7,7 +7,7 @@ const std = @import("std");
 const eggy = @import("eggy");
 
 /// Bumped whenever these types change, so an editor refuses a library built for another.
-pub const version: u32 = 24;
+pub const version: u32 = 25;
 
 /// The library's one exported function: `fn () callconv(.c) *const Game`.
 pub const entry_symbol = "eggy_game";
@@ -83,6 +83,10 @@ pub const ComponentType = extern struct {
 /// An entity of the app's world (`eggy.ecs.EntityId`).
 pub const Entity = extern struct { id: u32, generation: u32 };
 
+/// Caller-owned field text and stable failures; Zig error numbers never cross the boundary.
+pub const FieldBytes = extern struct { ptr: [*]u8, len: usize };
+pub const FieldStatus = enum(u32) { ok, no_component, no_such_component, out_of_memory };
+
 /// What the library gives the editor: the game's and its plugins' hooks (see `eggy.plugins`).
 /// `state` is what `start` returned.
 pub const Game = extern struct {
@@ -135,6 +139,8 @@ pub const Game = extern struct {
     /// Write a field's value as ZON into `buffer`; returns its length, more than `capacity`
     /// when it didn't fit (and was cut off), or 0 if it couldn't be read.
     read_field: *const fn (world: *anyopaque, entity: Entity, component: usize, field: usize, buffer: [*]u8, capacity: usize) callconv(.c) usize,
+    /// Allocate complete field ZON with the caller's `*const std.mem.Allocator`.
+    read_field_alloc: *const fn (world: *anyopaque, allocator: *const anyopaque, entity: Entity, component: usize, field: usize, out: *FieldBytes) callconv(.c) FieldStatus,
     /// Set a field from ZON `text`; false if it doesn't parse as the field's type.
     write_field: *const fn (world: *anyopaque, entity: Entity, component: usize, field: usize, text: [*:0]const u8) callconv(.c) bool,
     /// The entity's `eggy.Name` into `buffer`, returning its length; null without one.

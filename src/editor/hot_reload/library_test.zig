@@ -133,6 +133,10 @@ const ActionHost = struct {
         } else return error.NoEntity;
         var buffer: [128]u8 = undefined;
         try std.testing.expectEqualStrings(expected, self.game.readField(self.app, entity, component, 0, &buffer).?);
+        const text = try self.game.sceneAccess().readFieldAlloc(self.history.gpa, &self.app.world, entity, component, 0);
+        defer self.history.gpa.free(text);
+        try std.testing.expectEqualStrings(expected, text);
+        try std.testing.expectError(error.NoSuchComponent, self.game.sceneAccess().readFieldAlloc(self.history.gpa, &self.app.world, entity, component, 1));
     }
 };
 

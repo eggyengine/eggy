@@ -97,6 +97,10 @@ pub const Input = struct {
         const response = try self.send(.{ .operation = .controllers, .output = buffer.ptr, .count = buffer.len });
         return buffer[0..response.count];
     }
+    /// Copy connected IDs into caller-owned storage; free the result with `gpa.free`.
+    pub fn controllersAlloc(self: *const Input, gpa: std.mem.Allocator) ![]Controller {
+        return self.sendAlloc(Controller, gpa, .{ .operation = .controllers });
+    }
     pub fn controllerState(self: *const Input, device: Controller) !ControllerState {
         var state: ControllerState = undefined;
         _ = try self.send(.{ .operation = .controller_state, .device = @intFromEnum(device), .output = &state });
@@ -115,6 +119,10 @@ pub const Input = struct {
     pub fn touches(self: *const Input, buffer: []Touch) ![]const Touch {
         const response = try self.send(.{ .operation = .touches, .output = buffer.ptr, .count = buffer.len });
         return buffer[0..response.count];
+    }
+    /// Copy contacts, including ended/cancelled ones; free the result with `gpa.free`.
+    pub fn touchesAlloc(self: *const Input, gpa: std.mem.Allocator) ![]Touch {
+        return self.sendAlloc(Touch, gpa, .{ .operation = .touches });
     }
 
     /// Register a plugin's typed controls under its published key before init. Names/defaults
@@ -180,6 +188,10 @@ pub const Input = struct {
         const response = try self.send(.{ .operation = .get_bindings, .control = controlId(control), .output = buffer.ptr, .count = buffer.len });
         return buffer[0..response.count];
     }
+    /// Copy a control's current bindings; free the result with `gpa.free`.
+    pub fn getBindingsAlloc(self: *const Input, gpa: std.mem.Allocator, control: anytype) ![]Binding {
+        return self.sendAlloc(Binding, gpa, .{ .operation = .get_bindings, .control = controlId(control) });
+    }
     pub fn controlState(self: *const Input, control: anytype) !ControlState {
         var state: ControlState = undefined;
         _ = try self.send(.{ .operation = .control_state, .control = controlId(control), .output = &state });
@@ -200,6 +212,16 @@ pub const Input = struct {
         var response = protocol.Response{};
         try protocol.check(backend.request(backend.context, &request, &response));
         return response;
+    }
+    fn sendAlloc(self: *const Input, comptime T: type, gpa: std.mem.Allocator, request: protocol.Request) ![]T {
+        const size = try self.send(request);
+        const buffer = try gpa.alloc(T, size.count);
+        errdefer gpa.free(buffer);
+        var read = request;
+        read.output = buffer.ptr;
+        read.count = buffer.len;
+        const response = try self.send(read);
+        return try gpa.realloc(buffer, response.count);
     }
     fn notify(self: *const Input, operation: protocol.Operation) void {
         if (self.backend == null) return;
@@ -370,6 +392,10 @@ pub fn MapView(comptime Mapping: type) type {
             const response = try self.input.send(.{ .operation = .get_bindings, .control = id(control), .output = buffer.ptr, .count = buffer.len });
             return buffer[0..response.count];
         }
+        /// Copy a mapped control's current bindings; free the result with `gpa.free`.
+        pub fn getBindingsAlloc(self: Self, gpa: std.mem.Allocator, control: Mapping.Control) ![]Binding {
+            return self.input.sendAlloc(Binding, gpa, .{ .operation = .get_bindings, .control = id(control) });
+        }
     };
 }
 
@@ -427,4 +453,17 @@ test "a swallowed release clears a gameplay hold without inventing an edge" {
     try std.testing.expect(!input.held(.w) and !input.released(.w));
     try input.handle(event);
     try std.testing.expect(!input.released(.w));
+}
+
+test "allocated input lists free their buffer if the copy fails" {
+    const Host = struct {
+        fn request(_: *anyopaque, read: *const protocol.Request, response: *protocol.Response) callconv(.c) protocol.Status {
+            response.count = 2;
+            return if (read.output == null) .ok else .io_failed;
+        }
+    };
+    var context: u8 = 0;
+    const input = Input{ .backend = .{ .context = &context, .request = Host.request } };
+    try std.testing.expectError(error.InputSettingsFailed, input.controllersAlloc(std.testing.allocator));
+    try std.testing.expectError(error.InputSettingsFailed, input.touchesAlloc(std.testing.allocator));
 }

@@ -113,6 +113,7 @@ const game = api.Game{
     .add_component = addComponent,
     .remove_component = removeComponent,
     .read_field = readField,
+    .read_field_alloc = readFieldAlloc,
     .write_field = writeField,
     .read_name = readName,
     .write_name = writeName,
@@ -290,6 +291,17 @@ fn readField(world: *anyopaque, entity: api.Entity, component: usize, field: usi
         else => 0,
     };
     return writer.end;
+}
+
+fn readFieldAlloc(world: *anyopaque, allocator: *const anyopaque, entity: api.Entity, component: usize, field: usize, out: *api.FieldBytes) callconv(.c) api.FieldStatus {
+    const gpa: *const std.mem.Allocator = @ptrCast(@alignCast(allocator));
+    const text = access.readFieldAlloc(gpa.*, worldOf(world), entityOf(entity), component, field) catch |err| return switch (err) {
+        error.NoComponent => .no_component,
+        error.NoSuchComponent => .no_such_component,
+        error.OutOfMemory => .out_of_memory,
+    };
+    out.* = .{ .ptr = text.ptr, .len = text.len };
+    return .ok;
 }
 
 fn writeField(world: *anyopaque, entity: api.Entity, component: usize, field: usize, text: [*:0]const u8) callconv(.c) bool {

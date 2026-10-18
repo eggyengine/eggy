@@ -84,26 +84,42 @@ pub fn gather(world: *ecs.World, out: []Drawable) usize {
     var meshes = world.query(.{ *const Mesh, *const Transform });
     while (meshes.next()) |view| {
         if (count == out.len) break;
-        const mesh = view.get(*const Mesh);
-        const model = transform_zig.worldMatrix(world, view.entity);
-        out[count] = .{ .model = undefined, .color = .{ mesh.color[0], mesh.color[1], mesh.color[2], 1 }, .shape = .cube, .entity_id = view.entity.id, .entity_generation = view.entity.generation };
-        switch (mesh.shape) {
-            // A model with no file yet is nothing to draw.
-            .model => |*file| {
-                if (file.len == 0) continue;
-                out[count].model_file = &file.buffer;
-                out[count].model_file_len = file.len;
-            },
-            inline else => |_, tag| out[count].shape = @field(Shape, @tagName(tag)),
-        }
-        if (mesh.texture.len > 0) {
-            out[count].texture_file = &mesh.texture.buffer;
-            out[count].texture_file_len = mesh.texture.len;
-        }
-        for (&out[count].model, model.data) |*column, data| column.* = data;
+        out[count] = drawable(world, view.entity, view.get(*const Mesh)) orelse continue;
         count += 1;
     }
     return count;
+}
+
+/// Gather every drawable without truncation; free the result with `gpa.free`.
+/// File paths still borrow the world's Mesh components, as in `gather`.
+pub fn gatherAlloc(gpa: std.mem.Allocator, world: *ecs.World) ![]Drawable {
+    var result: std.ArrayList(Drawable) = .empty;
+    defer result.deinit(gpa);
+    var meshes = world.query(.{ *const Mesh, *const Transform });
+    while (meshes.next()) |view| {
+        try result.append(gpa, drawable(world, view.entity, view.get(*const Mesh)) orelse continue);
+    }
+    return result.toOwnedSlice(gpa);
+}
+
+fn drawable(world: *ecs.World, entity: ecs.EntityId, mesh: *const Mesh) ?Drawable {
+    var result = Drawable{ .model = undefined, .color = .{ mesh.color[0], mesh.color[1], mesh.color[2], 1 }, .shape = .cube, .entity_id = entity.id, .entity_generation = entity.generation };
+    switch (mesh.shape) {
+        // A model with no file yet is nothing to draw.
+        .model => |*file| {
+            if (file.len == 0) return null;
+            result.model_file = &file.buffer;
+            result.model_file_len = file.len;
+        },
+        inline else => |_, tag| result.shape = @field(Shape, @tagName(tag)),
+    }
+    if (mesh.texture.len > 0) {
+        result.texture_file = &mesh.texture.buffer;
+        result.texture_file_len = mesh.texture.len;
+    }
+    const model = transform_zig.worldMatrix(world, entity);
+    for (&result.model, model.data) |*column, data| column.* = data;
+    return result;
 }
 
 /// A vertex of a shape or model: where it is, which way its surface faces, and where on a texture.
@@ -247,6 +263,33 @@ test "every shape has triangles, each pointing at a real vertex" {
         try std.testing.expectEqual(@as(u32, 0), range.index_count % 3);
     }
     for (geometry.indices) |index| try std.testing.expect(index < geometry.vertices.len);
+}
+
+test "allocated gathering includes every drawable and preserves borrowed model paths" {
+    const Check = struct {
+        fn run(gpa: std.mem.Allocator) !void {
+            var world = ecs.World.init(std.testing.allocator);
+            defer world.deinit();
+            const empty = try gatherAlloc(gpa, &world);
+            defer gpa.free(empty);
+            try std.testing.expectEqual(@as(usize, 0), empty.len);
+            const cube = try world.spawn(.{ Mesh{}, Transform{} });
+            const model = try world.spawn(.{ Mesh{ .shape = .{ .model = .init("ship.glb") }, .texture = .init("ship.png") }, Transform{} });
+            _ = try world.spawn(.{ Mesh{ .shape = .{ .model = .{} } }, Transform{} });
+            const all = try gatherAlloc(gpa, &world);
+            defer gpa.free(all);
+            try std.testing.expectEqual(@as(usize, 2), all.len);
+            const drawn_cube, const drawn_model = if (all[0].entity().eql(cube)) .{ all[0], all[1] } else .{ all[1], all[0] };
+            try std.testing.expect(drawn_cube.entity().eql(cube));
+            try std.testing.expect(drawn_model.entity().eql(model));
+            try std.testing.expectEqualStrings("ship.glb", drawn_model.modelFile().?);
+            try std.testing.expectEqualStrings("ship.png", drawn_model.textureFile().?);
+            var buffer: [1]Drawable = undefined;
+            try std.testing.expectEqual(@as(usize, 1), gather(&world, &buffer));
+            try std.testing.expectEqualDeep(buffer[0], all[0]);
+        }
+    };
+    try std.testing.checkAllAllocationFailures(std.testing.allocator, Check.run, .{});
 }
 
 test "a child's mesh is drawn where its parent's transform puts it" {

@@ -139,6 +139,19 @@ with `vector` (`eggy.math.Vec2`, with `.x`/`.y`). Reading the wrong kind returns
 `WrongControlKind`; a map not registered with this host returns `UnknownControl`.
 Borrow the map view inside a hook instead of retaining an App/input pointer across reload.
 
+`player.getBindings(.jump, buffer)` copies bindings into your buffer without allocating.
+Use `player.getBindingsAlloc(gpa, .jump)` for a complete caller-owned slice:
+
+```zig
+const bindings = try player.getBindingsAlloc(gpa, .jump);
+defer gpa.free(bindings);
+```
+
+For controls registered directly with `registerControls`, the equivalent is
+`app.input.getBindingsAlloc(gpa, Controls.jump)`. Both variants copy the current bindings,
+including overrides, return an empty slice for an unbound control, and propagate allocation
+or unknown-control errors.
+
 ## Sources and modifiers
 
 | Kind | Sources |

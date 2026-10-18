@@ -35,7 +35,7 @@ const View = struct {
             .cracks = self.taps,
             .hatch = if (self.hatched_at_ms) |start| @min(1, @as(f32, @floatFromInt(context.time_ms -| start)) / 700) else 0,
         };
-        const egg = context.builder().node(id, .{ .height = 140, .width = 140 }, .{ .custom = .{ .context = glyph, .draw = drawEgg } }, &.{}) catch |err| {
+        const egg = context.builder().node(id, .{ .height = 160, .width = 140 }, .{ .custom = .{ .context = glyph, .draw = drawEgg } }, &.{}) catch |err| {
             context.err = err;
             return;
         };
@@ -45,22 +45,55 @@ const View = struct {
         context.begin(.column);
         context.element(egg);
         context.heading(1, "Eggy");
-        context.badge(std.fmt.allocPrint(context.builder().allocator, "Version {s}", .{@import("build_options").version}) catch "Version", .secondary);
+        centerText(context);
+        const version = std.fmt.allocPrint(context.builder().allocator, "Version {s}", .{@import("build_options").version}) catch "Version";
+        context.badge(version, .secondary);
+        restyle(context, .{ .width = context.font.measure(version, context.theme.small_text_size) + 20 });
         context.muted(if (self.hatched_at_ms != null) "Chirp! Your next game starts with a little idea." else "A game engine for making games in Zig.");
+        centerText(context);
         context.begin(.row);
         for (links) |link| if (context.buttonVariant(link.label, .link)) {
             self.open_url = link.url;
         };
         context.end();
         restyle(context, .{ .direction = .row, .gap = 4 });
+        if (context.last_added) |row| row.style.justify = .center;
         context.muted(std.fmt.allocPrint(context.builder().allocator, "Zig {s} · {s}-{s} · SDL3, Vitellus, Weeoui, Clutch", .{ builtin.zig_version_string, @tagName(builtin.cpu.arch), @tagName(builtin.os.tag) }) catch "");
         smallText(context, 12);
-        context.text("Made with ❤️ by the eggyengine team");
+        centerText(context);
+        madeWithLove(context);
         if (context.button("Close")) self.closed = true;
         context.end();
         restyle(context, .{ .width = context.contentWidth(), .align_items = .center, .gap = 10 });
     }
 };
+
+/// Centre the wrapped text `context` added last, as the rest of the page is.
+fn centerText(context: *ui.Context) void {
+    const element = context.last_added orelse return;
+    if (element.paint_kind == .text) element.paint_kind.text.alignment = .center;
+}
+
+/// "Made with ♥ by the eggyengine team", the heart drawn, since the UI font has no emoji.
+fn madeWithLove(context: *ui.Context) void {
+    const b = context.builder();
+    const size = context.theme.text_size;
+    const row = b.node(0, .{ .direction = .row, .gap = 4, .align_items = .center, .justify = .center }, .none, &.{
+        b.node(0, .{}, .{ .text = .{ .value = "Made with", .size = size } }, &.{}) catch return,
+        b.node(0, .{ .width = 12, .height = 12 }, .{ .custom = .{ .context = &drawHeart, .draw = drawHeart } }, &.{}) catch return,
+        b.node(0, .{}, .{ .text = .{ .value = "by the eggyengine team", .size = size } }, &.{}) catch return,
+    }) catch return;
+    row.accessibility.label = "Made with love by the eggyengine team";
+    context.element(row);
+}
+
+fn drawHeart(_: *const anyopaque, canvas: *ui.Canvas, rect: ui.Rect) !void {
+    const red = [4]f32{ 0.9, 0.25, 0.3, 1 };
+    const r = rect.w / 4;
+    try disc(canvas, .{ rect.x + r, rect.y + r + 1 }, .{ r, r }, red);
+    try disc(canvas, .{ rect.x + 3 * r, rect.y + r + 1 }, .{ r, r }, red);
+    try canvas.triangle(.{ .{ rect.x + 0.2, rect.y + r + 2 }, .{ rect.x + rect.w - 0.2, rect.y + r + 2 }, .{ rect.x + rect.w / 2, rect.y + rect.h } }, .{ red, red, red });
+}
 
 const links = [_]struct { label: []const u8, url: [:0]const u8 }{
     .{ .label = "Documentation", .url = "https://eggyengine.github.io/eggy" },
@@ -77,30 +110,58 @@ fn disc(canvas: *ui.Canvas, center: [2]f32, radii: [2]f32, color: [4]f32) !void 
     }
 }
 
+/// Where the shell breaks, across the egg's middle (offsets from its centre); a tap cracks one
+/// segment more, and the last tap breaks it open.
+const break_line = [_][2]f32{ .{ -38, 0 }, .{ -25, 2 }, .{ -15, -6 }, .{ -5, 4 }, .{ 5, -5 }, .{ 15, 5 }, .{ 25, -2 }, .{ 38, 0 } };
+
+/// The shell above the break line (`top`) or below it, out to `radii`, moved by `offset`.
+fn shellHalf(canvas: *ui.Canvas, center: [2]f32, radii: [2]f32, top: bool, offset: [2]f32, color: [4]f32) !void {
+    var points: [break_line.len + 17][2]f32 = undefined;
+    for (break_line, points[0..break_line.len]) |p, *point| point.* = .{ center[0] + std.math.clamp(p[0], -radii[0], radii[0]) + offset[0], center[1] + p[1] + offset[1] };
+    // The rim, from the line's right end round to its left: under the egg, or over it.
+    for (points[break_line.len..], 0..) |*point, i| {
+        const a = @as(f32, @floatFromInt(i)) * std.math.pi / 16;
+        const turn = if (top) -a else a;
+        point.* = .{ center[0] + @cos(turn) * radii[0] + offset[0], center[1] + @sin(turn) * radii[1] + offset[1] };
+    }
+    // A fan from inside the half; it sees every point of the line and the rim.
+    const hub = [2]f32{ center[0] + offset[0], center[1] + offset[1] + (if (top) -radii[1] else radii[1]) * 0.6 };
+    for (points, 0..) |a, i| {
+        const b = points[(i + 1) % points.len];
+        try canvas.triangle(.{ hub, a, b }, .{ color, color, color });
+    }
+}
+
 fn drawEgg(raw: *const anyopaque, canvas: *ui.Canvas, rect: ui.Rect) !void {
     const glyph: *const Glyph = @ptrCast(@alignCast(raw));
     const center = rect.center();
     const shell = [4]f32{ 1, 0.78, 0.36, 1 };
     const dark = [4]f32{ 0.45, 0.24, 0.09, 1 };
-    const y = center.y + 8;
-    try disc(canvas, .{ center.x, y }, .{ 38, 49 }, dark);
-    try disc(canvas, .{ center.x, y - 1 }, .{ 35, 46 }, shell);
+    const y = center.y + 18;
     if (glyph.hatch > 0) {
-        // The chick rises behind the remaining shell, entirely in the About window.
+        // The chick rises from the lower shell, wearing the top of it.
+        const chick = [4]f32{ 1, 0.92, 0.35, 1 };
         const head_y = y + 5 - 30 * glyph.hatch;
-        try disc(canvas, .{ center.x, head_y }, .{ 25, 25 }, .{ 1, 0.92, 0.35, 1 });
-        try disc(canvas, .{ center.x - 9, head_y - 2 }, .{ 2.5, 3.5 }, dark);
-        try disc(canvas, .{ center.x + 9, head_y - 2 }, .{ 2.5, 3.5 }, dark);
+        try disc(canvas, .{ center.x, y + 10 }, .{ 27, 27 }, chick);
+        try disc(canvas, .{ center.x, head_y }, .{ 22, 22 }, chick);
+        try disc(canvas, .{ center.x - 8, head_y - 1 }, .{ 2.5, 3.5 }, dark);
+        try disc(canvas, .{ center.x + 8, head_y - 1 }, .{ 2.5, 3.5 }, dark);
         const beak = [4]f32{ 0.95, 0.42, 0.1, 1 };
         try canvas.triangle(.{ .{ center.x - 5, head_y + 6 }, .{ center.x + 5, head_y + 6 }, .{ center.x, head_y + 12 } }, .{ beak, beak, beak });
-        try canvas.roundRect(.{ .x = center.x - 33, .y = y + 17, .w = 66, .h = 25 }, .{ shell[0], shell[1], shell[2] }, 12);
+        try shellHalf(canvas, .{ center.x, y }, .{ 38, 49 }, false, .{ 0, -2 }, dark);
+        try shellHalf(canvas, .{ center.x, y }, .{ 35, 46 }, false, .{ 0, 0 }, shell);
+        const lift = [2]f32{ 6 * glyph.hatch, -35 * glyph.hatch };
+        try shellHalf(canvas, .{ center.x, y }, .{ 38, 49 }, true, .{ lift[0], lift[1] + 2 }, dark);
+        try shellHalf(canvas, .{ center.x, y }, .{ 35, 46 }, true, lift, shell);
         return;
     }
+    try disc(canvas, .{ center.x, y }, .{ 38, 49 }, dark);
+    try disc(canvas, .{ center.x, y - 1 }, .{ 35, 46 }, shell);
     try disc(canvas, .{ center.x - 13, y - 23 }, .{ 7, 15 }, .{ 1, 0.95, 0.78, 1 });
-    const crack = [_][2]f32{ .{ -25, 2 }, .{ -15, -6 }, .{ -5, 4 }, .{ 5, -5 }, .{ 15, 5 }, .{ 25, -2 } };
-    for (0..@min(glyph.cracks, crack.len - 1)) |i| {
-        const a = [2]f32{ center.x + crack[i][0], y + crack[i][1] };
-        const b = [2]f32{ center.x + crack[i + 1][0], y + crack[i + 1][1] };
+    for (0..@min(glyph.cracks, break_line.len - 1)) |i| {
+        // The line's ends lie on the rim; the crack starts and stops inside it.
+        const a = [2]f32{ center.x + std.math.clamp(break_line[i][0], -30, 30), y + break_line[i][1] };
+        const b = [2]f32{ center.x + std.math.clamp(break_line[i + 1][0], -30, 30), y + break_line[i + 1][1] };
         try canvas.triangle(.{ a, b, .{ a[0], a[1] + 2 } }, .{ dark, dark, dark });
         try canvas.triangle(.{ b, .{ b[0], b[1] + 2 }, .{ a[0], a[1] + 2 } }, .{ dark, dark, dark });
     }
