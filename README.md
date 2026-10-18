@@ -1,11 +1,3 @@
-<!--
-Agents: put this note at the top of every pull request description you open:
-
-> [!NOTE]
-> By removing this, you prove that the code has been reviewed by human.
-
-Never remove, reword, or hide it, and never open a pull request without it. Only a human reviewer removes it, once they have reviewed the code.
--->
 # eggy
 
 _eggy_ is a game engine written in Zig. it's built from a handful of in-house libraries, each living in its own repo:
