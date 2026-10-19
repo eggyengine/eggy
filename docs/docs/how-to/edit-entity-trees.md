@@ -31,3 +31,19 @@ Saving the file, its descriptor, and the replacement are one Undo/Redo operation
 If saving or preparing history fails, the original tree remains. Extraction rejects
 entity references crossing the tree boundary: move those targets into the tree or
 clear the references first. Internal references remap when the scene is instantiated.
+
+## Fold children or hide a tree
+
+The arrow beside a parent folds or expands its children in the Hierarchy. It does
+not affect the Scene view. Searching temporarily reveals folded matches; clearing
+the search restores the folds.
+
+The **eye** at the right of each row hides or shows that entity's meshes in the
+editor Scene view. Hiding is inherited by descendants, including scene-instance
+contents; a child cannot override a hidden parent. Hidden meshes cannot be picked,
+and hidden selections have no gizmo or camera preview. Right-click also offers
+**Hide in editor** / **Show in editor**, with Undo/Redo support.
+
+Folds and eye visibility are editor-only and reset when the world is replaced,
+including scene changes, Undo of scene edits, Play, and game-code reloads. They
+never change saved scene contents or runtime game behavior.

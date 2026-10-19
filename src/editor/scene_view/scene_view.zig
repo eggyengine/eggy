@@ -107,6 +107,7 @@ pub const Target = struct {
     game: *const HotGame,
     app: *eggy.App,
     selected: *?eggy.ecs.EntityId,
+    selection_hidden: bool = false,
 };
 
 pub const SceneView = struct {
@@ -180,6 +181,11 @@ pub const SceneView = struct {
         };
         self.lookThroughGame(working, look);
         if (self.playing) return;
+        if (working.selection_hidden) {
+            self.drag = null;
+            self.hot = null;
+            return;
+        }
         if (working.selected.*) |selected| if (self.steering == null or !self.steering.?.eql(selected)) {
             self.preview = game_camera.viewOf(working.game, working.app, selected);
         };

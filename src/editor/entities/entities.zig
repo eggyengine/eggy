@@ -13,6 +13,7 @@ const hierarchy_zig = @import("hierarchy.zig");
 const inspector_zig = @import("inspector.zig");
 const RootOrder = @import("root_order.zig").RootOrder;
 const Clipboard = @import("clipboard.zig").Clipboard;
+const ViewState = @import("view_state.zig").ViewState;
 const Dragged = @import("../dragged.zig").Dragged;
 pub const SceneInstances = eggy.SceneInstances;
 const log = std.log.scoped(.entities);
@@ -29,6 +30,8 @@ pub const EntityEditor = struct {
     /// Commands needing the host's immediate undo snapshot.
     pending_paste: ?struct { beside: ?ecs.EntityId } = null,
     pending_extract: ?ecs.EntityId = null,
+    pending_visibility: ?ecs.EntityId = null,
+    view_state: ViewState,
 
     /// Create editor-only hierarchy, inspector and root-order state using `gpa`.
     /// Does not create a world; pair with `deinit`.
@@ -38,7 +41,7 @@ pub const EntityEditor = struct {
     /// defer entities.deinit();
     /// ```
     pub fn init(gpa: std.mem.Allocator) EntityEditor {
-        return .{ .gpa = gpa, .hierarchy = .init(gpa), .inspector = .init(gpa), .root_order = .{ .gpa = gpa }, .clipboard = .{ .gpa = gpa } };
+        return .{ .gpa = gpa, .hierarchy = .init(gpa), .inspector = .init(gpa), .root_order = .{ .gpa = gpa }, .clipboard = .{ .gpa = gpa }, .view_state = .{ .gpa = gpa } };
     }
 
     /// Release editor UI/order storage once, without despawning entities or unloading the game.
@@ -53,6 +56,7 @@ pub const EntityEditor = struct {
         self.inspector.deinit();
         self.root_order.deinit();
         self.clipboard.deinit();
+        self.view_state.deinit();
     }
 
     /// `world`'s top-level entities in the Hierarchy's order, for capturing the scene in it.
@@ -78,7 +82,9 @@ pub const EntityEditor = struct {
     pub fn buildHierarchy(self: *EntityEditor, context: *ui.Context, app: *eggy.App, game: ?*const HotGame) void {
         self.forgetDead(app);
         const access = if (game) |loaded| loaded.sceneAccess() else null;
-        const rows = tree.collect(context.builder().allocator, &app.world, self.roots(&app.world), access, self.hierarchy.filterText()) catch &.{};
+        const arena = context.builder().allocator;
+        const all = tree.collect(arena, &app.world, self.roots(&app.world), access, self.hierarchy.filterText()) catch &.{};
+        const rows = self.view_state.rows(arena, &app.world, all, self.hierarchy.filterText().len != 0) catch &.{};
         self.hierarchy.can_paste = self.clipboard.scene != null;
         if (self.hierarchy.build(context, rows, self.selected)) |action| self.apply(app, game, action);
     }
@@ -259,6 +265,8 @@ pub const EntityEditor = struct {
             },
             .paste => |beside| self.pending_paste = .{ .beside = beside },
             .extract => |entity| self.pending_extract = entity,
+            .toggle_collapse => |entity| self.view_state.toggleCollapse(entity) catch |err| log.err("cannot fold tree: {t}", .{err}),
+            .toggle_hidden => |entity| self.pending_visibility = entity,
         }
     }
 
@@ -420,6 +428,11 @@ pub const EntityEditor = struct {
     /// ```
     pub fn selectionPlace(self: *EntityEditor, app: *eggy.App, game: ?*const HotGame) ?usize {
         const entity = self.selected orelse return null;
+        return self.entityPlace(app, game, entity);
+    }
+
+    /// The entity's traversal position, independent of folds and editor-only hiding.
+    pub fn entityPlace(self: *EntityEditor, app: *eggy.App, game: ?*const HotGame, entity: ecs.EntityId) ?usize {
         const loaded = game orelse return null;
         var scene = eggy.scene.Scene.capture(self.gpa, &app.world, loaded.sceneAccess(), self.roots(&app.world)) catch return null;
         defer scene.deinit();
@@ -437,7 +450,7 @@ pub const EntityEditor = struct {
     /// entities.reselect(app, game, place);
     /// ```
     pub fn reselect(self: *EntityEditor, app: *eggy.App, game: ?*const HotGame, place: ?usize) void {
-        self.selected = null;
+        self.resetWorldView();
         const at = place orelse return;
         const loaded = game orelse return;
         var scene = eggy.scene.Scene.capture(self.gpa, &app.world, loaded.sceneAccess(), self.roots(&app.world)) catch return;
@@ -452,9 +465,25 @@ pub const EntityEditor = struct {
     /// entities.forgetDead(app); // Existing EntityEditor after world mutation.
     /// ```
     pub fn forgetDead(self: *EntityEditor, app: *eggy.App) void {
+        self.view_state.prune(&app.world);
         if (self.selected) |entity| if (!app.world.isAlive(entity)) {
             self.selected = null;
         };
+    }
+
+    /// Clear world-specific UI state without discarding the independent entity clipboard.
+    pub fn resetWorldView(self: *EntityEditor) void {
+        self.view_state.reset();
+        self.selected = null;
+        self.hierarchy.rows.clearRetainingCapacity();
+        self.hierarchy.menu = null;
+        self.hierarchy.drag = null;
+        self.hierarchy.renaming = null;
+        self.hierarchy.name_press = null;
+        self.inspector.shown = null;
+        self.pending_paste = null;
+        self.pending_extract = null;
+        self.pending_visibility = null;
     }
 };
 
@@ -536,6 +565,7 @@ fn referenceLabel(arena: std.mem.Allocator, app: *eggy.App, game: *const HotGame
 test {
     _ = @import("clipboard.zig");
     _ = @import("extraction.zig");
+    _ = @import("view_state.zig");
     _ = @import("root_order.zig");
     _ = @import("tree.zig");
     _ = @import("hierarchy.zig");

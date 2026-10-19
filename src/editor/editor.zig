@@ -832,7 +832,7 @@ pub fn Editor(comptime project: type) type {
                 self.workspace.simulating = false;
                 return std.log.err("cannot start playing: {t}", .{err});
             };
-            self.entity_editor.selected = null;
+            self.entity_editor.resetWorldView();
             self.workspace.playing = true;
             self.game_input = .{ .focused = true };
         }
@@ -973,7 +973,7 @@ pub fn Editor(comptime project: type) type {
                 .create_scene => |folder| try scene.create(folder, &self.app.world, game.sceneAccess()),
                 else => unreachable,
             }
-            self.entity_editor.selected = null;
+            self.entity_editor.resetWorldView();
             self.filesChanged();
             const to_world = self.sceneText() orelse return error.NoGameLibrary;
             self.history.setBaseline(try self.gpa.dupe(u8, to_world));
@@ -1085,6 +1085,13 @@ pub fn Editor(comptime project: type) type {
 
         /// Clipboard edits are discrete undo steps, not part of a pending field edit.
         fn applyEntityCommands(self: *Self) void {
+            if (self.entity_editor.pending_visibility) |entity| {
+                self.entity_editor.pending_visibility = null;
+                self.toggleEntityVisibility(entity) catch |err| {
+                    std.log.err("cannot change editor visibility: {t}", .{err});
+                    self.workspace.toast("Couldn't change visibility: see the Console");
+                };
+            }
             if (self.entity_editor.pending_extract) |entity| {
                 self.entity_editor.pending_extract = null;
                 self.extractEntityTree(entity) catch |err| {
@@ -1098,6 +1105,22 @@ pub fn Editor(comptime project: type) type {
                 std.log.err("cannot paste entity tree: {t}", .{err});
                 self.workspace.toast("Couldn't paste tree: see the Console");
             };
+        }
+
+        fn toggleEntityVisibility(self: *Self, entity: eggy.ecs.EntityId) !void {
+            if (self.play_mode.playing()) return error.NotEditing;
+            const game = self.gamePtr() orelse return error.NoGameLibrary;
+            self.history.watch(self.sceneText() orelse return error.CannotCaptureScene, std.math.maxInt(u64), false);
+            const place = self.entity_editor.entityPlace(&self.app, game, entity) orelse return error.EntityNotSaved;
+            try self.history.reserve();
+            const before = self.entity_editor.view_state.hidden.contains(entity);
+            try self.entity_editor.view_state.setHidden(entity, !before);
+            self.history.record(.{ .entity_visibility = .{ .place = place, .before = before, .after = !before } });
+            // Invalidate last frame's pick/gizmo geometry before another input event can use it.
+            self.scene_view.drawn = &.{};
+            self.scene_view.gizmo = null;
+            self.scene_view.drag = null;
+            self.scene_view.hot = null;
         }
 
         fn pasteEntityTree(self: *Self, beside: ?eggy.ecs.EntityId) !void {
@@ -1215,9 +1238,18 @@ pub fn Editor(comptime project: type) type {
             const io = threaded.io();
             var files = try std.Io.Dir.cwd().openDir(io, opened.dir, .{});
             defer files.close(io);
-            defer if (step.* == .input_map) self.assets_panel.refreshSoon() else self.filesChanged();
+            defer if (step.* == .input_map) self.assets_panel.refreshSoon() else if (step.* != .entity_visibility) self.filesChanged();
             switch (step.*) {
                 .group => unreachable,
+                .entity_visibility => |change| {
+                    const game = self.gamePtr() orelse return error.NoGame;
+                    var captured = try @import("entities/snapshot.zig").capture(self.gpa, &self.app.world, game.sceneAccess(), self.entity_editor.roots(&self.app.world));
+                    defer captured.deinit();
+                    if (change.place >= captured.sources.len) return error.EntityNotSaved;
+                    try self.entity_editor.view_state.setHidden(captured.sources[change.place], if (back) change.before else change.after);
+                    self.scene_view.drawn = &.{};
+                    self.scene_view.gizmo = null;
+                },
                 .scene => |change| {
                     const game = if (self.game) |*loaded| loaded else return error.NoGame;
                     const text = change.value(direction);
@@ -1311,7 +1343,7 @@ pub fn Editor(comptime project: type) type {
                     defer world.deinit();
                     game.restart(&self.app, &world, self.plugin_switches.off(), .discard);
                     try scene.reopenAs(if (back) change.from else change.to, if (back) change.from_saved else change.to_saved);
-                    self.entity_editor.selected = null;
+                    self.entity_editor.resetWorldView();
                     self.history.setBaseline(try self.gpa.dupe(u8, text));
                 },
             }
@@ -1432,7 +1464,8 @@ pub fn Editor(comptime project: type) type {
             const preview_px = if (scene_px != null and self.scene_view.preview != null) eggy.game_ui.pixelRect(scene_view.previewRect(self.workspace.placed.scene.?.rect), viewport, frame.extent) else null;
             if (scene_px) |rect| {
                 const gathered = if (self.game) |*game| game.gatherMeshes(&self.app, self.drawables) else self.drawables[0..0];
-                const meshes = if (self.scene_view.no_camera) gathered[0..0] else gathered;
+                const visible = if (self.play_mode.playing()) gathered else self.entity_editor.view_state.visibleMeshes(&self.app.world, gathered);
+                const meshes = if (self.scene_view.no_camera) visible[0..0] else visible;
                 self.scene_view.drawn = meshes;
                 // The ground grid only through the panel's own camera, not the game's.
                 try self.scene.render(&self.app.graphics, frame.cmd, pixelSize(rect), meshes, self.scene_view.view, self.entity_editor.selected, !self.scene_view.throughGameCamera());
@@ -2529,7 +2562,12 @@ pub fn Editor(comptime project: type) type {
         /// What the Scene panel works on; null without the game's library.
         fn sceneTarget(self: *Self) ?scene_view.Target {
             const game = if (self.game) |*loaded| loaded else return null;
-            return .{ .game = game, .app = &self.app, .selected = &self.entity_editor.selected };
+            return .{
+                .game = game,
+                .app = &self.app,
+                .selected = &self.entity_editor.selected,
+                .selection_hidden = !self.play_mode.playing() and if (self.entity_editor.selected) |entity| self.entity_editor.view_state.isHidden(&self.app.world, entity) else false,
+            };
         }
 
         /// Point the scene camera at the entity selected in the Hierarchy, close enough to see it.

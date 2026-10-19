@@ -11,6 +11,10 @@ pub const Row = struct {
     name: []const u8,
     depth: usize,
     has_parent: bool,
+    has_children: bool = false,
+    collapsed: bool = false,
+    hidden: bool = false,
+    self_hidden: bool = false,
     /// The names of its components, in type order.
     components: []const []const u8,
     /// Whether it is the last of its siblings shown: the tree's guide line ends at it.
@@ -90,9 +94,11 @@ fn addSubtree(arena: std.mem.Allocator, rows: *std.ArrayList(Row), world: *ecs.W
         }
         if (eggy.scene_instance.typeIndex(through.types())) |component| instance = through.has(world, entity, component);
     }
-    try rows.append(arena, .{ .entity = entity, .name = name, .depth = depth, .has_parent = depth > 0, .components = names.items });
-    if (instance) return;
     var children = world.children(entity);
+    const has_children = !instance and children.next() != null;
+    try rows.append(arena, .{ .entity = entity, .name = name, .depth = depth, .has_parent = depth > 0, .has_children = has_children, .components = names.items });
+    if (instance) return;
+    children = world.children(entity);
     while (children.next()) |child| try addSubtree(arena, rows, world, access, child, depth + 1);
 }
 

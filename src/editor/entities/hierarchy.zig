@@ -32,6 +32,8 @@ pub const Action = union(enum) {
     copy: ecs.EntityId,
     paste: ?ecs.EntityId,
     extract: ecs.EntityId,
+    toggle_collapse: ecs.EntityId,
+    toggle_hidden: ecs.EntityId,
 };
 
 const NameEdit = ui.TextEdit(eggy.Name.max_len);
@@ -52,7 +54,7 @@ const same_spot: f32 = 2;
 const name_size: f32 = 12;
 const components_size: f32 = 11;
 
-const MenuItem = enum(u32) { rename, add_child, duplicate, copy, paste, extract, to_top, delete, add_entity };
+const MenuItem = enum(u32) { rename, add_child, duplicate, copy, paste, extract, collapse, visibility, to_top, delete, add_entity };
 
 /// Where an entity moves to.
 pub const Place = union(enum) {
@@ -80,7 +82,7 @@ pub const Hierarchy = struct {
     /// The row being renamed, and its text.
     renaming: ?struct { entity: ecs.EntityId, edit: NameEdit, started: bool = false } = null,
     /// The right-click menu: where, and for which row (none: the empty space below the rows).
-    menu: ?struct { at: ui.Vec2, entity: ?ecs.EntityId, has_parent: bool } = null,
+    menu: ?struct { at: ui.Vec2, entity: ?ecs.EntityId, has_parent: bool, has_children: bool = false, collapsed: bool = false, self_hidden: bool = false } = null,
     /// A press on a row, which becomes a drag once it moves, and where it would drop.
     drag: ?struct { entity: ecs.EntityId, from: ui.Vec2, moving: bool = false, target: Target = .none } = null,
     /// The rows last built, to match presses to.
@@ -195,11 +197,28 @@ pub const Hierarchy = struct {
                 if (self.menu != null and !self.onMenu(context, down.position)) self.menu = null;
                 switch (down.button) {
                     .right => {
-                        self.menu = .{ .at = down.position, .entity = if (row) |r| r.entity else null, .has_parent = if (row) |r| r.has_parent else false };
+                        self.menu = .{
+                            .at = down.position,
+                            .entity = if (row) |r| r.entity else null,
+                            .has_parent = if (row) |r| r.has_parent else false,
+                            .has_children = if (row) |r| r.has_children else false,
+                            .collapsed = if (row) |r| r.collapsed else false,
+                            .self_hidden = if (row) |r| r.self_hidden else false,
+                        };
                         return .{ .used = true, .action = if (row) |r| Action{ .select = r.entity } else null };
                     },
                     .left => {
                         const pressed = row orelse return .{ .used = false };
+                        const bounds = context.last_bounds.get(row_id_base + pressed.entity.id).?.rect;
+                        if (down.position.x >= bounds.x + bounds.w - 26) {
+                            return .{ .used = true, .action = .{ .toggle_hidden = pressed.entity } };
+                        }
+                        if (pressed.has_children) for (self.names.items) |span| {
+                            if (!span.entity.eql(pressed.entity)) continue;
+                            const left = bounds.x + span.left - 22;
+                            if (down.position.x >= left and down.position.x < left + 18)
+                                return .{ .used = true, .action = .{ .toggle_collapse = pressed.entity } };
+                        };
                         // A rename takes both clicks on the name's text, in the same spot.
                         const on_name = self.onName(context, pressed.entity, down.position);
                         const first = self.name_press;
@@ -324,10 +343,10 @@ pub const Hierarchy = struct {
 
         // The name comes first; the components fill what room is left.
         const width = context.contentWidth();
-        const text_left = left + 8;
-        const name = page_style.fitText(arena, context.font, if (row.name.len > 0) row.name else (std.fmt.allocPrint(arena, "Entity {d}", .{row.entity.id}) catch "Entity"), name_size, width - text_left - 8);
+        const text_left = left + 24;
+        const name = page_style.fitText(arena, context.font, if (row.name.len > 0) row.name else (std.fmt.allocPrint(arena, "Entity {d}", .{row.entity.id}) catch "Entity"), name_size, width - text_left - 30);
         const name_width = context.font.measure(name, name_size);
-        const room = width - text_left - name_width - 20;
+        const room = width - text_left - name_width - 42;
         self.names.append(self.rows_arena.child_allocator, .{ .entity = row.entity, .left = text_left, .width = name_width }) catch {};
         const paint = arena.create(RowPaint) catch return null;
         paint.* = .{
@@ -342,6 +361,10 @@ pub const Hierarchy = struct {
             .selected = if (selected) |entity| entity.eql(row.entity) else false,
             .drop = if (self.drag) |drag| if (drag.moving) dropOn(drag.target, row.entity) else .none else .none,
             .dragged = if (self.drag) |drag| drag.moving and drag.entity.eql(row.entity) else false,
+            .has_children = row.has_children,
+            .collapsed = row.collapsed,
+            .hidden = row.hidden,
+            .self_hidden = row.self_hidden,
         };
         const element = b.node(id, .{ .height = row_height }, .{ .custom = .{ .context = paint, .draw = RowPaint.draw } }, &.{}) catch return null;
         element.cursor = .pointer;
@@ -382,6 +405,8 @@ pub const Hierarchy = struct {
             }) catch return null;
             if (self.can_paste) choices.append(arena, .{ .id = menuId(.paste), .label = "Paste tree" }) catch return null;
             choices.append(arena, .{ .id = menuId(.extract), .label = "Extract tree to scene" }) catch return null;
+            if (menu.has_children) choices.append(arena, .{ .id = menuId(.collapse), .label = if (menu.collapsed) "Expand children" else "Collapse children" }) catch return null;
+            choices.append(arena, .{ .id = menuId(.visibility), .label = if (menu.self_hidden) "Show in editor" else "Hide in editor" }) catch return null;
             if (menu.has_parent) choices.append(arena, .{ .id = menuId(.to_top), .label = "Move to top level" }) catch return null;
             choices.append(arena, .{ .id = menuId(.delete), .label = "Delete" }) catch return null;
         } else {
@@ -413,6 +438,8 @@ pub const Hierarchy = struct {
                 .copy => .{ .copy = entity.? },
                 .paste => .{ .paste = entity },
                 .extract => .{ .extract = entity.? },
+                .collapse => .{ .toggle_collapse = entity.? },
+                .visibility => .{ .toggle_hidden = entity.? },
                 .to_top => .{ .move = .{ .entity = entity.?, .place = .top_level } },
                 .delete => .{ .delete = entity.? },
                 .add_entity => .{ .spawn = null },
@@ -511,7 +538,13 @@ pub const Hierarchy = struct {
         _ = self.rows_arena.reset(.retain_capacity);
         self.rows = .empty;
         const arena = self.rows_arena.allocator();
-        for (rows) |row| self.rows.append(arena, .{ .entity = row.entity, .name = arena.dupe(u8, row.name) catch "", .depth = row.depth, .has_parent = row.has_parent, .components = &.{} }) catch return;
+        for (rows) |row| {
+            var kept = row;
+            kept.name = arena.dupe(u8, row.name) catch "";
+            kept.components = &.{};
+            kept.lines = &.{};
+            self.rows.append(arena, kept) catch return;
+        }
     }
 };
 
@@ -545,6 +578,10 @@ const RowPaint = struct {
     selected: bool,
     drop: Drop,
     dragged: bool,
+    has_children: bool,
+    collapsed: bool,
+    hidden: bool,
+    self_hidden: bool,
 
     fn draw(context: *const anyopaque, c: *ui.Canvas, r: ui.Rect) anyerror!void {
         const self: *const RowPaint = @ptrCast(@alignCast(context));
@@ -577,15 +614,27 @@ const RowPaint = struct {
         }
 
         // The name, dimmed while it is being dragged or has none, and the components right.
-        const text_left = left + 8;
-        const name_color = if (self.dragged or self.unnamed) t.muted_foreground else if (self.selected) t.accent_foreground else t.foreground;
-        try c.textIn(.{ .x = text_left, .y = r.y, .w = @max(0, r.x + r.w - text_left - 8), .h = r.h }, self.name, name_size, name_color, .start);
+        const text_left = left + 24;
+        const name_color = if (self.dragged or self.unnamed or self.hidden) t.muted_foreground else if (self.selected) t.accent_foreground else t.foreground;
+        if (self.has_children) try c.icon(.{ .x = left + 4, .y = mid_y - 6, .w = 12, .h = 12 }, if (self.collapsed) .chevron_right else .chevron_down, name_color);
+        try drawEye(c, .{ .x = r.x + r.w - 22, .y = mid_y - 5, .w = 16, .h = 10 }, self.hidden, if (self.self_hidden) t.muted_foreground else name_color);
+        try c.textIn(.{ .x = text_left, .y = r.y, .w = @max(0, r.x + r.w - text_left - 30), .h = r.h }, self.name, name_size, name_color, .start);
         if (self.summary.len > 0) {
             const width = c.font.measure(self.summary, components_size);
-            try c.textIn(.{ .x = r.x + r.w - 8 - width, .y = r.y, .w = width, .h = r.h }, self.summary, components_size, t.muted_foreground, .end);
+            try c.textIn(.{ .x = r.x + r.w - 30 - width, .y = r.y, .w = width, .h = r.h }, self.summary, components_size, t.muted_foreground, .end);
         }
     }
 };
+
+fn drawEye(c: *ui.Canvas, r: ui.Rect, hidden: bool, color: ui.Color) !void {
+    try c.roundRectStroke(r, color, 5, 1);
+    try c.roundRect(.{ .x = r.x + 6, .y = r.y + 3, .w = 4, .h = 4 }, color, 2);
+    if (hidden) {
+        const rgba: [4]f32 = .{ color[0], color[1], color[2], 1 };
+        try c.triangle(.{ .{ r.x, r.y - 1 }, .{ r.x + 2, r.y - 1 }, .{ r.x + r.w, r.y + r.h + 1 } }, @splat(rgba));
+        try c.triangle(.{ .{ r.x, r.y - 1 }, .{ r.x + r.w, r.y + r.h + 1 }, .{ r.x + r.w - 2, r.y + r.h + 1 } }, @splat(rgba));
+    }
+}
 
 /// As many of `names` as fit `width`, then "+N" for the rest; nothing if not even that fits.
 fn summarize(arena: std.mem.Allocator, font: *const ui.Font, names: []const []const u8, width: f32) []const u8 {
@@ -615,8 +664,8 @@ fn buildPage(context: *ui.Context, hierarchy: *Hierarchy, rows: []const Row, wid
     for (rows) |row| {
         const element = context.last_root.?.find(row_id_base + row.entity.id) orelse continue;
         const paint: *const RowPaint = @ptrCast(@alignCast(element.paint_kind.custom.context));
-        const text_left = paint.step * @as(f32, @floatFromInt(paint.depth)) + 8;
-        const used = text_left + context.font.measure(paint.name, name_size) + 8 + (if (paint.summary.len > 0) context.font.measure(paint.summary, components_size) + 12 else 0);
+        const text_left = paint.step * @as(f32, @floatFromInt(paint.depth)) + 24;
+        const used = text_left + context.font.measure(paint.name, name_size) + 30 + (if (paint.summary.len > 0) context.font.measure(paint.summary, components_size) + 12 else 0);
         if (used > element.bounds.w + 0.5) {
             std.debug.print("row {s} needs {d:.1} of {d:.1}\n", .{ paint.name, used, element.bounds.w });
             return error.TextOverflows;
@@ -674,6 +723,32 @@ test "clipboard shortcuts leave renaming alone" {
     try std.testing.expect(!hierarchy.key(.{ .key = .v, .modifiers = .{ .control = true }, .repeat = false }, entity).used);
 }
 
+test "fold and eye hits are independent of selecting or dragging a row" {
+    var context = try ui.Context.init(std.testing.allocator);
+    defer context.deinit();
+    var hierarchy = Hierarchy.init(std.testing.allocator);
+    defer hierarchy.deinit();
+    const entity = ecs.EntityId.init(0, 0);
+    const rows = [_]Row{.{ .entity = entity, .name = "Root", .depth = 0, .has_parent = false, .has_children = true, .components = &.{} }};
+    try buildPage(&context, &hierarchy, &rows, 260);
+    const bounds = context.last_bounds.get(row_id_base).?.rect;
+    const folded = hierarchy.pointer(&context, .{ .pointer_down = .{
+        .button = .left,
+        .position = .{ .x = bounds.x + 8, .y = bounds.y + bounds.h / 2 },
+        .clicks = 1,
+    } });
+    try std.testing.expect(folded.used);
+    try std.testing.expect(folded.action.?.toggle_collapse.eql(entity));
+    const hidden = hierarchy.pointer(&context, .{ .pointer_down = .{
+        .button = .left,
+        .position = .{ .x = bounds.x + bounds.w - 10, .y = bounds.y + bounds.h / 2 },
+        .clicks = 1,
+    } });
+    try std.testing.expect(hidden.used);
+    try std.testing.expect(hidden.action.?.toggle_hidden.eql(entity));
+    try std.testing.expect(hierarchy.drag == null);
+}
+
 test "a drag can't drop an entity into itself or its children" {
     var hierarchy = Hierarchy.init(std.testing.allocator);
     defer hierarchy.deinit();
@@ -722,8 +797,8 @@ test "a double-click renames only with both clicks on the name, in the same spot
     const rows = [_]Row{.{ .entity = .init(0, 0), .name = "Sun", .depth = 0, .has_parent = false, .components = &.{} }};
     try buildPage(&context, &hierarchy, &rows, 300);
     const row = context.last_bounds.get(row_id_base + 0).?.rect;
-    const on_name = ui.Vec2{ .x = row.x + 12, .y = row.y + row.h / 2 };
-    const beside_name = ui.Vec2{ .x = row.x + row.w - 10, .y = on_name.y };
+    const on_name = ui.Vec2{ .x = row.x + 28, .y = row.y + row.h / 2 };
+    const beside_name = ui.Vec2{ .x = row.x + row.w - 40, .y = on_name.y };
     const click = struct {
         fn f(h: *Hierarchy, c: *const ui.Context, at: ui.Vec2, clicks: u8) void {
             _ = h.pointer(c, .{ .pointer_down = .{ .position = at, .button = .left, .clicks = clicks } });

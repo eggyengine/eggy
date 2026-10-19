@@ -33,6 +33,8 @@ pub const SceneChange = struct {
 pub const Step = union(enum) {
     /// The world went from `before` to `after` (both scene files' text).
     scene: SceneChange,
+    /// Editor-only visibility of an entity at a scene traversal position.
+    entity_visibility: struct { place: usize, before: bool, after: bool },
     /// Several changes presented as one user operation, owning the label and children.
     group: struct { label: []u8, steps: []Step },
     /// A file or folder was renamed (or moved).
@@ -75,6 +77,7 @@ pub const Step = union(enum) {
     /// ```
     pub fn deinit(self: *Step, gpa: std.mem.Allocator) void {
         switch (self.*) {
+            .entity_visibility => {},
             .group => |group| {
                 for (group.steps) |*step| step.deinit(gpa);
                 gpa.free(group.steps);
@@ -132,6 +135,7 @@ pub const Step = union(enum) {
         return switch (self) {
             .group => |group| group.label,
             .scene => "a scene change",
+            .entity_visibility => "editor visibility",
             .rename => "a rename",
             .delete => "a deletion",
             .create => "a new file",
