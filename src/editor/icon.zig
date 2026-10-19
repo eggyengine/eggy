@@ -1,4 +1,4 @@
-//! The editor's window icon: the egg from `resources/icon.svg`.
+//! The editor's window icon: the pixel-art egg from `resources/icon.png`.
 const std = @import("std");
 const sdl3 = @import("eggy").sdl_adapter.sdl;
 

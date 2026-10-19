@@ -574,7 +574,7 @@ fn addEngine(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.buil
                 .{ .name = "cli", .module = cli.module("cli") },
             },
         });
-        // The window icon, rendered from resources/icon.svg: `rsvg-convert -w 256 -h 256`.
+        // The window icon: the original 256x256 pixel art (resources/icon.svg is the same egg as vector).
         editor.addAnonymousImport("editor_icon", .{ .root_source_file = b.path("resources/icon.png") });
         // The editor's monospace face, for terminal output (OFL; see resources/fonts/OFL.txt).
         // Eggy's version, for the editor's status bar, and where this Eggy is, so an editor built
