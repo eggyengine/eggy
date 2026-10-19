@@ -117,7 +117,7 @@ pub const Grid = struct {
         if (viewport_px.w <= 0 or viewport_px.h <= 0) return;
         self.slot = (self.slot + 1) % frames_in_flight;
         const aspect = viewport_px.w / viewport_px.h;
-        const half_height = @tan(view.fov_deg * std.math.rad_per_deg / 2);
+        const half_height = if (view.projection == .orthographic) view.orthographic_height_m / 2 else @tan(view.fov_deg * std.math.rad_per_deg / 2);
         const right = camera.normalize(camera.cross(view.forward, view.up));
         const uniforms = Uniforms{
             .view_projection = view.viewProjection(aspect),
@@ -126,7 +126,7 @@ pub const Grid = struct {
             .across = .{ right[0] * half_height * aspect, right[1] * half_height * aspect, right[2] * half_height * aspect, 0 },
             .upward = .{ view.up[0] * half_height, view.up[1] * half_height, view.up[2] * half_height, 0 },
             .viewport = .{ viewport_px.x, viewport_px.y, viewport_px.w, viewport_px.h },
-            .options = .{ if (srgb) 1 else 0, reach_m, 0, 0 },
+            .options = .{ if (srgb) 1 else 0, reach_m, if (view.projection == .orthographic) 1 else 0, 0 },
         };
         const buffer = self.uniforms[self.slot];
         const bytes = std.mem.asBytes(&uniforms);

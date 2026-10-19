@@ -1,11 +1,13 @@
 //! Cameras: where the scene is seen from. `Camera` is the built-in component a game puts on an
 //! entity to look through it (down the entity's -z, with its +y up); `View` is a camera placed in
-//! the world, which the renderer draws from. The runtime looks through the first entity with a
-//! `Camera` (`find`); the editor's Scene panel has a camera of its own.
+//! the world, which the renderer draws from. Active cameras use priority, then stable entity ID;
+//! the editor's Scene panel has a camera of its own.
 const std = @import("std");
 const ecs = @import("clutch");
 const math = @import("eggenvector");
 const transform_zig = @import("transform.zig");
+
+pub const Projection = enum(u32) { perspective, orthographic };
 
 pub const Camera = struct {
     /// It looks from where its `Transform` puts it.
@@ -16,6 +18,56 @@ pub const Camera = struct {
     /// The nearest and furthest it sees, in metres.
     near: f32 = 0.1,
     far: f32 = 1000,
+    projection: Projection = .perspective,
+    orthographic_height_m: f32 = 10,
+    active: bool = true,
+    priority: i32 = 0,
+
+    /// Reject unusable projection settings before selecting or projecting this camera.
+    pub fn validate(self: Camera) error{InvalidCamera}!void {
+        for ([_]f32{ self.fov_deg, self.near, self.far, self.orthographic_height_m }) |value|
+            if (!std.math.isFinite(value)) return error.InvalidCamera;
+        if (self.near <= 0 or self.far <= self.near or self.fov_deg <= 0 or self.fov_deg >= 180 or self.orthographic_height_m <= 0)
+            return error.InvalidCamera;
+    }
+};
+
+/// Borrowed camera controls for the current world; do not retain across world replacement.
+pub const Cameras = struct {
+    world: *ecs.World,
+
+    /// Make one live camera exclusive, or disable all cameras with null.
+    /// Invalid entities, missing components and invalid projections leave selection unchanged.
+    pub fn setActive(self: Cameras, entity: ?ecs.EntityId) !void {
+        if (entity) |id| {
+            if (!self.world.isAlive(id)) return error.InvalidEntity;
+            const value = self.world.get(id, Camera) orelse return error.NoCamera;
+            try value.validate();
+        }
+        var cameras = self.world.query(.{*Camera});
+        while (cameras.next()) |view| {
+            view.get(*Camera).active = if (entity) |id| view.entity.eql(id) else false;
+            self.world.markChanged(view.entity, Camera);
+        }
+    }
+
+    /// Return the active camera with highest priority; equal priorities use the lowest entity ID.
+    pub fn activeEntity(self: Cameras) ?ecs.EntityId {
+        var result: ?ecs.EntityId = null;
+        var priority: i32 = std.math.minInt(i32);
+        var cameras = self.world.query(.{*const Camera});
+        while (cameras.next()) |view| {
+            const value = view.get(*const Camera).*;
+            if (!value.active) continue;
+            if (result == null or value.priority > priority or
+                (value.priority == priority and view.entity.id < result.?.id))
+            {
+                result = view.entity;
+                priority = value.priority;
+            }
+        }
+        return result;
+    }
 };
 
 /// A camera placed in the world: where it is, which way it looks, and what it sees. Plain data,
@@ -28,6 +80,8 @@ pub const View = extern struct {
     fov_deg: f32 = 60,
     near: f32 = 0.1,
     far: f32 = 1000,
+    projection: Projection = .perspective,
+    orthographic_height_m: f32 = 10,
 
     /// Looking at the middle of the world from above and in front, for scenes without a camera.
     pub const default: View = lookingAt(.{ 0, 8, 18 }, .{ 0, 1, 0 }, .{});
@@ -42,7 +96,7 @@ pub const View = extern struct {
     pub fn lookingAt(eye: [3]f32, target: [3]f32, camera: Camera) View {
         const forward = normalize(sub(target, eye));
         const right = normalize(cross(forward, .{ 0, 1, 0 }));
-        return .{ .eye = eye, .forward = forward, .up = cross(right, forward), .fov_deg = camera.fov_deg, .near = camera.near, .far = camera.far };
+        return .{ .eye = eye, .forward = forward, .up = cross(right, forward), .fov_deg = camera.fov_deg, .near = camera.near, .far = camera.far, .projection = camera.projection, .orthographic_height_m = camera.orthographic_height_m };
     }
 
     /// The matrix taking world points to clip space, for a view `aspect` wide for each unit tall,
@@ -57,27 +111,52 @@ pub const View = extern struct {
         const eye = math.Vec3{ .x = self.eye[0], .y = self.eye[1], .z = self.eye[2] };
         const target = math.Vec3{ .x = self.eye[0] + self.forward[0], .y = self.eye[1] + self.forward[1], .z = self.eye[2] + self.forward[2] };
         const view = math.mat.lookAt4x4(f32, eye, target, .{ .x = self.up[0], .y = self.up[1], .z = self.up[2] });
-        const projection = math.mat.perspective4x4(f32, self.fov_deg * std.math.rad_per_deg, aspect, self.near, self.far);
+        var projection = math.mat.perspective4x4(f32, self.fov_deg * std.math.rad_per_deg, aspect, self.near, self.far);
+        if (self.projection == .orthographic)
+            projection.data = .{
+                .{ 2 / (self.orthographic_height_m * aspect), 0, 0, 0 },
+                .{ 0, 2 / self.orthographic_height_m, 0, 0 },
+                .{ 0, 0, 1 / (self.near - self.far), 0 },
+                .{ 0, 0, self.near / (self.near - self.far), 1 },
+            };
         const matrix = math.mul(f32, 4, 4, 4, projection, view);
         var columns: [4][4]f32 = undefined;
         for (&columns, matrix.data) |*column, data| column.* = data;
         return columns;
     }
+
+    /// Construct a world ray from NDC coordinates (-1 to 1, Y up) for either projection.
+    pub fn ray(self: View, ndc: [2]f32, aspect: f32) Ray {
+        const right = normalize(cross(self.forward, self.up));
+        const half_height = if (self.projection == .orthographic) self.orthographic_height_m / 2 else @tan(self.fov_deg * std.math.rad_per_deg / 2);
+        var offset: [3]f32 = undefined;
+        for (&offset, right, self.up) |*value, r, u| value.* = r * ndc[0] * half_height * aspect + u * ndc[1] * half_height;
+        var origin = self.eye;
+        var direction = self.forward;
+        for (&origin, &direction, offset) |*o, *d, value| {
+            if (self.projection == .orthographic) o.* += value else d.* += value;
+        }
+        return .{ .origin = origin, .direction = normalize(direction) };
+    }
 };
 
-/// The view through the first entity of `world` with a `Camera`, placed by its transform (and
-/// its parents'); null when there is none.
+pub const Ray = struct { origin: [3]f32, direction: [3]f32 };
+
+/// The highest-priority active camera, placed by its world transform; null when none is active.
 /// Borrows the world only during the query; returns a copy independent of ECS storage.
-/// When several cameras exist, query order determines which wins.
+/// Equal priorities use the lowest entity ID, independently of ECS query order.
 ///
 /// ```zig
 /// const view = find(world) orelse View.default;
 /// ```
 pub fn find(world: *ecs.World) ?View {
-    var cameras = world.query(.{*const Camera});
-    const found = cameras.next() orelse return null;
-    const camera = found.get(*const Camera).*;
-    const placed = transform_zig.worldMatrix(world, found.entity).data;
+    const entity = (Cameras{ .world = world }).activeEntity() orelse return null;
+    const camera = world.get(entity, Camera).?.*;
+    camera.validate() catch |err| {
+        std.log.err("active camera {d} is invalid: {t}", .{ entity.id, err });
+        return null;
+    };
+    const placed = transform_zig.worldMatrix(world, entity).data;
     return .{
         .eye = .{ placed[3][0], placed[3][1], placed[3][2] },
         .forward = normalize(.{ -placed[2][0], -placed[2][1], -placed[2][2] }),
@@ -85,6 +164,8 @@ pub fn find(world: *ecs.World) ?View {
         .fov_deg = camera.fov_deg,
         .near = camera.near,
         .far = camera.far,
+        .projection = camera.projection,
+        .orthographic_height_m = camera.orthographic_height_m,
     };
 }
 
@@ -150,4 +231,35 @@ test "a camera entity looks down its -z, from where its transform puts it" {
     // Turned a quarter about y, -z faces -x.
     try std.testing.expectApproxEqAbs(@as(f32, -1), view.forward[0], 0.001);
     try std.testing.expectApproxEqAbs(@as(f32, 1), view.up[1], 0.001);
+}
+
+test "camera selection is explicit and priority ties do not depend on archetypes" {
+    var world = ecs.World.init(std.testing.allocator);
+    defer world.deinit();
+    const first = try world.spawn(.{ Camera{}, transform_zig.Transform{} });
+    const second = try world.spawn(.{ Camera{ .priority = 10 }, transform_zig.Transform{} });
+    const cameras = Cameras{ .world = &world };
+    try std.testing.expect(cameras.activeEntity().?.eql(second));
+    try cameras.setActive(first);
+    try std.testing.expect(cameras.activeEntity().?.eql(first));
+    world.get(second, Camera).?.near = -1;
+    try std.testing.expectError(error.InvalidCamera, cameras.setActive(second));
+    try std.testing.expect(cameras.activeEntity().?.eql(first));
+    try cameras.setActive(null);
+    try std.testing.expect(find(&world) == null);
+}
+
+test "orthographic projection preserves apparent size across depth" {
+    const view = View.lookingAt(.{ 0, 0, 10 }, .{ 0, 0, 0 }, .{ .projection = .orthographic, .orthographic_height_m = 4 });
+    const matrix = view.viewProjection(2);
+    const near = project(matrix, .{ 2, 1, 0 });
+    const far = project(matrix, .{ 2, 1, -20 });
+    try std.testing.expectApproxEqAbs(@as(f32, 0.5), near.x, 0.0001);
+    try std.testing.expectApproxEqAbs(@as(f32, 0.5), near.y, 0.0001);
+    try std.testing.expectApproxEqAbs(near.x, far.x, 0.0001);
+    try std.testing.expectApproxEqAbs(near.y, far.y, 0.0001);
+    const first = view.ray(.{ 0, 0 }, 2);
+    const second = view.ray(.{ 1, 1 }, 2);
+    try std.testing.expectEqualSlices(f32, &first.direction, &second.direction);
+    try std.testing.expectEqualSlices(f32, &.{ 4, 2, 10 }, &second.origin);
 }

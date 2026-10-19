@@ -203,6 +203,11 @@ pub const App = struct {
         return .{ .world = &self.world };
     }
 
+    /// Borrow active-camera controls; selection changes apply to the next scene draw.
+    pub fn cameras(self: *App) @import("camera.zig").Cameras {
+        return .{ .world = &self.world };
+    }
+
     /// Borrow the current world's scene service; do not retain across reset/reload.
     /// Lazily creates the instance registry; the App owns it and any instantiated entities.
     ///

@@ -28,7 +28,7 @@ cbuffer Grid : register(b0, space0) {
     float4 across;           // xyz: right, as far as the view's edge is from its middle
     float4 upward;           // xyz: up, likewise
     float4 viewport;         // the viewport in pixels: x, y, width, height
-    float4 options;          // x: 1 when the target is sRGB; y: how far it shows, in metres
+    float4 options;          // x: sRGB target; y: reach in metres; z: orthographic projection
 };
 
 [shader("vertex")]
@@ -56,10 +56,12 @@ float axisLine(float value) {
 FragmentOutput fragmentMain(VertexOutput input) {
     // The ray through this pixel, and where it meets the ground.
     float2 ndc = float2((input.position.x - viewport.x) / viewport.z * 2.0 - 1.0, 1.0 - (input.position.y - viewport.y) / viewport.w * 2.0);
-    float3 direction = forward.xyz + across.xyz * ndc.x + upward.xyz * ndc.y;
-    float t = -eye.y / direction.y;
+    float3 offset = across.xyz * ndc.x + upward.xyz * ndc.y;
+    float3 origin = eye.xyz + (options.z > 0.5 ? offset : float3(0, 0, 0));
+    float3 direction = forward.xyz + (options.z > 0.5 ? float3(0, 0, 0) : offset);
+    float t = -origin.y / direction.y;
     if (!(t > 0.0)) discard;
-    float3 ground = eye.xyz + direction * t;
+    float3 ground = origin + direction * t;
 
     // The lines, the axes over them, fading with distance and at grazing angles.
     float minor = gridLine(ground.xz, 1.0) * 0.18;

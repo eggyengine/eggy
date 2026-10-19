@@ -103,8 +103,17 @@ continues to return only as many drawables as fit.
 
 ## Check the game camera {#cameras-and-custom-drawing}
 
-The game looks through the first matching Camera entity, placed by its world transform.
-There are no camera priorities, camera stacks, or global current camera to configure.
+The game looks through an active Camera entity, placed by its world transform.
+Higher `priority` wins; equal priorities use the lowest entity ID rather than query order.
+Existing cameras default to active with priority zero. To switch exclusively:
+
+```zig
+try app.cameras().setActive(camera);
+// Pass null to disable all game cameras.
+```
+
+Set `Camera.projection = .orthographic` and `orthographic_height_m` for a view whose
+visible height stays constant with depth. Perspective cameras use `fov_deg`.
 Run the game or enter Play in the editor to check the view through that Camera.
 The first example should show an orange cube. If it is missing, check that the
 Mesh and Camera entities each have a Transform and that you are viewing the game
