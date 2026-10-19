@@ -71,5 +71,5 @@ test "every missing backend operation returns NotImplemented" {
     defer instances.deinit();
     const scenes = @import("scenes/scenes.zig").Scenes{ .world = &world, .instances = &instances, .resources = .{}, .access = null };
     try expect(error.NotImplemented, scenes.stream(.init("level.scene.zon"), .{}));
-    try expect(error.NotImplemented, scenes.replace(.init("level.scene.zon")));
+    try expect(error.NoSceneRegistry, scenes.replace(.init("level.scene.zon")));
 }

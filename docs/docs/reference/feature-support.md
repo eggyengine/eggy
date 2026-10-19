@@ -38,7 +38,8 @@ Working low-level graphics (`eggy.vit`), UI (`eggy.ui`), math (`eggy.math`), ECS
 (`eggy.ecs`), scene formats, and asset formats remain available directly. SDL controllers,
 touch gameplay input, [named input maps](../how-to/map-input.md), value timers, and gameplay
 time scaling are implemented. Streaming and async resource loading are not:
-`Resources.readAsync`/`cancel` and `Scenes.stream`/`replace` fail explicitly.
+`Resources.readAsync`/`cancel` and `Scenes.stream` fail explicitly. `Scenes.replace`
+stages synchronous scene replacement for the end of the gameplay update.
 
 | Surface | Desktop | Web |
 | --- | --- | --- |

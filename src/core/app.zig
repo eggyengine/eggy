@@ -43,6 +43,7 @@ pub const App = struct {
     /// Typed registry installed by the game library, never the editor host.
     scene_access: ?scene.Access = null,
     instances: ?SceneInstances = null,
+    scene_transition: @import("scenes/scenes.zig").Transition = .{},
     ui_layer: ?*Overlay = null,
     audio: @import("audio.zig").Audio = .{},
     animation: @import("animation.zig").Animation = .{},
@@ -101,6 +102,7 @@ pub const App = struct {
     pub fn deinit(self: *App) void {
         self.stopWorld();
         self.clearGameUi();
+        self.scene_transition.deinit();
         if (self.instances) |*instances| instances.deinit();
         self.world.deinit();
         if (self.input_backend) |backend| backend.deinit();
@@ -149,7 +151,7 @@ pub const App = struct {
     /// _ = root; // An entity owned by app.world, not caller-allocated scene data.
     /// ```
     pub fn scenes(self: *App) Scenes {
-        return .{ .world = &self.world, .instances = self.sceneInstances(), .resources = self.resources(), .access = self.scene_access };
+        return .{ .world = &self.world, .instances = self.sceneInstances(), .resources = self.resources(), .access = self.scene_access, .transition = &self.scene_transition };
     }
 
     /// The instance registry shared by author calls and the executable's scene-sync point.
@@ -208,6 +210,7 @@ pub const App = struct {
     pub fn resetWorld(self: *App) void {
         self.stopWorld();
         self.clearGameUi();
+        self.scene_transition.deinit();
         if (self.instances) |*instances| instances.deinit();
         self.instances = null;
         self.scene_access = null;
@@ -253,6 +256,9 @@ pub const App = struct {
         try self.world.insertResource(self.time);
         inline for (.{ .PreUpdate, .Update, .PostUpdate }) |stage| try self.world.runStage(stage);
         self.world.tick();
+        if (self.scene_transition.pending != null) if (self.scene_access) |access| {
+            if (try self.scene_transition.apply(&self.world, access, self.sceneInstances())) self.input.cancel();
+        };
     }
 
     /// Host device bookkeeping before UI/gameplay routing; opens/closes controllers as needed.

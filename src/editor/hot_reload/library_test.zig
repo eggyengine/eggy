@@ -52,6 +52,7 @@ test "the game's library loads, runs, swaps for a fresh copy, and unloads cleanl
     app.instances = null;
     app.ui_layer = null;
     app.scene_access = null;
+    app.scene_transition = .{};
     var resource_context: u8 = 0;
     app.resource_provider = eggy.resources.Resources.from(&resource_context, Source.read, Source.model, Source.image);
     defer app.world.deinit();
@@ -170,6 +171,7 @@ test "typed actions and game UI cross the real ABI and undo after library replac
     app.instances = null;
     app.ui_layer = null;
     app.scene_access = null;
+    app.scene_transition = .{};
     var resource_context: u8 = 0;
     app.resource_provider = eggy.resources.Resources.from(&resource_context, Source.read, Source.model, Source.image);
     const backend = try attachInput(&app, gpa);

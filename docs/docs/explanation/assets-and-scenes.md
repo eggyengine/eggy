@@ -81,5 +81,20 @@ allocators, and `std.Io` where needed. Games can also access it as `eggy.assets`
 allocate their resulting paths or names; free them with `gpa.free`. Their original
 buffer-based counterparts remain allocation-free.
 
-Browser resource providers are not implemented. Async reads, streaming, and scene
-replacement return `NotImplemented`; a typed reference alone does not supply a backend.
+Browser builds read their preloaded packaged resources synchronously. Async reads and
+streaming still return `NotImplemented`.
+
+## Switch levels
+
+Call `try app.scenes().replace(.init("resources/levels/next.scene.zon"))` from game code.
+Eggy reads and parses the target immediately, then commits it after the current gameplay
+hooks and systems finish. Only one replacement can be pending.
+
+The old entities remain until the new scene instantiates successfully. A missing file or
+invalid scene reports an error rather than clearing the current level. Unknown or invalid
+components reject the replacement rather than loading a partially defaulted level.
+
+Replacement removes all old entities, including entities created by game code. Plugin
+instances, world resources, schedules, preferences and game UI survive; store cross-level
+progress there, not in an entity you expect to survive. Resolve entity references again
+after switching. Nested scene instances populate at the usual scene-sync point.

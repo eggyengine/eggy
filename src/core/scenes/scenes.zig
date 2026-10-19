@@ -7,6 +7,7 @@ const instances = @import("../scene_instances.zig");
 const Resources = @import("../resources/resources.zig").Resources;
 const support = @import("../support.zig");
 pub const streaming_support: support.Support = .not_implemented;
+pub const Transition = @import("transition.zig").Transition;
 
 /// A borrowed view of the current world. Do not retain it across world resets or hot reload.
 pub const Scenes = struct {
@@ -14,6 +15,7 @@ pub const Scenes = struct {
     instances: *instances.SceneInstances,
     resources: Resources,
     access: ?scene.Access,
+    transition: ?*Transition = null,
 
     pub const Options = struct { parent: ?ecs.EntityId = null };
 
@@ -47,16 +49,23 @@ pub const Scenes = struct {
     pub fn stream(_: Scenes, file: refs.AssetRef(.scene), options: Options) support.Error!ecs.EntityId {
         return support.notImplemented(.{ file, options });
     }
-    /// Reserved world-replacement API; always returns `NotImplemented`, leaving the world
-    /// untouched. Instantiation does not implicitly replace the current scene.
+    /// Read and parse a replacement now; commit it after the current gameplay update.
+    /// All old entities are removed only after the replacement instantiates successfully.
+    /// Plugin state, schedules, resources and UI survive. Entity/component pointers do not.
+    /// Missing/invalid files leave the current world untouched; only one request may be pending.
     ///
     /// ```zig
-    /// // With the current world's scenes view:
-    /// try std.testing.expectError(error.NotImplemented,
-    ///     scenes.replace(.init("resources/level.scene.zon")));
+    /// try app.scenes().replace(.init("resources/level.scene.zon"));
     /// ```
-    pub fn replace(_: Scenes, file: refs.AssetRef(.scene)) support.Error!void {
-        return support.notImplemented(file);
+    pub fn replace(self: Scenes, file: refs.AssetRef(.scene)) !void {
+        if (file.len == 0) return error.UnsetAsset;
+        if (self.access == null) return error.NoSceneRegistry;
+        const transition = self.transition orelse return error.NoSceneTransitionHost;
+        try transition.request(self.world.allocator, self.resources, file);
+    }
+
+    test {
+        _ = @import("transition.zig");
     }
 };
 
