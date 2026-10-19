@@ -112,9 +112,14 @@ pub fn layout(tool: Tool, space: Space, placed: [4][4]f32, view: View, scene: ui
     const origin_world = [3]f32{ placed[3][0], placed[3][1], placed[3][2] };
     const view_projection = view.viewProjection(scene.w / scene.h);
     const centre = toScreen(view_projection, scene, origin_world) orelse return null;
-    const to_camera = eggy.camera.normalize(eggy.camera.sub(view.eye, origin_world));
+    // Orthographic cameras see every point along the same direction, at a size fixed by the view's height.
+    const orthographic = view.projection == .orthographic;
+    const to_camera = if (orthographic) scale(view.forward, -1) else eggy.camera.normalize(eggy.camera.sub(view.eye, origin_world));
     const distance = length(eggy.camera.sub(origin_world, view.eye));
-    const world_length = distance * 2 * @tan(view.fov_deg * std.math.rad_per_deg / 2) * length_pt / @max(1, scene.h);
+    const world_length = if (orthographic)
+        view.orthographic_height_m * length_pt / @max(1, scene.h)
+    else
+        distance * 2 * @tan(view.fov_deg * std.math.rad_per_deg / 2) * length_pt / @max(1, scene.h);
     var result = Layout{
         .tool = tool,
         .space = space,
@@ -384,12 +389,12 @@ pub const Drag = struct {
 
     /// Where the pointer's ray at `pointer` meets the plane through the entity with `normal`.
     fn onPlane(self: Drag, normal: [3]f32, pointer: ui.Vec2) ?[3]f32 {
-        const direction = rayThrough(self.gizmo.view, self.gizmo.scene, pointer);
-        const facing = dot(direction, normal);
+        const ray = rayThrough(self.gizmo.view, self.gizmo.scene, pointer);
+        const facing = dot(ray.direction, normal);
         if (@abs(facing) < 1e-5) return null;
-        const t = dot(eggy.camera.sub(self.gizmo.origin_world, self.gizmo.view.eye), normal) / facing;
+        const t = dot(eggy.camera.sub(self.gizmo.origin_world, ray.origin), normal) / facing;
         if (t <= 0) return null;
-        return add(self.gizmo.view.eye, scale(direction, t));
+        return add(ray.origin, scale(ray.direction, t));
     }
 };
 

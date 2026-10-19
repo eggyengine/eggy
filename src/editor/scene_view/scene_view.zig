@@ -168,6 +168,8 @@ pub const SceneView = struct {
     /// scene_view.update(target, scene_rect, .editing);
     /// ```
     pub fn update(self: *SceneView, target: ?Target, scene: ?ui.Rect, look: Look) void {
+        // The panel's own camera is perspective; only a game camera's lens (below) changes that.
+        self.camera.projection = .perspective;
         self.view = self.camera.view();
         self.gizmo = null;
         self.scene = scene;
@@ -224,6 +226,12 @@ pub const SceneView = struct {
         self.view.fov_deg = camera.view.fov_deg;
         self.view.near = camera.view.near;
         self.view.far = camera.view.far;
+        self.view.projection = camera.view.projection;
+        self.view.orthographic_height_m = camera.view.orthographic_height_m;
+        // Panning keeps the focus under the pointer, whichever lens it is.
+        self.camera.fov_deg = camera.view.fov_deg;
+        self.camera.projection = camera.view.projection;
+        self.camera.orthographic_height_m = camera.view.orthographic_height_m;
     }
 
     /// Whether the panel looks through the game's camera this frame (or would, without one).
@@ -384,8 +392,9 @@ pub const SceneView = struct {
     /// const world_position = scene_view.dropPoint(scene, pointer); // Updated view and UI rect/point.
     /// ```
     pub fn dropPoint(self: *const SceneView, scene: ui.Rect, at: ui.Vec2) [3]f32 {
-        const along = eggy.camera.normalize(picking.rayThrough(self.view, scene, at));
-        const eye = self.view.eye;
+        const ray = picking.rayThrough(self.view, scene, at);
+        const along = ray.direction;
+        const eye = ray.origin;
         const to_ground = if (along[1] < -1e-3) -eye[1] / along[1] else std.math.inf(f32);
         const distance: f32 = if (to_ground > 0 and to_ground < 100) to_ground else 5;
         return .{ eye[0] + along[0] * distance, eye[1] + along[1] * distance, eye[2] + along[2] * distance };

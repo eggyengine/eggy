@@ -17,7 +17,7 @@ const ui = eggy.ui;
 /// const entity = pick(drawables, &graphics.models, view, scene, pointer);
 /// ```
 pub fn pick(drawn: []const eggy.mesh.Drawable, models: *const eggy.model_cache.ModelCache, view: eggy.camera.View, scene: ui.Rect, pointer: ui.Vec2) ?eggy.ecs.EntityId {
-    const direction = rayThrough(view, scene, pointer);
+    const ray = rayThrough(view, scene, pointer);
 
     var nearest: ?eggy.ecs.EntityId = null;
     var nearest_t = std.math.inf(f32);
@@ -25,8 +25,8 @@ pub fn pick(drawn: []const eggy.mesh.Drawable, models: *const eggy.model_cache.M
         // The ray in the mesh's own space, where its shape is a metre across round the origin;
         // `t` means the same distance along it in both.
         const to_local = eggy.transform.invert(drawable.model) orelse continue;
-        const origin = eggy.transform.apply(to_local, view.eye, 1);
-        const along = eggy.transform.apply(to_local, direction, 0);
+        const origin = eggy.transform.apply(to_local, ray.origin, 1);
+        const along = eggy.transform.apply(to_local, ray.direction, 0);
         const hit: ?f32 = if (drawable.modelFile()) |file| blk: {
             const box = models.bounds(file) orelse continue;
             break :blk hitBox(origin, along, box[0], box[1]);
@@ -44,23 +44,20 @@ pub fn pick(drawn: []const eggy.mesh.Drawable, models: *const eggy.model_cache.M
     return nearest;
 }
 
-/// The direction from the camera through `pointer` on the view in `scene` (not unit length).
-/// Editor-only: requires positive scene width/height and a valid camera basis/FOV. Input
-/// coordinates are UI points; output is a world-space direction from `view.eye`, even for
-/// pointers outside the rect. Pure calculation; normalize only if distance units are needed.
+/// The world ray from the camera through `pointer` on the view in `scene`: from the eye for a
+/// perspective camera, and from the point on the eye's plane for an orthographic one, whose
+/// rays run parallel. The direction is unit length.
+/// Editor-only: requires positive scene width/height and a valid camera. Pointers outside the
+/// rect still give a ray. Pure calculation.
 ///
 /// ```zig
 /// // Given camera view, positive-sized Scene rect and UI-space pointer:
-/// const direction = rayThrough(view, scene, pointer);
+/// const ray = rayThrough(view, scene, pointer);
 /// ```
-pub fn rayThrough(view: eggy.camera.View, scene: ui.Rect, pointer: ui.Vec2) [3]f32 {
+pub fn rayThrough(view: eggy.camera.View, scene: ui.Rect, pointer: ui.Vec2) eggy.camera.Ray {
     const x = (pointer.x - scene.x) / scene.w * 2 - 1;
     const y = 1 - (pointer.y - scene.y) / scene.h * 2;
-    const half_height = @tan(view.fov_deg * std.math.rad_per_deg / 2);
-    const right = eggy.camera.normalize(eggy.camera.cross(view.forward, view.up));
-    var direction: [3]f32 = undefined;
-    for (&direction, view.forward, right, view.up) |*part, ahead, across, up| part.* = ahead + across * x * half_height * (scene.w / scene.h) + up * y * half_height;
-    return direction;
+    return view.ray(.{ x, y }, scene.w / scene.h);
 }
 
 /// Where the ray first enters the box from `min` to `max`, if it does.
@@ -95,6 +92,19 @@ fn hitSphere(origin: [3]f32, along: [3]f32) ?f32 {
 
 fn dot(a: [3]f32, b: [3]f32) f32 {
     return a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+}
+
+test "an orthographic pointer ray is parallel and starts beside the eye" {
+    const scene = ui.Rect{ .x = 0, .y = 0, .w = 800, .h = 400 };
+    const view = eggy.camera.View.lookingAt(.{ 0, 0, 10 }, .{ 0, 0, 0 }, .{ .projection = .orthographic, .orthographic_height_m = 4 });
+    const ray = rayThrough(view, scene, .{ .x = 800, .y = 200 });
+    // The right edge is half the view's width (4 m tall at 2:1 is 8 m wide) from its centre.
+    try std.testing.expectApproxEqAbs(@as(f32, 4), ray.origin[0], 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, -1), ray.direction[2], 0.001);
+    const cube = eggy.mesh.Drawable{ .model = .{ .{ 1, 0, 0, 0 }, .{ 0, 1, 0, 0 }, .{ 0, 0, 1, 0 }, .{ 3.5, 0, -5, 1 } }, .color = .{ 1, 1, 1, 1 }, .shape = .cube, .entity_id = 9, .entity_generation = 0 };
+    var models = eggy.model_cache.ModelCache.init(std.testing.allocator, undefined);
+    try std.testing.expectEqual(@as(u32, 9), pick(&.{cube}, &models, view, scene, .{ .x = 790, .y = 200 }).?.id);
+    try std.testing.expect(pick(&.{cube}, &models, view, scene, .{ .x = 400, .y = 200 }) == null);
 }
 
 test "the nearest mesh under the pointer is picked, and empty space picks nothing" {

@@ -40,6 +40,10 @@ pub const SceneCamera = struct {
     /// How far the eye is from the focus point.
     distance: f32 = 19,
     fov_deg: f32 = 60,
+    /// The lens it shows through: its own is always perspective; through an orthographic game
+    /// camera it takes that camera's, so panning moves what is under the pointer.
+    projection: eggy.camera.Projection = .perspective,
+    orthographic_height_m: f32 = 10,
     /// The drag steering it, from a press over the Scene panel until its button is let go.
     drag: ?Drag = null,
     /// Whether the pointer is over the Scene panel, for F.
@@ -57,7 +61,7 @@ pub const SceneCamera = struct {
     /// const view = camera.view();
     /// ```
     pub fn view(self: *const SceneCamera) View {
-        return .{ .eye = self.eye(), .forward = self.forward(), .up = self.up(), .fov_deg = self.fov_deg };
+        return .{ .eye = self.eye(), .forward = self.forward(), .up = self.up(), .fov_deg = self.fov_deg, .projection = self.projection, .orthographic_height_m = self.orthographic_height_m };
     }
 
     /// Steer by `event`, from window `scene`, the Scene panel's rect (in the event's window;
@@ -183,7 +187,8 @@ pub const SceneCamera = struct {
 
     fn pan(self: *SceneCamera, dx: f32, dy: f32, height: f32) void {
         // Match the focus point's screen motion at any zoom level.
-        const metres_per_point = 2 * self.distance * @tan(self.fov_deg * std.math.rad_per_deg / 2) / @max(1, height);
+        const visible_height_m = if (self.projection == .orthographic) self.orthographic_height_m else 2 * self.distance * @tan(self.fov_deg * std.math.rad_per_deg / 2);
+        const metres_per_point = visible_height_m / @max(1, height);
         self.focus = add(self.focus, add(scale(self.right(), -dx * metres_per_point), scale(self.up(), dy * metres_per_point)));
     }
 
