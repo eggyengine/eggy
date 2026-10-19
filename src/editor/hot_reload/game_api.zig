@@ -25,6 +25,35 @@ pub const Panel = extern struct {
     title: [*:0]const u8,
 };
 pub const Command = extern struct { key: [*:0]const u8, title: [*:0]const u8 };
+
+/// A menu row (`eggy.plugins.EditorMenuItem`). A menu's rows, and a status item's, sit together
+/// in `Game.menu_items` / `Game.status_menu_items`, in declaration order.
+pub const MenuItem = extern struct {
+    key: [*:0]const u8,
+    title: [*:0]const u8,
+    shortcut: [*:0]const u8,
+    checkable: bool,
+};
+
+/// A plugin's top-bar menu (`eggy.plugins.EditorMenu`); `extends` is an
+/// `eggy.plugins.BuiltinMenu`, or -1 for a menu of its own.
+pub const Menu = extern struct {
+    key: [*:0]const u8,
+    title: [*:0]const u8,
+    extends: i32,
+    item_count: usize,
+};
+
+/// A status bar entry (`eggy.plugins.EditorStatusItem`); `side` is an `eggy.plugins.StatusSide`.
+pub const StatusItem = extern struct {
+    key: [*:0]const u8,
+    title: [*:0]const u8,
+    side: u8,
+    item_count: usize,
+};
+
+/// Which kind of entry `Game.bar_action` and `Game.bar_state` mean (`eggy.plugins.EditorBarTarget`).
+pub const BarKind = enum(u8) { menu_item, status, status_item };
 pub const FileType = extern struct {
     key: [*:0]const u8,
     title: [*:0]const u8,
@@ -135,6 +164,22 @@ pub const Game = extern struct {
     file_types: [*]const FileType,
     file_type_count: usize,
     editor_command: *const fn (state: *anyopaque, command: usize, editor: *anyopaque) callconv(.c) void,
+    /// The plugins' menus and status bar entries, whose rows follow in declaration order.
+    menus: [*]const Menu,
+    menu_count: usize,
+    menu_items: [*]const MenuItem,
+    menu_item_count: usize,
+    status_items: [*]const StatusItem,
+    status_item_count: usize,
+    status_menu_items: [*]const MenuItem,
+    status_menu_item_count: usize,
+    /// Press entry `owner` (a menu or status item index, by `kind`), row `item` of it for
+    /// `menu_item` and `status_item`, with a borrowed `*eggy.editor.Context`. A turned-off
+    /// plugin's entry does nothing.
+    bar_action: *const fn (state: *anyopaque, kind: BarKind, owner: usize, item: usize, editor: *anyopaque) callconv(.c) void,
+    /// How the entry looks now, into an `*eggy.plugins.EditorBarState`; false when its hook
+    /// failed (logged), leaving the declared look.
+    bar_state: *const fn (state: *anyopaque, kind: BarKind, owner: usize, item: usize, editor: *anyopaque, out: *anyopaque) callconv(.c) bool,
     /// The plugins' File > Export platforms, then their settings for `platform` (Eggy's
     /// `BuiltinPlatform`s, then `export_platforms`) exporting for `target`, into an
     /// `*eggy.ui.Context`, and their `zig build export` arguments into an

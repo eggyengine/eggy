@@ -27,6 +27,10 @@ pub const HotGame = struct {
     panels: []eggy.plugins.EditorPanel,
     commands: []const eggy.plugins.EditorCommand = &.{},
     file_types: []const eggy.plugins.EditorFileType = &.{},
+    /// The plugins' top-bar menus and status bar entries, rebuilt from the library on every
+    /// load and copied into `manifest_arena` (rows included): the editor keeps no callbacks.
+    menus: []const eggy.plugins.EditorMenu = &.{},
+    status_items: []const eggy.plugins.EditorStatusItem = &.{},
     /// The plugins' File > Export platforms, copied into `manifest_arena` too.
     export_platforms: []const eggy.plugins.ExportPlatform = &.{},
     /// Each plugin's preferences, copied out of the library into `manifest_arena`.
@@ -304,6 +308,55 @@ pub const HotGame = struct {
         self.game.editor_command(state, command, editor);
     }
 
+    /// Press a plugin's menu row or status bar entry, by its place in `menus` / `status_items`
+    /// (`item` for `.menu_item` and `.status_item`). Editor host only: does nothing while the
+    /// game isn't running, for a turned-off plugin's entry or an index past the metadata; hook
+    /// failures log. The hook-local editor context may queue lifecycle work; process it only
+    /// after return.
+    ///
+    /// ```zig
+    /// game.barAction(.{ .menu_item = .{ .menu = 0, .item = 1 } }, &editor_context);
+    /// ```
+    pub fn barAction(self: *HotGame, target: eggy.plugins.EditorBarTarget, editor: *eggy.editor.Context) void {
+        const state = self.state orelse return;
+        if (!self.hasBarTarget(target)) return;
+        const call = barCall(target);
+        self.game.bar_action(state, call.kind, call.owner, call.item, editor);
+    }
+
+    /// How a plugin's menu row or status bar entry looks now. While the game isn't running its
+    /// entries are disabled; a failed hook (logged) leaves the declared look. Editor host only.
+    ///
+    /// ```zig
+    /// const look = game.barState(.{ .status = 0 }, &editor_context);
+    /// ```
+    pub fn barState(self: *HotGame, target: eggy.plugins.EditorBarTarget, editor: *eggy.editor.Context) eggy.plugins.EditorBarState {
+        var result = eggy.plugins.EditorBarState{};
+        const state = self.state orelse return .{ .enabled = false };
+        if (!self.hasBarTarget(target)) return .{ .enabled = false };
+        const call = barCall(target);
+        if (!self.game.bar_state(state, call.kind, call.owner, call.item, editor, &result)) return .{};
+        return result;
+    }
+
+    fn hasBarTarget(self: *const HotGame, target: eggy.plugins.EditorBarTarget) bool {
+        return switch (target) {
+            .menu_item => |t| t.menu < self.menus.len and t.item < self.menus[t.menu].items.len,
+            .status => |s| s < self.status_items.len,
+            .status_item => |t| t.status < self.status_items.len and t.item < self.status_items[t.status].items.len,
+        };
+    }
+
+    const BarCall = struct { kind: api.BarKind, owner: usize, item: usize };
+
+    fn barCall(target: eggy.plugins.EditorBarTarget) BarCall {
+        return switch (target) {
+            .menu_item => |t| .{ .kind = .menu_item, .owner = t.menu, .item = t.item },
+            .status => |s| .{ .kind = .status, .owner = s, .item = 0 },
+            .status_item => |t| .{ .kind = .status_item, .owner = t.status, .item = t.item },
+        };
+    }
+
     /// Draw the plugins' File > Export settings for `platform` (Eggy's `BuiltinPlatform`s, then
     /// `export_platforms`) exporting for `target`, into this UI frame.
     /// Editor host only: does nothing while the game isn't running; hook failures log.
@@ -389,6 +442,8 @@ pub const HotGame = struct {
             .extension = try arena.dupeZ(u8, std.mem.span(source.extension)),
             .contents = try arena.dupe(u8, source.contents[0..source.contents_len]),
         };
+        const menus = try copyMenus(arena, game);
+        const status_items = try copyStatusItems(arena, game);
         const export_platforms = try arena.alloc(eggy.plugins.ExportPlatform, game.export_platform_count);
         for (export_platforms, game.export_platforms[0..game.export_platform_count]) |*platform, source| platform.* = .{
             .key = try arena.dupeZ(u8, std.mem.span(source.key)),
@@ -397,7 +452,52 @@ pub const HotGame = struct {
             .note = try arena.dupeZ(u8, std.mem.span(source.note)),
             .icon_png = try arena.dupe(u8, source.icon_png[0..source.icon_png_len]),
         };
-        self.* = .{ .gpa = gpa, .path = self.path, .copy_path = copy_path, .library = library, .game = game, .state = null, .panels = panels, .commands = commands, .file_types = file_types, .export_platforms = export_platforms, .loads = self.loads, .preference_manifests = manifests, .component_types = component_types, .plugin_keys = plugin_keys, .manifest_arena = self.manifest_arena };
+        self.* = .{ .gpa = gpa, .path = self.path, .copy_path = copy_path, .library = library, .game = game, .state = null, .panels = panels, .commands = commands, .file_types = file_types, .menus = menus, .status_items = status_items, .export_platforms = export_platforms, .loads = self.loads, .preference_manifests = manifests, .component_types = component_types, .plugin_keys = plugin_keys, .manifest_arena = self.manifest_arena };
+    }
+
+    /// Copy the game's menus, with their rows, out of the library's memory.
+    fn copyMenus(arena: std.mem.Allocator, game: *const api.Game) ![]eggy.plugins.EditorMenu {
+        const menus = try arena.alloc(eggy.plugins.EditorMenu, game.menu_count);
+        var next: usize = 0;
+        for (menus, game.menus[0..game.menu_count]) |*menu, source| {
+            if (next + source.item_count > game.menu_item_count) return error.MalformedGameLibrary;
+            menu.* = .{
+                .key = try arena.dupeZ(u8, std.mem.span(source.key)),
+                .title = try arena.dupeZ(u8, std.mem.span(source.title)),
+                .extends = std.enums.fromInt(eggy.plugins.BuiltinMenu, source.extends),
+                .items = try copyMenuItems(arena, game.menu_items[next..][0..source.item_count]),
+            };
+            next += source.item_count;
+        }
+        return menus;
+    }
+
+    /// Copy the game's status bar entries, with their menu rows, out of the library's memory.
+    fn copyStatusItems(arena: std.mem.Allocator, game: *const api.Game) ![]eggy.plugins.EditorStatusItem {
+        const items = try arena.alloc(eggy.plugins.EditorStatusItem, game.status_item_count);
+        var next: usize = 0;
+        for (items, game.status_items[0..game.status_item_count]) |*item, source| {
+            if (next + source.item_count > game.status_menu_item_count) return error.MalformedGameLibrary;
+            item.* = .{
+                .key = try arena.dupeZ(u8, std.mem.span(source.key)),
+                .title = try arena.dupeZ(u8, std.mem.span(source.title)),
+                .side = std.enums.fromInt(eggy.plugins.StatusSide, source.side) orelse return error.MalformedGameLibrary,
+                .items = try copyMenuItems(arena, game.status_menu_items[next..][0..source.item_count]),
+            };
+            next += source.item_count;
+        }
+        return items;
+    }
+
+    fn copyMenuItems(arena: std.mem.Allocator, sources: []const api.MenuItem) ![]eggy.plugins.EditorMenuItem {
+        const items = try arena.alloc(eggy.plugins.EditorMenuItem, sources.len);
+        for (items, sources) |*item, source| item.* = .{
+            .key = try arena.dupeZ(u8, std.mem.span(source.key)),
+            .title = try arena.dupeZ(u8, std.mem.span(source.title)),
+            .shortcut = try arena.dupeZ(u8, std.mem.span(source.shortcut)),
+            .checkable = source.checkable,
+        };
+        return items;
     }
 
     /// Stop the game, empty the world while its code is still loaded, and unload and delete the copy.
@@ -416,6 +516,8 @@ pub const HotGame = struct {
         self.panels = &.{};
         self.commands = &.{};
         self.file_types = &.{};
+        self.menus = &.{};
+        self.status_items = &.{};
         self.export_platforms = &.{};
         self.preference_manifests = &.{};
         self.component_types = &.{};

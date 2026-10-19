@@ -55,6 +55,8 @@ pub const Plugin = struct {
 | `editorUpdate` | While editing or paused. Use it for editor tools, not simulation. |
 | `editorUi` | Builds the project's Inspector content when no entity is selected. Separate dock tabs use `editorPanelUi`. |
 | `editorPanelUi` | Builds a declared panel. `panel` is the zero-based index in this type's `editor_panels`. |
+| `editorBarAction` | Presses an entry declared in `editor_menus` or `editor_status_items` |
+| `editorBarState` | Optional. Fills in an entry's label, checkmark and enabled state each frame |
 | `editorCommand` | Invokes a declared View-menu command. `command` is the zero-based index in this type's `editor_commands`. |
 | `exportUi` | Builds extra settings in File > Export for the platform shown, whichever it is. See [Export platforms](#export-platforms). |
 | `exportArgs` | Adds `zig build export` arguments when an export starts, for whichever platform. |
@@ -86,6 +88,8 @@ keeps running. See [Diagnose and handle errors](../how-to/handle-errors.md).
 | `pub const Preferences = struct { volume: f32 = 0.8 };` | Defaulted settings read with `app.preferences(Preferences)` |
 | `pub const editor_panels = [_]eggy.plugins.EditorPanel{...};` | Dock-panel metadata paired with `editorPanelUi` |
 | `pub const editor_commands = [_]eggy.plugins.EditorCommand{...};` | View-menu metadata paired with `editorCommand` |
+| `pub const editor_menus = [_]eggy.plugins.EditorMenu{...};` | Menus on the top bar, or rows added to a built-in menu, paired with `editorBarAction` |
+| `pub const editor_status_items = [_]eggy.plugins.EditorStatusItem{...};` | Buttons and menus on the bottom status bar, paired with `editorBarAction` |
 | `pub const editor_file_types = [_]eggy.plugins.EditorFileType{...};` | Templates in both Assets New menus |
 | `pub const export_platforms = [_]eggy.plugins.ExportPlatform{...};` | Platforms in File > Export, paired with `exportUi` and `exportArgs` |
 
@@ -117,6 +121,74 @@ Reference slots accept matching entities/files by drag-and-drop; the x clears a 
 `EntityRef(T)` requires component `T`, `EntityRef(void)` accepts any entity, and
 `AssetRef(kind)` accepts the named file kind. Reference fields also work inside tagged
 unions. See [Find entities safely](../how-to/render-scene.md#find-entities-safely).
+
+## Top bar and status bar
+
+A plugin adds to the editor's top menu bar and bottom status bar with the same type that
+holds its game logic. Both hooks share one interface, so the game and every plugin use it
+the same way.
+
+```zig
+pub const Plugin = struct {
+    bakes: u32 = 0,
+
+    pub const editor_menus = [_]eggy.plugins.EditorMenu{
+        // A menu of its own, after Help.
+        .{ .key = "tools", .title = "Tools", .items = &.{
+            .{ .key = "bake", .title = "Bake lighting", .shortcut = "Ctrl+B" },
+            .{ .key = "autobake", .title = "Bake on save", .checkable = true },
+        } },
+        // Rows added to the end of a built-in menu.
+        .{ .key = "view", .title = "Grid", .extends = .view, .items = &.{
+            .{ .key = "snap", .title = "Snap to grid", .checkable = true },
+        } },
+    };
+    pub const editor_status_items = [_]eggy.plugins.EditorStatusItem{
+        .{ .key = "bakes", .title = "Bakes", .side = .right },
+        .{ .key = "quality", .title = "Quality", .items = &.{
+            .{ .key = "fast", .title = "Fast" },
+            .{ .key = "best", .title = "Best" },
+        } },
+    };
+
+    pub fn editorBarAction(self: *Plugin, target: eggy.plugins.EditorBarTarget, editor: *eggy.editor.Context) !void {
+        switch (target) {
+            .menu_item => |row| if (row.menu == 0 and row.item == 0) self.bakes += 1,
+            else => {},
+        }
+        _ = editor;
+    }
+
+    // Optional: the label, checkmark and enabled state of each entry, asked every frame.
+    pub fn editorBarState(self: *Plugin, target: eggy.plugins.EditorBarTarget, editor: *eggy.editor.Context, state: *eggy.plugins.EditorBarState) !void {
+        _ = editor;
+        switch (target) {
+            .status => |item| if (item == 0) state.setText("Bakes: 3"),
+            else => {},
+        }
+        _ = self;
+    }
+};
+```
+
+- `target` is the entry's zero-based place in this type's own `editor_menus` or
+  `editor_status_items`: `.menu_item{ .menu, .item }`, `.status` for a status button
+  without rows, `.status_item{ .status, .item }` for one of a status menu's rows. It is an
+  index, not a stored callback, so a reload that changes the list never leaves a stale one.
+- A status item with `items` opens a menu above it; without them it acts when pressed.
+- `side` is `.left` (after the project name) or `.right`; the default is `.left`.
+- `extends` adds the rows to `.file`, `.edit`, `.view`, `.window` or `.help` instead of
+  giving the menu its own trigger. Built-in rows come first.
+- `editorBarState` is optional. `state.enabled` greys a row out, `state.checked` marks a
+  checkable row, and `state.setText` replaces the label. Keep it cheap: it runs every frame.
+  If it fails the entry keeps its declared look and the failure is logged.
+- Keys must be non-empty and unique within their owner; the compiler rejects duplicates.
+  The editor scopes each entry to its plugin, so two plugins may use the same key.
+- A turned-off plugin's entries show greyed out and its hooks are not called. They are
+  only live while the editor's game library is loaded; the editor reloads the lists when
+  the library is rebuilt.
+- The bars hold up to 4096 menus, status items, and rows of each kind. An editor that finds
+  more shows none and logs why.
 
 ## Editor panels
 

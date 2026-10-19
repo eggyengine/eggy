@@ -1,4 +1,5 @@
-//! The editor's menus (File, Edit, View, Window, Help): their items, and what pressing one does.
+//! The editor's menus (File, Edit, View, Window, Help) and the ones plugins add: their items, and
+//! what pressing one does.
 //! Menus that don't fit beside the play button fold into a "..." menu, as VS Code's do. Weeoui
 //! draws them compact, as a desktop menu bar's are.
 const std = @import("std");
@@ -8,6 +9,7 @@ const widgets = ui.widgets;
 const L = ui.Layout;
 const dock = ui.dock;
 const panels = @import("panels.zig");
+const plugin_bars = @import("plugin_bars.zig");
 const Panel = panels.Panel;
 
 // Ids, kept below `dock.first_id`.
@@ -81,30 +83,36 @@ pub const Action = union(enum) {
     toggle_panel: u32,
     command: Command,
     plugin_command: usize,
+    /// A plugin's menu row, or its status bar button, was pressed.
+    plugin_bar: eggy.plugins.EditorBarTarget,
 };
 
 /// The menu bar's state: which menu is open.
 pub const Menubar = struct {
     plugin_command_count: usize = 0,
-    /// Trigger id of the open menu, or 0.
+    /// How many menus the last `list` made (Eggy's, then the plugins' own), for the "..." rows.
+    menu_count: usize = menu_order.len,
+    /// Trigger id of the open menu, or of the open status item, or 0.
     open: u32 = 0,
     /// The "..." menu's row whose menu is open beside it, or 0.
     open_submenu: u32 = 0,
 
     /// The menus as `widgets` draws them: the first `shown` (see `shownMenus`) on the bar and the
     /// rest in the "..." menu. Window lists each panel, the built-in ones then `plugin_panels`,
-    /// checked while `layout` shows it.
+    /// checked while `layout` shows it. Plugin menus follow Eggy's, and the rows of those that
+    /// extend one of Eggy's end it; `states` says how each looks.
     /// Editor-host only: allocate with a frame arena, which owns the returned menus and nested
     /// item slices; labels borrow plugin declarations/static strings through drawing.
     /// Updates command dispatch bounds; errors on allocation or over 65536 plugin commands.
     ///
     /// ```zig
     /// const shown = menus.shownMenus(font, available_points);
-    /// const list = try menubar.list(arena, &layout, plugin_panels, plugin_commands, project_state, shown);
+    /// const list = try menubar.list(arena, &layout, plugin_panels, plugin_commands, bars, states, project_state, shown);
     /// // Feed list to the frame's titlebarMenubar widget.
     /// _ = list;
     /// ```
-    pub fn list(self: *Menubar, gpa: std.mem.Allocator, layout: *const dock.DockSpace, plugin_panels: []const eggy.plugins.EditorPanel, plugin_commands: []const eggy.plugins.EditorCommand, project: ProjectState, shown: usize) ![]const widgets.MenubarMenu {
+    pub fn list(self: *Menubar, gpa: std.mem.Allocator, layout: *const dock.DockSpace, plugin_panels: []const eggy.plugins.EditorPanel, plugin_commands: []const eggy.plugins.EditorCommand, bars: plugin_bars.Bars, states: plugin_bars.States, project: ProjectState, shown: usize) ![]const widgets.MenubarMenu {
+        if (!bars.fits()) return error.TooManyPluginMenus;
         if (plugin_commands.len > 65536) return error.TooManyEditorCommands;
         self.plugin_command_count = plugin_commands.len;
         const command_items = try gpa.alloc(widgets.MenuItem, plugin_commands.len);
@@ -137,23 +145,29 @@ pub const Menubar = struct {
             .{ .id = @intFromEnum(Command.quit), .label = "Quit", .shortcut = "Ctrl+Q" },
         });
 
-        const all = [menu_order.len]widgets.MenubarMenu{
-            .{ .id = @intFromEnum(Menu.file), .label = Menu.file.label(), .items = file_items },
-            .{ .id = @intFromEnum(Menu.edit), .label = Menu.edit.label(), .items = &.{
-                .{ .id = @intFromEnum(Command.undo), .label = "Undo", .shortcut = "Ctrl+Z" },
-                .{ .id = @intFromEnum(Command.redo), .label = "Redo", .shortcut = "Ctrl+Shift+Z" },
-                .{ .kind = .separator },
-                .{ .id = @intFromEnum(Command.preferences), .label = "Preferences..." },
-            } },
-            .{ .id = @intFromEnum(Menu.view), .label = Menu.view.label(), .items = command_items },
-            .{ .id = @intFromEnum(Menu.window), .label = Menu.window.label(), .items = window_items },
-            .{ .id = @intFromEnum(Menu.help), .label = Menu.help.label(), .items = &.{
-                .{ .id = @intFromEnum(Command.devtools), .label = "DevTools", .shortcut = "F12" },
-                .{ .kind = .separator },
-                .{ .id = @intFromEnum(Command.about), .label = "About Eggy" },
-            } },
+        const edit_items = [_]widgets.MenuItem{
+            .{ .id = @intFromEnum(Command.undo), .label = "Undo", .shortcut = "Ctrl+Z" },
+            .{ .id = @intFromEnum(Command.redo), .label = "Redo", .shortcut = "Ctrl+Shift+Z" },
+            .{ .kind = .separator },
+            .{ .id = @intFromEnum(Command.preferences), .label = "Preferences..." },
         };
-        if (shown >= all.len) return gpa.dupe(widgets.MenubarMenu, &all);
+        const help_items = [_]widgets.MenuItem{
+            .{ .id = @intFromEnum(Command.devtools), .label = "DevTools", .shortcut = "F12" },
+            .{ .kind = .separator },
+            .{ .id = @intFromEnum(Command.about), .label = "About Eggy" },
+        };
+        const own = try plugin_bars.ownMenus(gpa, bars, states);
+        const all = try gpa.alloc(widgets.MenubarMenu, menu_order.len + own.len);
+        all[0..menu_order.len].* = .{
+            .{ .id = @intFromEnum(Menu.file), .label = Menu.file.label(), .items = try plugin_bars.extend(gpa, file_items, .file, bars, states) },
+            .{ .id = @intFromEnum(Menu.edit), .label = Menu.edit.label(), .items = try plugin_bars.extend(gpa, &edit_items, .edit, bars, states) },
+            .{ .id = @intFromEnum(Menu.view), .label = Menu.view.label(), .items = try plugin_bars.extend(gpa, command_items, .view, bars, states) },
+            .{ .id = @intFromEnum(Menu.window), .label = Menu.window.label(), .items = try plugin_bars.extend(gpa, window_items, .window, bars, states) },
+            .{ .id = @intFromEnum(Menu.help), .label = Menu.help.label(), .items = try plugin_bars.extend(gpa, &help_items, .help, bars, states) },
+        };
+        @memcpy(all[menu_order.len..], own);
+        self.menu_count = all.len;
+        if (shown >= all.len) return all;
 
         // The menus that don't fit, each a submenu of the "..." menu.
         const result = try gpa.alloc(widgets.MenubarMenu, shown + 1);
@@ -170,25 +184,33 @@ pub const Menubar = struct {
     /// to execute and mutates open-menu state, but performs no command side effects.
     ///
     /// ```zig
-    /// if (menubar.press(hit_id)) |action| switch (action) {
+    /// if (menubar.press(hit_id, bars)) |action| switch (action) {
     ///     .command => |command| std.log.info("command: {t}", .{command}),
     ///     else => {},
     /// };
     /// ```
-    pub fn press(self: *Menubar, id: u32) ?Action {
-        if (std.enums.fromInt(Menu, id) != null) {
+    pub fn press(self: *Menubar, id: u32, bars: plugin_bars.Bars) ?Action {
+        const plugin = plugin_bars.pressed(bars, id);
+        if (std.enums.fromInt(Menu, id) != null or plugin_bars.isMenuTrigger(bars, id) or (plugin != null and plugin.? == .status_menu)) {
             self.open = if (self.open == id) 0 else id;
             self.open_submenu = 0;
             return .handled;
         }
+        // A status bar button needs no open menu; it closes any that is.
+        if (plugin) |found| if (found == .action and found.action == .status) {
+            self.open = 0;
+            self.open_submenu = 0;
+            return .{ .plugin_bar = found.action };
+        };
         if (self.open == 0) return null;
         // A folded menu's row opens it beside the "..." menu, which stays open.
-        if (isOverflowRow(id)) {
+        if (self.isOverflowRow(id)) {
             self.open_submenu = id;
             return .handled;
         }
         self.open = 0;
         self.open_submenu = 0;
+        if (plugin) |found| return .{ .plugin_bar = found.action };
         if (id >= plugin_command_first and id - plugin_command_first < self.plugin_command_count) return .{ .plugin_command = id - plugin_command_first };
         if (id > window_item_first and id < window_item_first + dock.max_panel) return .{ .toggle_panel = id - window_item_first };
         const command = std.enums.fromInt(Command, id) orelse return .handled;
@@ -203,13 +225,13 @@ pub const Menubar = struct {
     /// _ = menubar.hover(hit_id); // Host pointer-motion route.
     /// ```
     pub fn hover(self: *Menubar, id: u32) bool {
-        if (self.open != @intFromEnum(Menu.more) or !isOverflowRow(id) or self.open_submenu == id) return false;
+        if (self.open != @intFromEnum(Menu.more) or !self.isOverflowRow(id) or self.open_submenu == id) return false;
         self.open_submenu = id;
         return true;
     }
 
-    fn isOverflowRow(id: u32) bool {
-        return id >= overflow_first and id < overflow_first + menu_order.len;
+    fn isOverflowRow(self: *const Menubar, id: u32) bool {
+        return id >= overflow_first and id < overflow_first + self.menu_count;
     }
 };
 
@@ -222,26 +244,40 @@ pub const Menubar = struct {
 /// // Pass shown to Menubar.list for the same frame.
 /// _ = shown;
 /// ```
-pub fn shownMenus(font: *const ui.Font, available: f32) usize {
+pub fn shownMenus(font: *const ui.Font, available: f32, bars: plugin_bars.Bars) usize {
+    const total = menu_order.len + ownMenuCount(bars);
     var used: f32 = 0;
     var fitting: usize = 0;
-    for (menu_order) |menu| {
-        used += triggerWidth(font, menu);
+    for (0..total) |i| {
+        used += triggerWidth(font, i, bars);
         if (used > available) break;
         fitting += 1;
-    } else return menu_order.len;
+    } else return total;
     // Room for the "..." trigger too: drop menus until it fits.
     while (fitting > 0) : (fitting -= 1) {
-        var width = triggerWidth(font, .more);
-        for (menu_order[0..fitting]) |menu| width += triggerWidth(font, menu);
+        var width = widgets.flush_trigger_height;
+        for (0..fitting) |i| width += triggerWidth(font, i, bars);
         if (width <= available) break;
     }
     return fitting;
 }
 
-fn triggerWidth(font: *const ui.Font, menu: Menu) f32 {
-    if (menu == .more) return widgets.flush_trigger_height;
-    return widgets.flushTriggerWidth(font, menu.label());
+fn ownMenuCount(bars: plugin_bars.Bars) usize {
+    var count: usize = 0;
+    for (bars.menus) |menu| count += @intFromBool(menu.extends == null);
+    return count;
+}
+
+/// The bar's `index`th trigger: Eggy's menus, then the plugins' own.
+fn triggerWidth(font: *const ui.Font, index: usize, bars: plugin_bars.Bars) f32 {
+    if (index < menu_order.len) return widgets.flushTriggerWidth(font, menu_order[index].label());
+    var own = index - menu_order.len;
+    for (bars.menus) |menu| {
+        if (menu.extends != null) continue;
+        if (own == 0) return widgets.flushTriggerWidth(font, menu.title);
+        own -= 1;
+    }
+    return 0;
 }
 
 /// Draw the "..." trigger in `tree` (from `widgets.titlebarMenubar`) as three dots, as the font
@@ -286,48 +322,118 @@ test "plugin View commands dispatch their current index without storing callback
     var layout = dock.DockSpace.init();
     var menubar = Menubar{};
     const commands = [_]eggy.plugins.EditorCommand{.{ .key = "game/raise", .title = "Raise" }};
-    const list = try menubar.list(arena.allocator(), &layout, &.{}, &commands, .{}, menu_order.len);
+    const list = try menubar.list(arena.allocator(), &layout, &.{}, &commands, .{}, .{}, .{}, menu_order.len);
     try std.testing.expectEqualStrings("Raise", list[2].items[0].label);
-    _ = menubar.press(@intFromEnum(Menu.view));
-    try std.testing.expectEqual(Action{ .plugin_command = 0 }, menubar.press(list[2].items[0].id).?);
+    _ = menubar.press(@intFromEnum(Menu.view), .{});
+    try std.testing.expectEqual(Action{ .plugin_command = 0 }, menubar.press(list[2].items[0].id, .{}).?);
 }
 
 test "pressing a trigger opens its menu, and an item runs and closes it" {
     var menubar = Menubar{};
-    try std.testing.expectEqual(Action.handled, menubar.press(@intFromEnum(Menu.file)).?);
+    try std.testing.expectEqual(Action.handled, menubar.press(@intFromEnum(Menu.file), .{}).?);
     try std.testing.expectEqual(@intFromEnum(Menu.file), menubar.open);
-    try std.testing.expectEqual(Action{ .command = .quit }, menubar.press(@intFromEnum(Command.quit)).?);
+    try std.testing.expectEqual(Action{ .command = .quit }, menubar.press(@intFromEnum(Command.quit), .{}).?);
     try std.testing.expectEqual(@as(u32, 0), menubar.open);
-    try std.testing.expect(menubar.press(@intFromEnum(Command.quit)) == null); // closed: not ours
+    try std.testing.expect(menubar.press(@intFromEnum(Command.quit), .{}) == null); // closed: not ours
 }
 
 test "the Window menu's items toggle their panel" {
     var menubar = Menubar{ .open = @intFromEnum(Menu.window) };
     const console = @intFromEnum(Panel.console);
-    try std.testing.expectEqual(Action{ .toggle_panel = console }, menubar.press(window_item_first + console).?);
+    try std.testing.expectEqual(Action{ .toggle_panel = console }, menubar.press(window_item_first + console, .{}).?);
 }
 
 test "menus that don't fit fold into the \"...\" menu, and its rows open them beside it" {
     var font = try ui.Font.init(std.testing.allocator, ui.default_font);
     defer font.deinit();
-    try std.testing.expectEqual(menu_order.len, shownMenus(&font, 1000));
-    const shown = shownMenus(&font, triggerWidth(&font, .file) + triggerWidth(&font, .edit) + triggerWidth(&font, .more));
+    try std.testing.expectEqual(menu_order.len, shownMenus(&font, 1000, .{}));
+    const shown = shownMenus(&font, triggerWidth(&font, 0, .{}) + triggerWidth(&font, 1, .{}) + widgets.flush_trigger_height, .{});
     try std.testing.expectEqual(@as(usize, 2), shown);
-    try std.testing.expectEqual(@as(usize, 0), shownMenus(&font, 1));
+    try std.testing.expectEqual(@as(usize, 0), shownMenus(&font, 1, .{}));
 
     var menubar = Menubar{};
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     var layout = dock.DockSpace.init();
-    const list = try menubar.list(arena.allocator(), &layout, &.{}, &.{}, .{}, shown);
+    const list = try menubar.list(arena.allocator(), &layout, &.{}, &.{}, .{}, .{}, .{}, shown);
     try std.testing.expectEqual(@as(usize, 3), list.len);
     try std.testing.expectEqual(@intFromEnum(Menu.more), list[2].id);
     try std.testing.expectEqualStrings("View", list[2].items[0].label);
 
-    _ = menubar.press(@intFromEnum(Menu.more));
+    _ = menubar.press(@intFromEnum(Menu.more), .{});
     try std.testing.expect(menubar.hover(overflow_first + 3));
-    try std.testing.expectEqual(Action.handled, menubar.press(overflow_first + 4).?);
+    try std.testing.expectEqual(Action.handled, menubar.press(overflow_first + 4, .{}).?);
     try std.testing.expectEqual(@intFromEnum(Menu.more), menubar.open); // still open, on Help now
-    try std.testing.expectEqual(Action{ .command = .about }, menubar.press(@intFromEnum(Command.about)).?);
+    try std.testing.expectEqual(Action{ .command = .about }, menubar.press(@intFromEnum(Command.about), .{}).?);
     try std.testing.expectEqual(@as(u32, 0), menubar.open_submenu);
+}
+
+const test_menus = [_]eggy.plugins.EditorMenu{
+    .{ .key = "tools/tools", .title = "Tools", .items = &.{ .{ .key = "tools/tools/bake", .title = "Bake" }, .{ .key = "tools/tools/clean", .title = "Clean" } } },
+    .{ .key = "tools/view", .title = "Grid", .extends = .view, .items = &.{.{ .key = "tools/view/snap", .title = "Snap" }} },
+};
+const test_status = [_]eggy.plugins.EditorStatusItem{
+    .{ .key = "tools/fps", .title = "FPS" },
+    .{ .key = "tools/mode", .title = "Mode", .items = &.{.{ .key = "tools/mode/fast", .title = "Fast" }} },
+};
+
+test "plugin menus join the bar and Eggy's menus, and their rows run by place" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var layout = dock.DockSpace.init();
+    var menubar = Menubar{};
+    const bars = plugin_bars.Bars{ .menus = &test_menus, .status_items = &test_status };
+    const states = try plugin_bars.States.declared(arena.allocator(), bars);
+    const list = try menubar.list(arena.allocator(), &layout, &.{}, &.{}, bars, states, .{}, menu_order.len + 1);
+
+    // Eggy's five, then the one menu that stands alone.
+    try std.testing.expectEqual(@as(usize, 6), list.len);
+    try std.testing.expectEqualStrings("Tools", list[5].label);
+    // The extension's row ends View.
+    try std.testing.expectEqualStrings("Snap", list[2].items[list[2].items.len - 1].label);
+
+    try std.testing.expectEqual(Action.handled, menubar.press(list[5].id, bars).?);
+    const press = menubar.press(list[5].items[1].id, bars).?;
+    try std.testing.expectEqual(@as(usize, 0), press.plugin_bar.menu_item.menu);
+    try std.testing.expectEqual(@as(usize, 1), press.plugin_bar.menu_item.item);
+    try std.testing.expectEqual(@as(u32, 0), menubar.open);
+
+    // The extension is pressed from its own place in View.
+    _ = menubar.press(@intFromEnum(Menu.view), bars);
+    const snap = menubar.press(list[2].items[list[2].items.len - 1].id, bars).?;
+    try std.testing.expectEqual(@as(usize, 1), snap.plugin_bar.menu_item.menu);
+}
+
+test "a status button acts at once and a status menu opens and closes" {
+    var menubar = Menubar{ .open = @intFromEnum(Menu.file) };
+    const bars = plugin_bars.Bars{ .menus = &test_menus, .status_items = &test_status };
+    const button = menubar.press(plugin_bars.statusId(0), bars).?;
+    try std.testing.expectEqual(@as(usize, 0), button.plugin_bar.status);
+    try std.testing.expectEqual(@as(u32, 0), menubar.open); // a menu that was open closes
+
+    try std.testing.expectEqual(Action.handled, menubar.press(plugin_bars.statusId(1), bars).?);
+    try std.testing.expectEqual(plugin_bars.statusId(1), menubar.open);
+    try std.testing.expectEqual(Action.handled, menubar.press(plugin_bars.statusId(1), bars).?);
+    try std.testing.expectEqual(@as(u32, 0), menubar.open);
+
+    // Its row runs and closes it.
+    _ = menubar.press(plugin_bars.statusId(1), bars);
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const states = try plugin_bars.States.declared(arena.allocator(), bars);
+    const rows = try plugin_bars.statusRows(arena.allocator(), bars, states, 1);
+    const row = menubar.press(rows[0].id, bars).?;
+    try std.testing.expectEqual(@as(usize, 1), row.plugin_bar.status_item.status);
+    try std.testing.expectEqual(@as(u32, 0), menubar.open);
+}
+
+test "plugin menus count toward what fits on the bar" {
+    var font = try ui.Font.init(std.testing.allocator, ui.default_font);
+    defer font.deinit();
+    const bars = plugin_bars.Bars{ .menus = &test_menus };
+    try std.testing.expectEqual(menu_order.len + 1, shownMenus(&font, 1000, bars));
+    // Room for Eggy's five but not the plugin's menu: it folds away, and so does the one before it.
+    var room: f32 = widgets.flush_trigger_height;
+    for (0..menu_order.len) |i| room += triggerWidth(&font, i, bars);
+    try std.testing.expect(shownMenus(&font, room, bars) < menu_order.len + 1);
 }

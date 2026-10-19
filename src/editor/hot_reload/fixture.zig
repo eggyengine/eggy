@@ -28,6 +28,48 @@ pub const Game = struct {
         .{ .key = "sdl-window", .title = "Check shared SDL window" },
     };
     pub const editor_panels = [_]eggy.plugins.EditorPanel{.{ .key = "counter", .title = "Counter" }};
+    pub const editor_menus = [_]eggy.plugins.EditorMenu{
+        .{ .key = "counter", .title = "Counter", .items = &.{ .{ .key = "add", .title = "Add One", .shortcut = "Ctrl+1" }, .{ .key = "odd", .title = "Odd", .checkable = true } } },
+        .{ .key = "view-extra", .title = "Extra", .extends = .view, .items = &.{.{ .key = "noop", .title = "Nothing" }} },
+    };
+    pub const editor_status_items = [_]eggy.plugins.EditorStatusItem{
+        .{ .key = "value", .title = "Counter", .side = .right },
+        .{ .key = "mode", .title = "Mode", .items = &.{.{ .key = "reset", .title = "Reset" }} },
+    };
+
+    /// Add one to the Counter for "Add One" (menu 0, row 0) and the Mode > Reset row's status
+    /// entry (which also adds, so the test sees a status menu row dispatch); other entries do nothing.
+    /// Fixture-only: the Counter must exist; history/service errors propagate.
+    ///
+    /// ```zig
+    /// try fixture.editorBarAction(.{ .menu_item = .{ .menu = 0, .item = 0 } }, &editor_context);
+    /// ```
+    pub fn editorBarAction(self: *Game, target: eggy.plugins.EditorBarTarget, editor: *eggy.editor.Context) !void {
+        const pressed = switch (target) {
+            .menu_item => |t| t.menu == 0 and t.item == 0,
+            .status_item => |t| t.status == 1 and t.item == 0,
+            .status => false,
+        };
+        if (pressed) try self.editorCommand(0, editor);
+    }
+
+    /// Check "Odd" while the Counter is odd, and show the Counter's value as the first status
+    /// item's text. Fixture-only: the Counter must exist.
+    ///
+    /// ```zig
+    /// try fixture.editorBarState(.{ .status = 0 }, &editor_context, &state);
+    /// ```
+    pub fn editorBarState(self: *Game, target: eggy.plugins.EditorBarTarget, editor: *eggy.editor.Context, state: *eggy.plugins.EditorBarState) !void {
+        const counter = editor.app.world.get(self.entity, Counter) orelse return error.NoCounter;
+        switch (target) {
+            .menu_item => |t| state.checked = t.menu == 0 and t.item == 1 and counter.value % 2 == 1,
+            .status => |s| if (s == 0) {
+                var buffer: [16]u8 = undefined;
+                state.setText(try std.fmt.bufPrint(&buffer, "{d}", .{counter.value}));
+            },
+            .status_item => {},
+        }
+    }
 
     /// Initialize the shared-library test game, reusing "API Entity" or spawning its Counter.
     /// Fixture-only: ignores the allocator argument; the App world owns the entity and spawn

@@ -10,6 +10,7 @@ const widgets = ui.widgets;
 const titlebar = ui.titlebar;
 const dock = ui.dock;
 const menus = @import("menus.zig");
+const plugin_bars = @import("plugin_bars.zig");
 const panels = @import("panels.zig");
 const play_button = @import("play_button.zig");
 const pause_button = @import("pause_button.zig");
@@ -87,6 +88,8 @@ pub const Outcome = union(enum) {
     /// The title bar's Reload: open the rebuilt editor, rebuilding it first if need be.
     reload,
     plugin_command: usize,
+    /// A plugin's menu row or status bar button.
+    plugin_bar: eggy.plugins.EditorBarTarget,
     build_project,
 };
 
@@ -204,6 +207,10 @@ pub const Workspace = struct {
     /// `panels.pluginId` of its stable key.
     plugin_panels: []const eggy.plugins.EditorPanel,
     plugin_commands: []const eggy.plugins.EditorCommand = &.{},
+    /// The plugins' menus and status bar entries, borrowed from the library like `plugin_panels`
+    /// (see `setPluginBars`), and how the editor found them looking, set before each `build`.
+    plugin_bars: plugin_bars.Bars = .{},
+    bar_states: plugin_bars.States = .{},
     /// The plugin panels (by stable key, owned) this user has had, kept with the layout: only one not
     /// among them docks by itself, so a panel closed stays closed.
     seen_plugin_panels: std.ArrayList([]u8) = .empty,
@@ -243,6 +250,23 @@ pub const Workspace = struct {
         self.shell.deinit(self.arena.child_allocator);
         self.vertices.deinit(self.arena.child_allocator);
         self.arena.deinit();
+    }
+
+    /// Show the game's plugin menus and status entries, after it loaded or was swapped (they
+    /// must last until the next call). An open plugin menu closes, as its rows may not exist now.
+    /// Editor-host reload hook; keeps no callbacks, only the borrowed declarations.
+    ///
+    /// ```zig
+    /// workspace.setPluginBars(.{ .menus = game.menus, .status_items = game.status_items });
+    /// ```
+    pub fn setPluginBars(self: *Workspace, bars: plugin_bars.Bars) void {
+        self.plugin_bars = if (bars.fits()) bars else blk: {
+            std.log.err("plugins declare more menus, status items or rows than the editor's bars hold; none are shown", .{});
+            break :blk .{};
+        };
+        self.bar_states = .{};
+        self.menubar.open = 0;
+        self.menubar.open_submenu = 0;
     }
 
     /// Show `plugin_panels`, the game's panels after it loaded or was swapped (they must last
@@ -394,7 +418,10 @@ pub const Workspace = struct {
             if (button != null) menu_room -= 32;
         };
         const project_state = menus.ProjectState{ .open = self.project != null, .can_upgrade = self.can_upgrade, .can_link = self.can_link, .developer_known = self.developer_known, .shift_held = self.shift_held };
-        const menu_list = try self.menubar.list(b.allocator, &self.dock, self.plugin_panels, self.plugin_commands, project_state, menus.shownMenus(font, menu_room));
+        // How the plugins' entries look, as the editor found them this frame.
+        const bar_states = if (self.bar_states.matches(self.plugin_bars)) self.bar_states else try plugin_bars.States.declared(b.allocator, self.plugin_bars);
+        self.bar_states = bar_states;
+        const menu_list = try self.menubar.list(b.allocator, &self.dock, self.plugin_panels, self.plugin_commands, self.plugin_bars, bar_states, project_state, menus.shownMenus(font, menu_room, self.plugin_bars));
         const menubar = if (self.custom_frame)
             try widgets.titlebarMenubar(b, menu_list, self.menubar.open, hot, self.menubar.open_submenu)
         else
@@ -501,7 +528,9 @@ pub const Workspace = struct {
             try children.append(b.allocator, try text(b, scene_label, if (self.scene_name != null or self.scene_unsaved) .foreground else .muted));
             try children.append(b.allocator, try text(b, project.dir, .muted));
         } else try children.append(b.allocator, try text(b, "No project open: File > New Project or Open Project", .muted));
+        try self.pluginStatusItems(b, &children, .left);
         try children.append(b.allocator, try b.node(0, .{ .grow = 1 }, .none, &.{}));
+        try self.pluginStatusItems(b, &children, .right);
         switch (self.build_state) {
             .idle => {},
             .building => |detail| try children.append(b.allocator, try text(b, try std.fmt.allocPrint(b.allocator, "Building: {s}", .{detail}), .muted)),
@@ -537,6 +566,29 @@ pub const Workspace = struct {
         return bar;
     }
 
+    /// Add the plugins' status bar entries on `side`: a button, or one that opens a menu above
+    /// it, greyed out while its plugin is off. Their labels are copied for this frame's tree.
+    fn pluginStatusItems(self: *const Workspace, b: L.Builder, children: *std.ArrayList(*L.Element), side: eggy.plugins.StatusSide) !void {
+        for (self.plugin_bars.status_items, 0..) |item, index| {
+            if (item.side != side) continue;
+            const state = self.bar_states.status[index];
+            const label = try b.allocator.dupe(u8, if (state.text().len > 0) state.text() else item.title);
+            if (!state.enabled) {
+                try children.append(b.allocator, try b.node(0, .{}, .{ .text = .{ .value = label, .size = 12, .tone = .muted } }, &.{}));
+                continue;
+            }
+            const id = plugin_bars.statusId(index);
+            const open = self.menubar.open == id;
+            const button = try b.node(id, .{ .height = status_height - 4 }, .{ .button = .{ .label = label, .variant = .ghost, .size = .sm, .hot = open } }, &.{});
+            button.accessibility = .{ .role = .button, .label = label, .expanded = if (item.items.len > 0) open else null };
+            try children.append(b.allocator, button);
+            if (open) {
+                const rows = try plugin_bars.statusRows(b.allocator, self.plugin_bars, self.bar_states, index);
+                try children.append(b.allocator, widgets.anchorTo(try widgets.sizedMenuItems(b, rows, 0, 0, .sm), button, .bottom, 100));
+            }
+        }
+    }
+
     /// Where the main window's drawn title bar is, for the OS to move and resize the window by it.
     /// Return a by-value SDL hit-test description from the last build, including popup and
     /// interactive exclusions. Before a tree exists returns an otherwise-empty frame.
@@ -556,6 +608,10 @@ pub const Workspace = struct {
         // The menus sharing the bar take presses instead of dragging the window.
         var controls: ?ui.Rect = null;
         for (std.enums.values(menus.Menu)) |menu| if (root.find(@intFromEnum(menu))) |trigger| {
+            const r = trigger.bounds;
+            controls = if (controls) |so_far| .{ .x = so_far.x, .y = so_far.y, .w = r.x + r.w - so_far.x, .h = so_far.h } else r;
+        };
+        for (self.plugin_bars.menus, 0..) |menu, index| if (menu.extends == null) if (root.find(plugin_bars.menuTriggerId(index))) |trigger| {
             const r = trigger.bounds;
             controls = if (controls) |so_far| .{ .x = so_far.x, .y = so_far.y, .w = r.x + r.w - so_far.x, .h = so_far.h } else r;
         };
@@ -707,7 +763,7 @@ pub const Workspace = struct {
                         self.paused = !self.paused;
                         return .{ .pause = self.paused };
                     }
-                    if (self.menubar.press(id)) |action| return self.run(action);
+                    if (self.menubar.press(id, self.plugin_bars)) |action| return self.run(action);
                 }
                 if (scene_view.toolbar.buttonOf(id)) |button| return .{ .scene_button = button };
                 if (self.dock.press(id, down.position.x, down.position.y)) return .handled;
@@ -756,6 +812,7 @@ pub const Workspace = struct {
     fn run(self: *Workspace, action: menus.Action) Outcome {
         switch (action) {
             .plugin_command => |command| return .{ .plugin_command = command },
+            .plugin_bar => |target| return .{ .plugin_bar = target },
             .handled => {},
             .toggle_panel => |panel| self.togglePanel(panel),
             .command => |command| switch (command) {

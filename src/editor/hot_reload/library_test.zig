@@ -49,6 +49,7 @@ test "the game's library loads, runs, swaps for a fresh copy, and unloads cleanl
     const backend = try attachInput(&app, gpa);
     defer backend.deinit();
     app.time = .{};
+    app.resource_jobs = null;
     app.instances = null;
     app.ui_layer = null;
     app.scene_access = null;
@@ -184,6 +185,7 @@ test "typed actions and game UI cross the real ABI and undo after library replac
     defer backend.deinit();
     try backend.state.readOverrides(".{ .controls = .{ .{ .owner = \"game/player\", .name = \"jump\", .bindings = .{ .{ .key = .j } } }, .{ .owner = \"game/asset-player\", .name = \"jump\", .bindings = .{ .{ .key = .j } } } } }");
     app.time = .{};
+    app.resource_jobs = null;
     var game = try HotGame.load(gpa, path);
     defer game.deinit(&app);
     game.start(&app, &.{}, .keep);
@@ -197,6 +199,30 @@ test "typed actions and game UI cross the real ABI and undo after library replac
     const press = eggy.Event{ .key_down = .{ .common = undefined, .id = null, .scancode = .j, .key = null, .mod = .{}, .raw = 0, .down = true, .repeat = false } };
     try app.input.handle(press);
     game.editorCommand(2, &editor);
+    try host.expectCounter("3");
+    // The plugin bars cross the boundary as data, and their entries run through it.
+    try std.testing.expectEqual(@as(usize, 2), game.menus.len);
+    try std.testing.expectEqualStrings("game/counter", game.menus[0].key);
+    try std.testing.expectEqualStrings("game/counter/odd", game.menus[0].items[1].key);
+    try std.testing.expectEqualStrings("Ctrl+1", game.menus[0].items[0].shortcut);
+    try std.testing.expectEqual(eggy.plugins.BuiltinMenu.view, game.menus[1].extends.?);
+    try std.testing.expectEqual(@as(?eggy.plugins.BuiltinMenu, null), game.menus[0].extends);
+    try std.testing.expectEqual(eggy.plugins.StatusSide.right, game.status_items[0].side);
+    try std.testing.expectEqualStrings("game/mode/reset", game.status_items[1].items[0].key);
+    try std.testing.expect(@intFromPtr(game.menus[0].title.ptr) != @intFromPtr(game.game.menus[0].title));
+    try std.testing.expectEqualStrings("3", game.barState(.{ .status = 0 }, &editor).text());
+    try std.testing.expect(game.barState(.{ .menu_item = .{ .menu = 0, .item = 1 } }, &editor).checked);
+    game.barAction(.{ .menu_item = .{ .menu = 0, .item = 0 } }, &editor);
+    try host.expectCounter("4");
+    game.barAction(.{ .status_item = .{ .status = 1, .item = 0 } }, &editor);
+    try host.expectCounter("5");
+    // Rows the library doesn't have are ignored.
+    game.barAction(.{ .menu_item = .{ .menu = 9, .item = 0 } }, &editor);
+    game.barAction(.{ .menu_item = .{ .menu = 0, .item = 7 } }, &editor);
+    try host.expectCounter("5");
+    try std.testing.expect(!game.barState(.{ .status_item = .{ .status = 4, .item = 0 } }, &editor).enabled);
+    try std.testing.expect(try host.history.apply(.undo, &host, ActionHost.apply));
+    try std.testing.expect(try host.history.apply(.undo, &host, ActionHost.apply));
     try host.expectCounter("3");
     {
         var ui = try eggy.ui.Context.init(gpa);

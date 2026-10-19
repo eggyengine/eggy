@@ -14,7 +14,7 @@
 //! These signatures apply equally to `Game` and `Plugin`; hooks belong inside that type,
 //! not beside it in the module. `init` constructs each instance; editor restarts/reloads can
 //! construct it again. Most hooks run game-first; `deinit` and `uiEvent` run in reverse order.
-//! See `docs/docs/guides/plugins.md` for the hook reference and lifecycle.
+//! See `docs/docs/reference/plugin-hooks.md` for the hook reference and lifecycle.
 //!
 //! A plugin can also add panels of its own to the editor's dock, each a page of UI it fills
 //! every frame. Declare them, then draw panel `panel` (an index into the declaration):
@@ -26,6 +26,24 @@
 //!
 //!     pub const editor_commands = [_]eggy.plugins.EditorCommand{.{ .key = "raise", .title = "Raise" }};
 //!     pub fn editorCommand(self: *Self, command: usize, editor: *eggy.editor.Context) !void
+//!
+//! Plugins can extend the top menu bar and the bottom status bar. A menu with `extends` adds its
+//! rows to one of Eggy's menus (File, Edit, View, Window or Help); without it, it is a menu of
+//! its own. A status item with no `items` is a button; with `items`, it opens a menu upward.
+//! Entries are identified by `<plugin>/<key>`, never by index, and the editor reads them afresh
+//! from the library on every reload, so nothing stale outlives a swap. A turned-off plugin's
+//! entries show greyed out and do nothing:
+//!
+//!     pub const editor_menus = [_]eggy.plugins.EditorMenu{.{
+//!         .key = "tools", .title = "Tools", .items = &.{.{ .key = "bake", .title = "Bake Lights" }},
+//!     }};
+//!     pub const editor_status_items = [_]eggy.plugins.EditorStatusItem{.{ .key = "fps", .title = "FPS", .side = .right }};
+//!     pub fn editorBarAction(self: *Self, target: eggy.plugins.EditorBarTarget, editor: *eggy.editor.Context) !void
+//!     pub fn editorBarState(self: *Self, target: eggy.plugins.EditorBarTarget, editor: *eggy.editor.Context, state: *eggy.plugins.EditorBarState) !void
+//!
+//! `editorBarAction` runs when a row or button is pressed; `editorBarState` is optional and says
+//! whether an entry is enabled or checked, and gives a status item its text. Both name an entry
+//! by its place in the plugin's own declaration.
 //!
 //! A plugin can declare preferences, which people set in the editor's Preferences window, kept in
 //! the project's `.eggy/` folder and baked into the runtime (see `preferences.zig`):
@@ -172,6 +190,78 @@ pub const EditorPanel = struct {
 /// A command shown in the editor's View menu. Keys are local to the declaring plugin.
 pub const EditorCommand = struct { key: [:0]const u8, title: [:0]const u8 };
 
+/// One of Eggy's own menus, which a plugin's `EditorMenu` can extend.
+pub const BuiltinMenu = enum(u8) { file, edit, view, window, help };
+
+/// A row in a plugin's menu, or in a menu hanging off a status bar item. Keys are local to the
+/// menu, and in the Set's metadata they are the full `<plugin>/<menu>/<item>` identity.
+pub const EditorMenuItem = struct {
+    key: [:0]const u8,
+    title: [:0]const u8,
+    shortcut: [:0]const u8 = "",
+    /// Shows a check mark, set by `editorBarState`.
+    checkable: bool = false,
+};
+
+/// A menu a plugin adds to the editor's top bar, or, with `extends`, rows it appends to one of
+/// Eggy's. In the Set's metadata the key is `<plugin>/<menu>`.
+pub const EditorMenu = struct {
+    key: [:0]const u8,
+    title: [:0]const u8,
+    extends: ?BuiltinMenu = null,
+    items: []const EditorMenuItem,
+};
+
+pub const StatusSide = enum(u8) { left, right };
+
+/// An entry on the editor's bottom status bar: a button, or, with `items`, a button that opens a
+/// menu above it. Its label is `title` unless `editorBarState` supplies text. The Set's key is
+/// `<plugin>/<key>`.
+pub const EditorStatusItem = struct {
+    key: [:0]const u8,
+    title: [:0]const u8,
+    side: StatusSide = .left,
+    items: []const EditorMenuItem = &.{},
+};
+
+/// What the editor asks about a menu or status bar entry. Indices are into this plugin's own
+/// `editor_menus` / `editor_status_items`, and into that entry's `items`.
+pub const EditorBarTarget = union(enum) {
+    menu_item: struct { menu: usize, item: usize },
+    /// The status item's own button, pressed when it has no `items`.
+    status: usize,
+    status_item: struct { status: usize, item: usize },
+};
+
+/// How an `EditorBarTarget` shows right now; `editorBarState` fills it in. Fixed size so it
+/// crosses the hot-reload boundary by value.
+pub const EditorBarState = extern struct {
+    enabled: bool = true,
+    checked: bool = false,
+    text_len: u8 = 0,
+    text_bytes: [max_text]u8 = undefined,
+
+    pub const max_text = 61;
+
+    /// Replace the label with `label` (a status item's only), cut to fit on a character boundary.
+    ///
+    /// ```zig
+    /// state.setText("60 fps"); // Inside editorBarState for a status item.
+    /// ```
+    pub fn setText(self: *EditorBarState, label: []const u8) void {
+        var len = @min(label.len, max_text);
+        // Never leave half a UTF-8 sequence.
+        while (len > 0 and len < label.len and label[len] & 0xC0 == 0x80) len -= 1;
+        @memcpy(self.text_bytes[0..len], label[0..len]);
+        self.text_len = @intCast(len);
+    }
+
+    /// The label set, or "" to keep the declared title. Borrows this state.
+    pub fn text(self: *const EditorBarState) []const u8 {
+        return self.text_bytes[0..self.text_len];
+    }
+};
+
 /// A file template offered by Assets > New. Its identity is scoped to the published plugin.
 /// The editor creates a uniquely named file with these bytes and tracks it in undo history.
 pub const EditorFileType = struct {
@@ -180,6 +270,22 @@ pub const EditorFileType = struct {
     extension: [:0]const u8,
     contents: []const u8 = "",
 };
+
+/// `items` with each key made `<owner>/<key>`; rows need a title and a key unique in their menu.
+fn identifiedItems(comptime owner: []const u8, comptime items: []const EditorMenuItem) []const EditorMenuItem {
+    comptime {
+        var all: []const EditorMenuItem = &.{};
+        for (items) |item| {
+            if (item.key.len == 0 or item.title.len == 0) @compileError("editor menu items need a key and title");
+            const identity = std.fmt.comptimePrint("{s}/{s}", .{ owner, item.key });
+            for (all) |previous| if (std.mem.eql(u8, previous.key, identity)) @compileError("duplicate editor menu item key");
+            var copy = item;
+            copy.key = identity;
+            all = all ++ .{copy};
+        }
+        return all;
+    }
+}
 
 /// One instance of each type in `types` (a tuple such as `.{ Game, Stats }`). Hooks run in list
 /// order, so the game, listed first, sees each frame before its plugins; `deinit` and `uiEvent`
@@ -249,6 +355,35 @@ pub fn Set(comptime types: anytype, comptime keys: []const [:0]const u8) type {
                     const identity = std.fmt.comptimePrint("{s}/{s}", .{ key, command.key });
                     for (all) |previous| if (std.mem.eql(u8, previous.key, identity)) @compileError("duplicate editor command key");
                     all = all ++ .{EditorCommand{ .key = identity, .title = command.title }};
+                }
+            };
+            break :blk all;
+        };
+
+        /// Menus plugins add to the top bar or extend, keyed `<plugin>/<menu>`, their items keyed
+        /// `<plugin>/<menu>/<item>`. Disabled plugins stay listed; dispatch skips them.
+        pub const editor_menus: []const EditorMenu = blk: {
+            var all: []const EditorMenu = &.{};
+            for (list, keys) |T, key| if (@hasDecl(T, "editor_menus")) {
+                for (T.editor_menus) |menu| {
+                    if (menu.key.len == 0 or menu.title.len == 0) @compileError("editor menus need a key and title");
+                    const identity = std.fmt.comptimePrint("{s}/{s}", .{ key, menu.key });
+                    for (all) |previous| if (std.mem.eql(u8, previous.key, identity)) @compileError("duplicate editor menu key");
+                    all = all ++ .{EditorMenu{ .key = identity, .title = menu.title, .extends = menu.extends, .items = identifiedItems(identity, menu.items) }};
+                }
+            };
+            break :blk all;
+        };
+
+        /// Status bar entries, keyed `<plugin>/<key>`, their menu rows `<plugin>/<key>/<item>`.
+        pub const editor_status_items: []const EditorStatusItem = blk: {
+            var all: []const EditorStatusItem = &.{};
+            for (list, keys) |T, key| if (@hasDecl(T, "editor_status_items")) {
+                for (T.editor_status_items) |status| {
+                    if (status.key.len == 0 or status.title.len == 0) @compileError("editor status items need a key and title");
+                    const identity = std.fmt.comptimePrint("{s}/{s}", .{ key, status.key });
+                    for (all) |previous| if (std.mem.eql(u8, previous.key, identity)) @compileError("duplicate editor status item key");
+                    all = all ++ .{EditorStatusItem{ .key = identity, .title = status.title, .side = status.side, .items = identifiedItems(identity, status.items) }};
                 }
             };
             break :blk all;
@@ -512,7 +647,71 @@ pub fn Set(comptime types: anytype, comptime keys: []const [:0]const u8) type {
             return error.NoEditorCommand;
         }
 
-        /// Draw every enabled plugin's `exportUi` for `platform`: an index into Eggy's
+        /// Run a menu row or status bar entry on the plugin that declared it. Host-only: indices
+        /// are into this Set's `editor_menus` / `editor_status_items` for this generation, never
+        /// persisted. Returns `PluginDisabled`, `NoEditorBarHook` or `NoEditorBarTarget`, or the
+        /// hook's failure; the context must not escape the call.
+        ///
+        /// ```zig
+        /// try plugins.editorBarAction(.{ .menu_item = .{ .menu = 0, .item = 1 } }, &editor_context);
+        /// ```
+        pub fn editorBarAction(self: *Self, target: EditorBarTarget, editor: *EditorContext) !void {
+            const owner = locate(target) orelse return error.NoEditorBarTarget;
+            if (!self.enabled[owner.plugin]) return error.PluginDisabled;
+            inline for (list, 0..) |T, i| if (owner.plugin == i) {
+                if (!@hasDecl(T, "editorBarAction")) return error.NoEditorBarHook;
+                return self.instances[i].editorBarAction(owner.target, editor);
+            };
+            unreachable;
+        }
+
+        /// Ask the plugin how `target` shows now. A disabled plugin's entries come back disabled
+        /// without running a hook, and a plugin without `editorBarState` shows its entries as
+        /// declared. Hook failures propagate (the host should then show the declared look).
+        ///
+        /// ```zig
+        /// var state = eggy.plugins.EditorBarState{};
+        /// try plugins.editorBarState(.{ .status = 0 }, &editor_context, &state);
+        /// ```
+        pub fn editorBarState(self: *Self, target: EditorBarTarget, editor: *EditorContext, state: *EditorBarState) !void {
+            state.* = .{};
+            const owner = locate(target) orelse return error.NoEditorBarTarget;
+            if (!self.enabled[owner.plugin]) {
+                state.enabled = false;
+                return;
+            }
+            inline for (list, 0..) |T, i| if (owner.plugin == i and @hasDecl(T, "editorBarState")) try self.instances[i].editorBarState(owner.target, editor, state);
+        }
+
+        const Owner = struct { plugin: usize, target: EditorBarTarget };
+
+        /// Which plugin declared `target` (global indices), and the target in its own indices.
+        fn locate(target: EditorBarTarget) ?Owner {
+            comptime var first_menu: usize = 0;
+            comptime var first_status: usize = 0;
+            inline for (list, 0..) |T, i| {
+                const menu_count = if (@hasDecl(T, "editor_menus")) T.editor_menus.len else 0;
+                const status_count = if (@hasDecl(T, "editor_status_items")) T.editor_status_items.len else 0;
+                switch (target) {
+                    .menu_item => |t| if (t.menu >= first_menu and t.menu < first_menu + menu_count) {
+                        if (t.item >= editor_menus[t.menu].items.len) return null;
+                        return .{ .plugin = i, .target = .{ .menu_item = .{ .menu = t.menu - first_menu, .item = t.item } } };
+                    },
+                    .status => |s| if (s >= first_status and s < first_status + status_count) {
+                        return .{ .plugin = i, .target = .{ .status = s - first_status } };
+                    },
+                    .status_item => |t| if (t.status >= first_status and t.status < first_status + status_count) {
+                        if (t.item >= editor_status_items[t.status].items.len) return null;
+                        return .{ .plugin = i, .target = .{ .status_item = .{ .status = t.status - first_status, .item = t.item } } };
+                    },
+                }
+                first_menu += menu_count;
+                first_status += status_count;
+            }
+            return null;
+        }
+
+        /// Draw every enabled plugin's `exportUi` for `platform`
         /// `BuiltinPlatform`s, then `export_platforms`, exporting for `target`.
         /// Host-only: contexts are hook-local. A disabled plugin's own platform says it is off.
         /// Hook errors propagate, leaving later plugins undrawn this frame.
@@ -907,4 +1106,117 @@ test "export platforms are scoped to their plugin, which sees its own by local i
     try plugins.exportArgs(std.meta.fields(BuiltinPlatform).len, "aarch64-linux-gnu", &args);
     try std.testing.expectEqual(@as(?usize, 0), plugins.instances[1].seen.?.own);
     try std.testing.expectEqual(@as(usize, 2), args.list.items.len);
+}
+
+test "plugin bars are scoped to their plugin and dispatch its local indices" {
+    const Tools = struct {
+        pressed: ?EditorBarTarget = null,
+        pub const editor_menus = [_]EditorMenu{
+            .{ .key = "tools", .title = "Tools", .items = &.{ .{ .key = "bake", .title = "Bake" }, .{ .key = "clean", .title = "Clean", .checkable = true } } },
+            .{ .key = "more", .title = "More", .extends = .view, .items = &.{.{ .key = "grid", .title = "Grid" }} },
+        };
+        pub const editor_status_items = [_]EditorStatusItem{
+            .{ .key = "fps", .title = "FPS", .side = .right },
+            .{ .key = "mode", .title = "Mode", .items = &.{.{ .key = "fast", .title = "Fast" }} },
+        };
+        /// Test fixture: remember the target it was given, in this plugin's own indices.
+        ///
+        /// ```zig
+        /// try tools.editorBarAction(.{ .status = 0 }, editor); // Within this fixture.
+        /// ```
+        pub fn editorBarAction(self: *@This(), target: EditorBarTarget, _: *EditorContext) !void {
+            self.pressed = target;
+        }
+        /// Test fixture: check the second Tools row and give the first status item text.
+        ///
+        /// ```zig
+        /// try tools.editorBarState(.{ .status = 0 }, editor, &state); // Within this fixture.
+        /// ```
+        pub fn editorBarState(_: *@This(), target: EditorBarTarget, _: *EditorContext, state: *EditorBarState) !void {
+            switch (target) {
+                .menu_item => |t| state.checked = t.menu == 0 and t.item == 1,
+                .status => |s| if (s == 0) state.setText("60 fps"),
+                .status_item => {},
+            }
+        }
+    };
+    const Other = struct {
+        pub const editor_menus = [_]EditorMenu{.{ .key = "tools", .title = "Tools", .items = &.{.{ .key = "bake", .title = "Bake" }} }};
+        pub const editor_status_items = [_]EditorStatusItem{.{ .key = "fps", .title = "FPS" }};
+    };
+    const Plugins = Set(.{ struct {}, Tools, Other }, &.{ "game", "tools", "other" });
+
+    // The same local keys under different plugins don't collide.
+    try std.testing.expectEqualStrings("tools/tools", Plugins.editor_menus[0].key);
+    try std.testing.expectEqualStrings("tools/tools/clean", Plugins.editor_menus[0].items[1].key);
+    try std.testing.expectEqualStrings("other/tools", Plugins.editor_menus[2].key);
+    try std.testing.expectEqual(BuiltinMenu.view, Plugins.editor_menus[1].extends.?);
+    try std.testing.expectEqualStrings("other/fps", Plugins.editor_status_items[2].key);
+
+    var plugins = try Plugins.init(std.testing.allocator, undefined, .{ true, true, true });
+    defer plugins.deinit();
+    try plugins.editorBarAction(.{ .menu_item = .{ .menu = 1, .item = 0 } }, undefined);
+    try std.testing.expectEqual(@as(usize, 1), plugins.instances[1].pressed.?.menu_item.menu);
+    try plugins.editorBarAction(.{ .status_item = .{ .status = 1, .item = 0 } }, undefined);
+    try std.testing.expectEqual(@as(usize, 1), plugins.instances[1].pressed.?.status_item.status);
+
+    var state = EditorBarState{};
+    try plugins.editorBarState(.{ .menu_item = .{ .menu = 0, .item = 1 } }, undefined, &state);
+    try std.testing.expect(state.checked and state.enabled);
+    try plugins.editorBarState(.{ .status = 0 }, undefined, &state);
+    try std.testing.expectEqualStrings("60 fps", state.text());
+
+    // Indices that nothing declared, or rows past a menu's end, are refused.
+    try std.testing.expectError(error.NoEditorBarTarget, plugins.editorBarAction(.{ .menu_item = .{ .menu = 3, .item = 0 } }, undefined));
+    try std.testing.expectError(error.NoEditorBarTarget, plugins.editorBarAction(.{ .menu_item = .{ .menu = 0, .item = 2 } }, undefined));
+    // A plugin that declares no action hook says so.
+    try std.testing.expectError(error.NoEditorBarHook, plugins.editorBarAction(.{ .menu_item = .{ .menu = 2, .item = 0 } }, undefined));
+}
+
+test "a turned-off plugin's bar entries are disabled and never run" {
+    const Tools = struct {
+        ran: u32 = 0,
+        pub const editor_menus = [_]EditorMenu{.{ .key = "tools", .title = "Tools", .items = &.{.{ .key = "bake", .title = "Bake" }} }};
+        pub const editor_status_items = [_]EditorStatusItem{.{ .key = "fps", .title = "FPS" }};
+        /// Test fixture: count how often it runs.
+        ///
+        /// ```zig
+        /// try tools.editorBarAction(.{ .status = 0 }, editor); // Within this fixture.
+        /// ```
+        pub fn editorBarAction(self: *@This(), _: EditorBarTarget, _: *EditorContext) !void {
+            self.ran += 1;
+        }
+        /// Test fixture: ask for a different look, which a turned-off plugin must not get to.
+        ///
+        /// ```zig
+        /// try tools.editorBarState(.{ .status = 0 }, editor, &state); // Within this fixture.
+        /// ```
+        pub fn editorBarState(_: *@This(), _: EditorBarTarget, _: *EditorContext, state: *EditorBarState) !void {
+            state.setText("on");
+        }
+    };
+    const Plugins = Set(.{ struct {}, Tools }, &.{ "game", "tools" });
+    var plugins = try Plugins.init(std.testing.allocator, undefined, .{ true, true });
+    defer plugins.deinit();
+    plugins.enabled[1] = false;
+
+    try std.testing.expectError(error.PluginDisabled, plugins.editorBarAction(.{ .status = 0 }, undefined));
+    try std.testing.expectError(error.PluginDisabled, plugins.editorBarAction(.{ .menu_item = .{ .menu = 0, .item = 0 } }, undefined));
+    var state = EditorBarState{};
+    try plugins.editorBarState(.{ .status = 0 }, undefined, &state);
+    try std.testing.expect(!state.enabled);
+    try std.testing.expectEqualStrings("", state.text());
+
+    // Turned back on, the same entries run.
+    plugins.enabled[1] = true;
+    try plugins.editorBarAction(.{ .status = 0 }, undefined);
+    try std.testing.expectEqual(@as(u32, 1), plugins.instances[1].ran);
+}
+
+test "status text is cut on a character boundary" {
+    var state = EditorBarState{};
+    const long = "é" ** 40;
+    state.setText(long);
+    try std.testing.expect(state.text().len <= EditorBarState.max_text);
+    try std.testing.expect(std.unicode.utf8ValidateSlice(state.text()));
 }

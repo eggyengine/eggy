@@ -43,6 +43,7 @@ const layout_file = @import("layout_file.zig");
 const PlayMode = @import("play_mode.zig").PlayMode;
 const history_zig = @import("history.zig");
 const PluginSwitches = @import("plugin_switches.zig").PluginSwitches;
+const plugin_bars = @import("plugin_bars.zig");
 const Dragged = @import("dragged.zig").Dragged;
 const save_prompt_zig = @import("save_prompt.zig");
 const page_style = @import("page_style.zig");
@@ -324,6 +325,7 @@ pub fn Editor(comptime project: type) type {
             if (game) |loaded| {
                 workspace.setPluginPanels(loaded.panels);
                 workspace.plugin_commands = loaded.commands;
+                workspace.setPluginBars(.{ .menus = loaded.menus, .status_items = loaded.status_items });
                 preferences.writeRegistry(gpa, preference_folders, loaded.plugin_keys, loaded.preference_manifests, plugin_switches.off()) catch |err| std.log.warn("cannot update .eggy/plugins.zon: {t}", .{err});
             }
             // The project's scene first, so the game's plugins start among its entities.
@@ -522,6 +524,7 @@ pub fn Editor(comptime project: type) type {
             self.workspace.shift_held = modifiers.left_shift or modifiers.right_shift;
             const stop_key = preferences.editor(&self.app.preference_values).stop_play_key;
             self.workspace.stop_tooltip = try std.fmt.allocPrint(frame_arena.allocator(), "Stop ({s})", .{sdl3.keyboard.getScancodeName(stop_key) orelse @tagName(stop_key)});
+            self.workspace.bar_states = try self.askPluginBars(frame_arena.allocator());
             try self.workspace.build(viewport, window_viewports, self.ui.font);
             try self.syncViewportMouse();
             // Help > DevTools, on this frame's main window, before that draws their highlight.
@@ -1749,6 +1752,10 @@ pub fn Editor(comptime project: type) type {
                     var editor_context = extensions.context(self);
                     game.editorCommand(command, &editor_context);
                 },
+                .plugin_bar => |target| if (self.game) |*game| {
+                    var editor_context = extensions.context(self);
+                    game.barAction(target, &editor_context);
+                },
                 .quit => if (self.mayLeave(.quit)) return .success,
                 .window => |button| if (button != .close or self.mayLeave(.quit)) {
                     if (weeoui_sdl3.windowAction(self.app.window.window, button)) return .success;
@@ -1847,6 +1854,34 @@ pub fn Editor(comptime project: type) type {
             self.scene_view.hot = null;
             self.scene_view.hot_end = null;
             for (0..self.pageCount()) |index| self.page(index).pointer = .init(-1, -1);
+        }
+
+        /// How each plugin menu row, status item and status row looks this frame, asked of the
+        /// game (only entries it declares; with no game, each as declared and disabled).
+        fn askPluginBars(self: *Self, arena: std.mem.Allocator) !plugin_bars.States {
+            const bars = self.workspace.plugin_bars;
+            const states = try plugin_bars.States.declared(arena, bars);
+            const game = if (self.game) |*loaded| loaded else {
+                for (@constCast(states.menu_rows)) |*state| state.enabled = false;
+                for (@constCast(states.status)) |*state| state.enabled = false;
+                for (@constCast(states.status_rows)) |*state| state.enabled = false;
+                return states;
+            };
+            var editor_context = extensions.context(self);
+            var row: usize = 0;
+            for (bars.menus, 0..) |menu, menu_index| for (menu.items, 0..) |_, item| {
+                @constCast(states.menu_rows)[row] = game.barState(.{ .menu_item = .{ .menu = menu_index, .item = item } }, &editor_context);
+                row += 1;
+            };
+            row = 0;
+            for (bars.status_items, 0..) |entry, index| {
+                @constCast(states.status)[index] = game.barState(.{ .status = index }, &editor_context);
+                for (entry.items, 0..) |_, item| {
+                    @constCast(states.status_rows)[row] = game.barState(.{ .status_item = .{ .status = index, .item = item } }, &editor_context);
+                    row += 1;
+                }
+            }
+            return states;
         }
 
         fn syncViewportMouse(self: *Self) !void {
@@ -2156,6 +2191,7 @@ pub fn Editor(comptime project: type) type {
             } else |err| std.log.err("cannot put the scene back: {t}", .{err});
             self.workspace.setPluginPanels(game.panels);
             self.workspace.plugin_commands = game.commands;
+            self.workspace.setPluginBars(.{ .menus = game.menus, .status_items = game.status_items });
             preferences.writeRegistry(self.gpa, self.preference_folders, game.plugin_keys, game.preference_manifests, self.plugin_switches.off()) catch |err| std.log.warn("cannot update .eggy/plugins.zon: {t}", .{err});
             game.start(&self.app, self.plugin_switches.off(), .discard);
         }

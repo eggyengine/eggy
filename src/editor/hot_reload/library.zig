@@ -29,6 +29,35 @@ const commands = blk: {
     for (&list, Plugins.editor_commands) |*command, source| command.* = .{ .key = source.key.ptr, .title = source.title.ptr };
     break :blk list;
 };
+const bar_menus = blk: {
+    var list: [Plugins.editor_menus.len]api.Menu = undefined;
+    for (&list, Plugins.editor_menus) |*menu, source| menu.* = .{ .key = source.key.ptr, .title = source.title.ptr, .extends = if (source.extends) |builtin| @intFromEnum(builtin) else -1, .item_count = source.items.len };
+    break :blk list;
+};
+const bar_menu_items = barItems(Plugins.editor_menus);
+const bar_status_items = blk: {
+    var list: [Plugins.editor_status_items.len]api.StatusItem = undefined;
+    for (&list, Plugins.editor_status_items) |*status, source| status.* = .{ .key = source.key.ptr, .title = source.title.ptr, .side = @intFromEnum(source.side), .item_count = source.items.len };
+    break :blk list;
+};
+const bar_status_menu_items = barItems(Plugins.editor_status_items);
+
+/// Every entry's rows, one after another, as C data.
+fn barItems(comptime owners: anytype) [barItemCount(owners)]api.MenuItem {
+    var list: [barItemCount(owners)]api.MenuItem = undefined;
+    var next: usize = 0;
+    for (owners) |owner| for (owner.items) |source| {
+        list[next] = .{ .key = source.key.ptr, .title = source.title.ptr, .shortcut = source.shortcut.ptr, .checkable = source.checkable };
+        next += 1;
+    };
+    return list;
+}
+
+fn barItemCount(comptime owners: anytype) usize {
+    var count: usize = 0;
+    for (owners) |owner| count += owner.items.len;
+    return count;
+}
 const file_types = blk: {
     var list: [Plugins.editor_file_types.len]api.FileType = undefined;
     for (&list, Plugins.editor_file_types) |*file_type, source| file_type.* = .{
@@ -117,6 +146,16 @@ const game = api.Game{
     .file_types = &file_types,
     .file_type_count = file_types.len,
     .editor_command = editorCommand,
+    .menus = &bar_menus,
+    .menu_count = bar_menus.len,
+    .menu_items = &bar_menu_items,
+    .menu_item_count = bar_menu_items.len,
+    .status_items = &bar_status_items,
+    .status_item_count = bar_status_items.len,
+    .status_menu_items = &bar_status_menu_items,
+    .status_menu_item_count = bar_status_menu_items.len,
+    .bar_action = barAction,
+    .bar_state = barState,
     .export_platforms = &export_platforms,
     .export_platform_count = export_platforms.len,
     .export_ui = exportUi,
@@ -177,7 +216,7 @@ fn start(editor: *const api.Host, gpa_ptr: *const anyopaque, app_ptr: *anyopaque
 
 /// What can fail each frame, and the error each last failed with: one failing every frame is
 /// logged once, and again only when it fails differently or after it recovers.
-const Hook = enum { update, game_ui, draw, ui_event, editor_update, editor_ui, editor_panel_ui, editor_command, export_ui, export_args, event, world_start, world_update, scene_lights };
+const Hook = enum { update, game_ui, draw, ui_event, editor_update, editor_ui, editor_panel_ui, editor_command, bar_action, bar_state, export_ui, export_args, event, world_start, world_update, scene_lights };
 var failures: [std.meta.fields(Hook).len]?anyerror = @splat(null);
 
 fn report(hook: Hook, err: anyerror) void {
@@ -195,6 +234,8 @@ fn report(hook: Hook, err: anyerror) void {
         .export_ui => "an exportUi hook",
         .export_args => "an exportArgs hook",
         .editor_command => "an editorCommand hook",
+        .bar_action => "an editorBarAction hook",
+        .bar_state => "an editorBarState hook",
         .event => "an event hook",
         .world_start => "a system in the world's Init stages",
         .world_update => "a system in the world's Update stages",
@@ -298,6 +339,34 @@ fn editorPanelUi(state_ptr: *anyopaque, panel: usize, editor_ptr: *anyopaque, co
 fn editorCommand(state_ptr: *anyopaque, command: usize, editor_ptr: *anyopaque) callconv(.c) void {
     stateOf(state_ptr).plugins.editorCommand(command, @ptrCast(@alignCast(editor_ptr))) catch |err| return report(.editor_command, err);
     recovered(.editor_command);
+}
+
+fn barTarget(kind: api.BarKind, owner: usize, item: usize) eggy.plugins.EditorBarTarget {
+    return switch (kind) {
+        .menu_item => .{ .menu_item = .{ .menu = owner, .item = item } },
+        .status => .{ .status = owner },
+        .status_item => .{ .status_item = .{ .status = owner, .item = item } },
+    };
+}
+
+fn barAction(state_ptr: *anyopaque, kind: api.BarKind, owner: usize, item: usize, editor_ptr: *anyopaque) callconv(.c) void {
+    stateOf(state_ptr).plugins.editorBarAction(barTarget(kind, owner, item), @ptrCast(@alignCast(editor_ptr))) catch |err| {
+        // A turned-off plugin's entry is shown greyed out; pressing it is not a failure.
+        if (err != error.PluginDisabled) report(.bar_action, err);
+        return;
+    };
+    recovered(.bar_action);
+}
+
+fn barState(state_ptr: *anyopaque, kind: api.BarKind, owner: usize, item: usize, editor_ptr: *anyopaque, out: *anyopaque) callconv(.c) bool {
+    const bar_state: *eggy.plugins.EditorBarState = @ptrCast(@alignCast(out));
+    stateOf(state_ptr).plugins.editorBarState(barTarget(kind, owner, item), @ptrCast(@alignCast(editor_ptr)), bar_state) catch |err| {
+        report(.bar_state, err);
+        bar_state.* = .{};
+        return false;
+    };
+    recovered(.bar_state);
+    return true;
 }
 
 fn exportUi(state_ptr: *anyopaque, platform: usize, target_ptr: [*]const u8, target_len: usize, editor_ptr: *anyopaque, context: *anyopaque) callconv(.c) void {
