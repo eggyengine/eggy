@@ -6,6 +6,7 @@
 //! the nearest depth (without colour), then its hull, pushed outwards on screen, just behind
 //! that, so the hull shows everywhere but the mask: its rim.
 const std = @import("std");
+const builtin = @import("builtin");
 const vit = @import("vitellus");
 const ecs = @import("clutch");
 const shaders = @import("scene_shaders");
@@ -71,7 +72,8 @@ pub const MeshRenderer = struct {
     /// defer renderer.deinit(); // Finish any GPU use before leaving this host scope.
     /// ```
     pub fn init(device: vit.Device, format: vit.Format, shaderSource: *const fn ([]const u8, []const u8) vit.ShaderModule, texture_layout: vit.BindGroupLayout, sample_count: u32) !MeshRenderer {
-        var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+        // malloc, not page_allocator: on the web, growing memory behind Emscripten's back detaches its views of it.
+        var arena = std.heap.ArenaAllocator.init(std.heap.c_allocator);
         defer arena.deinit();
         const geometry = try mesh.Geometry.build(arena.allocator());
         const vertices = try vit.Buffer.init(device, .{ .label = "mesh vertices", .size = geometry.vertices.len * @sizeOf(mesh.Vertex), .usage = .{ .vertex = true }, .initial_data = std.mem.sliceAsBytes(geometry.vertices) });
@@ -300,17 +302,16 @@ fn makePipeline(device: vit.Device, format: vit.Format, layout: vit.PipelineLayo
         .{ .location = 9, .format = .float32x4, .offset = @offsetOf(mesh.Drawable, "material_params") },
         .{ .location = 10, .format = .float32x4, .offset = @offsetOf(mesh.Drawable, "emissive_cutoff") },
     };
-    const instance_count: usize = switch (depth) {
-        .drawn => instance_attributes.len,
-        .mask => 5,
-        .over_all_but_mask => 4,
-    };
+    // The selection passes read fewer attributes, but WGSL keeps every input the shader
+    // declares and WebGPU rejects a pipeline missing any; SPIR-V drops the ones unused.
+    const all = depth == .drawn or builtin.os.tag == .emscripten;
+    const instance_count: usize = if (all) instance_attributes.len else if (depth == .mask) 5 else 4;
     return vit.GraphicsPipeline.init(device, .{
         .label = label,
         .vertex = vs,
         .fragment = fs,
         .vertex_buffers = &.{
-            .{ .stride = @sizeOf(mesh.Vertex), .attributes = vertex_attributes[0..if (depth == .drawn) vertex_attributes.len else 1] },
+            .{ .stride = @sizeOf(mesh.Vertex), .attributes = vertex_attributes[0..if (all) vertex_attributes.len else 1] },
             .{ .stride = @sizeOf(mesh.Drawable), .step_mode = .instance, .attributes = instance_attributes[0..instance_count] },
         },
         .color_targets = &.{.{ .format = format, .write_mask = if (depth == .mask) .{ .red = false, .green = false, .blue = false, .alpha = false } else .{} }},

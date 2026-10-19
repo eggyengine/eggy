@@ -1,29 +1,31 @@
 // Meshes with authored metallic/roughness materials and directional/point scene lights.
+// No semantics on the varyings: Slang's WGSL numbers semantic'd inputs its own way, ignoring
+// vk::location, while without them it numbers them in order, as vk::location does.
 struct VertexInput {
-    [[vk::location(0)]] float3 position : POSITION;
-    [[vk::location(1)]] float3 normal : NORMAL;
-    [[vk::location(2)]] float4 model0 : TEXCOORD0;
-    [[vk::location(3)]] float4 model1 : TEXCOORD1;
-    [[vk::location(4)]] float4 model2 : TEXCOORD2;
-    [[vk::location(5)]] float4 model3 : TEXCOORD3;
-    [[vk::location(6)]] float4 color : COLOR0;
-    [[vk::location(7)]] float2 uv : TEXCOORD4;
-    [[vk::location(8)]] float4 surface_color : COLOR1;
-    [[vk::location(9)]] float4 material_params : TEXCOORD5;
-    [[vk::location(10)]] float4 emissive_cutoff : TEXCOORD6;
-    [[vk::location(11)]] float4 imported_color : COLOR2;
-    [[vk::location(12)]] float2 imported_material : TEXCOORD7;
-    [[vk::location(13)]] float3 imported_emissive : TEXCOORD8;
+    [[vk::location(0)]] float3 position;
+    [[vk::location(1)]] float3 normal;
+    [[vk::location(2)]] float4 model0;
+    [[vk::location(3)]] float4 model1;
+    [[vk::location(4)]] float4 model2;
+    [[vk::location(5)]] float4 model3;
+    [[vk::location(6)]] float4 color;
+    [[vk::location(7)]] float2 uv;
+    [[vk::location(8)]] float4 surface_color;
+    [[vk::location(9)]] float4 material_params;
+    [[vk::location(10)]] float4 emissive_cutoff;
+    [[vk::location(11)]] float4 imported_color;
+    [[vk::location(12)]] float2 imported_material;
+    [[vk::location(13)]] float3 imported_emissive;
 };
 
 struct VertexOutput {
     float4 position : SV_Position;
-    [[vk::location(0)]] float3 normal : NORMAL;
-    [[vk::location(1)]] float4 color : COLOR0;
-    [[vk::location(2)]] float2 uv : TEXCOORD0;
-    [[vk::location(3)]] float3 world : TEXCOORD1;
-    [[vk::location(4)]] float4 material : TEXCOORD2;
-    [[vk::location(5)]] float4 emissive_cutoff : TEXCOORD3;
+    [[vk::location(0)]] float3 normal;
+    [[vk::location(1)]] float4 color;
+    [[vk::location(2)]] float2 uv;
+    [[vk::location(3)]] float3 world;
+    [[vk::location(4)]] float4 material;
+    [[vk::location(5)]] float4 emissive_cutoff;
 };
 
 struct SceneLight {
