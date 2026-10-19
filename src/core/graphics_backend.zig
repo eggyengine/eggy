@@ -31,6 +31,7 @@ pub fn capabilities(adapter: vit.Adapter, instance: vit.Instance, present_modes:
         .window_settings = builtin.os.tag != .emscripten and !builtin.abi.isAndroid(),
         .frame_limit = builtin.os.tag != .emscripten,
         .max_anisotropy = if (native.features.anisotropic_filtering) @min(16, @max(1, native.limits.max_sampler_anisotropy)) else 1,
+        .max_shadow_resolution = @min(4096, native.limits.max_texture_dimension_2d),
     };
     switch (builtin.os.tag) {
         .windows => {

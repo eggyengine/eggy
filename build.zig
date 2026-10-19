@@ -412,6 +412,7 @@ fn addEngine(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.buil
     const mesh_shader = b.path("src/core/shaders/mesh.slang");
     const mesh_vertex = vitellus_build.compileSlang(b, vitellus, target, mesh_shader, "vertexMain", .vertex) orelse return null;
     const mesh_fragment = vitellus_build.compileSlang(b, vitellus, target, mesh_shader, "fragmentMain", .fragment) orelse return null;
+    const mesh_shadow_fragment = vitellus_build.compileSlang(b, vitellus, target, mesh_shader, "fragmentShadow", .fragment) orelse return null;
     const outline_vertex = vitellus_build.compileSlang(b, vitellus, target, mesh_shader, "vertexOutline", .vertex) orelse return null;
     const outline_fragment = vitellus_build.compileSlang(b, vitellus, target, mesh_shader, "fragmentOutline", .fragment) orelse return null;
     const mask_vertex = vitellus_build.compileSlang(b, vitellus, target, mesh_shader, "vertexMask", .vertex) orelse return null;
@@ -432,6 +433,7 @@ fn addEngine(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.buil
     _ = shader_files.addCopyFile(viewport_fragment, "viewport3d.frag");
     _ = shader_files.addCopyFile(mesh_vertex, "mesh.vert");
     _ = shader_files.addCopyFile(mesh_fragment, "mesh.frag");
+    _ = shader_files.addCopyFile(mesh_shadow_fragment, "mesh_shadow.frag");
     _ = shader_files.addCopyFile(outline_vertex, "outline.vert");
     _ = shader_files.addCopyFile(outline_fragment, "outline.frag");
     _ = shader_files.addCopyFile(mask_vertex, "mask.vert");
@@ -449,6 +451,7 @@ fn addEngine(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.buil
             \\pub const viewport_fragment = @embedFile("viewport3d.frag");
             \\pub const mesh_vertex = @embedFile("mesh.vert");
             \\pub const mesh_fragment = @embedFile("mesh.frag");
+            \\pub const mesh_shadow_fragment = @embedFile("mesh_shadow.frag");
             \\pub const outline_vertex = @embedFile("outline.vert");
             \\pub const outline_fragment = @embedFile("outline.frag");
             \\pub const mask_vertex = @embedFile("mask.vert");

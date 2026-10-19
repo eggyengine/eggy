@@ -178,7 +178,7 @@ pub const SceneTexture = struct {
             .width = extent_px.width,
             .height = extent_px.height,
             .format = graphics.color_format,
-            .usage = .{ .color_attachment = true, .sampled = true },
+            .usage = .{ .color_attachment = true, .sampled = true, .transfer_src = true },
         });
         errdefer texture.deinit();
         const view = try vit.TextureView.init(device, .{ .texture = texture });

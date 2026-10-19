@@ -117,7 +117,7 @@ pub const Preview = struct {
         errdefer depth.deinit();
         const depth_view = try vit.TextureView.init(device, .{ .texture = depth, .aspect = .depth });
         errdefer depth_view.deinit();
-        var meshes = try MeshRenderer.init(device, format, shaderSource, texture_layout, sample_count);
+        var meshes = try MeshRenderer.init(device, format, shaderSource, texture_layout, sample_count, settings.shadow_quality);
         errdefer meshes.deinit();
         var grid = try Grid.init(device, format, shaderSource, sample_count);
         errdefer grid.deinit();
@@ -216,6 +216,7 @@ pub const Preview = struct {
     fn drawPass(self: *Preview, cmd: vit.CommandBuffer, target: vit.TextureView, scene: ui.Rect, clip: ui.Rect, window: ui.Rect, extent: vit.Extent2D, srgb: bool, drawables: []mesh.Drawable, sources: mesh_renderer.Sources, view: camera.View, selected: ?ecs.EntityId, grid: bool) !void {
         const scissor = previewScissor(scene, clip, window, extent) orelse return;
         try self.meshes.prepare(cmd, drawables, sources);
+        try self.meshes.renderShadow(cmd, drawables, sources, view, scene.w / scene.h, self.settings);
         try self.world_draw.prepare(sources.world_draw, sources.textures, view, scene.w / scene.h, srgb);
         const transform = SceneUniforms{
             .screen = .{

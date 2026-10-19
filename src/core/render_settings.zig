@@ -21,6 +21,21 @@ pub const AntiAliasing = enum {
     }
 };
 pub const TextureFilter = enum { nearest, linear };
+pub const ShadowQuality = enum {
+    off,
+    low,
+    medium,
+    high,
+
+    pub fn resolution(self: ShadowQuality) u32 {
+        return switch (self) {
+            .off => 1,
+            .low => 1024,
+            .medium => 2048,
+            .high => 4096,
+        };
+    }
+};
 pub const WindowMode = enum { windowed, borderless };
 pub const ApplyResult = enum { queued, restart_required };
 pub const Scope = enum { editor, runtime };
@@ -47,6 +62,7 @@ pub const Capabilities = struct {
     present_modes: std.enums.EnumSet(PresentMode) = .initOne(.auto),
     anti_aliasing: std.enums.EnumSet(AntiAliasing) = .initMany(&.{ .off, .fxaa }),
     max_anisotropy: u16 = 1,
+    max_shadow_resolution: u32 = 4096,
     window_settings: bool = false,
     frame_limit: bool = false,
     adapters: [16]AdapterChoice = @splat(.{}),
@@ -67,6 +83,9 @@ pub const Settings = struct {
     mipmaps: bool = true,
     texture_filter: TextureFilter = .linear,
     anisotropy: u16 = 1,
+    shadow_quality: ShadowQuality = .medium,
+    shadow_distance_m: f32 = 60,
+    shadow_bias: f32 = 0.001,
 
     /// Reject invalid values before allocating resources, writing preferences or changing windows.
     pub fn validate(self: Settings, caps: Capabilities) !void {
@@ -76,6 +95,8 @@ pub const Settings = struct {
         if (!caps.present_modes.contains(self.present_mode)) return error.UnsupportedPresentMode;
         if (!caps.anti_aliasing.contains(self.anti_aliasing)) return error.UnsupportedAntialiasing;
         if (self.anisotropy > caps.max_anisotropy) return error.UnsupportedAnisotropy;
+        if (self.shadow_quality != .off and self.shadow_quality.resolution() > caps.max_shadow_resolution)
+            return error.UnsupportedShadowQuality;
         if (!caps.frame_limit and self.frame_limit != 0) return error.UnsupportedFrameLimit;
         if (!caps.window_settings and (self.window_mode != .windowed or self.width != 900 or self.height != 675))
             return error.UnsupportedWindowSettings;
@@ -91,6 +112,10 @@ pub const Settings = struct {
         if (self.anisotropy == 0 or self.anisotropy > 16 or !std.math.isPowerOfTwo(self.anisotropy))
             return error.InvalidAnisotropy;
         if (self.anisotropy > 1 and self.texture_filter != .linear) return error.AnisotropyRequiresLinearFiltering;
+        if (!std.math.isFinite(self.shadow_distance_m) or self.shadow_distance_m < 1 or self.shadow_distance_m > 10000)
+            return error.InvalidShadowDistance;
+        if (!std.math.isFinite(self.shadow_bias) or self.shadow_bias < 0 or self.shadow_bias > 0.1)
+            return error.InvalidShadowBias;
     }
 
     pub fn requiresRestart(self: Settings, other: Settings) bool {
@@ -140,6 +165,8 @@ pub const Settings = struct {
             }
         }
         while (supported.anisotropy > caps.max_anisotropy) supported.anisotropy /= 2;
+        while (supported.shadow_quality != .off and supported.shadow_quality.resolution() > caps.max_shadow_resolution)
+            supported.shadow_quality = @enumFromInt(@intFromEnum(supported.shadow_quality) - 1);
         if (!caps.frame_limit) supported.frame_limit = 0;
         if (!caps.window_settings) {
             supported.window_mode = .windowed;
@@ -175,6 +202,20 @@ test "backend GPU and presentation choices require restarting graphics" {
     try std.testing.expect(original.requiresRestart(.{ .backend = .vulkan }));
     try std.testing.expect(original.requiresRestart(.{ .adapter_index = 0 }));
     try std.testing.expect(original.requiresRestart(.{ .present_mode = .fifo }));
+}
+
+test "shadow defaults scale to device limits while overrides and distances remain strict" {
+    const caps = Capabilities{ .max_shadow_resolution = 1024 };
+    const authored = Settings{ .anti_aliasing = .off, .shadow_quality = .high };
+    const portable = authored.supportedDefaults(caps);
+    try portable.validate(caps);
+    try std.testing.expectEqual(ShadowQuality.low, portable.shadow_quality);
+    try std.testing.expectError(error.UnsupportedShadowQuality, authored.validate(caps));
+    try std.testing.expectEqual(ShadowQuality.off, authored.supportedDefaults(.{ .max_shadow_resolution = 512 }).shadow_quality);
+    try std.testing.expectError(error.InvalidShadowDistance, (Settings{ .shadow_distance_m = 0 }).validateValues());
+    try std.testing.expectError(error.InvalidShadowDistance, (Settings{ .shadow_distance_m = std.math.nan(f32) }).validateValues());
+    try std.testing.expectError(error.InvalidShadowBias, (Settings{ .shadow_bias = -0.001 }).validateValues());
+    try std.testing.expectError(error.InvalidShadowBias, (Settings{ .shadow_bias = 0.11 }).validateValues());
 }
 
 test "portable project defaults select supported options without weakening override validation" {

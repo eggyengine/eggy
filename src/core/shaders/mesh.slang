@@ -1,4 +1,4 @@
-// Meshes with authored metallic/roughness materials and directional/point scene lights.
+// Metallic/roughness surfaces with direct scene lights and directional PCF shadows.
 // No semantics on the varyings: Slang's WGSL numbers semantic'd inputs its own way, ignoring
 // vk::location, while without them it numbers them in order, as vk::location does.
 struct VertexInput {
@@ -32,6 +32,7 @@ struct SceneLight {
     float4 position_kind;
     float4 direction_range;
     float4 color_intensity;
+    float4 cone_shadow;
 };
 
 [[vk::binding(0, 0)]]
@@ -46,8 +47,20 @@ cbuffer Camera : register(b0, space0) {
     float4 outline_size;     // xy: the viewport in pixels; z: the outline's width in pixels
     float4 eye;
     float4 light_info;       // x: number of scene lights
+    float4 ambient;
+    float4 environment;      // exposure multiplier, fallback light, shadow-light index, reserved
+    float4 shadow_matrix0;
+    float4 shadow_matrix1;
+    float4 shadow_matrix2;
+    float4 shadow_matrix3;
+    float4 shadow_params;    // bias, reciprocal map size, light index, enabled
     SceneLight lights[16];
 };
+
+[[vk::binding(1, 0)]]
+Texture2D<float> shadow_map : register(t1, space0);
+[[vk::binding(2, 0)]]
+SamplerComparisonState shadow_sampler : register(s2, space0);
 
 // The texture the mesh is painted with, and how it is sampled.
 [[vk::binding(0, 1)]]
@@ -108,6 +121,19 @@ float3 surfaceLight(float3 base, float metallic, float roughness, float3 normal,
     return (diffuse + specular) * radiance * ndl;
 }
 
+float visibility(float3 world, float ndl) {
+    float4 clip = shadow_matrix0 * world.x + shadow_matrix1 * world.y + shadow_matrix2 * world.z + shadow_matrix3;
+    float3 point = clip.xyz / clip.w;
+    float2 uv = float2(point.x * 0.5 + 0.5, 0.5 - point.y * 0.5);
+    if (point.z < 0.0 || point.z > 1.0 || any(uv < 0.0) || any(uv > 1.0)) return 1.0;
+    float depth = point.z - shadow_params.x * (1.0 + 2.0 * (1.0 - saturate(ndl)));
+    float visible = 0.0;
+    for (int y = -1; y <= 1; ++y)
+        for (int x = -1; x <= 1; ++x)
+            visible += shadow_map.SampleCmpLevelZero(shadow_sampler, uv + float2(x, y) * shadow_params.y, depth);
+    return visible / 9.0;
+}
+
 [shader("pixel")]
 float4 fragmentMain(VertexOutput input) : SV_Target0 {
     float4 texel = paint.Sample(paint_sampler, input.uv);
@@ -118,8 +144,8 @@ float4 fragmentMain(VertexOutput input) : SV_Target0 {
     float3 view = unit(eye.xyz - input.world);
     float3 color = base;
     if (input.material.z < 0.5) {
-        color = base * 0.03;
-        if (light_info.x < 0.5) {
+        color = base * ambient.rgb * ambient.w * (1.0 - saturate(input.material.x));
+        if (light_info.x < 0.5 && environment.y > 0.5) {
             // Keep scenes without authored lights visible in both the editor and runtime.
             if (input.material.w > 0.5 || input.material.x > 0.0 || input.material.y < 0.999) {
                 color += surfaceLight(base, saturate(input.material.x), clamp(input.material.y, 0.05, 1.0), normal, view, unit(light.xyz), float3(3.0, 3.0, 3.0));
@@ -139,15 +165,31 @@ float4 fragmentMain(VertexOutput input) : SV_Target0 {
                 incoming = unit(offset);
                 float falloff = saturate(1.0 - pow(distance / max(current.direction_range.w, 0.001), 4.0));
                 attenuation = falloff * falloff / max(distance2, 0.01);
+                if (current.position_kind.w > 1.5) {
+                    float cone = dot(-incoming, current.direction_range.xyz);
+                    attenuation *= smoothstep(current.cone_shadow.y, current.cone_shadow.x, cone);
+                }
             }
-            float3 radiance = current.color_intensity.rgb * current.color_intensity.w * attenuation;
+            if (shadow_params.w > 0.5 && i == int(shadow_params.z))
+                attenuation *= visibility(input.world, dot(normal, incoming));
+            float3 radiance = current.color_intensity.rgb * current.color_intensity.w * 0.001 * attenuation;
             color += surfaceLight(base, saturate(input.material.x), clamp(input.material.y, 0.05, 1.0), normal, view, incoming, radiance);
         }
     }
     color += input.emissive_cutoff.rgb;
+    color *= environment.x;
+    // Fit HDR direct lighting into the output range without hard-clipping bright surfaces.
+    if (input.material.z < 0.5)
+        color = saturate((color * (2.51 * color + 0.03)) / (color * (2.43 * color + 0.59) + 0.14));
     // sRGB targets encode linear output themselves; other targets need explicit encoding.
     color = options.x > 0.5 ? color : pow(max(color, 0.0), float3(1.0 / 2.2, 1.0 / 2.2, 1.0 / 2.2));
     return float4(color, alpha);
+}
+
+[shader("pixel")]
+void fragmentShadow(VertexOutput input) {
+    float alpha = input.color.a * paint.Sample(paint_sampler, input.uv).a;
+    if (alpha < input.emissive_cutoff.w) discard;
 }
 
 // The selected object's mask: the object itself, at the nearest depth, without colour.

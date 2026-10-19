@@ -112,6 +112,112 @@ test "GPU texture transfers preserve padded rows in every mip level" {
         try checkTextureRows(device, queue, extent[0], extent[1]);
 }
 
+test "GPU directional shadows darken receivers and world sprites and text reach the scene" {
+    if (comptime builtin.os.tag == .emscripten) return error.SkipZigTest;
+    if ((try sdl.getEnvironment()).getVariable("EGGY_GPU_TEST") == null) return error.SkipZigTest;
+    const gpa = std.testing.allocator;
+    const flags = sdl.InitFlags{ .video = true };
+    try sdl.init(flags);
+    defer sdl.quit(flags);
+    const window = adapter.Sdl3Window.init(try sdl.video.Window.init("Eggy shadow and world drawing", 320, 240, .{ .vulkan = true }));
+    defer window.window.deinit();
+    var graphics = try Graphics.initWithSettings(gpa, window, .{ .backend = .vulkan, .anti_aliasing = .off, .shadow_quality = .low, .shadow_distance_m = 20, .width = 320, .height = 240 });
+    defer graphics.deinit();
+    var scene = try SceneTexture.init(&graphics);
+    defer scene.deinit();
+    defer graphics.queue.waitIdle() catch @panic("shadow GPU work did not finish");
+    var context: u8 = 0;
+    graphics.textures.loader = .{ .context = &context, .load = checker };
+    var drawables = [_]mesh.Drawable{
+        .{ .model = .{ .{ 1, 0, 0, 0 }, .{ 0, 1, 0, 0 }, .{ 0, 0, 1, 0 }, .{ 0, 0.5, 0, 1 } }, .color = .{ 0.8, 0.8, 0.8, 1 }, .shape = .cube, .entity_id = 0, .entity_generation = 0 },
+        .{ .model = .{ .{ 12, 0, 0, 0 }, .{ 0, 1, 0, 0 }, .{ 0, 0, 12, 0 }, .{ 0, 0, 0, 1 } }, .color = .{ 0.8, 0.8, 0.8, 1 }, .shape = .plane, .entity_id = 1, .entity_generation = 0 },
+    };
+    graphics.lights.count = 1;
+    const direction = camera.normalize(.{ 0.6, -1, -0.5 });
+    graphics.lights.lights[0] = .{
+        .direction_range = .{ direction[0], direction[1], direction[2], 0 },
+        .color_intensity = .{ 1, 1, 1, 7000 },
+    };
+    graphics.lights.options = .{ 1, 0, -1, 0 };
+    const view = camera.View.lookingAt(.{ 4, 4, 7 }, .{ 0, 0.5, 0 }, .{});
+    const without = try scenePixels(gpa, &graphics, &scene, &drawables, view);
+    defer gpa.free(without);
+    graphics.lights.options[2] = 0;
+    const shadowed = try scenePixels(gpa, &graphics, &scene, &drawables, view);
+    defer gpa.free(shadowed);
+    var darkened: usize = 0;
+    for (0..without.len / 4) |pixel| {
+        if (@as(u16, shadowed[pixel * 4]) + 5 < without[pixel * 4]) darkened += 1;
+    }
+    try std.testing.expect(darkened > 20);
+
+    var world_draw = @import("draw2d.zig").Draw2d{ .gpa = gpa };
+    defer world_draw.deinit();
+    try world_draw.sprite(.{ .image = .init("generated-checker.png"), .position = .{ 0, 2 }, .size = .{ 2, 1 }, .billboard = true, .tint = .{ 1, 0.1, 0.1, 1 } });
+    try world_draw.worldText("world", .{ -1, 2.5, 0 }, 0.35);
+    graphics.world_draw = &world_draw;
+    const decorated = try scenePixels(gpa, &graphics, &scene, &drawables, view);
+    defer gpa.free(decorated);
+    try std.testing.expect(!std.mem.eql(u8, shadowed, decorated));
+    world_draw.clear();
+    try world_draw.worldText("world", .{ -1, 2.5, 0 }, 0.35);
+    const text_only = try scenePixels(gpa, &graphics, &scene, &drawables, view);
+    defer gpa.free(text_only);
+    try std.testing.expect(!std.mem.eql(u8, shadowed, text_only));
+    try std.testing.expect(!std.mem.eql(u8, decorated, text_only));
+    world_draw.clear();
+    try world_draw.sprite(.{ .image = .init("generated-checker.png"), .position = .{ 0, 0.5 }, .size = .{ 0.1, 0.1 }, .billboard = true });
+    const occluded = try scenePixels(gpa, &graphics, &scene, &drawables, view);
+    defer gpa.free(occluded);
+    try std.testing.expectEqualSlices(u8, shadowed, occluded);
+    world_draw.clear();
+    graphics.lights.options[2] = -1;
+    graphics.lights.count = 0;
+    const ambient = try scenePixels(gpa, &graphics, &scene, &drawables, view);
+    defer gpa.free(ambient);
+    graphics.lights.count = 1;
+    graphics.lights.lights[0] = .{
+        .position_kind = .{ 0, 3, 0, 1 },
+        .direction_range = .{ 0, -1, 0, 10 },
+        .color_intensity = .{ 1, 1, 1, 3000 },
+        .cone_shadow = .{ @cos(15 * std.math.rad_per_deg), @cos(30 * std.math.rad_per_deg), 0, 0 },
+    };
+    const point_lit = try scenePixels(gpa, &graphics, &scene, &drawables, view);
+    defer gpa.free(point_lit);
+    try std.testing.expect(rgbSum(point_lit) > rgbSum(ambient));
+    graphics.lights.lights[0].position_kind[3] = 2;
+    const spot_lit = try scenePixels(gpa, &graphics, &scene, &drawables, view);
+    defer gpa.free(spot_lit);
+    try std.testing.expect(rgbSum(spot_lit) > rgbSum(ambient));
+    try std.testing.expect(rgbSum(point_lit) > rgbSum(spot_lit));
+}
+
+fn rgbSum(pixels: []const u8) u64 {
+    var total: u64 = 0;
+    for (0..pixels.len / 4) |index| for (pixels[index * 4 ..][0..3]) |channel| {
+        total += channel;
+    };
+    return total;
+}
+
+fn scenePixels(gpa: std.mem.Allocator, graphics: *Graphics, scene: *SceneTexture, drawables: []mesh.Drawable, view: camera.View) ![]u8 {
+    const size = 128;
+    const length = size * size * 4;
+    const destination = try vit.Buffer.init(graphics.device, .{ .size = length, .usage = .{ .transfer_dst = true }, .memory = .readback });
+    defer destination.deinit();
+    const frame = try graphics.beginFrame();
+    try scene.render(graphics, frame.cmd, .{ .width = size, .height = size }, drawables, view, null, false);
+    const target = scene.target.?.texture;
+    try frame.cmd.barrier(&.{.{ .texture = .{ .texture = target, .before = .sampled, .after = .copy_source } }});
+    try frame.cmd.copyTextureToBuffer(.{ .buffer = destination, .bytes_per_row = size * 4, .texture = .{ .texture = target }, .extent = .{ .width = size, .height = size } });
+    try frame.cmd.barrier(&.{.{ .texture = .{ .texture = target, .before = .copy_source, .after = .sampled } }});
+    try graphics.endFrame(frame);
+    try graphics.queue.waitIdle();
+    const mapped = try destination.map(.read, .{ .size = length });
+    defer destination.unmap(null);
+    return gpa.dupe(u8, mapped[0..length]);
+}
+
 fn checkTextureRows(device: vit.Device, queue: vit.Queue, width: u32, height: u32) !void {
     const gpa = std.testing.allocator;
     const pixels = try gpa.alloc(u8, @as(usize, width) * height * 4);

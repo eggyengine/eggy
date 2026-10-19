@@ -161,7 +161,8 @@ pub const Graphics = struct {
         if (std.meta.eql(self.render_settings, settings)) return;
         const replace_textures = self.render_settings.mipmaps != settings.mipmaps or
             self.render_settings.texture_filter != settings.texture_filter or self.render_settings.anisotropy != settings.anisotropy;
-        const replace_preview = replace_textures or self.render_settings.anti_aliasing != settings.anti_aliasing or self.render_settings.render_scale != settings.render_scale;
+        const replace_preview = replace_textures or self.render_settings.anti_aliasing != settings.anti_aliasing or self.render_settings.render_scale != settings.render_scale or
+            self.render_settings.shadow_quality != settings.shadow_quality or self.render_settings.shadow_distance_m != settings.shadow_distance_m or self.render_settings.shadow_bias != settings.shadow_bias;
         try self.queue.waitIdle();
         var textures: ?TextureCache = null;
         errdefer if (textures) |*made| made.deinit();

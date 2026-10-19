@@ -36,16 +36,7 @@ pub const Sources = struct {
 /// Scene passes accumulated by the host during this frame, including editor camera views.
 pub const Stats = struct { draw_calls: usize = 0, meshes: usize = 0, triangles: u64 = 0 };
 
-const CameraUniforms = extern struct {
-    view_projection: [4][4]f32,
-    light: [4]f32,
-    options: [4]f32,
-    outline: [4]f32,
-    outline_size: [4]f32,
-    eye: [4]f32,
-    light_info: [4]f32,
-    lights: [lighting.max_lights]lighting.GpuLight,
-};
+const CameraUniforms = @import("scene_uniforms.zig").Camera;
 
 pub const MeshRenderer = struct {
     vertices: vit.Buffer,
@@ -61,6 +52,9 @@ pub const MeshRenderer = struct {
     pipeline: vit.GraphicsPipeline,
     outline_pipeline: vit.GraphicsPipeline,
     mask_pipeline: vit.GraphicsPipeline,
+    shadow: @import("shadows.zig").Map,
+    shadow_pipeline_layout: vit.PipelineLayout,
+    shadow_pipeline: vit.GraphicsPipeline,
 
     /// Build the shapes and a pipeline drawing into `format`, with a `.d32_float` depth buffer,
     /// painting with textures bound as `texture_layout` describes (`TextureCache.layout`).
@@ -72,7 +66,7 @@ pub const MeshRenderer = struct {
     /// var renderer = try MeshRenderer.init(device, color_format, shader_source_adapter, textures.layout, graphics.render_settings.anti_aliasing.samples());
     /// defer renderer.deinit(); // Finish any GPU use before leaving this host scope.
     /// ```
-    pub fn init(device: vit.Device, format: vit.Format, shaderSource: *const fn ([]const u8, []const u8) vit.ShaderModule, texture_layout: vit.BindGroupLayout, sample_count: u32) !MeshRenderer {
+    pub fn init(device: vit.Device, format: vit.Format, shaderSource: *const fn ([]const u8, []const u8) vit.ShaderModule, texture_layout: vit.BindGroupLayout, sample_count: u32, shadow_quality: @import("render_settings.zig").ShadowQuality) !MeshRenderer {
         // malloc, not page_allocator: on the web, growing memory behind Emscripten's back detaches its views of it.
         var arena = std.heap.ArenaAllocator.init(std.heap.c_allocator);
         defer arena.deinit();
@@ -83,8 +77,12 @@ pub const MeshRenderer = struct {
         errdefer indices.deinit();
 
         // Per frame in flight: the instances and the camera, which the bind group holds.
+        var shadow = try @import("shadows.zig").Map.init(device, shadow_quality, max_drawables);
+        errdefer shadow.deinit();
         const group_layout = try vit.BindGroupLayout.init(device, .{ .entries = &.{
             .{ .binding = 0, .kind = .{ .buffer = .{ .kind = .uniform } }, .visibility = .{ .vertex = true, .fragment = true } },
+            .{ .binding = 1, .kind = .{ .sampled_texture = .{ .sample_type = .depth } }, .visibility = .{ .fragment = true } },
+            .{ .binding = 2, .kind = .{ .sampler = .comparison }, .visibility = .{ .fragment = true } },
         } });
         errdefer group_layout.deinit();
         var instances: [frames_in_flight]vit.Buffer = undefined;
@@ -102,6 +100,8 @@ pub const MeshRenderer = struct {
             errdefer uniforms[i].deinit();
             groups[i] = try vit.BindGroup.init(device, .{ .layout = group_layout, .entries = &.{
                 .{ .binding = 0, .resource = .{ .buffer = .{ .buffer = uniforms[i] } } },
+                .{ .binding = 1, .resource = .{ .texture_view = shadow.view } },
+                .{ .binding = 2, .resource = .{ .sampler = shadow.sampler } },
             } });
         }
         errdefer for (instances, uniforms, groups) |instance, uniform, group| {
@@ -117,6 +117,10 @@ pub const MeshRenderer = struct {
         const outline_pipeline = try makePipeline(device, format, pipeline_layout, shaderSource, "outline", shaders.outline_vertex, "vertexOutline", shaders.outline_fragment, "fragmentOutline", .over_all_but_mask, sample_count);
         errdefer outline_pipeline.deinit();
         const mask_pipeline = try makePipeline(device, format, pipeline_layout, shaderSource, "selection mask", shaders.mask_vertex, "vertexMask", shaders.outline_fragment, "fragmentOutline", .mask, sample_count);
+        errdefer mask_pipeline.deinit();
+        const shadow_pipeline_layout = try vit.PipelineLayout.init(device, .{ .label = "shadow layout", .bind_group_layouts = &.{ shadow.layout, texture_layout } });
+        errdefer shadow_pipeline_layout.deinit();
+        const shadow_pipeline = try makePipeline(device, format, shadow_pipeline_layout, shaderSource, "directional shadow", shaders.mesh_vertex, "vertexMain", shaders.mesh_shadow_fragment, "fragmentShadow", .shadow, 1);
         return .{
             .vertices = vertices,
             .indices = indices,
@@ -129,6 +133,9 @@ pub const MeshRenderer = struct {
             .pipeline = pipeline,
             .outline_pipeline = outline_pipeline,
             .mask_pipeline = mask_pipeline,
+            .shadow = shadow,
+            .shadow_pipeline_layout = shadow_pipeline_layout,
+            .shadow_pipeline = shadow_pipeline,
         };
     }
 
@@ -140,6 +147,8 @@ pub const MeshRenderer = struct {
     /// renderer.deinit();
     /// ```
     pub fn deinit(self: *MeshRenderer) void {
+        self.shadow_pipeline.deinit();
+        self.shadow_pipeline_layout.deinit();
         self.mask_pipeline.deinit();
         self.outline_pipeline.deinit();
         self.pipeline.deinit();
@@ -150,6 +159,7 @@ pub const MeshRenderer = struct {
             instance.deinit();
         }
         self.group_layout.deinit();
+        self.shadow.deinit();
         self.indices.deinit();
         self.vertices.deinit();
     }
@@ -200,14 +210,14 @@ pub const MeshRenderer = struct {
         // draw; then upload them and the camera.
         std.mem.sort(mesh.Drawable, sorted, {}, drawnBefore);
         try upload(self.instances[self.slot], std.mem.sliceAsBytes(sorted));
-        const camera = CameraUniforms{ .view_projection = view_projection, .light = .{ 0.4, 1, 0.6, 0 }, .options = .{ if (srgb) 1 else 0, 0, 0, 0 }, .outline = outline_color, .outline_size = .{ viewport_px[0], viewport_px[1], outline_width_px, 0 }, .eye = .{ eye[0], eye[1], eye[2], 0 }, .light_info = .{ @floatFromInt(sources.lights.count), 0, 0, 0 }, .lights = sources.lights.lights };
+        const camera = CameraUniforms{ .view_projection = view_projection, .options = .{ if (srgb) 1 else 0, 0, 0, 0 }, .outline = outline_color, .outline_size = .{ viewport_px[0], viewport_px[1], outline_width_px, 0 }, .eye = .{ eye[0], eye[1], eye[2], 0 }, .light_info = .{ @floatFromInt(sources.lights.count), 0, 0, 0 }, .lights = sources.lights.lights, .ambient = sources.lights.ambient, .environment = sources.lights.options, .shadow_matrix = self.shadow.matrix, .shadow_params = self.shadow.params };
         try upload(self.uniforms[self.slot], std.mem.asBytes(&camera));
 
+        cmd.setGraphicsPipeline(self.pipeline);
         cmd.setBindGroup(0, self.groups[self.slot], &.{});
         cmd.setVertexBuffer(1, self.instances[self.slot], 0);
 
         // One instanced draw per run of the same shape or model file and texture, per part.
-        cmd.setGraphicsPipeline(self.pipeline);
         var start: usize = 0;
         while (start < sorted.len) {
             var end = start + 1;
@@ -223,6 +233,38 @@ pub const MeshRenderer = struct {
                 self.drawRun(cmd, sources, drawable, @intCast(i), 1);
             }
         };
+    }
+
+    /// Record depth outside the color pass, with separate storage for in-flight shadow draws.
+    pub fn renderShadow(self: *MeshRenderer, cmd: vit.CommandBuffer, drawables: []mesh.Drawable, sources: Sources, view: @import("camera.zig").View, aspect: f32, settings: @import("render_settings.zig").Settings) !void {
+        const enabled = self.shadow.fit(view, aspect, sources.lights, settings);
+        if (!enabled and self.shadow.initialized) return;
+        const casters = if (enabled) drawables else drawables[0..0];
+        if (casters.len > max_drawables) return error.TooManyShadowMeshes;
+        self.shadow.slot = (self.shadow.slot + 1) % frames_in_flight;
+        const slot = self.shadow.slot;
+        if (enabled) {
+            try upload(self.shadow.instances[slot], std.mem.sliceAsBytes(casters));
+            const uniforms = CameraUniforms{ .view_projection = self.shadow.matrix };
+            try upload(self.shadow.uniforms[slot], std.mem.asBytes(&uniforms));
+        }
+        try cmd.barrier(&.{.{ .texture = .{ .texture = self.shadow.texture, .before = if (self.shadow.initialized) .sampled else .common, .after = .depth_stencil_write } }});
+        try cmd.beginRenderPass(.{ .label = "directional shadows", .color_attachments = &.{}, .depth_stencil_attachment = .{ .view = self.shadow.view, .depth_clear = 1, .depth_store_op = .store } });
+        if (enabled) {
+            const size: f32 = @floatFromInt(self.shadow.resolution);
+            cmd.setViewport(.{ .width = size, .height = size });
+            cmd.setScissor(.{ .x = 0, .y = 0, .width = self.shadow.resolution, .height = self.shadow.resolution });
+            cmd.setGraphicsPipeline(self.shadow_pipeline);
+            cmd.setBindGroup(0, self.shadow.groups[slot], &.{});
+            cmd.setVertexBuffer(1, self.shadow.instances[slot], 0);
+            const saved_slot = self.slot;
+            self.slot = slot;
+            defer self.slot = saved_slot;
+            for (casters, 0..) |drawable, index| self.drawRun(cmd, sources, drawable, @intCast(index), 1);
+        }
+        cmd.endRenderPass();
+        try cmd.barrier(&.{.{ .texture = .{ .texture = self.shadow.texture, .before = .depth_stencil_write, .after = .sampled } }});
+        self.shadow.initialized = true;
     }
 
     /// Draw `count` instances from `first` of `drawable`'s shape or model file, each part with
@@ -253,8 +295,6 @@ pub const MeshRenderer = struct {
     }
 };
 
-/// The order meshes are drawn in: built-in shapes first, by shape, then model files, by path,
-/// and those alike by texture. Two that neither comes before are drawn in one go.
 fn drawnBefore(_: void, a: mesh.Drawable, b: mesh.Drawable) bool {
     if (a.material_failed != b.material_failed) return !a.material_failed;
     const by_source = sourceOrder(a, b);
@@ -276,7 +316,7 @@ fn upload(buffer: vit.Buffer, bytes: []const u8) !void {
 
 /// How a pipeline meets the depth buffer: drawn as usual; the selection's mask (depth only,
 /// over everything); or over everything but the mask (the outline).
-const DepthUse = enum { drawn, mask, over_all_but_mask };
+const DepthUse = enum { drawn, mask, over_all_but_mask, shadow };
 
 /// A pipeline drawing shapes into `format` with a `.d32_float` depth buffer, from the given
 /// vertex and fragment shaders, labelled `label`.
@@ -305,7 +345,7 @@ fn makePipeline(device: vit.Device, format: vit.Format, layout: vit.PipelineLayo
     };
     // The selection passes read fewer attributes, but WGSL keeps every input the shader
     // declares and WebGPU rejects a pipeline missing any; SPIR-V drops the ones unused.
-    const all = depth == .drawn or builtin.os.tag == .emscripten;
+    const all = depth == .drawn or depth == .shadow or builtin.os.tag == .emscripten;
     const instance_count: usize = if (all) instance_attributes.len else if (depth == .mask) 5 else 4;
     return vit.GraphicsPipeline.init(device, .{
         .label = label,
@@ -315,9 +355,9 @@ fn makePipeline(device: vit.Device, format: vit.Format, layout: vit.PipelineLayo
             .{ .stride = @sizeOf(mesh.Vertex), .attributes = vertex_attributes[0..if (all) vertex_attributes.len else 1] },
             .{ .stride = @sizeOf(mesh.Drawable), .step_mode = .instance, .attributes = instance_attributes[0..instance_count] },
         },
-        .color_targets = &.{.{ .format = format, .write_mask = if (depth == .mask) .{ .red = false, .green = false, .blue = false, .alpha = false } else .{} }},
+        .color_targets = if (depth == .shadow) &.{} else &.{.{ .format = format, .write_mask = if (depth == .mask) .{ .red = false, .green = false, .blue = false, .alpha = false } else .{} }},
         .depth_stencil = switch (depth) {
-            .drawn => .{ .format = .d32_float, .depth_write = true, .depth_compare = .less },
+            .drawn, .shadow => .{ .format = .d32_float, .depth_write = true, .depth_compare = .less },
             .mask => .{ .format = .d32_float, .depth_write = true, .depth_compare = .always },
             .over_all_but_mask => .{ .format = .d32_float, .depth_write = false, .depth_compare = .less },
         },
