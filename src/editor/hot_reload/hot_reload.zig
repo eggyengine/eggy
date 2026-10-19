@@ -27,6 +27,8 @@ pub const HotGame = struct {
     panels: []eggy.plugins.EditorPanel,
     commands: []const eggy.plugins.EditorCommand = &.{},
     file_types: []const eggy.plugins.EditorFileType = &.{},
+    /// The plugins' File > Export platforms, copied into `manifest_arena` too.
+    export_platforms: []const eggy.plugins.ExportPlatform = &.{},
     /// Each plugin's preferences, copied out of the library into `manifest_arena`.
     preference_manifests: []const eggy.preferences.Manifest = &.{},
     /// The game's and each plugin's key, the game first, copied into `manifest_arena` too.
@@ -302,6 +304,31 @@ pub const HotGame = struct {
         self.game.editor_command(state, command, editor);
     }
 
+    /// Draw the plugins' File > Export settings for `platform` (Eggy's `BuiltinPlatform`s, then
+    /// `export_platforms`) exporting for `target`, into this UI frame.
+    /// Editor host only: does nothing while the game isn't running; hook failures log.
+    ///
+    /// ```zig
+    /// game.exportUi(0, "x86_64-windows-gnu", &editor_context, context);
+    /// ```
+    pub fn exportUi(self: *HotGame, platform: usize, target: []const u8, editor: *eggy.editor.Context, context: *eggy.ui.Context) void {
+        const state = self.state orelse return;
+        self.game.export_ui(state, platform, target.ptr, target.len, editor, context);
+    }
+
+    /// Add the plugins' `zig build export` arguments for `platform` (numbered as `exportUi`
+    /// does) to `args`. Fails with GameNotRunning while it isn't, or ExportArgsFailed when a
+    /// hook failed (logged).
+    ///
+    /// ```zig
+    /// var args = eggy.plugins.ExportArgs{ .arena = arena };
+    /// try game.exportArgs(0, "x86_64-windows-gnu", &args);
+    /// ```
+    pub fn exportArgs(self: *HotGame, platform: usize, target: []const u8, args: *eggy.plugins.ExportArgs) !void {
+        const state = self.state orelse return error.GameNotRunning;
+        if (!self.game.export_args(state, platform, target.ptr, target.len, args)) return error.ExportArgsFailed;
+    }
+
     /// Copy the library and load the copy.
     fn open(self: *HotGame) !void {
         const gpa = self.gpa;
@@ -362,7 +389,15 @@ pub const HotGame = struct {
             .extension = try arena.dupeZ(u8, std.mem.span(source.extension)),
             .contents = try arena.dupe(u8, source.contents[0..source.contents_len]),
         };
-        self.* = .{ .gpa = gpa, .path = self.path, .copy_path = copy_path, .library = library, .game = game, .state = null, .panels = panels, .commands = commands, .file_types = file_types, .loads = self.loads, .preference_manifests = manifests, .component_types = component_types, .plugin_keys = plugin_keys, .manifest_arena = self.manifest_arena };
+        const export_platforms = try arena.alloc(eggy.plugins.ExportPlatform, game.export_platform_count);
+        for (export_platforms, game.export_platforms[0..game.export_platform_count]) |*platform, source| platform.* = .{
+            .key = try arena.dupeZ(u8, std.mem.span(source.key)),
+            .title = try arena.dupeZ(u8, std.mem.span(source.title)),
+            .target = try arena.dupeZ(u8, std.mem.span(source.target)),
+            .note = try arena.dupeZ(u8, std.mem.span(source.note)),
+            .icon_png = try arena.dupe(u8, source.icon_png[0..source.icon_png_len]),
+        };
+        self.* = .{ .gpa = gpa, .path = self.path, .copy_path = copy_path, .library = library, .game = game, .state = null, .panels = panels, .commands = commands, .file_types = file_types, .export_platforms = export_platforms, .loads = self.loads, .preference_manifests = manifests, .component_types = component_types, .plugin_keys = plugin_keys, .manifest_arena = self.manifest_arena };
     }
 
     /// Stop the game, empty the world while its code is still loaded, and unload and delete the copy.
@@ -381,6 +416,7 @@ pub const HotGame = struct {
         self.panels = &.{};
         self.commands = &.{};
         self.file_types = &.{};
+        self.export_platforms = &.{};
         self.preference_manifests = &.{};
         self.component_types = &.{};
         self.plugin_keys = &.{};

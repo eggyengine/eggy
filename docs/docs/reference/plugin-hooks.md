@@ -37,6 +37,9 @@ pub const Plugin = struct {
     pub fn editorPanelUi(self: *Self, panel: usize, editor: *eggy.editor.Context, ui: *eggy.ui.Context) !void { ... }
     pub const editor_commands = [_]eggy.plugins.EditorCommand{.{ .key = "reset", .title = "Reset" }};
     pub fn editorCommand(self: *Self, command: usize, editor: *eggy.editor.Context) !void { ... }
+    pub const export_platforms = [_]eggy.plugins.ExportPlatform{.{ .key = "pi", .title = "Raspberry Pi", .target = "aarch64-linux-gnu" }};
+    pub fn exportUi(self: *Self, platform: eggy.plugins.ExportTarget, editor: *eggy.editor.Context, ui: *eggy.ui.Context) !void { ... }
+    pub fn exportArgs(self: *Self, platform: eggy.plugins.ExportTarget, args: *eggy.plugins.ExportArgs) !void { ... }
 };
 ```
 
@@ -53,6 +56,8 @@ pub const Plugin = struct {
 | `editorUi` | Builds the project's Inspector content when no entity is selected. Separate dock tabs use `editorPanelUi`. |
 | `editorPanelUi` | Builds a declared panel. `panel` is the zero-based index in this type's `editor_panels`. |
 | `editorCommand` | Invokes a declared View-menu command. `command` is the zero-based index in this type's `editor_commands`. |
+| `exportUi` | Builds extra settings in File > Export for the platform shown, whichever it is. See [Export platforms](#export-platforms). |
+| `exportArgs` | Adds `zig build export` arguments when an export starts, for whichever platform. |
 
 Keep the parameter order and return types above, including error unions on hooks that
 currently cannot fail. `init` has no `self`; it constructs the instance. Use `_` for
@@ -82,6 +87,7 @@ keeps running. See [Diagnose and handle errors](../how-to/handle-errors.md).
 | `pub const editor_panels = [_]eggy.plugins.EditorPanel{...};` | Dock-panel metadata paired with `editorPanelUi` |
 | `pub const editor_commands = [_]eggy.plugins.EditorCommand{...};` | View-menu metadata paired with `editorCommand` |
 | `pub const editor_file_types = [_]eggy.plugins.EditorFileType{...};` | Templates in both Assets New menus |
+| `pub const export_platforms = [_]eggy.plugins.ExportPlatform{...};` | Platforms in File > Export, paired with `exportUi` and `exportArgs` |
 
 Disabling a plugin skips its instance and hooks. Its component types and preferences
 remain known so scene and setting values are retained. The game is always enabled.
@@ -144,6 +150,57 @@ Inspector; the Window menu restores closed panels.
 layout identity, scoped to the published plugin name. Omit it to use the title.
 Duplicate keys fail compilation; dock-ID hash collisions are reported. Keep a key
 unchanged when renaming a panel or reordering declarations.
+
+## Export platforms
+
+A plugin can add platforms to File > Export, and settings to any platform there,
+including Eggy's own:
+
+```zig
+pub const Plugin = struct {
+    steam: bool = false,
+
+    pub const export_platforms = [_]eggy.plugins.ExportPlatform{.{
+        .key = "pi",
+        .title = "Raspberry Pi",
+        .target = "aarch64-linux-gnu",
+        .note = "A folder with the game for a Raspberry Pi 4 or 5.",
+        .icon_png = @embedFile("pi.png"),
+    }};
+
+    pub fn exportUi(self: *Plugin, platform: eggy.plugins.ExportTarget, editor: *eggy.editor.Context, ui: *eggy.ui.Context) !void {
+        _ = editor;
+        if (platform.builtin != .windows) return;
+        var rows = eggy.setting_rows.SettingRows{};
+        eggy.setting_rows.beginGroup(ui);
+        rows.begin(ui, "Steam", "Link Steamworks into the game.");
+        _ = ui.toggle("##steam", &self.steam);
+        rows.end(ui);
+        eggy.setting_rows.endGroup(ui);
+    }
+
+    pub fn exportArgs(self: *Plugin, platform: eggy.plugins.ExportTarget, args: *eggy.plugins.ExportArgs) !void {
+        if (platform.builtin == .windows and self.steam) try args.add("-Dsteam=true");
+    }
+};
+```
+
+A declared platform appears below Eggy's own with its icon, or a package icon when
+`icon_png` is empty. Exporting for it runs `zig build export -Dtarget=<target>` with the
+start scene, the chosen optimization and ZIP choice, and every enabled plugin's
+`exportArgs`. Arguments must be options the game's `build.zig` declares, or the build
+fails.
+
+`ExportTarget` says which platform the hook is for: `builtin` is Eggy's
+`windows`, `macos`, `linux`, `web` or `android`, else null. `own` is the index in this
+plugin's `export_platforms` when this plugin declared it. `target` is the `-Dtarget`
+with the architecture chosen, or `native` for Linux, which builds for this computer.
+`exportUi` runs every frame the window shows the platform. Keep its choices in the
+instance. A rebuild of the game's code restarts the instance and resets them, so keep
+lasting choices in `Preferences`.
+
+`key` is scoped to the published plugin name and duplicate keys fail compilation.
+A disabled plugin's platforms stay listed but can't export.
 
 ## File templates
 

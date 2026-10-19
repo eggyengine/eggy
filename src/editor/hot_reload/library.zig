@@ -40,6 +40,18 @@ const file_types = blk: {
     };
     break :blk list;
 };
+const export_platforms = blk: {
+    var list: [Plugins.export_platforms.len]api.ExportPlatform = undefined;
+    for (&list, Plugins.export_platforms) |*platform, source| platform.* = .{
+        .key = source.key.ptr,
+        .title = source.title.ptr,
+        .target = source.target.ptr,
+        .note = source.note.ptr,
+        .icon_png = source.icon_png.ptr,
+        .icon_png_len = source.icon_png.len,
+    };
+    break :blk list;
+};
 
 /// Each plugin's preferences, as C data.
 const preference_sets = blk: {
@@ -105,6 +117,10 @@ const game = api.Game{
     .file_types = &file_types,
     .file_type_count = file_types.len,
     .editor_command = editorCommand,
+    .export_platforms = &export_platforms,
+    .export_platform_count = export_platforms.len,
+    .export_ui = exportUi,
+    .export_args = exportArgs,
     .preferences = &preference_sets,
     .preference_count = preference_sets.len,
     .components = &component_types,
@@ -161,7 +177,7 @@ fn start(editor: *const api.Host, gpa_ptr: *const anyopaque, app_ptr: *anyopaque
 
 /// What can fail each frame, and the error each last failed with: one failing every frame is
 /// logged once, and again only when it fails differently or after it recovers.
-const Hook = enum { update, game_ui, draw, ui_event, editor_update, editor_ui, editor_panel_ui, editor_command, event, world_start, world_update, scene_lights };
+const Hook = enum { update, game_ui, draw, ui_event, editor_update, editor_ui, editor_panel_ui, editor_command, export_ui, export_args, event, world_start, world_update, scene_lights };
 var failures: [std.meta.fields(Hook).len]?anyerror = @splat(null);
 
 fn report(hook: Hook, err: anyerror) void {
@@ -176,6 +192,8 @@ fn report(hook: Hook, err: anyerror) void {
         .editor_update => "an editorUpdate hook",
         .editor_ui => "an editorUi hook",
         .editor_panel_ui => "an editorPanelUi hook",
+        .export_ui => "an exportUi hook",
+        .export_args => "an exportArgs hook",
         .editor_command => "an editorCommand hook",
         .event => "an event hook",
         .world_start => "a system in the world's Init stages",
@@ -280,6 +298,20 @@ fn editorPanelUi(state_ptr: *anyopaque, panel: usize, editor_ptr: *anyopaque, co
 fn editorCommand(state_ptr: *anyopaque, command: usize, editor_ptr: *anyopaque) callconv(.c) void {
     stateOf(state_ptr).plugins.editorCommand(command, @ptrCast(@alignCast(editor_ptr))) catch |err| return report(.editor_command, err);
     recovered(.editor_command);
+}
+
+fn exportUi(state_ptr: *anyopaque, platform: usize, target_ptr: [*]const u8, target_len: usize, editor_ptr: *anyopaque, context: *anyopaque) callconv(.c) void {
+    stateOf(state_ptr).plugins.exportUi(platform, target_ptr[0..target_len], @ptrCast(@alignCast(editor_ptr)), @ptrCast(@alignCast(context))) catch |err| return report(.export_ui, err);
+    recovered(.export_ui);
+}
+
+/// Logged every time: each call is an export the person asked for, not a frame.
+fn exportArgs(state_ptr: *anyopaque, platform: usize, target_ptr: [*]const u8, target_len: usize, args: *anyopaque) callconv(.c) bool {
+    stateOf(state_ptr).plugins.exportArgs(platform, target_ptr[0..target_len], @ptrCast(@alignCast(args))) catch |err| {
+        std.log.err("an exportArgs hook failed: {t}", .{err});
+        return false;
+    };
+    return true;
 }
 
 fn hasComponent(world: *anyopaque, entity: api.Entity, component: usize) callconv(.c) bool {

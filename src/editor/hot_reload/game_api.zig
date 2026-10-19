@@ -7,7 +7,7 @@ const std = @import("std");
 const eggy = @import("eggy");
 
 /// Bumped whenever these types change, so an editor refuses a library built for another.
-pub const version: u32 = 31;
+pub const version: u32 = 32;
 
 /// The library's one exported function: `fn () callconv(.c) *const Game`.
 pub const entry_symbol = "eggy_game";
@@ -31,6 +31,16 @@ pub const FileType = extern struct {
     extension: [*:0]const u8,
     contents: [*]const u8,
     contents_len: usize,
+};
+
+/// A platform a plugin adds to File > Export (`eggy.plugins.ExportPlatform`).
+pub const ExportPlatform = extern struct {
+    key: [*:0]const u8,
+    title: [*:0]const u8,
+    target: [*:0]const u8,
+    note: [*:0]const u8,
+    icon_png: [*]const u8,
+    icon_png_len: usize,
 };
 
 /// A field of a plugin's preferences (`eggy.preferences.Field`).
@@ -125,6 +135,14 @@ pub const Game = extern struct {
     file_types: [*]const FileType,
     file_type_count: usize,
     editor_command: *const fn (state: *anyopaque, command: usize, editor: *anyopaque) callconv(.c) void,
+    /// The plugins' File > Export platforms, then their settings for `platform` (Eggy's
+    /// `BuiltinPlatform`s, then `export_platforms`) exporting for `target`, into an
+    /// `*eggy.ui.Context`, and their `zig build export` arguments into an
+    /// `*eggy.plugins.ExportArgs`; false when a hook failed (logged).
+    export_platforms: [*]const ExportPlatform,
+    export_platform_count: usize,
+    export_ui: *const fn (state: *anyopaque, platform: usize, target_ptr: [*]const u8, target_len: usize, editor: *anyopaque, context: *anyopaque) callconv(.c) void,
+    export_args: *const fn (state: *anyopaque, platform: usize, target_ptr: [*]const u8, target_len: usize, args: *anyopaque) callconv(.c) bool,
     /// Each plugin's preferences, for the Preferences window.
     preferences: [*]const Preferences,
     preference_count: usize,

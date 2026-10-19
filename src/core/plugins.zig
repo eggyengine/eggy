@@ -49,6 +49,16 @@
 //!         .key = "material", .title = "Material", .extension = ".material.zon", .contents = ".{}\n",
 //!     }};
 //!
+//! And platforms for File > Export, beside Eggy's own, with the settings each shows there and the
+//! `zig build export` arguments it adds. Both hooks see every platform, so a plugin can also add
+//! settings to Eggy's (`platform.builtin`) or another plugin's:
+//!
+//!     pub const export_platforms = [_]eggy.plugins.ExportPlatform{.{
+//!         .key = "pi", .title = "Raspberry Pi", .target = "aarch64-linux-gnu",
+//!     }};
+//!     pub fn exportUi(self: *Self, platform: eggy.plugins.ExportTarget, editor: *eggy.editor.Context, ui: *eggy.ui.Context) !void
+//!     pub fn exportArgs(self: *Self, platform: eggy.plugins.ExportTarget, args: *eggy.plugins.ExportArgs) !void
+//!
 //! Eggy's own components (`builtin_components`: `Transform`, `Mesh`, which the scene draws, and
 //! `Camera`, which the runtime looks through, and `SceneInstance`, a scene file made under an
 //! entity) are listed first in every project, owned by `eggy`.
@@ -76,6 +86,49 @@ const DrawContext = @import("game_ui/game_ui.zig").DrawContext;
 
 /// The components every project has, before its plugins' own.
 pub const builtin_components = .{ @import("transform.zig").Transform, @import("mesh.zig").Mesh, @import("camera.zig").Camera, @import("scene_instance.zig").SceneInstance, @import("material.zig").Material, @import("lighting.zig").SceneLight };
+
+/// Eggy's own platforms in File > Export, in the order it lists them.
+pub const BuiltinPlatform = enum(u8) { windows, macos, linux, web, android };
+
+/// A platform a plugin adds to File > Export (see `export_platforms` above). Its identity is
+/// scoped to the published plugin.
+pub const ExportPlatform = struct {
+    key: [:0]const u8,
+    title: [:0]const u8,
+    /// The `-Dtarget` it builds for, such as "aarch64-linux-gnu".
+    target: [:0]const u8,
+    /// A line under its title on what it builds and needs.
+    note: [:0]const u8 = "",
+    /// Its icon in the platform list: PNG bytes, 48 pixels square, drawn as they are. Empty for a
+    /// generic package icon.
+    icon_png: []const u8 = "",
+};
+
+/// The platform File > Export shows or exports for, as `exportUi` and `exportArgs` see it.
+pub const ExportTarget = struct {
+    /// Eggy's own platform, or null for one a plugin declared.
+    builtin: ?BuiltinPlatform,
+    /// Its index in this plugin's `export_platforms`, when this plugin declared it.
+    own: ?usize,
+    /// The `-Dtarget` it builds for, with the architecture chosen. Borrowed for the hook.
+    target: []const u8,
+};
+
+/// The arguments `exportArgs` adds to `zig build export`, such as `-Dsteam=true` for an option
+/// the game's build declares. Allocates in the hook's arena; nothing is freed separately.
+pub const ExportArgs = struct {
+    arena: std.mem.Allocator,
+    list: std.ArrayList([]const u8) = .empty,
+
+    /// Add a copy of `arg`. Allocation failure propagates.
+    ///
+    /// ```zig
+    /// try args.add("-Dsteam=true"); // Inside an exportArgs hook.
+    /// ```
+    pub fn add(self: *ExportArgs, arg: []const u8) !void {
+        try self.list.append(self.arena, try self.arena.dupe(u8, arg));
+    }
+};
 
 /// Where a project lists its plugins, relative to the project: each one's key, whether it is on,
 /// and the preferences it declares.
@@ -217,6 +270,23 @@ pub fn Set(comptime types: anytype, comptime keys: []const [:0]const u8) type {
                     const identity = std.fmt.comptimePrint("{s}/{s}", .{ key, file_type.key });
                     for (all) |previous| if (std.mem.eql(u8, previous.key, identity)) @compileError("duplicate editor file type key");
                     all = all ++ .{EditorFileType{ .key = identity, .title = file_type.title, .extension = file_type.extension, .contents = file_type.contents }};
+                }
+            };
+            break :blk all;
+        };
+
+        /// Every plugin's `export_platforms`, in plugin order, with published-plugin/key identities.
+        pub const export_platforms: []const ExportPlatform = blk: {
+            var all: []const ExportPlatform = &.{};
+            for (list, keys) |T, key| if (@hasDecl(T, "export_platforms")) {
+                for (T.export_platforms) |platform| {
+                    if (platform.key.len == 0 or platform.title.len == 0 or platform.target.len == 0)
+                        @compileError("export platforms need a key, title and target");
+                    const identity = std.fmt.comptimePrint("{s}/{s}", .{ key, platform.key });
+                    for (all) |previous| if (std.mem.eql(u8, previous.key, identity)) @compileError("duplicate export platform key");
+                    var copy = platform;
+                    copy.key = identity;
+                    all = all ++ .{copy};
                 }
             };
             break :blk all;
@@ -440,6 +510,56 @@ pub fn Set(comptime types: anytype, comptime keys: []const [:0]const u8) type {
                 first += count;
             };
             return error.NoEditorCommand;
+        }
+
+        /// Draw every enabled plugin's `exportUi` for `platform`: an index into Eggy's
+        /// `BuiltinPlatform`s, then `export_platforms`, exporting for `target`.
+        /// Host-only: contexts are hook-local. A disabled plugin's own platform says it is off.
+        /// Hook errors propagate, leaving later plugins undrawn this frame.
+        ///
+        /// ```zig
+        /// try plugins.exportUi(0, "x86_64-windows-gnu", &editor_context, ui_context);
+        /// ```
+        pub fn exportUi(self: *Self, platform: usize, target: []const u8, editor: *EditorContext, context: *ui.Context) !void {
+            comptime var first: usize = std.meta.fields(BuiltinPlatform).len;
+            inline for (list, 0..) |T, i| {
+                const count = if (@hasDecl(T, "export_platforms")) T.export_platforms.len else 0;
+                const seen = exportTarget(platform, first, count, target);
+                if (!self.enabled[i]) {
+                    if (seen.own != null) context.muted("This plugin is turned off, in Preferences > Plugins.");
+                } else if (@hasDecl(T, "exportUi")) try self.instances[i].exportUi(seen, editor, context);
+                first += count;
+            }
+        }
+
+        /// Collect every enabled plugin's `exportArgs` for `platform` (as `exportUi` numbers it)
+        /// into `args`. Host-only: returns PluginDisabled for a disabled plugin's own platform;
+        /// hook and allocation errors propagate.
+        ///
+        /// ```zig
+        /// var args = eggy.plugins.ExportArgs{ .arena = arena };
+        /// try plugins.exportArgs(0, "x86_64-windows-gnu", &args);
+        /// ```
+        pub fn exportArgs(self: *Self, platform: usize, target: []const u8, args: *ExportArgs) !void {
+            comptime var first: usize = std.meta.fields(BuiltinPlatform).len;
+            inline for (list, 0..) |T, i| {
+                const count = if (@hasDecl(T, "export_platforms")) T.export_platforms.len else 0;
+                const seen = exportTarget(platform, first, count, target);
+                if (!self.enabled[i]) {
+                    if (seen.own != null) return error.PluginDisabled;
+                } else if (@hasDecl(T, "exportArgs")) try self.instances[i].exportArgs(seen, args);
+                first += count;
+            }
+        }
+
+        /// `platform` as the plugin whose own platforms start at `first` (`count` of them) sees it.
+        fn exportTarget(platform: usize, first: usize, count: usize, target: []const u8) ExportTarget {
+            const builtin_count = std.meta.fields(BuiltinPlatform).len;
+            return .{
+                .builtin = if (platform < builtin_count) @enumFromInt(platform) else null,
+                .own = if (platform >= first and platform < first + count) platform - first else null,
+                .target = target,
+            };
         }
 
         /// Load through the executable's resource bridge, never library-local filesystem I/O.
@@ -753,4 +873,38 @@ test "plugins' components are listed once each, under the plugin that lists them
     try std.testing.expectEqual(@as(usize, 2), infos.len);
     try std.testing.expectEqualStrings("game", infos[0].owner);
     try std.testing.expectEqualStrings("combat", infos[1].owner);
+}
+
+test "export platforms are scoped to their plugin, which sees its own by local index" {
+    const Pi = struct {
+        seen: ?ExportTarget = null,
+        pub const export_platforms = [_]ExportPlatform{.{ .key = "pi", .title = "Raspberry Pi", .target = "aarch64-linux-gnu" }};
+        /// Test fixture: remember the platform it was asked about and add one argument.
+        ///
+        /// ```zig
+        /// try pi.exportArgs(platform, &args); // Within this fixture.
+        /// ```
+        pub fn exportArgs(self: *@This(), platform: ExportTarget, args: *ExportArgs) !void {
+            self.seen = platform;
+            try args.add("-Dpi=true");
+        }
+    };
+    const Plugins = Set(.{ struct {}, Pi }, &.{ "game", "boards" });
+    try std.testing.expectEqualStrings("boards/pi", Plugins.export_platforms[0].key);
+
+    var plugins = try Plugins.init(std.testing.allocator, undefined, .{ true, true });
+    defer plugins.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var args = ExportArgs{ .arena = arena.allocator() };
+
+    // Eggy's Windows: a built-in, not its own.
+    try plugins.exportArgs(@intFromEnum(BuiltinPlatform.windows), "x86_64-windows-gnu", &args);
+    try std.testing.expectEqual(BuiltinPlatform.windows, plugins.instances[1].seen.?.builtin.?);
+    try std.testing.expectEqual(@as(?usize, null), plugins.instances[1].seen.?.own);
+
+    // Its own platform comes after Eggy's five.
+    try plugins.exportArgs(std.meta.fields(BuiltinPlatform).len, "aarch64-linux-gnu", &args);
+    try std.testing.expectEqual(@as(?usize, 0), plugins.instances[1].seen.?.own);
+    try std.testing.expectEqual(@as(usize, 2), args.list.items.len);
 }
