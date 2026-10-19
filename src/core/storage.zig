@@ -62,7 +62,7 @@ pub const Storage = struct {
         if (project_id.len == 0) return error.InvalidProjectId;
         const namespace = identityHash(project_id);
         if (comptime builtin.os.tag == .emscripten) {
-            try browser.checkAvailable();
+            browser.checkAvailable() catch |err| return mappedError(err);
             const context = try gpa.create(Context);
             context.* = .{ .gpa = gpa, .io = io, .backend = .{ .browser = namespace } };
             return context.interface();
@@ -132,7 +132,8 @@ fn validateSlot(slot: []const u8) error{InvalidSlot}!void {
     }
 }
 
-fn identityHash(identity: []const u8) [64]u8 {
+/// Stable path-safe project namespace, shared by saves and other per-game user files.
+pub fn identityHash(identity: []const u8) [64]u8 {
     var digest: [32]u8 = undefined;
     std.crypto.hash.sha2.Sha256.hash(identity, &digest, .{});
     return std.fmt.bytesToHex(digest, .lower);

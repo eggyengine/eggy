@@ -87,7 +87,7 @@ pub const ModelCache = struct {
     /// Host lookup: `path` is project-relative. Returns cache-owned GPU handles and parts;
     /// do not free them or retain them past invalidation. Load/upload failures are logged
     /// and cached until `forgetAll`; allocation failure can also return null.
-    /// Embedded textures need `textures.prepare` before sampling.
+    /// Embedded textures are ready for sampling when loading finishes.
     ///
     /// ```zig
     /// const gpu_model = models.get("resources/ship.glb", &textures) orelse return;

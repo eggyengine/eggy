@@ -67,10 +67,10 @@ pub const MeshRenderer = struct {
     /// Release the returned renderer with `deinit` after queued draws finish.
     ///
     /// ```zig
-    /// var renderer = try MeshRenderer.init(device, color_format, shader_source_adapter, textures.layout);
+    /// var renderer = try MeshRenderer.init(device, color_format, shader_source_adapter, textures.layout, graphics.render_settings.anti_aliasing.samples());
     /// defer renderer.deinit(); // Finish any GPU use before leaving this host scope.
     /// ```
-    pub fn init(device: vit.Device, format: vit.Format, shaderSource: *const fn ([]const u8, []const u8) vit.ShaderModule, texture_layout: vit.BindGroupLayout) !MeshRenderer {
+    pub fn init(device: vit.Device, format: vit.Format, shaderSource: *const fn ([]const u8, []const u8) vit.ShaderModule, texture_layout: vit.BindGroupLayout, sample_count: u32) !MeshRenderer {
         var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
         defer arena.deinit();
         const geometry = try mesh.Geometry.build(arena.allocator());
@@ -109,11 +109,11 @@ pub const MeshRenderer = struct {
 
         const pipeline_layout = try vit.PipelineLayout.init(device, .{ .label = "mesh layout", .bind_group_layouts = &.{ group_layout, texture_layout } });
         errdefer pipeline_layout.deinit();
-        const pipeline = try makePipeline(device, format, pipeline_layout, shaderSource, "mesh", shaders.mesh_vertex, "vertexMain", shaders.mesh_fragment, "fragmentMain", .drawn);
+        const pipeline = try makePipeline(device, format, pipeline_layout, shaderSource, "mesh", shaders.mesh_vertex, "vertexMain", shaders.mesh_fragment, "fragmentMain", .drawn, sample_count);
         errdefer pipeline.deinit();
-        const outline_pipeline = try makePipeline(device, format, pipeline_layout, shaderSource, "outline", shaders.outline_vertex, "vertexOutline", shaders.outline_fragment, "fragmentOutline", .over_all_but_mask);
+        const outline_pipeline = try makePipeline(device, format, pipeline_layout, shaderSource, "outline", shaders.outline_vertex, "vertexOutline", shaders.outline_fragment, "fragmentOutline", .over_all_but_mask, sample_count);
         errdefer outline_pipeline.deinit();
-        const mask_pipeline = try makePipeline(device, format, pipeline_layout, shaderSource, "selection mask", shaders.mask_vertex, "vertexMask", shaders.outline_fragment, "fragmentOutline", .mask);
+        const mask_pipeline = try makePipeline(device, format, pipeline_layout, shaderSource, "selection mask", shaders.mask_vertex, "vertexMask", shaders.outline_fragment, "fragmentOutline", .mask, sample_count);
         return .{
             .vertices = vertices,
             .indices = indices,
@@ -154,7 +154,7 @@ pub const MeshRenderer = struct {
     /// Load the model files and textures `drawables` need from `sources`, and ready new
     /// textures for sampling. Call outside a render pass, before `draw`.
     /// Host-only: considers at most `max_drawables`, borrowing valid component-backed
-    /// paths. Loads are cached (including failures); barrier errors propagate.
+    /// paths. Uploads finish synchronously; failed assets are logged and cached.
     ///
     /// ```zig
     /// try renderer.prepare(scene_cmd, drawables, asset_sources);
@@ -162,6 +162,7 @@ pub const MeshRenderer = struct {
     /// ```
     pub fn prepare(self: *MeshRenderer, cmd: vit.CommandBuffer, drawables: []mesh.Drawable, sources: Sources) !void {
         _ = self;
+        _ = cmd;
         for (drawables[0..@min(drawables.len, max_drawables)]) |*drawable| {
             if (drawable.materialFile()) |path| {
                 if (sources.materials.get(path)) |material| drawable.applyMaterial(material) else drawable.material_failed = true;
@@ -170,7 +171,6 @@ pub const MeshRenderer = struct {
             if (drawable.modelFile()) |file| _ = sources.models.get(file, sources.textures);
             if (drawable.textureFile()) |file| _ = sources.textures.get(file);
         }
-        try sources.textures.prepare(cmd);
     }
 
     /// Draw `drawables` (at most `max_drawables`; they are sorted in place) in the render pass in
@@ -277,7 +277,7 @@ const DepthUse = enum { drawn, mask, over_all_but_mask };
 
 /// A pipeline drawing shapes into `format` with a `.d32_float` depth buffer, from the given
 /// vertex and fragment shaders, labelled `label`.
-fn makePipeline(device: vit.Device, format: vit.Format, layout: vit.PipelineLayout, shaderSource: *const fn ([]const u8, []const u8) vit.ShaderModule, label: []const u8, vertex: []const u8, vertex_entry: []const u8, fragment: []const u8, fragment_entry: []const u8, depth: DepthUse) !vit.GraphicsPipeline {
+fn makePipeline(device: vit.Device, format: vit.Format, layout: vit.PipelineLayout, shaderSource: *const fn ([]const u8, []const u8) vit.ShaderModule, label: []const u8, vertex: []const u8, vertex_entry: []const u8, fragment: []const u8, fragment_entry: []const u8, depth: DepthUse, sample_count: u32) !vit.GraphicsPipeline {
     const vs = try vit.Shader.init(device, .{ .label = label, .stage = .vertex, .source = shaderSource(vertex, vertex_entry) });
     defer vs.deinit();
     const fs = try vit.Shader.init(device, .{ .label = label, .stage = .fragment, .source = shaderSource(fragment, fragment_entry) });
@@ -322,6 +322,7 @@ fn makePipeline(device: vit.Device, format: vit.Format, layout: vit.PipelineLayo
         // ponytail: no culling, as the shapes' winding isn't checked against Vitellus's front face; cull back faces once it is.
         .raster = .{ .cull_mode = .none },
         .layout = layout,
+        .multisample = .{ .count = sample_count },
     });
 }
 

@@ -10,6 +10,8 @@ const ecs = @import("clutch");
 const mesh_renderer = @import("mesh_renderer.zig");
 const MeshRenderer = mesh_renderer.MeshRenderer;
 const Grid = @import("grid.zig").Grid;
+const Settings = @import("render_settings.zig").Settings;
+const Resolve = @import("scene_resolve.zig").Resolve;
 
 const Vertex = extern struct {
     position: [2]f32,
@@ -26,6 +28,8 @@ const SceneUniforms = extern struct {
 const vertex_data = backdropVertices();
 
 pub const Preview = struct {
+    settings: Settings,
+    resolve: ?Resolve = null,
     /// The backdrop's two triangles.
     geometry: vit.Buffer,
     /// One per frame in flight, so `draw` never rewrites a transform the GPU is still reading.
@@ -48,10 +52,12 @@ pub const Preview = struct {
     /// Owns render resources and must be deinitialized after their GPU work completes.
     ///
     /// ```zig
-    /// var preview = try Preview.init(device, color_format, target_extent_pixels, textures.layout);
+    /// var preview = try Preview.init(device, color_format, target_extent_pixels, textures.layout, graphics.render_settings);
     /// defer preview.deinit(); // Finish GPU use before this host scope ends.
     /// ```
-    pub fn init(device: vit.Device, format: vit.Format, extent: vit.Extent2D, texture_layout: vit.BindGroupLayout) !Preview {
+    pub fn init(device: vit.Device, format: vit.Format, extent: vit.Extent2D, texture_layout: vit.BindGroupLayout, settings: Settings) !Preview {
+        const sample_count = settings.anti_aliasing.samples();
+        const render_extent = renderExtent(extent, settings.render_scale);
         const geometry = try vit.Buffer.init(device, .{
             .label = "scene backdrop",
             .size = @sizeOf(@TypeOf(vertex_data)),
@@ -103,17 +109,24 @@ pub const Preview = struct {
             .depth_stencil = .{ .format = .d32_float, .depth_write = true, .depth_compare = .less },
             .raster = .{ .cull_mode = .none },
             .layout = pipeline_layout,
+            .multisample = .{ .count = sample_count },
         });
         errdefer pipeline.deinit();
-        const depth = try makeDepth(device, extent);
+        const depth = try makeDepth(device, render_extent, sample_count);
         errdefer depth.deinit();
         const depth_view = try vit.TextureView.init(device, .{ .texture = depth, .aspect = .depth });
         errdefer depth_view.deinit();
-        var meshes = try MeshRenderer.init(device, format, shaderSource, texture_layout);
+        var meshes = try MeshRenderer.init(device, format, shaderSource, texture_layout, sample_count);
         errdefer meshes.deinit();
-        var grid = try Grid.init(device, format, shaderSource);
+        var grid = try Grid.init(device, format, shaderSource, sample_count);
         errdefer grid.deinit();
+        var resolve: ?Resolve = null;
+        errdefer if (resolve) |*made| made.deinit();
+        if (settings.anti_aliasing != .off or settings.render_scale != 1)
+            resolve = try Resolve.init(device, format, render_extent, sample_count, settings.anti_aliasing == .fxaa, shaderSource);
         return .{
+            .settings = settings,
+            .resolve = resolve,
             .geometry = geometry,
             .uniforms = uniforms,
             .group_layout = group_layout,
@@ -136,9 +149,12 @@ pub const Preview = struct {
     /// try preview.resize(graphics.device, resized_extent_pixels);
     /// ```
     pub fn resize(self: *Preview, device: vit.Device, extent: vit.Extent2D) !void {
-        const depth = try makeDepth(device, extent);
+        const render_extent = renderExtent(extent, self.settings.render_scale);
+        const depth = try makeDepth(device, render_extent, self.settings.anti_aliasing.samples());
         errdefer depth.deinit();
         const depth_view = try vit.TextureView.init(device, .{ .texture = depth, .aspect = .depth });
+        errdefer depth_view.deinit();
+        if (self.resolve) |*resolve| try resolve.resize(render_extent);
         self.depth_view.deinit();
         self.depth.deinit();
         self.depth = depth;
@@ -154,6 +170,7 @@ pub const Preview = struct {
     /// preview.deinit();
     /// ```
     pub fn deinit(self: *Preview) void {
+        if (self.resolve) |*resolve| resolve.deinit();
         self.grid.deinit();
         self.meshes.deinit();
         self.depth_view.deinit();
@@ -184,6 +201,15 @@ pub const Preview = struct {
     /// ```
     pub fn draw(self: *Preview, cmd: vit.CommandBuffer, target: vit.TextureView, scene: ui.Rect, clip: ui.Rect, window: ui.Rect, extent: vit.Extent2D, srgb: bool, drawables: []mesh.Drawable, sources: mesh_renderer.Sources, view: camera.View, selected: ?ecs.EntityId, grid: bool) !void {
         const scissor = previewScissor(scene, clip, window, extent) orelse return;
+        if (self.resolve) |*resolve| {
+            try resolve.begin(cmd);
+            try self.drawPass(cmd, target, scene, clip, window, renderExtent(extent, self.settings.render_scale), srgb, drawables, sources, view, selected, grid);
+            try resolve.draw(cmd, target, extent, scissor);
+        } else try self.drawPass(cmd, target, scene, clip, window, extent, srgb, drawables, sources, view, selected, grid);
+    }
+
+    fn drawPass(self: *Preview, cmd: vit.CommandBuffer, target: vit.TextureView, scene: ui.Rect, clip: ui.Rect, window: ui.Rect, extent: vit.Extent2D, srgb: bool, drawables: []mesh.Drawable, sources: mesh_renderer.Sources, view: camera.View, selected: ?ecs.EntityId, grid: bool) !void {
+        const scissor = previewScissor(scene, clip, window, extent) orelse return;
         try self.meshes.prepare(cmd, drawables, sources);
         const transform = SceneUniforms{
             .screen = .{
@@ -209,7 +235,7 @@ pub const Preview = struct {
         self.depth_initialized = true;
         try cmd.beginRenderPass(.{
             .label = "3D preview",
-            .color_attachments = &.{.{ .view = target, .load_op = .load, .store_op = .store }},
+            .color_attachments = &.{if (self.resolve) |*resolve| resolve.attachment() else .{ .view = target, .load_op = .load, .store_op = .store }},
             .depth_stencil_attachment = .{ .view = self.depth_view, .depth_clear = 1, .depth_store_op = .discard },
         });
         cmd.setViewport(.{ .width = @floatFromInt(extent.width), .height = @floatFromInt(extent.height) });
@@ -243,14 +269,27 @@ pub fn shaderSource(code: []const u8, entry_point: []const u8) vit.ShaderModule 
     return @import("vitellus_spirv").SPIRVShaderModule.init(.{ .code = code });
 }
 
-fn makeDepth(device: vit.Device, extent: vit.Extent2D) !vit.Texture {
+fn makeDepth(device: vit.Device, extent: vit.Extent2D, samples: u32) !vit.Texture {
     return vit.Texture.init(device, .{
         .label = "preview depth",
         .width = extent.width,
         .height = extent.height,
         .format = .d32_float,
+        .sample_count = samples,
         .usage = .{ .depth_stencil_attachment = true },
     });
+}
+
+fn renderExtent(extent: vit.Extent2D, scale: f32) vit.Extent2D {
+    return .{
+        .width = @max(1, @as(u32, @intFromFloat(@ceil(@as(f32, @floatFromInt(extent.width)) * scale)))),
+        .height = @max(1, @as(u32, @intFromFloat(@ceil(@as(f32, @floatFromInt(extent.height)) * scale)))),
+    };
+}
+
+test "render scaling preserves a nonempty target and rounds fractional pixels up" {
+    try std.testing.expectEqual(vit.Extent2D{ .width = 1, .height = 1 }, renderExtent(.{ .width = 1, .height = 1 }, 0.25));
+    try std.testing.expectEqual(vit.Extent2D{ .width = 451, .height = 338 }, renderExtent(.{ .width = 901, .height = 675 }, 0.5));
 }
 
 fn previewScissor(scene: ui.Rect, clip: ui.Rect, window: ui.Rect, extent: vit.Extent2D) ?vit.hal.command.ScissorRect {

@@ -6,7 +6,6 @@ const sdl3 = eggy.sdl_adapter.sdl;
 const packaged_assets = @import("packaged_assets.zig");
 
 const web = builtin.os.tag == .emscripten;
-const fps = 340000;
 
 /// The runtime for `project`, which declares `name` (the window title) and `plugins` (a tuple of
 /// plugin types, the game first). `addGame` generates it from the game's build.
@@ -24,7 +23,6 @@ pub fn Runtime(comptime project: type) type {
         gpa: std.mem.Allocator,
         app: eggy.App,
         plugins: Plugins,
-        fps_capper: sdl3.extras.FramerateCapper(f32),
         /// The meshes drawn each frame, gathered from the world.
         drawables: []eggy.mesh.Drawable,
         /// "No camera available", made the first time the scene has no camera to look through.
@@ -63,7 +61,11 @@ pub fn Runtime(comptime project: type) type {
             const gpa = process_init.gpa;
             // Used, so a release build's linker keeps the metadata's section.
             if (@hasDecl(project, "metadata_text")) std.mem.doNotOptimizeAway(&project.metadata_text);
-            var app = try eggy.App.init(process_init, project.name);
+            const graphics_defaults = if (@hasDecl(project, "graphics_zon"))
+                try eggy.render_settings.parse(gpa, project.graphics_zon)
+            else
+                eggy.render_settings.Settings{};
+            var app = try eggy.App.initForProject(process_init, project.name, project.name, .runtime, graphics_defaults);
             errdefer app.deinit();
             app.storage = try eggy.storage.Storage.init(gpa, process_init.io, project.name);
             if (@hasDecl(project, "input_bindings")) try app.input_backend.?.state.readOverrides(project.input_bindings);
@@ -102,7 +104,6 @@ pub fn Runtime(comptime project: type) type {
                 .drawables = drawables,
                 .plugins = plugins,
                 .app = app,
-                .fps_capper = .{ .mode = .{ .limited = fps } },
                 .data = data,
             };
         }
@@ -154,8 +155,6 @@ pub fn Runtime(comptime project: type) type {
             try self.app.applyGraphicsSettings();
             self.app.beginDiagnosticsFrame();
             try self.app.graphics.syncSize(self.app.window);
-            // The browser already paces frames to the display.
-            if (!web) _ = self.fps_capper.delay();
             // Scene instances' entities, from their files, for any made or changed.
             if (self.data) |packaged| self.app.sceneInstances().sync(packaged.copies(), &self.app.world, eggy.scene.registryAccess(Plugins.Components), null);
             self.app.time.tick(sdl3.timer.getNanosecondsSinceInit());

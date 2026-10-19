@@ -39,10 +39,10 @@ pub const Grid = struct {
     /// completion. GPU allocation/shader errors propagate.
     ///
     /// ```zig
-    /// var grid = try Grid.init(device, color_format, shader_source_adapter);
+    /// var grid = try Grid.init(device, color_format, shader_source_adapter, graphics.render_settings.anti_aliasing.samples());
     /// defer grid.deinit(); // Finish any GPU use before leaving this host scope.
     /// ```
-    pub fn init(device: vit.Device, format: vit.Format, shaderSource: *const fn ([]const u8, []const u8) vit.ShaderModule) !Grid {
+    pub fn init(device: vit.Device, format: vit.Format, shaderSource: *const fn ([]const u8, []const u8) vit.ShaderModule, sample_count: u32) !Grid {
         const vertices = try vit.Buffer.init(device, .{ .label = "grid triangle", .size = @sizeOf(@TypeOf(triangle)), .usage = .{ .vertex = true }, .initial_data = std.mem.asBytes(&triangle) });
         errdefer vertices.deinit();
         const group_layout = try vit.BindGroupLayout.init(device, .{ .entries = &.{
@@ -80,6 +80,7 @@ pub const Grid = struct {
             .depth_stencil = .{ .format = .d32_float, .depth_write = false, .depth_compare = .less },
             .raster = .{ .cull_mode = .none },
             .layout = pipeline_layout,
+            .multisample = .{ .count = sample_count },
         });
         return .{ .vertices = vertices, .uniforms = uniforms, .groups = groups, .group_layout = group_layout, .pipeline_layout = pipeline_layout, .pipeline = pipeline };
     }

@@ -12,6 +12,7 @@ const weeoui_vitellus = @import("weeoui_vitellus");
 const Graphics = @import("graphics.zig").Graphics;
 
 pub const SceneTexture = struct {
+    settings_revision: u64,
     /// Its own preview, so its depth buffer matches the texture rather than the window.
     preview: viewport3d.Preview,
     /// Null until the first `render`.
@@ -48,7 +49,7 @@ pub const SceneTexture = struct {
     /// ```
     pub fn init(graphics: *const Graphics) !SceneTexture {
         const device = graphics.device;
-        var preview = try viewport3d.Preview.init(device, graphics.color_format, .{ .width = 1, .height = 1 }, graphics.textures.layout);
+        var preview = try viewport3d.Preview.init(device, graphics.color_format, .{ .width = 1, .height = 1 }, graphics.textures.layout, graphics.render_settings);
         errdefer preview.deinit();
         // A vertex buffer rather than SV_VertexID, which needs Vulkan's shaderDrawParameters.
         const triangle = try vit.Buffer.init(device, .{ .label = "scene blit triangle", .size = @sizeOf(@TypeOf(blit_triangle)), .usage = .{ .vertex = true }, .initial_data = std.mem.asBytes(&blit_triangle) });
@@ -75,7 +76,7 @@ pub const SceneTexture = struct {
             .raster = .{ .cull_mode = .none },
             .layout = pipeline_layout,
         });
-        return .{ .preview = preview, .triangle = triangle, .sampler = sampler, .group_layout = group_layout, .pipeline_layout = pipeline_layout, .pipeline = pipeline };
+        return .{ .settings_revision = graphics.settings_revision, .preview = preview, .triangle = triangle, .sampler = sampler, .group_layout = group_layout, .pipeline_layout = pipeline_layout, .pipeline = pipeline };
     }
 
     /// Free everything. The GPU must be done with it (`Graphics.queue.waitIdle`).
@@ -109,6 +110,13 @@ pub const SceneTexture = struct {
     /// ```
     pub fn render(self: *SceneTexture, graphics: *Graphics, cmd: vit.CommandBuffer, extent_px: vit.Extent2D, drawables: []mesh.Drawable, view: camera.View, selected: ?ecs.EntityId, grid: bool) !void {
         if (extent_px.width == 0 or extent_px.height == 0) return;
+        if (self.settings_revision != graphics.settings_revision) {
+            try graphics.queue.waitIdle();
+            const preview = try viewport3d.Preview.init(graphics.device, graphics.color_format, extent_px, graphics.textures.layout, graphics.render_settings);
+            self.preview.deinit();
+            self.preview = preview;
+            self.settings_revision = graphics.settings_revision;
+        }
         const target = try self.targetSized(graphics, extent_px);
 
         // Render, then leave the texture ready for `draw` to sample.

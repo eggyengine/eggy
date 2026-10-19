@@ -213,6 +213,7 @@ fn addProject(b: *std.Build, engine: *std.Build, emscripten: Emscripten, target:
     // And what its executable says about itself, which it keeps in a section of its own.
     const metadata = if (own) &.{} else game_metadata.read(b);
     if (metadata.len > 0) source.print(b.allocator, "pub const metadata_text = \"{f}\".*;\n", .{std.zig.fmtString(game_metadata.text(b, metadata))}) catch @panic("OOM");
+    @import("src/build/render_settings.zig").appendDefaults(b, &source, own);
     const runtime_project = b.createModule(.{ .root_source_file = addPreferenceFiles(b, source.items), .target = target, .optimize = optimize });
     runtime_project.addImport("game", options.game);
     for (options.plugins, 0..) |plugin, i| runtime_project.addImport(b.fmt("plugin_{d}", .{i}), plugin);
@@ -418,6 +419,9 @@ fn addEngine(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.buil
     const grid_shader = b.path("src/core/shaders/grid.slang");
     const grid_vertex = vitellus_build.compileSlang(b, vitellus, target, grid_shader, "vertexMain", .vertex) orelse return null;
     const grid_fragment = vitellus_build.compileSlang(b, vitellus, target, grid_shader, "fragmentMain", .fragment) orelse return null;
+    const resolve_shader = b.path("src/core/shaders/scene_resolve.slang");
+    const resolve_vertex = vitellus_build.compileSlang(b, vitellus, target, resolve_shader, "vertexMain", .vertex) orelse return null;
+    const resolve_fragment = vitellus_build.compileSlang(b, vitellus, target, resolve_shader, "fragmentMain", .fragment) orelse return null;
     const shader_files = b.addWriteFiles();
     _ = shader_files.addCopyFile(viewport_vertex, "viewport3d.vert");
     _ = shader_files.addCopyFile(viewport_fragment, "viewport3d.frag");
@@ -430,6 +434,8 @@ fn addEngine(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.buil
     _ = shader_files.addCopyFile(blit_fragment, "scene_blit.frag");
     _ = shader_files.addCopyFile(grid_vertex, "grid.vert");
     _ = shader_files.addCopyFile(grid_fragment, "grid.frag");
+    _ = shader_files.addCopyFile(resolve_vertex, "scene_resolve.vert");
+    _ = shader_files.addCopyFile(resolve_fragment, "scene_resolve.frag");
     const shader_module = b.createModule(.{
         .root_source_file = shader_files.add("root.zig",
             \\pub const viewport_vertex = @embedFile("viewport3d.vert");
@@ -443,6 +449,8 @@ fn addEngine(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.buil
             \\pub const blit_fragment = @embedFile("scene_blit.frag");
             \\pub const grid_vertex = @embedFile("grid.vert");
             \\pub const grid_fragment = @embedFile("grid.frag");
+            \\pub const resolve_vertex = @embedFile("scene_resolve.vert");
+            \\pub const resolve_fragment = @embedFile("scene_resolve.frag");
             \\
         ),
         .target = target,

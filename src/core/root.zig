@@ -9,6 +9,7 @@ pub const slangc = @import("vitellus_slangc");
 
 pub const App = @import("app.zig").App;
 pub const Graphics = @import("graphics.zig").Graphics;
+pub const render_settings = @import("render_settings.zig");
 pub const Frame = @import("graphics.zig").Frame;
 pub const Surface = @import("graphics.zig").Surface;
 pub const SceneTexture = @import("scene_texture.zig").SceneTexture;
@@ -84,6 +85,11 @@ test {
     _ = scenes;
     _ = @import("action.zig");
     _ = @import("graphics.zig");
+    _ = render_settings;
+    _ = @import("mipmaps.zig");
+    _ = @import("graphics_preferences.zig");
+    _ = @import("graphics_control.zig");
+    _ = @import("graphics_gpu_test.zig");
     _ = @import("scene_texture.zig");
     _ = @import("notice.zig");
     _ = @import("grid.zig");

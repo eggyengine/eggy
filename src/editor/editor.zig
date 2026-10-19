@@ -231,7 +231,7 @@ pub fn Editor(comptime project: type) type {
         /// ```
         pub fn init(process_init: *const std.process.Init, args: []const [*:0]const u8) !Self {
             const gpa = process_init.gpa;
-            var app = try eggy.App.init(process_init, title);
+            var app = try eggy.App.initForProject(process_init, title, project.name, .editor, .{});
             errdefer app.deinit();
             app.storage = try eggy.storage.Storage.init(gpa, process_init.io, project.name);
             const opened_project = try openProject(gpa, app.window.window, args);

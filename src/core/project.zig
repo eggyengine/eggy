@@ -35,6 +35,8 @@ pub const Config = struct {
     default_scene: ?[]const u8 = null,
     /// What the built game says about itself, in its executable.
     metadata: Metadata = .{},
+    /// Shipped graphics defaults; a user's graphics preferences override them.
+    graphics: @import("render_settings.zig").Settings = .{},
 };
 
 /// What a game's executable says about itself: on Windows, its version information (in the
@@ -62,6 +64,9 @@ pub fn write(writer: *std.Io.Writer, config: Config) std.Io.Writer.Error!void {
     try writer.writeAll(".{\n    // The package name, as build.zig's addGame uses it: the editor opens `<name>_editor`.\n");
     try writer.print("    .name = \"{f}\",\n    .title = \"{f}\",\n    .version = \"{f}\",\n", .{ std.zig.fmtString(config.name), std.zig.fmtString(config.title), std.zig.fmtString(config.version) });
     if (config.default_scene) |scene| try writer.print("    // The scene the built game starts in.\n    .default_scene = \"{f}\",\n", .{std.zig.fmtString(scene)});
+    try writer.writeAll("    .graphics = ");
+    try std.zon.stringify.serialize(config.graphics, .{}, writer);
+    try writer.writeAll(",\n");
     const metadata = config.metadata;
     if (metadata.company.len + metadata.description.len + metadata.copyright.len + metadata.extra.len > 0) {
         try writer.writeAll("    // What the built game's executable says about itself.\n    .metadata = .{\n");
@@ -89,7 +94,9 @@ pub fn write(writer: *std.Io.Writer, config: Config) std.Io.Writer.Error!void {
 /// const config = try parse(arena.allocator(), ".{ .name = \"game\", .title = \"Game\" }");
 /// ```
 pub fn parse(arena: std.mem.Allocator, source: [:0]const u8) !Config {
-    return std.zon.parse.fromSliceAlloc(Config, arena, source, null, .{});
+    const config = try std.zon.parse.fromSliceAlloc(Config, arena, source, null, .{});
+    try config.graphics.validateValues();
+    return config;
 }
 
 /// The `eggy.zon` in `dir`, parsed into `arena`.
@@ -134,6 +141,7 @@ test "eggy.zon written reads back the same, its metadata included" {
         .title = "Space \"Game\"",
         .default_scene = "resources/scene/start.scene.zon",
         .metadata = .{ .company = "Rat Co", .extra = &.{.{ .name = "Website", .value = "rats.example" }} },
+        .graphics = .{ .anti_aliasing = .fxaa, .mipmaps = false, .frame_limit = 120 },
     };
     var text: std.Io.Writer.Allocating = .init(arena.allocator());
     try write(&text.writer, config);
@@ -143,4 +151,5 @@ test "eggy.zon written reads back the same, its metadata included" {
     try std.testing.expectEqualStrings("Rat Co", read.metadata.company);
     try std.testing.expectEqualStrings("rats.example", read.metadata.extra[0].value);
     try std.testing.expectEqual(@as(usize, 0), read.metadata.copyright.len);
+    try std.testing.expectEqualDeep(config.graphics, read.graphics);
 }

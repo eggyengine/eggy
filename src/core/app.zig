@@ -14,6 +14,8 @@ const Scenes = @import("scenes/scenes.zig").Scenes;
 const SceneInstances = @import("scene_instances.zig").SceneInstances;
 const scene = @import("scene.zig");
 const Overlay = @import("game_ui/game_ui.zig").Overlay;
+const render = @import("render_settings.zig");
+const graphics_control = @import("graphics_control.zig");
 const GraphicsSettingsUi = @import("game_ui/graphics_settings.zig").GraphicsSettingsUi;
 
 const web = builtin.os.tag == .emscripten;
@@ -58,6 +60,7 @@ pub const App = struct {
     localization: @import("localization.zig").Localization = .{},
     debug_draw: @import("debug_draw.zig").DebugDraw = .{},
     profiling: @import("profiling.zig").Profiling = .{},
+    graphics_options: graphics_control.State = .{},
 
     /// Host entry point: open SDL video/gamepads, a 900x675 logical-point window, GPU and world.
     /// `process_init` must outlive the returned owner; `title` is null-terminated UTF-8.
@@ -70,26 +73,72 @@ pub const App = struct {
     /// defer app.deinit();
     /// ```
     pub fn init(process_init: *const std.process.Init, title: [:0]const u8) !App {
+        return initConfigured(process_init, title, null);
+    }
+
+    /// Load persistent graphics choices before creating this project's window and device.
+    pub fn initForProject(process_init: *const std.process.Init, title: [:0]const u8, project_name: []const u8, scope: render.Scope, defaults: render.Settings) !App {
+        return initConfigured(process_init, title, .{ .project_name = project_name, .scope = scope, .defaults = defaults });
+    }
+
+    const GraphicsConfig = struct { project_name: []const u8, scope: render.Scope, defaults: render.Settings };
+
+    fn initConfigured(process_init: *const std.process.Init, title: [:0]const u8, config: ?GraphicsConfig) !App {
         const gpa = process_init.gpa;
         const init_flags = sdl3.InitFlags{ .video = true, .gamepad = true };
         try sdl3.init(init_flags);
         errdefer sdl3.quit(init_flags);
+        var options = if (config) |value|
+            try graphics_control.State.init(gpa, process_init.io, value.project_name, value.scope, value.defaults)
+        else
+            graphics_control.State{};
+        errdefer options.deinit();
 
         // On Windows the window stays hidden until the renderer is ready.
-        var window: sdl_adapter.Sdl3Window = .init(try sdl3.video.Window.init(title, width, height, .{
+        var window: sdl_adapter.Sdl3Window = .init(try sdl3.video.Window.init(title, options.requested.width, options.requested.height, .{
             .vulkan = !web,
             .resizable = true,
             .high_pixel_density = true,
             .hidden = builtin.os.tag == .windows,
+            .fullscreen = options.requested.window_mode == .borderless,
         }));
         errdefer window.deinit();
         const input_backend = try InputBackend.init(gpa);
         errdefer input_backend.deinit();
-        var graphics = try Graphics.init(gpa, window);
+        const has_override = if (options.store) |store| store.has_override else false;
+        var graphics = (if (has_override) Graphics.initWithSettings(gpa, window, options.requested) else Graphics.initWithDefaults(gpa, window, options.requested)) catch |err| blk: {
+            if (options.store == null or !options.store.?.has_override) return err;
+            options.recover(err);
+            try window.window.setFullscreen(options.requested.window_mode == .borderless);
+            if (options.requested.window_mode == .windowed) try window.window.setSize(options.requested.width, options.requested.height);
+            break :blk try Graphics.initWithDefaults(gpa, window, options.requested);
+        };
         errdefer graphics.deinit();
+        options.defaults = options.defaults.supportedDefaults(graphics.capabilities());
+        options.requested = graphics.render_settings;
         if (builtin.os.tag == .windows) try window.window.show();
 
-        return .{ .window = window, .process_init = process_init, .init_flags = init_flags, .graphics = graphics, .world = .init(gpa), .preference_values = .init(gpa), .input_backend = input_backend, .input = .{ .backend = input_backend.state.interface() } };
+        return .{ .window = window, .process_init = process_init, .init_flags = init_flags, .graphics = graphics, .graphics_options = options, .world = .init(gpa), .preference_values = .init(gpa), .input_backend = input_backend, .input = .{ .backend = input_backend.state.interface() } };
+    }
+
+    /// Queue validated live choices; restart-only selections remain pending until next launch.
+    pub fn setGraphicsSettings(self: *App, settings: render.Settings) !render.ApplyResult {
+        return self.graphics_options.request(settings, &self.graphics, false);
+    }
+
+    /// Host-only: atomically persist and queue user choices, outside game-library callbacks.
+    pub fn saveGraphicsSettings(self: *App, settings: render.Settings) !render.ApplyResult {
+        return self.graphics_options.request(settings, &self.graphics, true);
+    }
+
+    /// Update shipped defaults without overwriting an existing personal override.
+    pub fn setGraphicsDefaults(self: *App, settings: render.Settings) !render.ApplyResult {
+        return self.graphics_options.setDefaults(settings, &self.graphics);
+    }
+
+    /// Host-only safe point, before recording any window's commands for this frame.
+    pub fn applyGraphicsSettings(self: *App) !void {
+        try self.graphics_options.apply(&self.graphics, self.window);
     }
 
     /// Run the world's PreDeinit, Deinit and PostDeinit stages, then free everything.
@@ -111,6 +160,7 @@ pub const App = struct {
         if (self.input_backend) |backend| backend.deinit();
         self.preference_values.deinit();
         self.graphics.deinit();
+        self.graphics_options.deinit();
         self.window.deinit();
         sdl3.quit(self.init_flags);
         sdl3.shutdown();

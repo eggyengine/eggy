@@ -11,6 +11,8 @@ const ModelCache = @import("model_cache.zig").ModelCache;
 const TextureCache = @import("texture_cache.zig").TextureCache;
 const Sources = @import("mesh_renderer.zig").Sources;
 const MaterialCache = @import("material_cache.zig").MaterialCache;
+const render = @import("render_settings.zig");
+const backend_config = @import("graphics_backend.zig");
 
 /// The GPU device, the main window's `Surface`, and the 3D scene that draws into it.
 pub const Graphics = struct {
@@ -32,6 +34,9 @@ pub const Graphics = struct {
     materials: MaterialCache,
     lights: @import("lighting.zig").Frame = .{},
     stats: @import("mesh_renderer.zig").Stats = .{},
+    render_settings: render.Settings = .{},
+    settings_revision: u64 = 0,
+    cached_caps: render.Capabilities = .{},
 
     /// Graphics for `window`, on the platform's backends in Vitellus's order: on Windows
     /// DirectX 12, then Vulkan; on macOS Metal (not there yet), then Vulkan through MoltenVK; on
@@ -47,13 +52,32 @@ pub const Graphics = struct {
     /// defer graphics.deinit();
     /// ```
     pub fn init(allocator: std.mem.Allocator, window: sdl_adapter.Sdl3Window) !Graphics {
+        return initWithDefaults(allocator, window, .{});
+    }
+
+    /// Initialize a requested backend/GPU and validate quality against its actual capabilities.
+    pub fn initWithSettings(allocator: std.mem.Allocator, window: sdl_adapter.Sdl3Window, settings: render.Settings) !Graphics {
+        return initConfigured(allocator, window, settings, .strict);
+    }
+
+    /// Adapt shipped defaults to this device; saved user overrides must use `initWithSettings`.
+    pub fn initWithDefaults(allocator: std.mem.Allocator, window: sdl_adapter.Sdl3Window, defaults: render.Settings) !Graphics {
+        try defaults.validateValues();
+        return initConfigured(allocator, window, defaults.forPlatform(), .project_defaults);
+    }
+
+    const Policy = enum { strict, project_defaults };
+
+    fn initConfigured(allocator: std.mem.Allocator, window: sdl_adapter.Sdl3Window, settings: render.Settings, policy: Policy) !Graphics {
+        try settings.validateValues();
         // Null: Vitellus's own choice; once one fails, every other.
-        var allowed: ?vit.BackendType = null;
+        var allowed = backend_config.mask(settings.backend);
         while (true) {
             const validation: vit.ValidationLevel = if (builtin.mode == .Debug) .core else .none;
             const instance = try vit.Instance.init(allocator, .{ .backend = allowed, .validation = validation });
             const backend = instance.selected_backend;
-            return initOn(allocator, window, instance) catch |err| {
+            return initOn(allocator, window, instance, settings, policy) catch |err| {
+                if (settings.backend != .auto) return err;
                 std.log.warn("cannot render with {t} ({t}): trying the next backend", .{ backend, err });
                 var rest = allowed orelse vit.BackendType{ .dx12 = true, .vulkan = true, .metal = true, .webgpu = true };
                 switch (backend) {
@@ -66,23 +90,47 @@ pub const Graphics = struct {
     }
 
     /// `init` on `instance`, which it owns from now on (freed if this fails).
-    fn initOn(allocator: std.mem.Allocator, window: sdl_adapter.Sdl3Window, instance: vit.Instance) !Graphics {
+    fn initOn(allocator: std.mem.Allocator, window: sdl_adapter.Sdl3Window, instance: vit.Instance, requested: render.Settings, policy: Policy) !Graphics {
+        var settings = requested;
         std.log.info("rendering with {t}", .{instance.selected_backend});
         errdefer instance.deinit();
-        const adapter = try vit.Adapter.init(instance, .{ .label = "vitellus adapter" });
+        const adapter = if (settings.adapter_index) |index| backend_config.selectAdapter(instance, index) catch |err| switch (err) {
+            error.InvalidGraphicsAdapter, error.EnumerationUnsupported => blk: {
+                if (policy == .strict) return err;
+                settings.adapter_index = null;
+                std.log.warn("project's default GPU is unavailable ({t}); selecting automatically", .{err});
+                break :blk try vit.Adapter.init(instance, .{ .label = "vitellus adapter" });
+            },
+            else => return err,
+        } else try vit.Adapter.init(instance, .{ .label = "vitellus adapter" });
         errdefer adapter.deinit();
-        const device = try vit.Device.init(adapter, .{ .label = "vitellus device" });
+        const device = try vit.Device.init(adapter, .{ .label = "vitellus device", .required_features = .{ .anisotropic_filtering = adapter.capabilities().features.anisotropic_filtering } });
         errdefer device.deinit();
         const queue = try vit.Queue.init(device, .{ .label = "graphics queue", .kind = .graphics });
         errdefer queue.deinit();
 
         // The main window picks the color format; other windows must offer the same one.
-        var surface = try Surface.initFor(instance, adapter, device, queue, window, null);
+        var surface = Surface.initFor(instance, adapter, device, queue, window, null, settings.present_mode) catch |err| switch (err) {
+            error.UnsupportedPresentMode => blk: {
+                if (policy == .strict) return err;
+                settings.present_mode = .auto;
+                std.log.warn("project's default presentation mode is unavailable; selecting automatically", .{});
+                break :blk try Surface.initFor(instance, adapter, device, queue, window, null, .auto);
+            },
+            else => return err,
+        };
         errdefer surface.deinit();
         const color_format = weeoui_vitellus.colorFormat(surface.swapchain.info().format);
-        var textures = try TextureCache.init(allocator, device);
+        const caps = try backend_config.capabilities(adapter, instance, surface.present_modes, color_format);
+        if (policy == .project_defaults) {
+            settings = settings.supportedDefaults(caps);
+            if (!std.meta.eql(settings, requested))
+                std.log.warn("project graphics defaults adjusted to this device's supported options", .{});
+        }
+        try settings.validate(caps);
+        var textures = try TextureCache.init(allocator, device, queue, settings);
         errdefer textures.deinit();
-        const preview = try viewport3d.Preview.init(device, color_format, surface.extent, textures.layout);
+        const preview = try viewport3d.Preview.init(device, color_format, surface.extent, textures.layout, settings);
         std.log.info("Graphics ready: {d}x{d} px, {s}", .{ surface.extent.width, surface.extent.height, @tagName(color_format) });
         return .{
             .instance = instance,
@@ -95,7 +143,46 @@ pub const Graphics = struct {
             .models = .init(allocator, device),
             .textures = textures,
             .materials = .{ .gpa = allocator },
+            .render_settings = settings,
+            .cached_caps = caps,
         };
+    }
+
+    /// Borrow-free snapshot of usable settings and adapter names, queried once at startup.
+    pub fn capabilities(self: *const Graphics) render.Capabilities {
+        return self.cached_caps;
+    }
+
+    /// Apply live rendering choices before recording any frame. Restart-only changes are rejected.
+    pub fn setRenderSettings(self: *Graphics, settings: render.Settings) !void {
+        try settings.validate(self.cached_caps);
+        if (self.render_settings.requiresRestart(settings)) return error.RestartRequired;
+        if (std.meta.eql(self.render_settings, settings)) return;
+        const replace_textures = self.render_settings.mipmaps != settings.mipmaps or
+            self.render_settings.texture_filter != settings.texture_filter or self.render_settings.anisotropy != settings.anisotropy;
+        const replace_preview = replace_textures or self.render_settings.anti_aliasing != settings.anti_aliasing or self.render_settings.render_scale != settings.render_scale;
+        try self.queue.waitIdle();
+        var textures: ?TextureCache = null;
+        errdefer if (textures) |*made| made.deinit();
+        if (replace_textures) {
+            textures = try TextureCache.init(self.textures.gpa, self.device, self.queue, settings);
+            textures.?.loader = self.textures.loader;
+        }
+        var preview: ?viewport3d.Preview = null;
+        errdefer if (preview) |*made| made.deinit();
+        if (replace_preview)
+            preview = try viewport3d.Preview.init(self.device, self.color_format, self.surface.extent, if (textures) |made| made.layout else self.textures.layout, settings);
+        if (preview) |made| {
+            self.preview.deinit();
+            self.preview = made;
+        }
+        if (textures) |made| {
+            self.models.forgetAll(&self.textures);
+            self.textures.deinit();
+            self.textures = made;
+        }
+        self.render_settings = settings;
+        if (replace_preview) self.settings_revision +%= 1;
     }
 
     /// Where the scene's model files and textures come from, for drawing it.
@@ -191,7 +278,7 @@ pub const Graphics = struct {
     /// surface.deinit();
     /// ```
     pub fn addSurface(self: *const Graphics, window: sdl_adapter.Sdl3Window) !Surface {
-        return Surface.initFor(self.instance, self.adapter, self.device, self.queue, window, self.color_format);
+        return Surface.initFor(self.instance, self.adapter, self.device, self.queue, window, self.color_format, self.render_settings.present_mode);
     }
 
     /// Start a frame in the main window (see `Surface.beginFrame`).
@@ -249,9 +336,10 @@ pub const Surface = struct {
     /// Signalled when drawing into swapchain image i finishes; its present waits on it.
     render_done: [max_swapchain_images]vit.Semaphore,
     extent: vit.Extent2D,
+    present_modes: std.enums.EnumSet(render.PresentMode),
 
     /// A swapchain for `window`; with `color_format`, one whose format renders as it.
-    fn initFor(instance: vit.Instance, adapter: vit.Adapter, device: vit.Device, queue: vit.Queue, window: sdl_adapter.Sdl3Window, color_format: ?vit.Format) !Surface {
+    fn initFor(instance: vit.Instance, adapter: vit.Adapter, device: vit.Device, queue: vit.Queue, window: sdl_adapter.Sdl3Window, color_format: ?vit.Format, requested_mode: render.PresentMode) !Surface {
         var slots: [frames_in_flight]FrameSlot = undefined;
         for (&slots, 0..) |*slot, i| {
             errdefer for (slots[0..i]) |*made| made.deinit();
@@ -275,17 +363,25 @@ pub const Surface = struct {
             if (weeoui_vitellus.colorFormat(candidate) == wanted) break candidate;
         } else return error.NoMatchingSurfaceFormat else caps.formats[0];
         const extent = try pixelExtent(window) orelse vit.Extent2D{ .width = 1, .height = 1 };
+        var present_modes = std.enums.EnumSet(render.PresentMode).initOne(.auto);
+        for (caps.present_modes) |mode| present_modes.insert(switch (mode) {
+            inline else => |tag| @field(render.PresentMode, @tagName(tag)),
+        });
+        if (!present_modes.contains(requested_mode)) return error.UnsupportedPresentMode;
         const swapchain = try vit.Swapchain.init(adapter, .{
             .label = "swapchain",
             .window = try window.asWindow(),
             .queue = queue,
             .extent = extent,
             .format = format,
-            .present_mode = pickPresentMode(caps.present_modes),
+            .present_mode = if (requested_mode == .auto) pickPresentMode(caps.present_modes) else switch (requested_mode) {
+                .auto => unreachable,
+                inline else => |tag| @field(vit.PresentMode, @tagName(tag)),
+            },
             .image_count = 2,
             .composite_alpha = caps.composite_alpha[0],
         });
-        return .{ .swapchain = swapchain, .slots = slots, .gpu_done = gpu_done, .render_done = render_done, .extent = extent };
+        return .{ .swapchain = swapchain, .slots = slots, .gpu_done = gpu_done, .render_done = render_done, .extent = extent, .present_modes = present_modes };
     }
 
     /// Free the swapchain. The GPU must be done with it (`queue.waitIdle`).
