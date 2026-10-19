@@ -77,18 +77,24 @@ pub const ViewState = struct {
         return meshes[0..count];
     }
 
-    /// Remove hidden lights in place, keeping their plain-C source identities aligned.
+    /// Remove hidden lights in place, keeping their plain-C source identities aligned. The
+    /// frame's shadow-light index (`options[2]`) follows its light to its new place, or becomes
+    /// -1 when that light is hidden.
     pub fn visibleLights(self: *const ViewState, world: *ecs.World, frame: *eggy.lighting.Frame) void {
+        const shadow_index: ?usize = if (frame.options[2] >= 0) @intFromFloat(frame.options[2]) else null;
+        var shadow_now: f32 = -1;
         var count: u32 = 0;
         for (0..frame.count) |index| {
             const source = frame.entities[index];
             const entity = ecs.EntityId.init(source.id, source.generation);
             if (!world.isAlive(entity) or self.isHidden(world, entity)) continue;
+            if (shadow_index == index) shadow_now = @floatFromInt(count);
             frame.lights[count] = frame.lights[index];
             frame.entities[count] = source;
             count += 1;
         }
         frame.count = count;
+        frame.options[2] = shadow_now;
     }
 };
 
@@ -174,4 +180,32 @@ test "editor hiding removes descendant and directly hidden lights without mixing
     try std.testing.expectEqual(nested.id, frame.entities[0].id);
     // Filtering is editor state only: it never removes or modifies authored lights.
     try std.testing.expectEqual(@as(u32, 2), (try eggy.lighting.gather(&world)).count);
+}
+
+test "editor hiding keeps the shadow light's index on its light, or clears it when hidden" {
+    const gpa = std.testing.allocator;
+    var world = ecs.World.init(gpa);
+    defer world.deinit();
+    var state = ViewState{ .gpa = gpa };
+    defer state.deinit();
+    for (0..3) |_| _ = try world.spawn(.{ eggy.Transform{}, eggy.lighting.SceneLight{} });
+    var frame = try eggy.lighting.gather(&world);
+    try std.testing.expectEqual(@as(u32, 3), frame.count);
+    // Whatever order the world gathers in, the last light casts the shadow.
+    const first = ecs.EntityId.init(frame.entities[0].id, frame.entities[0].generation);
+    const middle = ecs.EntityId.init(frame.entities[1].id, frame.entities[1].generation);
+    const caster = ecs.EntityId.init(frame.entities[2].id, frame.entities[2].generation);
+    frame.options[2] = 2;
+
+    // Hiding the first light moves the shadow light from slot 2 to slot 1.
+    try state.setHidden(first, true);
+    state.visibleLights(&world, &frame);
+    try std.testing.expectEqual(@as(f32, 1), frame.options[2]);
+    try std.testing.expectEqual(caster.id, frame.entities[1].id);
+
+    // Hiding the shadow light itself leaves none.
+    try state.setHidden(caster, true);
+    state.visibleLights(&world, &frame);
+    try std.testing.expectEqual(@as(f32, -1), frame.options[2]);
+    try std.testing.expectEqual(middle.id, frame.entities[0].id);
 }
