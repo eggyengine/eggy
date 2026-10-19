@@ -13,6 +13,7 @@ pub const Kind = enum {
     file,
     input_map,
     material,
+    animation,
 
     /// What a file is, by its name.
     /// This editor classification inspects suffixes only; it never opens the file.
@@ -24,6 +25,7 @@ pub const Kind = enum {
         if (std.mem.endsWith(u8, name, ".scene.zon")) return .scene;
         if (std.mem.endsWith(u8, name, ".inmap.zon")) return .input_map;
         if (std.mem.endsWith(u8, name, ".material.zon")) return .material;
+        if (std.mem.endsWith(u8, name, ".clip.zon")) return .animation;
         const extension = std.fs.path.extension(name);
         const kinds = [_]struct { []const []const u8, Kind }{
             .{ &.{".zig"}, .code },
@@ -124,6 +126,7 @@ pub fn parentOf(path: []const u8) []const u8 {
 test "files are told apart by their names" {
     try std.testing.expectEqual(Kind.scene, Kind.ofFile("main.scene.zon"));
     try std.testing.expectEqual(Kind.input_map, Kind.ofFile("player.inmap.zon"));
+    try std.testing.expectEqual(Kind.animation, Kind.ofFile("walk.clip.zon"));
     try std.testing.expectEqual(Kind.text, Kind.ofFile("build.zig.zon"));
     try std.testing.expectEqual(Kind.code, Kind.ofFile("root.zig"));
     try std.testing.expectEqual(Kind.image, Kind.ofFile("Icon.PNG"));
