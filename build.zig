@@ -421,6 +421,9 @@ fn addEngine(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.buil
     const grid_shader = b.path("src/core/shaders/grid.slang");
     const grid_vertex = vitellus_build.compileSlang(b, vitellus, target, grid_shader, "vertexMain", .vertex) orelse return null;
     const grid_fragment = vitellus_build.compileSlang(b, vitellus, target, grid_shader, "fragmentMain", .fragment) orelse return null;
+    const world_shader = b.path("src/core/shaders/world_draw.slang");
+    const world_vertex = vitellus_build.compileSlang(b, vitellus, target, world_shader, "vertexMain", .vertex) orelse return null;
+    const world_fragment = vitellus_build.compileSlang(b, vitellus, target, world_shader, "fragmentMain", .fragment) orelse return null;
     const resolve_shader = b.path("src/core/shaders/scene_resolve.slang");
     const resolve_vertex = vitellus_build.compileSlang(b, vitellus, target, resolve_shader, "vertexMain", .vertex) orelse return null;
     const resolve_fragment = vitellus_build.compileSlang(b, vitellus, target, resolve_shader, "fragmentMain", .fragment) orelse return null;
@@ -436,6 +439,8 @@ fn addEngine(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.buil
     _ = shader_files.addCopyFile(blit_fragment, "scene_blit.frag");
     _ = shader_files.addCopyFile(grid_vertex, "grid.vert");
     _ = shader_files.addCopyFile(grid_fragment, "grid.frag");
+    _ = shader_files.addCopyFile(world_vertex, "world.vert");
+    _ = shader_files.addCopyFile(world_fragment, "world.frag");
     _ = shader_files.addCopyFile(resolve_vertex, "scene_resolve.vert");
     _ = shader_files.addCopyFile(resolve_fragment, "scene_resolve.frag");
     const shader_module = b.createModule(.{
@@ -451,6 +456,8 @@ fn addEngine(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.buil
             \\pub const blit_fragment = @embedFile("scene_blit.frag");
             \\pub const grid_vertex = @embedFile("grid.vert");
             \\pub const grid_fragment = @embedFile("grid.frag");
+            \\pub const world_vertex = @embedFile("world.vert");
+            \\pub const world_fragment = @embedFile("world.frag");
             \\pub const resolve_vertex = @embedFile("scene_resolve.vert");
             \\pub const resolve_fragment = @embedFile("scene_resolve.frag");
             \\

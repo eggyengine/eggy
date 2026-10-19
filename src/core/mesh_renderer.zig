@@ -30,6 +30,7 @@ pub const Sources = struct {
     materials: *@import("material_cache.zig").MaterialCache,
     lights: *const lighting.Frame,
     stats: *Stats,
+    world_draw: ?*const @import("draw2d.zig").Draw2d = null,
 };
 
 /// Scene passes accumulated by the host during this frame, including editor camera views.

@@ -121,7 +121,7 @@ pub const App = struct {
         options.requested = graphics.render_settings;
         if (builtin.os.tag == .windows) try window.window.show();
 
-        return .{ .window = window, .process_init = process_init, .init_flags = init_flags, .graphics = graphics, .graphics_options = options, .world = .init(gpa), .preference_values = .init(gpa), .input_backend = input_backend, .input = .{ .backend = input_backend.state.interface() }, .resource_jobs = resource_jobs };
+        return .{ .window = window, .process_init = process_init, .init_flags = init_flags, .graphics = graphics, .graphics_options = options, .world = .init(gpa), .preference_values = .init(gpa), .input_backend = input_backend, .input = .{ .backend = input_backend.state.interface() }, .resource_jobs = resource_jobs, .draw2d = .{ .gpa = gpa } };
     }
 
     /// Queue validated live choices; restart-only selections remain pending until next launch.
@@ -157,6 +157,7 @@ pub const App = struct {
         if (self.resource_jobs) |jobs| jobs.destroy();
         self.clearGameUi();
         self.debug_draw.deinit(self.world.allocator);
+        self.draw2d.deinit();
         self.scene_transition.deinit();
         if (self.instances) |*instances| instances.deinit();
         self.world.deinit();
@@ -285,6 +286,9 @@ pub const App = struct {
         if (self.resource_jobs) |jobs| jobs.clear();
         self.clearGameUi();
         self.debug_draw.deinit(self.world.allocator);
+        self.draw2d.deinit();
+        self.draw2d = .{ .gpa = self.world.allocator };
+        self.graphics.world_draw = null;
         self.profiling = .{};
         self.graphics.lights = .{};
         self.scene_transition.deinit();
@@ -344,6 +348,8 @@ pub const App = struct {
     /// Start frame-local diagnostics before any game/editor hooks run.
     pub fn beginDiagnosticsFrame(self: *App) void {
         self.debug_draw.clear();
+        self.draw2d.clear();
+        self.graphics.world_draw = &self.draw2d;
         self.profiling.beginFrame(sdl3.timer.getNanosecondsSinceInit());
         self.graphics.stats = .{};
     }

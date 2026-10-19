@@ -34,6 +34,7 @@ pub const Graphics = struct {
     materials: MaterialCache,
     lights: @import("lighting.zig").Frame = .{},
     stats: @import("mesh_renderer.zig").Stats = .{},
+    world_draw: ?*const @import("draw2d.zig").Draw2d = null,
     render_settings: render.Settings = .{},
     settings_revision: u64 = 0,
     cached_caps: render.Capabilities = .{},
@@ -193,7 +194,7 @@ pub const Graphics = struct {
     /// const asset_sources = graphics.sources();
     /// ```
     pub fn sources(self: *Graphics) Sources {
-        return .{ .models = &self.models, .textures = &self.textures, .materials = &self.materials, .lights = &self.lights, .stats = &self.stats };
+        return .{ .models = &self.models, .textures = &self.textures, .materials = &self.materials, .lights = &self.lights, .stats = &self.stats, .world_draw = self.world_draw };
     }
 
     /// Forget every model file and image, so each loads again when next drawn: their files may

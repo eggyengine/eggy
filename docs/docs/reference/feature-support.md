@@ -20,7 +20,6 @@ no output devices, threads, sessions, files, fake handles, or successful empty r
 | --- | --- |
 | `audio` | play, pause/unpause, stop, voice/bus gain, listener placement |
 | `animation` | play, blend, pause, stop, seek a named model clip |
-| `draw2d` | sprites and world-space text |
 | `materials.applyEffect` | postprocessing effects |
 | `particles` | emission and stopping |
 | `network` | connection, listening, messages, polling, disconnection |
@@ -52,6 +51,7 @@ stages synchronous scene replacement for the end of the gameplay update.
 | Weeoui game UI and custom draw hooks | Implemented | Shared runtime API; no editor import |
 | Materials and directional/point scene lights | Implemented; Inspector components and reusable material assets | Shared renderer, up to sixteen lights |
 | [Debug drawing and CPU profiling](../how-to/debug-and-profile.md) | World-space overlays, named samples/counters; DevTools Game tab | Same frame-owned collectors and drawing |
+| [World sprites and text](../how-to/world-drawing.md) | Depth-tested atlas sprites and camera-facing glyphs | Same scene renderer |
 | Editor context, panels, commands, actions | Desktop only | Not run or linked |
 | Missing-backend contracts listed above | `NotImplemented` | `NotImplemented` |
 

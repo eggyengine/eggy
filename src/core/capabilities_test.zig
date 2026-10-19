@@ -21,9 +21,6 @@ test "every missing backend operation returns NotImplemented" {
     try expect(error.NotImplemented, animation.stop(entity));
     try expect(error.NotImplemented, animation.seek(entity, 1));
 
-    const draw = @import("draw2d.zig").Draw2d{};
-    try expect(error.NotImplemented, draw.sprite(.{ .image = .init("rat.png") }));
-    try expect(error.NotImplemented, draw.worldText("hello", @splat(0), 1));
     var capability_world = @import("clutch").World.init(std.testing.allocator);
     defer capability_world.deinit();
     const materials = @import("materials.zig").Materials{ .world = &capability_world };

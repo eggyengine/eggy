@@ -44,6 +44,7 @@ pub const Preview = struct {
     depth_initialized: bool = false,
     meshes: MeshRenderer,
     grid: Grid,
+    world_draw: @import("world_draw.zig").Renderer,
 
     /// The backdrop and meshes for a target in `format` at `extent`, painting with textures
     /// bound as `texture_layout` describes (`TextureCache.layout`).
@@ -120,6 +121,8 @@ pub const Preview = struct {
         errdefer meshes.deinit();
         var grid = try Grid.init(device, format, shaderSource, sample_count);
         errdefer grid.deinit();
+        var world_draw = try @import("world_draw.zig").Renderer.init(device, format, sample_count, texture_layout, shaderSource);
+        errdefer world_draw.deinit();
         var resolve: ?Resolve = null;
         errdefer if (resolve) |*made| made.deinit();
         if (settings.anti_aliasing != .off or settings.render_scale != 1)
@@ -137,6 +140,7 @@ pub const Preview = struct {
             .depth_view = depth_view,
             .meshes = meshes,
             .grid = grid,
+            .world_draw = world_draw,
         };
     }
 
@@ -172,6 +176,7 @@ pub const Preview = struct {
     pub fn deinit(self: *Preview) void {
         if (self.resolve) |*resolve| resolve.deinit();
         self.grid.deinit();
+        self.world_draw.deinit();
         self.meshes.deinit();
         self.depth_view.deinit();
         self.depth.deinit();
@@ -211,6 +216,7 @@ pub const Preview = struct {
     fn drawPass(self: *Preview, cmd: vit.CommandBuffer, target: vit.TextureView, scene: ui.Rect, clip: ui.Rect, window: ui.Rect, extent: vit.Extent2D, srgb: bool, drawables: []mesh.Drawable, sources: mesh_renderer.Sources, view: camera.View, selected: ?ecs.EntityId, grid: bool) !void {
         const scissor = previewScissor(scene, clip, window, extent) orelse return;
         try self.meshes.prepare(cmd, drawables, sources);
+        try self.world_draw.prepare(sources.world_draw, sources.textures, view, scene.w / scene.h, srgb);
         const transform = SceneUniforms{
             .screen = .{
                 2 * (scene.x + scene.w / 2) / window.w - 1,
@@ -238,6 +244,7 @@ pub const Preview = struct {
             .color_attachments = &.{if (self.resolve) |*resolve| resolve.attachment() else .{ .view = target, .load_op = .load, .store_op = .store }},
             .depth_stencil_attachment = .{ .view = self.depth_view, .depth_clear = 1, .depth_store_op = .discard },
         });
+        errdefer cmd.endRenderPass();
         cmd.setViewport(.{ .width = @floatFromInt(extent.width), .height = @floatFromInt(extent.height) });
         cmd.setScissor(scissor);
         cmd.setGraphicsPipeline(self.pipeline);
@@ -251,6 +258,9 @@ pub const Preview = struct {
         cmd.setViewport(.{ .x = (scene.x - window.x) * px, .y = (scene.y - window.y) * py, .width = scene.w * px, .height = scene.h * py });
         try self.meshes.draw(cmd, drawables, sources, view.viewProjection(scene.w / scene.h), .{ scene.w * px, scene.h * py }, view.eye, selected, srgb);
         if (grid) try self.grid.draw(cmd, view, .{ .x = (scene.x - window.x) * px, .y = (scene.y - window.y) * py, .w = scene.w * px, .h = scene.h * py }, srgb);
+        const quads = self.world_draw.draw(cmd);
+        sources.stats.draw_calls += quads;
+        sources.stats.triangles += quads * 2;
         cmd.endRenderPass();
     }
 };

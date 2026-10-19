@@ -118,6 +118,8 @@ test {
     _ = @import("texture_cache.zig");
     _ = @import("eggy_assets");
     _ = @import("camera.zig");
+    _ = draw2d;
+    _ = @import("world_draw.zig");
     _ = @import("refs.zig");
     _ = materials;
     _ = lighting;
