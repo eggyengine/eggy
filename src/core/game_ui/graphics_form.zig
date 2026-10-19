@@ -431,6 +431,47 @@ test "a GPU is offered only for the backend its list belongs to" {
     try std.testing.expect((try context.render()).len > 0);
 }
 
+fn testFrame(context: *ui.Context, form: *Form, caps: *const Capabilities) !void {
+    context.newFrame(.{ .x = 0, .y = 0, .w = 720, .h = 2400 });
+    _ = form.build(context, .{ .caps = caps });
+    _ = try context.render();
+}
+
+fn testTap(context: *ui.Context, widget: u32) !void {
+    const at = context.last_bounds.get(widget).?.rect.center();
+    context.handle(.{ .pointer_move = at });
+    context.handle(.{ .pointer_down = .{ .position = at, .button = .left, .clicks = 1 } });
+    context.handle(.{ .pointer_up = .{ .position = at, .button = .left } });
+}
+
+test "opening one dropdown does not stop another from opening" {
+    const gpa = std.testing.allocator;
+    var context = try ui.Context.init(gpa);
+    defer context.deinit();
+    var form = Form{};
+    var caps = testCapabilities();
+    caps.present_modes.insert(.mailbox);
+    try testFrame(&context, &form, &caps);
+    // The API dropdown, and the vertical sync one after the card, window mode and size fields.
+    const backend = context.last_focusables.items[0];
+    const sync = context.last_focusables.items[5];
+
+    // Open the first dropdown.
+    try testTap(&context, backend);
+    try testFrame(&context, &form, &caps);
+    try std.testing.expectEqual(backend, context.open_popup);
+
+    // One click on another dropdown switches to it.
+    try testTap(&context, sync);
+    try testFrame(&context, &form, &caps);
+    try std.testing.expectEqual(sync, context.open_popup);
+
+    // Escape closes it.
+    context.handle(.{ .key_down = .{ .key = .escape, .modifiers = .{}, .repeat = false } });
+    try testFrame(&context, &form, &caps);
+    try std.testing.expectEqual(@as(u32, 0), context.open_popup);
+}
+
 test "the choice labels cover every enum value in order" {
     try std.testing.expectEqual(@typeInfo(render_settings.Backend).@"enum".fields.len, backend_labels.len);
     try std.testing.expectEqual(@typeInfo(render_settings.PresentMode).@"enum".fields.len, present_mode_labels.len);
