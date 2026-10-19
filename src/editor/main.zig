@@ -20,7 +20,33 @@ pub const panic = std.debug.FullPanic(eggy.entry.panic);
 /// Log through the editor, which keeps messages for its Console panel.
 pub const std_options: std.Options = .{ .logFn = @import("eggy_editor").logFn };
 
-const callbacks = eggy.entry.Callbacks(Editor);
+// SDL's return-value adapter must not copy the editor's large state through its startup stack.
+const State = struct {
+    gui: *Editor,
+
+    pub fn init(process: *const std.process.Init, args: []const [*:0]const u8) !State {
+        const gui = try process.gpa.create(Editor);
+        errdefer process.gpa.destroy(gui);
+        gui.* = try Editor.init(process, args);
+        return .{ .gui = gui };
+    }
+
+    pub fn iterate(self: *State) !sdl3.AppResult {
+        return self.gui.iterate();
+    }
+
+    pub fn event(self: *State, current: sdl3.events.Event) !sdl3.AppResult {
+        return self.gui.event(current);
+    }
+
+    pub fn deinit(self: *State) void {
+        const gpa = self.gui.gpa;
+        self.gui.deinit();
+        gpa.destroy(self.gui);
+    }
+};
+
+const callbacks = eggy.entry.Callbacks(State);
 
 /// SDL editor-executable initialization callback, not a game/plugin API.
 /// Borrows SDL's startup data; CLI invocations run headlessly and return a null editor with
@@ -34,7 +60,7 @@ const callbacks = eggy.entry.Callbacks(Editor);
 /// defer quit(&state, result);
 /// // Only dispatch iterate/event when result == .run and state is non-null.
 /// ```
-pub fn init(init_data: sdl3.Init) !struct { ?Editor, sdl3.AppResult } {
+pub fn init(init_data: sdl3.Init) !struct { ?State, sdl3.AppResult } {
     if (editor.cli.isCommand(init_data.args)) {
         const process = try eggy.entry.processInit(init_data);
         editor.cli.run(process) catch |err| {
@@ -57,7 +83,7 @@ pub fn init(init_data: sdl3.Init) !struct { ?Editor, sdl3.AppResult } {
 /// // Stop callbacks and pass result to quit when result != .run.
 /// _ = result;
 /// ```
-pub fn iterate(state: *?Editor) !sdl3.AppResult {
+pub fn iterate(state: *?State) !sdl3.AppResult {
     return callbacks.iterate(&state.*.?);
 }
 
@@ -70,7 +96,7 @@ pub fn iterate(state: *?Editor) !sdl3.AppResult {
 /// const result = try event(&state, current);
 /// _ = result; // Adapter stops on a terminal result and then calls quit.
 /// ```
-pub fn event(state: *?Editor, current: sdl3.events.Event) !sdl3.AppResult {
+pub fn event(state: *?State, current: sdl3.events.Event) !sdl3.AppResult {
     return callbacks.event(&state.*.?, current);
 }
 
@@ -83,6 +109,6 @@ pub fn event(state: *?Editor, current: sdl3.events.Event) !sdl3.AppResult {
 /// quit(&state, final_result);
 /// // Headless/no-state shutdown may instead use quit(null, final_result).
 /// ```
-pub fn quit(state: ?*?Editor, result: sdl3.AppResult) void {
+pub fn quit(state: ?*?State, result: sdl3.AppResult) void {
     callbacks.quit(if (state) |value| if (value.*) |*gui| gui else null else null, result);
 }
