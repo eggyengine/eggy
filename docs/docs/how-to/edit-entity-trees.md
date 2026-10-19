@@ -47,3 +47,10 @@ and hidden selections have no gizmo or camera preview. Right-click also offers
 Folds and eye visibility are editor-only and reset when the world is replaced,
 including scene changes, Undo of scene edits, Play, and game-code reloads. They
 never change saved scene contents or runtime game behavior.
+
+## Inspector components
+
+Each component card has an icon beside its name: transforms, meshes, cameras,
+scene instances, materials, and lights have distinct icons; game and plugin
+components use a common attachment icon. The full component name and plugin owner
+remain visible. Click the header to fold its fields without removing the component.

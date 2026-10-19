@@ -18,6 +18,7 @@ const components = eggy.components;
 const page_style = @import("../page_style.zig");
 const Dragged = @import("../dragged.zig").Dragged;
 const field_editor = @import("field_editor.zig");
+const component_icons = @import("component_icons.zig");
 const restyle = page_style.restyle;
 const displayName = field_editor.displayName;
 
@@ -212,6 +213,7 @@ pub const EntityInspector = struct {
         }
         const header = b.node(fold_id, .{ .direction = .row, .gap = 8, .align_items = .center, .grow = 1 }, .none, &.{
             b.node(0, .{ .width = 14, .height = 14 }, .{ .icon = if (folded) .chevron_right else .chevron_down }, &.{}) catch return null,
+            b.node(0, .{ .width = 18, .height = 18 }, component_icons.paint(arena, component.info) catch .none, &.{}) catch return null,
             b.node(0, .{ .grow = 1, .gap = 1 }, .none, &.{
                 b.node(0, .{}, .{ .text = .{ .value = component.info.name, .size = 14, .wrap = true } }, &.{}) catch return null,
                 b.node(0, .{}, .{ .text = .{ .value = std.fmt.allocPrint(arena, "{s}from {s}{s}{s}{s}{s}", .{ if (component.disabled) "Disabled: its plugin is off · " else "", component.info.owner, if (component.needs.len > 0) " · needs " else "", component.needs, if (component.needed_by.len > 0) " · needed by " else "", component.needed_by }) catch "", .size = 11, .tone = .muted, .wrap = true } }, &.{}) catch return null,
