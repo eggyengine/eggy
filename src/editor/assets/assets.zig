@@ -429,7 +429,7 @@ pub const AssetsPanel = struct {
                 }
                 break :blk .{ .used = false }; // the list opens folders with one press
             },
-            .code, .text, .material => .{ .used = true, .action = .{ .open_code = entry.path } },
+            .code, .text, .material, .animation => .{ .used = true, .action = .{ .open_code = entry.path } },
             else => .{ .used = true, .action = .{ .reveal = entry.path } },
         };
     }
@@ -542,7 +542,7 @@ pub const AssetsPanel = struct {
         };
         if (menu.new_only) return self.newMenu(context, new_items, menu.at, self.newFilesFolder());
         if (menu.entry) |entry| {
-            if (entry.kind == .scene or entry.kind == .input_map or entry.kind == .code or entry.kind == .text or entry.kind == .material) add(&choices, context, .open, "Open");
+            if (entry.kind == .scene or entry.kind == .input_map or entry.kind == .code or entry.kind == .text or entry.kind == .material or entry.kind == .animation) add(&choices, context, .open, "Open");
             add(&choices, context, .rename, "Rename");
             add(&choices, context, .duplicate, "Duplicate");
             add(&choices, context, .delete, "Delete");

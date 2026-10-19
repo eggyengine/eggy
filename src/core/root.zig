@@ -116,6 +116,8 @@ test {
     _ = @import("mesh_renderer.zig");
     _ = @import("model_cache.zig");
     _ = @import("texture_cache.zig");
+    _ = @import("clip_cache.zig");
+    _ = animation;
     _ = @import("eggy_assets");
     _ = @import("camera.zig");
     _ = @import("shadows.zig");

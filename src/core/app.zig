@@ -52,7 +52,6 @@ pub const App = struct {
     /// The player's graphics menu: F10 opens it, or `graphics_settings_ui.open()` (see `GraphicsSettingsUi`).
     graphics_settings_ui: GraphicsSettingsUi = .{},
     audio: @import("audio.zig").Audio = .{},
-    animation: @import("animation.zig").Animation = .{},
     draw2d: @import("draw2d.zig").Draw2d = .{},
     particles: @import("particles.zig").Particles = .{},
     network: @import("network.zig").Network = .{},
@@ -206,6 +205,11 @@ pub const App = struct {
 
     /// Borrow scene-light access for the current world; do not retain across reset/reload.
     pub fn lighting(self: *App) @import("lighting.zig").Lighting {
+        return .{ .world = &self.world };
+    }
+
+    /// Borrow animation controls for the current world; do not retain across reset/reload.
+    pub fn animation(self: *App) @import("animation.zig").Animation {
         return .{ .world = &self.world };
     }
 

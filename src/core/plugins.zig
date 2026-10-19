@@ -79,7 +79,7 @@
 //!
 //! Eggy's own components (`builtin_components`: `Transform`, `Mesh`, which the scene draws, and
 //! `Camera`, which the runtime looks through, and `SceneInstance`, a scene file made under an
-//! entity) are listed first in every project, owned by `eggy`.
+//! entity, `Animator`, which plays clips) are listed first in every project, owned by `eggy`.
 //!
 //! A project can turn plugins off (not the game): one that is off doesn't start, and none of its
 //! hooks run, but its preferences and components stay known, so scenes keep their values. The
@@ -103,7 +103,7 @@ const EditorContext = @import("editor_api/editor_api.zig").Context;
 const DrawContext = @import("game_ui/game_ui.zig").DrawContext;
 
 /// The components every project has, before its plugins' own.
-pub const builtin_components = .{ @import("transform.zig").Transform, @import("mesh.zig").Mesh, @import("camera.zig").Camera, @import("scene_instance.zig").SceneInstance, @import("material.zig").Material, @import("lighting.zig").SceneLight };
+pub const builtin_components = .{ @import("transform.zig").Transform, @import("mesh.zig").Mesh, @import("camera.zig").Camera, @import("scene_instance.zig").SceneInstance, @import("material.zig").Material, @import("lighting.zig").SceneLight, @import("lighting.zig").Environment, @import("animation.zig").Animator };
 
 /// Eggy's own platforms in File > Export, in the order it lists them.
 pub const BuiltinPlatform = enum(u8) { windows, macos, linux, web, android };

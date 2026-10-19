@@ -11,6 +11,7 @@ pub const rig = @import("rig.zig");
 pub const texture = @import("texture.zig");
 pub const Texture = texture.Texture;
 pub const manifest = @import("manifest.zig");
+pub const clip = @import("clip.zig");
 
 test {
     _ = @import("kind.zig");
@@ -19,4 +20,5 @@ test {
     _ = @import("rig.zig");
     _ = @import("texture.zig");
     _ = @import("manifest.zig");
+    _ = @import("clip.zig");
 }

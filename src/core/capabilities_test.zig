@@ -12,15 +12,7 @@ test "every missing backend operation returns NotImplemented" {
     try expect(error.NotImplemented, audio.setBusGain(.master, 1));
     try expect(error.NotImplemented, audio.setListener(@splat(0), .{ 0, 0, -1 }, .{ 0, 1, 0 }));
 
-    const animation = @import("animation.zig").Animation{};
     const entity = @import("clutch").EntityId.init(0, 0);
-    const clip = @import("animation.zig").Clip{ .model = .init("rat.glb"), .name = "run" };
-    try expect(error.NotImplemented, animation.play(entity, clip, .{}));
-    try expect(error.NotImplemented, animation.blendTo(entity, clip, 0.2, .{}));
-    try expect(error.NotImplemented, animation.pause(entity));
-    try expect(error.NotImplemented, animation.stop(entity));
-    try expect(error.NotImplemented, animation.seek(entity, 1));
-
     var capability_world = @import("clutch").World.init(std.testing.allocator);
     defer capability_world.deinit();
     const materials = @import("materials.zig").Materials{ .world = &capability_world };

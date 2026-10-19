@@ -29,7 +29,7 @@ pub const Icon = enum {
             .scene => .scene,
             .code => .code,
             .text, .input_map => .text,
-            .image, .material => .image,
+            .image, .material, .animation => .image,
             .audio => .audio,
             .file => .file,
         };
