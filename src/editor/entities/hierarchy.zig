@@ -192,6 +192,7 @@ pub const Hierarchy = struct {
     pub fn pointer(self: *Hierarchy, context: *const ui.Context, event: ui.input.Event) struct { used: bool, action: ?Action = null } {
         switch (event) {
             .pointer_down => |down| {
+                if (self.menu != null and self.onMenu(context, down.position)) return .{ .used = false };
                 const row = self.rowAt(context, down.position);
                 // A press outside an open menu closes it (the menu's own items are buttons).
                 if (self.menu != null and !self.onMenu(context, down.position)) self.menu = null;
@@ -746,6 +747,26 @@ test "fold and eye hits are independent of selecting or dragging a row" {
     } });
     try std.testing.expect(hidden.used);
     try std.testing.expect(hidden.action.?.toggle_hidden.eql(entity));
+    try std.testing.expect(hierarchy.drag == null);
+}
+
+test "popup choices take precedence over the row controls behind them" {
+    var context = try ui.Context.init(std.testing.allocator);
+    defer context.deinit();
+    var hierarchy = Hierarchy.init(std.testing.allocator);
+    defer hierarchy.deinit();
+    const entity = ecs.EntityId.init(0, 0);
+    const rows = [_]Row{.{ .entity = entity, .name = "Root", .depth = 0, .has_parent = false, .has_children = true, .components = &.{} }};
+    try buildPage(&context, &hierarchy, &rows, 260);
+    const bounds = context.last_bounds.get(row_id_base).?.rect;
+    hierarchy.menu = .{ .at = .{ .x = 260, .y = bounds.y }, .entity = entity, .has_parent = false };
+    try buildPage(&context, &hierarchy, &rows, 260);
+    const choice = context.last_bounds.get(Hierarchy.menuId(.rename)).?.rect;
+    const at = ui.Vec2{ .x = bounds.x + bounds.w - 10, .y = bounds.y + bounds.h / 2 };
+    try std.testing.expect(choice.contains(at.x, at.y));
+    const result = hierarchy.pointer(&context, .{ .pointer_down = .{ .position = at, .button = .left, .clicks = 1 } });
+    try std.testing.expect(!result.used);
+    try std.testing.expect(result.action == null);
     try std.testing.expect(hierarchy.drag == null);
 }
 
