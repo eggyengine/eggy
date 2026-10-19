@@ -29,6 +29,8 @@ pub const Action = union(enum) {
     /// Move `entity` to `place`.
     move: struct { entity: ecs.EntityId, place: Place },
     duplicate: ecs.EntityId,
+    copy: ecs.EntityId,
+    paste: ?ecs.EntityId,
 };
 
 const NameEdit = ui.TextEdit(eggy.Name.max_len);
@@ -38,7 +40,7 @@ const FilterEdit = ui.TextEdit(64);
 /// can be matched to rows by last frame's layout.
 const row_id_base: u32 = 0x6E00_0000;
 const top_level_id: u32 = row_id_base - 2;
-const menu_id_base: u32 = row_id_base - 16;
+const menu_id_base: u32 = row_id_base - 32;
 const row_height: f32 = 24;
 /// How far each level steps in; less when the tree is deep for the panel.
 const indent: f32 = 16;
@@ -49,7 +51,7 @@ const same_spot: f32 = 2;
 const name_size: f32 = 12;
 const components_size: f32 = 11;
 
-const MenuItem = enum(u32) { rename, add_child, duplicate, to_top, delete, add_entity };
+const MenuItem = enum(u32) { rename, add_child, duplicate, copy, paste, to_top, delete, add_entity };
 
 /// Where an entity moves to.
 pub const Place = union(enum) {
@@ -72,6 +74,7 @@ const Target = union(enum) {
 };
 
 pub const Hierarchy = struct {
+    can_paste: bool = false,
     filter: FilterEdit = FilterEdit.init("") catch unreachable,
     /// The row being renamed, and its text.
     renaming: ?struct { entity: ecs.EntityId, edit: NameEdit, started: bool = false } = null,
@@ -258,6 +261,12 @@ pub const Hierarchy = struct {
                 self.startRename(entity, self.nameOf(entity));
                 return .{ .used = true };
             },
+            .c => if (key_down.modifiers.control and self.renaming == null) if (selected) |entity| {
+                return .{ .used = true, .action = .{ .copy = entity } };
+            },
+            .v => if (key_down.modifiers.control and self.renaming == null and self.can_paste) {
+                return .{ .used = true, .action = .{ .paste = selected } };
+            },
             .delete => if (selected) |entity| if (self.renaming == null) return .{ .used = true, .action = .{ .delete = entity } },
             else => {},
         }
@@ -368,10 +377,15 @@ pub const Hierarchy = struct {
                 .{ .id = menuId(.rename), .label = "Rename" },
                 .{ .id = menuId(.add_child), .label = "Add child" },
                 .{ .id = menuId(.duplicate), .label = "Duplicate" },
+                .{ .id = menuId(.copy), .label = "Copy tree" },
             }) catch return null;
+            if (self.can_paste) choices.append(arena, .{ .id = menuId(.paste), .label = "Paste tree" }) catch return null;
             if (menu.has_parent) choices.append(arena, .{ .id = menuId(.to_top), .label = "Move to top level" }) catch return null;
             choices.append(arena, .{ .id = menuId(.delete), .label = "Delete" }) catch return null;
-        } else choices.append(arena, .{ .id = menuId(.add_entity), .label = "Add entity" }) catch return null;
+        } else {
+            choices.append(arena, .{ .id = menuId(.add_entity), .label = "Add entity" }) catch return null;
+            if (self.can_paste) choices.append(arena, .{ .id = menuId(.paste), .label = "Paste tree" }) catch return null;
+        }
 
         // Kept inside the page: it opens left of or above the pointer near an edge.
         const width: f32 = @min(200, context.viewport.w);
@@ -394,6 +408,8 @@ pub const Hierarchy = struct {
                 },
                 .add_child => .{ .spawn = entity },
                 .duplicate => .{ .duplicate = entity.? },
+                .copy => .{ .copy = entity.? },
+                .paste => .{ .paste = entity },
                 .to_top => .{ .move = .{ .entity = entity.?, .place = .top_level } },
                 .delete => .{ .delete = entity.? },
                 .add_entity => .{ .spawn = null },
@@ -639,6 +655,20 @@ test "the right-click menu and the drag label stay inside the page" {
     hierarchy.drag = .{ .entity = rows[0].entity, .from = .{ .x = 0, .y = 0 }, .moving = true, .target = .{ .place = .top_level } };
     context.pointer = .{ .x = 250, .y = 100 };
     try buildPage(&context, &hierarchy, &rows, 260);
+}
+
+test "clipboard shortcuts leave renaming alone" {
+    var hierarchy = Hierarchy.init(std.testing.allocator);
+    defer hierarchy.deinit();
+    const entity = ecs.EntityId.init(3, 2);
+    const copy = hierarchy.key(.{ .key = .c, .modifiers = .{ .control = true }, .repeat = false }, entity);
+    try std.testing.expect(copy.action.?.copy.eql(entity));
+    hierarchy.can_paste = true;
+    const paste = hierarchy.key(.{ .key = .v, .modifiers = .{ .control = true }, .repeat = false }, entity);
+    try std.testing.expect(paste.action.?.paste.?.eql(entity));
+    hierarchy.startRename(entity, "Name");
+    try std.testing.expect(!hierarchy.key(.{ .key = .c, .modifiers = .{ .control = true }, .repeat = false }, entity).used);
+    try std.testing.expect(!hierarchy.key(.{ .key = .v, .modifiers = .{ .control = true }, .repeat = false }, entity).used);
 }
 
 test "a drag can't drop an entity into itself or its children" {

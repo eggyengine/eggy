@@ -12,6 +12,7 @@ const tree = @import("tree.zig");
 const hierarchy_zig = @import("hierarchy.zig");
 const inspector_zig = @import("inspector.zig");
 const RootOrder = @import("root_order.zig").RootOrder;
+const Clipboard = @import("clipboard.zig").Clipboard;
 const Dragged = @import("../dragged.zig").Dragged;
 pub const SceneInstances = eggy.SceneInstances;
 const log = std.log.scoped(.entities);
@@ -24,6 +25,9 @@ pub const EntityEditor = struct {
     selected: ?ecs.EntityId = null,
     /// The top-level entities' order.
     root_order: RootOrder,
+    clipboard: Clipboard,
+    /// Commands needing the host's immediate undo snapshot.
+    pending_paste: ?struct { beside: ?ecs.EntityId } = null,
 
     /// Create editor-only hierarchy, inspector and root-order state using `gpa`.
     /// Does not create a world; pair with `deinit`.
@@ -33,7 +37,7 @@ pub const EntityEditor = struct {
     /// defer entities.deinit();
     /// ```
     pub fn init(gpa: std.mem.Allocator) EntityEditor {
-        return .{ .gpa = gpa, .hierarchy = .init(gpa), .inspector = .init(gpa), .root_order = .{ .gpa = gpa } };
+        return .{ .gpa = gpa, .hierarchy = .init(gpa), .inspector = .init(gpa), .root_order = .{ .gpa = gpa }, .clipboard = .{ .gpa = gpa } };
     }
 
     /// Release editor UI/order storage once, without despawning entities or unloading the game.
@@ -47,6 +51,7 @@ pub const EntityEditor = struct {
         self.hierarchy.deinit();
         self.inspector.deinit();
         self.root_order.deinit();
+        self.clipboard.deinit();
     }
 
     /// `world`'s top-level entities in the Hierarchy's order, for capturing the scene in it.
@@ -73,6 +78,7 @@ pub const EntityEditor = struct {
         self.forgetDead(app);
         const access = if (game) |loaded| loaded.sceneAccess() else null;
         const rows = tree.collect(context.builder().allocator, &app.world, self.roots(&app.world), access, self.hierarchy.filterText()) catch &.{};
+        self.hierarchy.can_paste = self.clipboard.scene != null;
         if (self.hierarchy.build(context, rows, self.selected)) |action| self.apply(app, game, action);
     }
 
@@ -196,7 +202,8 @@ pub const EntityEditor = struct {
     /// // Given entities, App/optional HotGame pointers and key-down payload:
     /// const used = entities.hierarchyKey(app, game, key_down);
     /// ```
-    pub fn hierarchyKey(self: *EntityEditor, app: *eggy.App, game: ?*const HotGame, key: @FieldType(ui.input.Event, "key_down")) bool {
+    pub fn hierarchyKey(self: *EntityEditor, app: *eggy.App, game: ?*const HotGame, key: @FieldType(ui.input.Event, "key_down"), typing: bool) bool {
+        if (typing and key.key != .escape and key.key != .enter) return false;
         const result = self.hierarchy.key(key, self.selected);
         if (result.action) |action| self.apply(app, game, action);
         return result.used;
@@ -244,7 +251,24 @@ pub const EntityEditor = struct {
                 self.moveEntity(world, made.entities[0], .{ .after = entity }) catch {};
                 self.selected = made.entities[0];
             },
+            .copy => |entity| {
+                const loaded = game orelse return;
+                self.clipboard.copy(world, loaded.sceneAccess(), entity) catch |err| return log.err("cannot copy tree: {t}", .{err});
+                self.hierarchy.can_paste = true;
+            },
+            .paste => |beside| self.pending_paste = .{ .beside = beside },
         }
+    }
+
+    /// Paste beside the target, or at the top level, and select the new root.
+    pub fn paste(self: *EntityEditor, app: *eggy.App, game: *const HotGame, beside: ?ecs.EntityId) !?ecs.EntityId {
+        const target = if (beside) |entity| if (app.world.isAlive(entity)) entity else null else null;
+        const parent = if (target) |entity| app.world.getParent(entity) else null;
+        const made = (try self.clipboard.paste(&app.world, game.sceneAccess(), parent)) orelse return null;
+        errdefer app.world.despawnRecursive(made);
+        if (target) |entity| try self.moveEntity(&app.world, made, .{ .after = entity });
+        self.selected = made;
+        return made;
     }
 
     /// Move `entity` to `place`: under a parent (last), beside a sibling, or to the end of the
@@ -477,6 +501,7 @@ fn referenceLabel(arena: std.mem.Allocator, app: *eggy.App, game: *const HotGame
 }
 
 test {
+    _ = @import("clipboard.zig");
     _ = @import("root_order.zig");
     _ = @import("tree.zig");
     _ = @import("hierarchy.zig");

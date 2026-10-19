@@ -534,7 +534,10 @@ pub fn Editor(comptime project: type) type {
                     panels.console_page => {
                         if (self.console.build(page_ui, if (self.project) |opened| opened.dir else null)) |source| self.openDiagnostic(source);
                     },
-                    panels.hierarchy_page => self.entity_editor.buildHierarchy(page_ui, &self.app, self.gamePtr()),
+                    panels.hierarchy_page => {
+                        self.entity_editor.buildHierarchy(page_ui, &self.app, self.gamePtr());
+                        self.applyEntityCommands();
+                    },
                     panels.assets_page => {
                         // The view is a preference, so it is the same in the next editor.
                         const view_before: assets.View = @enumFromInt(@intFromEnum(preferences.editor(&self.app.preference_values).assets_view));
@@ -1077,6 +1080,36 @@ pub fn Editor(comptime project: type) type {
         fn typing(self: *Self) bool {
             for (0..self.pageCount()) |index| if (self.page(index).wants_text) return true;
             return false;
+        }
+
+        /// Clipboard edits are discrete undo steps, not part of a pending field edit.
+        fn applyEntityCommands(self: *Self) void {
+            const request = self.entity_editor.pending_paste orelse return;
+            self.entity_editor.pending_paste = null;
+            self.pasteEntityTree(request.beside) catch |err| {
+                std.log.err("cannot paste entity tree: {t}", .{err});
+                self.workspace.toast("Couldn't paste tree: see the Console");
+            };
+        }
+
+        fn pasteEntityTree(self: *Self, beside: ?eggy.ecs.EntityId) !void {
+            if (self.play_mode.playing()) return error.NotEditing;
+            const game = self.gamePtr() orelse return error.NoGameLibrary;
+            const before = self.sceneText() orelse return error.CannotCaptureScene;
+            errdefer self.gpa.free(before);
+            self.history.watch(try self.gpa.dupe(u8, before), std.math.maxInt(u64), false);
+            try self.history.reserve();
+            const selection = self.entity_editor.selected;
+            const made = (try self.entity_editor.paste(&self.app, game, beside)) orelse return;
+            errdefer {
+                self.app.world.despawnRecursive(made);
+                self.entity_editor.selected = selection;
+            }
+            const after = self.sceneText() orelse return error.CannotCaptureScene;
+            errdefer self.gpa.free(after);
+            const baseline = try self.gpa.dupe(u8, after);
+            self.history.record(.{ .scene = .{ .before = before, .after = after } });
+            self.history.setBaseline(baseline);
         }
 
         /// Edit > Undo or Redo: carry the step back (`.undo`) or out again (`.redo`).
@@ -2238,10 +2271,11 @@ pub fn Editor(comptime project: type) type {
                 // The Hierarchy's right-clicks, double-clicks, drags and keys, before its UI.
                 if (index == panels.hierarchy_page) {
                     const used = switch (input) {
-                        .key_down => |key| self.entity_editor.hierarchyKey(&self.app, self.gamePtr(), key),
+                        .key_down => |key| self.entity_editor.hierarchyKey(&self.app, self.gamePtr(), key, self.hierarchy_ui.wants_text),
                         .pointer_down, .pointer_move, .pointer_up => self.entity_editor.hierarchyPointer(&self.hierarchy_ui, &self.app, self.gamePtr(), input),
                         else => false,
                     };
+                    self.applyEntityCommands();
                     if (used) continue;
                 }
                 if (index == panels.inspector_page) weeoui_sdl3.handleEvent(&self.ui, curr_event) else self.page(index).handle(input);
