@@ -41,7 +41,7 @@ const Job = struct {
     fn destroy(self: *Job, gpa: std.mem.Allocator) void {
         if (comptime threaded) if (self.thread) |thread| thread.join();
         self.arena.deinit();
-        self.caller.free(self.path);
+        gpa.free(self.path);
         gpa.destroy(self);
     }
 };
@@ -94,8 +94,8 @@ pub const Queue = struct {
     fn add(self: *Queue, caller: std.mem.Allocator, kind: api.LoadKind, path: []const u8) !u64 {
         if (self.jobs.count() >= max_requests) return error.TooManyResourceRequests;
         if (self.next_id == std.math.maxInt(u64)) return error.TooManyResourceRequests;
-        const owned = try caller.dupe(u8, path);
-        errdefer caller.free(owned);
+        const owned = try self.gpa.dupe(u8, path);
+        errdefer self.gpa.free(owned);
         const job = try self.gpa.create(Job);
         errdefer self.gpa.destroy(job);
         job.* = .{ .source = self.source, .caller = caller, .kind = kind, .path = owned };
@@ -118,6 +118,7 @@ pub const Queue = struct {
 
     fn take(self: *Queue, id: u64) !?api.Result {
         const job = self.jobs.get(id) orelse return error.InvalidResourceRequest;
+        // ponytail: threadless targets decode preloaded data here; use workers for streaming.
         if (comptime !threaded) if (!job.done.load(.acquire)) job.run();
         if (!job.done.load(.acquire)) return null;
         defer {
@@ -215,6 +216,33 @@ test "native imports run off-thread and cancellation does not wait for the impor
             self.entered.store(true, .release);
             while (!self.release.load(.acquire)) std.atomic.spinLoopHint();
             return gpa.dupeZ(u8, "discard me");
+        }
+
+        test "submission and cancellation never touch the caller allocator" {
+            const Source = struct {
+                fn read(_: *anyopaque, gpa: std.mem.Allocator, _: []const u8) ![:0]u8 {
+                    return gpa.dupeZ(u8, "loaded");
+                }
+                fn model(_: *anyopaque, _: std.mem.Allocator, _: []const u8) !assets.Model {
+                    return error.NotPackaged;
+                }
+                fn image(_: *anyopaque, _: std.mem.Allocator, _: []const u8) !assets.Texture {
+                    return error.NotPackaged;
+                }
+            };
+            const queue = try Queue.create(std.testing.allocator);
+            defer queue.destroy();
+            var context: u8 = 0;
+            const resources = queue.attach(api.Resources.from(&context, Source.read, Source.model, Source.image));
+            var failing = std.testing.FailingAllocator.init(std.testing.allocator, .{ .fail_index = 0 });
+            const cancelled = try resources.readAsync(failing.allocator(), refs.AssetRef(.text).init("notes.txt"));
+            try resources.cancel(cancelled);
+            queue.clear();
+            const request = try resources.readAsync(failing.allocator(), refs.AssetRef(.text).init("notes.txt"));
+            while (resources.poll(request)) |pending| {
+                try std.testing.expect(pending == null);
+            } else |err| try std.testing.expectEqual(error.OutOfMemory, err);
+            try std.testing.expectError(error.InvalidResourceRequest, resources.poll(request));
         }
         fn model(_: *anyopaque, _: std.mem.Allocator, _: []const u8) !assets.Model {
             return error.NotPackaged;
