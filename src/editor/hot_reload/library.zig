@@ -118,6 +118,7 @@ const game = api.Game{
     .read_name = readName,
     .write_name = writeName,
     .gather_meshes = gatherMeshes,
+    .gather_lights = gatherLights,
     .world_matrix = worldMatrix,
     .find_camera = findCamera,
 };
@@ -160,7 +161,7 @@ fn start(editor: *const api.Host, gpa_ptr: *const anyopaque, app_ptr: *anyopaque
 
 /// What can fail each frame, and the error each last failed with: one failing every frame is
 /// logged once, and again only when it fails differently or after it recovers.
-const Hook = enum { update, game_ui, draw, ui_event, editor_update, editor_ui, editor_panel_ui, editor_command, event, world_start, world_update };
+const Hook = enum { update, game_ui, draw, ui_event, editor_update, editor_ui, editor_panel_ui, editor_command, event, world_start, world_update, scene_lights };
 var failures: [std.meta.fields(Hook).len]?anyerror = @splat(null);
 
 fn report(hook: Hook, err: anyerror) void {
@@ -179,6 +180,7 @@ fn report(hook: Hook, err: anyerror) void {
         .event => "an event hook",
         .world_start => "a system in the world's Init stages",
         .world_update => "a system in the world's Update stages",
+        .scene_lights => "gathering scene lights",
     };
     const detail = if (err == error.SdlError) eggy.sdl_adapter.sdl.errors.get() else null;
     std.log.err("{s} failed: {t}{s}{s}. The game keeps running; this is logged again only if it fails differently.", .{ what, err, if (detail != null) ": " else "", detail orelse "" });
@@ -332,6 +334,16 @@ fn writeName(world: *anyopaque, entity: api.Entity, text: [*]const u8, len: usiz
 
 fn gatherMeshes(world: *anyopaque, out: [*]eggy.mesh.Drawable, capacity: usize) callconv(.c) usize {
     return eggy.mesh.gather(worldOf(world), out[0..capacity]);
+}
+
+fn gatherLights(world: *anyopaque, out: *eggy.lighting.Frame) callconv(.c) bool {
+    const frame = eggy.lighting.gather(worldOf(world)) catch |err| {
+        report(.scene_lights, err);
+        return false;
+    };
+    out.* = frame;
+    recovered(.scene_lights);
+    return true;
 }
 
 fn worldMatrix(world: *anyopaque, entity: api.Entity, out: *[4][4]f32) callconv(.c) bool {

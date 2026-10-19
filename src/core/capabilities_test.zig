@@ -24,12 +24,10 @@ test "every missing backend operation returns NotImplemented" {
     const draw = @import("draw2d.zig").Draw2d{};
     try expect(error.NotImplemented, draw.sprite(.{ .image = .init("rat.png") }));
     try expect(error.NotImplemented, draw.worldText("hello", @splat(0), 1));
-    const materials = @import("materials.zig").Materials{};
-    try expect(error.NotImplemented, materials.assign(entity, .{}));
+    var capability_world = @import("clutch").World.init(std.testing.allocator);
+    defer capability_world.deinit();
+    const materials = @import("materials.zig").Materials{ .world = &capability_world };
     try expect(error.NotImplemented, materials.applyEffect(.bloom, 1));
-    const lights = @import("lighting.zig").Lighting{};
-    try expect(error.NotImplemented, lights.setLight(entity, .{ .point = .{} }));
-    try expect(error.NotImplemented, lights.removeLight(entity));
     const particles = @import("particles.zig").Particles{};
     try expect(error.NotImplemented, particles.emit(.{ .position_m = @splat(0) }));
     try expect(error.NotImplemented, particles.stop(@enumFromInt(0)));

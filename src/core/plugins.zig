@@ -75,7 +75,7 @@ const EditorContext = @import("editor_api/editor_api.zig").Context;
 const DrawContext = @import("game_ui/game_ui.zig").DrawContext;
 
 /// The components every project has, before its plugins' own.
-pub const builtin_components = .{ @import("transform.zig").Transform, @import("mesh.zig").Mesh, @import("camera.zig").Camera, @import("scene_instance.zig").SceneInstance };
+pub const builtin_components = .{ @import("transform.zig").Transform, @import("mesh.zig").Mesh, @import("camera.zig").Camera, @import("scene_instance.zig").SceneInstance, @import("material.zig").Material, @import("lighting.zig").SceneLight };
 
 /// Where a project lists its plugins, relative to the project: each one's key, whether it is on,
 /// and the preferences it declares.

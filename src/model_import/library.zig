@@ -34,6 +34,7 @@ export fn eggy_import_model(path: [*:0]const u8, scale: f32, out: *Bytes) bool {
     defer c.aiReleaseImport(scene);
     var model = importScene(scene, std.fs.path.dirname(std.mem.span(path)) orelse ".", scale) catch |err| return fail(switch (err) {
         error.NoMeshes => "it has no meshes",
+        error.InvalidMaterial => "it has invalid material parameters",
         error.OutOfMemory => "out of memory",
     });
     defer model.deinit(gpa);
@@ -133,6 +134,7 @@ fn importScene(scene: *const c.struct_aiScene, dir: []const u8, scale: f32) !ass
     var next_vertex: usize = 0;
     var next_index: usize = 0;
     for (meshes, parts) |mesh, *part| {
+        const material = try materialOf(scene, mesh.*.mMaterialIndex);
         const first: u32 = @intCast(next_vertex);
         const channels = mesh.*.mTextureCoords;
         const uvs: [*c]c.struct_aiVector3D = channels[0];
@@ -140,9 +142,10 @@ fn importScene(scene: *const c.struct_aiScene, dir: []const u8, scale: f32) !ass
             const at = mesh.*.mVertices[i];
             const normal: [3]f32 = if (mesh.*.mNormals) |normals| .{ normals[i].x, normals[i].y, normals[i].z } else .{ 0, 1, 0 };
             const uv: [2]f32 = if (uvs != null) .{ uvs[i].x, uvs[i].y } else .{ 0, 0 };
-            vertices[next_vertex] = .{ .position = .{ at.x * scale, at.y * scale, at.z * scale }, .normal = normal, .uv = uv };
+            vertices[next_vertex] = .{ .position = .{ at.x * scale, at.y * scale, at.z * scale }, .normal = normal, .uv = uv, .color = material.color, .metallic_roughness = material.metallic_roughness, .emissive_color = material.emissive_color };
             next_vertex += 1;
         }
+
         part.* = .{ .first_index = @intCast(next_index), .index_count = 0, .texture = try textures.ofMaterial(mesh.*.mMaterialIndex) };
         for (mesh.*.mFaces[0..mesh.*.mNumFaces]) |face| {
             if (face.mNumIndices != 3) continue;
@@ -156,6 +159,33 @@ fn importScene(scene: *const c.struct_aiScene, dir: []const u8, scale: f32) !ass
     const decoded = try textures.list.toOwnedSlice(gpa);
     textures.by_material.deinit(gpa);
     return .{ .vertices = vertices, .indices = indices, .parts = parts, .textures = decoded };
+}
+
+const Surface = struct {
+    color: [4]f32 = @splat(1),
+    metallic_roughness: [2]f32 = .{ 0, 1 },
+    emissive_color: [3]f32 = @splat(0),
+};
+
+fn materialOf(scene: *const c.struct_aiScene, index: u32) error{InvalidMaterial}!Surface {
+    var surface = Surface{};
+    if (index >= scene.mNumMaterials) return surface;
+    const material = scene.mMaterials[index];
+    var color: c.struct_aiColor4D = undefined;
+    if (c.aiGetMaterialColor(material, "$clr.base", 0, 0, &color) == c.aiReturn_SUCCESS or
+        c.aiGetMaterialColor(material, "$clr.diffuse", 0, 0, &color) == c.aiReturn_SUCCESS)
+    {
+        surface.color = .{ color.r, color.g, color.b, color.a };
+    }
+    if (c.aiGetMaterialColor(material, "$clr.emissive", 0, 0, &color) == c.aiReturn_SUCCESS) surface.emissive_color = .{ color.r, color.g, color.b };
+    var count: c_uint = 1;
+    _ = c.aiGetMaterialFloatArray(material, "$mat.metallicFactor", 0, 0, &surface.metallic_roughness[0], &count);
+    count = 1;
+    _ = c.aiGetMaterialFloatArray(material, "$mat.roughnessFactor", 0, 0, &surface.metallic_roughness[1], &count);
+    for (surface.color) |value| if (!std.math.isFinite(value) or value < 0 or value > 1) return error.InvalidMaterial;
+    for (surface.metallic_roughness) |value| if (!std.math.isFinite(value) or value < 0 or value > 1) return error.InvalidMaterial;
+    for (surface.emissive_color) |value| if (!std.math.isFinite(value) or value < 0) return error.InvalidMaterial;
+    return surface;
 }
 
 /// The textures a model's materials use, each decoded once.

@@ -14,6 +14,7 @@ const ModelCache = @import("model_cache.zig").ModelCache;
 const texture_cache = @import("texture_cache.zig");
 const TextureCache = texture_cache.TextureCache;
 const frames_in_flight = @import("weeoui_vitellus").frames_in_flight;
+const lighting = @import("lighting.zig");
 
 /// The most meshes drawn in one frame; any more are left out.
 pub const max_drawables = 4096;
@@ -25,7 +26,13 @@ const outline_width_px: f32 = 2.5;
 pub const Sources = struct {
     models: *ModelCache,
     textures: *TextureCache,
+    materials: *@import("material_cache.zig").MaterialCache,
+    lights: *const lighting.Frame,
+    stats: *Stats,
 };
+
+/// Scene passes accumulated by the host during this frame, including editor camera views.
+pub const Stats = struct { draw_calls: usize = 0, meshes: usize = 0, triangles: u64 = 0 };
 
 const CameraUniforms = extern struct {
     view_projection: [4][4]f32,
@@ -33,6 +40,9 @@ const CameraUniforms = extern struct {
     options: [4]f32,
     outline: [4]f32,
     outline_size: [4]f32,
+    eye: [4]f32,
+    light_info: [4]f32,
+    lights: [lighting.max_lights]lighting.GpuLight,
 };
 
 pub const MeshRenderer = struct {
@@ -85,7 +95,7 @@ pub const MeshRenderer = struct {
             };
             instances[i] = try vit.Buffer.init(device, .{ .label = "mesh instances", .size = max_drawables * @sizeOf(mesh.Drawable), .usage = .{ .vertex = true }, .memory = .upload });
             errdefer instances[i].deinit();
-            uniforms[i] = try vit.Buffer.init(device, .{ .label = "mesh camera", .size = 256, .usage = .{ .uniform = true }, .memory = .upload });
+            uniforms[i] = try vit.Buffer.init(device, .{ .label = "mesh camera", .size = @sizeOf(CameraUniforms), .usage = .{ .uniform = true }, .memory = .upload });
             errdefer uniforms[i].deinit();
             groups[i] = try vit.BindGroup.init(device, .{ .layout = group_layout, .entries = &.{
                 .{ .binding = 0, .resource = .{ .buffer = .{ .buffer = uniforms[i] } } },
@@ -150,9 +160,13 @@ pub const MeshRenderer = struct {
     /// try renderer.prepare(scene_cmd, drawables, asset_sources);
     /// // Begin the compatible scene render pass before calling renderer.draw.
     /// ```
-    pub fn prepare(self: *MeshRenderer, cmd: vit.CommandBuffer, drawables: []const mesh.Drawable, sources: Sources) !void {
+    pub fn prepare(self: *MeshRenderer, cmd: vit.CommandBuffer, drawables: []mesh.Drawable, sources: Sources) !void {
         _ = self;
-        for (drawables[0..@min(drawables.len, max_drawables)]) |drawable| {
+        for (drawables[0..@min(drawables.len, max_drawables)]) |*drawable| {
+            if (drawable.materialFile()) |path| {
+                if (sources.materials.get(path)) |material| drawable.applyMaterial(material) else drawable.material_failed = true;
+            }
+            if (drawable.material_failed) continue;
             if (drawable.modelFile()) |file| _ = sources.models.get(file, sources.textures);
             if (drawable.textureFile()) |file| _ = sources.textures.get(file);
         }
@@ -171,16 +185,19 @@ pub const MeshRenderer = struct {
     /// // Inside the compatible render pass, after prepare:
     /// try renderer.draw(scene_cmd, drawables, asset_sources, clip_from_world, .{ 1280, 720 }, selected_entity, target_is_srgb);
     /// ```
-    pub fn draw(self: *MeshRenderer, cmd: vit.CommandBuffer, drawables: []mesh.Drawable, sources: Sources, view_projection: [4][4]f32, viewport_px: [2]f32, selected: ?ecs.EntityId, srgb: bool) !void {
+    pub fn draw(self: *MeshRenderer, cmd: vit.CommandBuffer, drawables: []mesh.Drawable, sources: Sources, view_projection: [4][4]f32, viewport_px: [2]f32, eye: [3]f32, selected: ?ecs.EntityId, srgb: bool) !void {
         const sorted = drawables[0..@min(drawables.len, max_drawables)];
         if (sorted.len == 0) return;
+        for (sorted) |drawable| if (!drawable.material_failed) {
+            sources.stats.meshes += 1;
+        };
         self.slot = (self.slot + 1) % frames_in_flight;
 
         // Sort so each shape's, then each model file's, with the same texture are one instanced
         // draw; then upload them and the camera.
         std.mem.sort(mesh.Drawable, sorted, {}, drawnBefore);
         try upload(self.instances[self.slot], std.mem.sliceAsBytes(sorted));
-        const camera = CameraUniforms{ .view_projection = view_projection, .light = .{ 0.4, 1, 0.6, 0 }, .options = .{ if (srgb) 1 else 0, 0, 0, 0 }, .outline = outline_color, .outline_size = .{ viewport_px[0], viewport_px[1], outline_width_px, 0 } };
+        const camera = CameraUniforms{ .view_projection = view_projection, .light = .{ 0.4, 1, 0.6, 0 }, .options = .{ if (srgb) 1 else 0, 0, 0, 0 }, .outline = outline_color, .outline_size = .{ viewport_px[0], viewport_px[1], outline_width_px, 0 }, .eye = .{ eye[0], eye[1], eye[2], 0 }, .light_info = .{ @floatFromInt(sources.lights.count), 0, 0, 0 }, .lights = sources.lights.lights };
         try upload(self.uniforms[self.slot], std.mem.asBytes(&camera));
 
         cmd.setBindGroup(0, self.groups[self.slot], &.{});
@@ -208,6 +225,7 @@ pub const MeshRenderer = struct {
     /// Draw `count` instances from `first` of `drawable`'s shape or model file, each part with
     /// its texture. A model file that can't be drawn draws nothing.
     fn drawRun(self: *MeshRenderer, cmd: vit.CommandBuffer, sources: Sources, drawable: mesh.Drawable, first: u32, count: u32) void {
+        if (drawable.material_failed) return;
         const own = if (drawable.textureFile()) |file| sources.textures.get(file) else null;
         if (drawable.modelFile()) |file| {
             const model = sources.models.get(file, sources.textures) orelse return;
@@ -217,6 +235,8 @@ pub const MeshRenderer = struct {
                 const paint = own orelse part.texture orelse sources.textures.white;
                 cmd.setBindGroup(1, paint.group, &.{});
                 cmd.drawIndexed(part.index_count, count, part.first_index, 0, first);
+                sources.stats.draw_calls += 1;
+                sources.stats.triangles += @as(u64, part.index_count / 3) * count;
             }
             return;
         }
@@ -225,12 +245,15 @@ pub const MeshRenderer = struct {
         cmd.setBindGroup(1, (own orelse sources.textures.white).group, &.{});
         const range = self.ranges[@intFromEnum(drawable.shape)];
         cmd.drawIndexed(range.index_count, count, range.first_index, 0, first);
+        sources.stats.draw_calls += 1;
+        sources.stats.triangles += @as(u64, range.index_count / 3) * count;
     }
 };
 
 /// The order meshes are drawn in: built-in shapes first, by shape, then model files, by path,
 /// and those alike by texture. Two that neither comes before are drawn in one go.
 fn drawnBefore(_: void, a: mesh.Drawable, b: mesh.Drawable) bool {
+    if (a.material_failed != b.material_failed) return !a.material_failed;
     const by_source = sourceOrder(a, b);
     if (by_source != .eq) return by_source == .lt;
     return std.mem.order(u8, a.textureFile() orelse "", b.textureFile() orelse "") == .lt;
@@ -259,23 +282,36 @@ fn makePipeline(device: vit.Device, format: vit.Format, layout: vit.PipelineLayo
     defer vs.deinit();
     const fs = try vit.Shader.init(device, .{ .label = label, .stage = .fragment, .source = shaderSource(fragment, fragment_entry) });
     defer fs.deinit();
+    const vertex_attributes = [_]vit.hal.pipeline.VertexAttribute{
+        .{ .location = 0, .format = .float32x3, .offset = @offsetOf(mesh.Vertex, "position") },
+        .{ .location = 1, .format = .float32x3, .offset = @offsetOf(mesh.Vertex, "normal") },
+        .{ .location = 7, .format = .float32x2, .offset = @offsetOf(mesh.Vertex, "uv") },
+        .{ .location = 11, .format = .float32x4, .offset = @offsetOf(mesh.Vertex, "color") },
+        .{ .location = 12, .format = .float32x2, .offset = @offsetOf(mesh.Vertex, "metallic_roughness") },
+        .{ .location = 13, .format = .float32x3, .offset = @offsetOf(mesh.Vertex, "emissive_color") },
+    };
+    const instance_attributes = [_]vit.hal.pipeline.VertexAttribute{
+        .{ .location = 2, .format = .float32x4, .offset = @offsetOf(mesh.Drawable, "model") },
+        .{ .location = 3, .format = .float32x4, .offset = @offsetOf(mesh.Drawable, "model") + 16 },
+        .{ .location = 4, .format = .float32x4, .offset = @offsetOf(mesh.Drawable, "model") + 32 },
+        .{ .location = 5, .format = .float32x4, .offset = @offsetOf(mesh.Drawable, "model") + 48 },
+        .{ .location = 6, .format = .float32x4, .offset = @offsetOf(mesh.Drawable, "color") },
+        .{ .location = 8, .format = .float32x4, .offset = @offsetOf(mesh.Drawable, "surface_color") },
+        .{ .location = 9, .format = .float32x4, .offset = @offsetOf(mesh.Drawable, "material_params") },
+        .{ .location = 10, .format = .float32x4, .offset = @offsetOf(mesh.Drawable, "emissive_cutoff") },
+    };
+    const instance_count: usize = switch (depth) {
+        .drawn => instance_attributes.len,
+        .mask => 5,
+        .over_all_but_mask => 4,
+    };
     return vit.GraphicsPipeline.init(device, .{
         .label = label,
         .vertex = vs,
         .fragment = fs,
         .vertex_buffers = &.{
-            .{ .stride = @sizeOf(mesh.Vertex), .attributes = &.{
-                .{ .location = 0, .format = .float32x3, .offset = @offsetOf(mesh.Vertex, "position") },
-                .{ .location = 1, .format = .float32x3, .offset = @offsetOf(mesh.Vertex, "normal") },
-                .{ .location = 7, .format = .float32x2, .offset = @offsetOf(mesh.Vertex, "uv") },
-            } },
-            .{ .stride = @sizeOf(mesh.Drawable), .step_mode = .instance, .attributes = &.{
-                .{ .location = 2, .format = .float32x4, .offset = @offsetOf(mesh.Drawable, "model") },
-                .{ .location = 3, .format = .float32x4, .offset = @offsetOf(mesh.Drawable, "model") + 16 },
-                .{ .location = 4, .format = .float32x4, .offset = @offsetOf(mesh.Drawable, "model") + 32 },
-                .{ .location = 5, .format = .float32x4, .offset = @offsetOf(mesh.Drawable, "model") + 48 },
-                .{ .location = 6, .format = .float32x4, .offset = @offsetOf(mesh.Drawable, "color") },
-            } },
+            .{ .stride = @sizeOf(mesh.Vertex), .attributes = vertex_attributes[0..if (depth == .drawn) vertex_attributes.len else 1] },
+            .{ .stride = @sizeOf(mesh.Drawable), .step_mode = .instance, .attributes = instance_attributes[0..instance_count] },
         },
         .color_targets = &.{.{ .format = format, .write_mask = if (depth == .mask) .{ .red = false, .green = false, .blue = false, .alpha = false } else .{} }},
         .depth_stencil = switch (depth) {

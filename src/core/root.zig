@@ -58,7 +58,9 @@ pub const audio = @import("audio.zig");
 pub const animation = @import("animation.zig");
 pub const draw2d = @import("draw2d.zig");
 pub const materials = @import("materials.zig");
+pub const Material = materials.Material;
 pub const lighting = @import("lighting.zig");
+pub const SceneLight = lighting.SceneLight;
 pub const particles = @import("particles.zig");
 pub const network = @import("network.zig");
 pub const navigation = @import("navigation.zig");
@@ -105,5 +107,7 @@ test {
     _ = @import("eggy_assets");
     _ = @import("camera.zig");
     _ = @import("refs.zig");
+    _ = materials;
+    _ = lighting;
     _ = @import("weeoui");
 }

@@ -12,6 +12,7 @@ pub const Kind = enum {
     audio,
     file,
     input_map,
+    material,
 
     /// What a file is, by its name.
     /// This editor classification inspects suffixes only; it never opens the file.
@@ -22,6 +23,7 @@ pub const Kind = enum {
     pub fn ofFile(name: []const u8) Kind {
         if (std.mem.endsWith(u8, name, ".scene.zon")) return .scene;
         if (std.mem.endsWith(u8, name, ".inmap.zon")) return .input_map;
+        if (std.mem.endsWith(u8, name, ".material.zon")) return .material;
         const extension = std.fs.path.extension(name);
         const kinds = [_]struct { []const []const u8, Kind }{
             .{ &.{".zig"}, .code },

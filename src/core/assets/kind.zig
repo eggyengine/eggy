@@ -15,6 +15,8 @@ pub const Kind = enum(u8) {
     folder,
     /// A complete input-map resource.
     input_map,
+    /// A reusable surface material.
+    material,
 
     /// The kind of the file at `path`; `any` for a kind Eggy doesn't know.
     /// Does not inspect the filesystem or infer folders. Ordinary extensions ignore case;
@@ -26,6 +28,7 @@ pub const Kind = enum(u8) {
     pub fn of(path: []const u8) Kind {
         if (std.mem.endsWith(u8, path, ".scene.zon")) return .scene;
         if (std.mem.endsWith(u8, path, ".inmap.zon")) return .input_map;
+        if (std.mem.endsWith(u8, path, ".material.zon")) return .material;
         const extension = std.fs.path.extension(path);
         const kinds = [_]struct { []const []const u8, Kind }{
             .{ &.{".zig"}, .code },
@@ -72,6 +75,7 @@ test "a file's kind comes from its name" {
     try std.testing.expectEqual(Kind.scene, Kind.of("levels/one.scene.zon"));
     try std.testing.expectEqual(Kind.model, Kind.of("ships/Fighter.GLB"));
     try std.testing.expectEqual(Kind.input_map, Kind.of("input/player.inmap.zon"));
+    try std.testing.expectEqual(Kind.material, Kind.of("art/metal.material.zon"));
     try std.testing.expect(Kind.isTexture("art/Wood.PNG"));
     try std.testing.expect(!Kind.isTexture("art/logo.svg"));
 }

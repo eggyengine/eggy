@@ -48,8 +48,6 @@ pub const App = struct {
     audio: @import("audio.zig").Audio = .{},
     animation: @import("animation.zig").Animation = .{},
     draw2d: @import("draw2d.zig").Draw2d = .{},
-    materials: @import("materials.zig").Materials = .{},
-    lighting: @import("lighting.zig").Lighting = .{},
     particles: @import("particles.zig").Particles = .{},
     network: @import("network.zig").Network = .{},
     navigation: @import("navigation.zig").Navigation = .{},
@@ -142,6 +140,16 @@ pub const App = struct {
     }
 
     /// Borrow the current world's scene service; do not retain across reset/reload.
+    /// Borrow material access for the current world; do not retain across reset/reload.
+    pub fn materials(self: *App) @import("materials.zig").Materials {
+        return .{ .world = &self.world };
+    }
+
+    /// Borrow scene-light access for the current world; do not retain across reset/reload.
+    pub fn lighting(self: *App) @import("lighting.zig").Lighting {
+        return .{ .world = &self.world };
+    }
+
     /// Lazily creates the instance registry; the App owns it and any instantiated entities.
     ///
     /// ```zig
@@ -212,6 +220,7 @@ pub const App = struct {
         self.stopWorld();
         self.clearGameUi();
         self.scene_transition.deinit();
+        self.graphics.lights = .{};
         if (self.instances) |*instances| instances.deinit();
         self.instances = null;
         self.scene_access = null;

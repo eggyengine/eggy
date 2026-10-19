@@ -11,6 +11,9 @@ pub const Vertex = extern struct {
     position: [3]f32,
     normal: [3]f32,
     uv: [2]f32 = .{ 0, 0 },
+    color: [4]f32 = @splat(1),
+    metallic_roughness: [2]f32 = .{ 0, 1 },
+    emissive_color: [3]f32 = @splat(0),
 };
 
 /// A run of a model's `indices` drawn with one texture: its own, or none (the `Mesh`'s, or
@@ -60,6 +63,11 @@ pub const Model = struct {
             if (part.texture) |texture| if (texture >= self.textures.len) return false;
         }
         for (self.textures) |texture| if (!texture.isWhole()) return false;
+        for (self.vertices) |vertex| {
+            for (vertex.color) |value| if (!std.math.isFinite(value) or value < 0 or value > 1) return false;
+            for (vertex.metallic_roughness) |value| if (!std.math.isFinite(value) or value < 0 or value > 1) return false;
+            for (vertex.emissive_color) |value| if (!std.math.isFinite(value) or value < 0) return false;
+        }
         return true;
     }
 };
@@ -94,7 +102,7 @@ pub fn read(gpa: std.mem.Allocator, reader: *std.Io.Reader) !Model {
 }
 
 test "a model reads back as written" {
-    var vertices = [_]Vertex{ .{ .position = .{ 0, 0, 0 }, .normal = .{ 0, 1, 0 } }, .{ .position = .{ 1, 0, 0 }, .normal = .{ 0, 1, 0 } }, .{ .position = .{ 0, 0, 1 }, .normal = .{ 0, 1, 0 } } };
+    var vertices = [_]Vertex{ .{ .position = .{ 0, 0, 0 }, .normal = .{ 0, 1, 0 }, .color = .{ 1, 0.5, 0.2, 1 }, .metallic_roughness = .{ 0.8, 0.3 }, .emissive_color = .{ 0.1, 0.2, 0.3 } }, .{ .position = .{ 1, 0, 0 }, .normal = .{ 0, 1, 0 } }, .{ .position = .{ 0, 0, 1 }, .normal = .{ 0, 1, 0 } } };
     var indices = [_]u32{ 0, 2, 1 };
     var bytes: std.Io.Writer.Allocating = .init(std.testing.allocator);
     defer bytes.deinit();
@@ -110,6 +118,9 @@ test "a model reads back as written" {
     try std.testing.expectEqual(@as(?u32, 0), model.parts[0].texture);
     try std.testing.expectEqualSlices(u8, &pixels, model.textures[0].pixels);
     try std.testing.expectEqual(@as(f32, 1), model.vertices[1].position[0]);
+    try std.testing.expectEqualSlices(f32, &vertices[0].color, &model.vertices[0].color);
+    try std.testing.expectEqualSlices(f32, &vertices[0].metallic_roughness, &model.vertices[0].metallic_roughness);
+    try std.testing.expectEqualSlices(f32, &vertices[0].emissive_color, &model.vertices[0].emissive_color);
 }
 
 test "a model pointing past its vertices is refused" {

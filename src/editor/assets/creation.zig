@@ -32,6 +32,12 @@ const builtins = [_]Entry{
         .extension = ".inmap.zon",
         .contents = ".{\n    .version = 1,\n    .controls = .{},\n}\n",
     } },
+    .{ .file = .{
+        .key = "eggy/material",
+        .title = "Material",
+        .extension = ".material.zon",
+        .contents = ".{\n    .color = .{ 1, 1, 1, 1 },\n    .metallic = 0,\n    .roughness = 1,\n    .texture = \"\",\n    .emissive_color = .{ 0, 0, 0 },\n    .unlit = false,\n    .alpha_cutoff = 0.01,\n}\n",
+    } },
     .folder,
 };
 

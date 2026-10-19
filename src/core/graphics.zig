@@ -10,6 +10,7 @@ const weeoui_vitellus = @import("weeoui_vitellus");
 const ModelCache = @import("model_cache.zig").ModelCache;
 const TextureCache = @import("texture_cache.zig").TextureCache;
 const Sources = @import("mesh_renderer.zig").Sources;
+const MaterialCache = @import("material_cache.zig").MaterialCache;
 
 /// The GPU device, the main window's `Surface`, and the 3D scene that draws into it.
 pub const Graphics = struct {
@@ -28,6 +29,9 @@ pub const Graphics = struct {
     models: ModelCache,
     /// The images meshes are painted with, likewise; set its `loader`.
     textures: TextureCache,
+    materials: MaterialCache,
+    lights: @import("lighting.zig").Frame = .{},
+    stats: @import("mesh_renderer.zig").Stats = .{},
 
     /// Graphics for `window`, on the platform's backends in Vitellus's order: on Windows
     /// DirectX 12, then Vulkan; on macOS Metal (not there yet), then Vulkan through MoltenVK; on
@@ -90,6 +94,7 @@ pub const Graphics = struct {
             .preview = preview,
             .models = .init(allocator, device),
             .textures = textures,
+            .materials = .{ .gpa = allocator },
         };
     }
 
@@ -101,7 +106,7 @@ pub const Graphics = struct {
     /// const asset_sources = graphics.sources();
     /// ```
     pub fn sources(self: *Graphics) Sources {
-        return .{ .models = &self.models, .textures = &self.textures };
+        return .{ .models = &self.models, .textures = &self.textures, .materials = &self.materials, .lights = &self.lights, .stats = &self.stats };
     }
 
     /// Forget every model file and image, so each loads again when next drawn: their files may
@@ -115,6 +120,7 @@ pub const Graphics = struct {
     pub fn forgetAssets(self: *Graphics) void {
         self.queue.waitIdle() catch {};
         self.models.forgetAll(&self.textures);
+        self.materials.forgetAll();
         self.textures.forgetAll();
     }
 
@@ -163,6 +169,7 @@ pub const Graphics = struct {
     pub fn deinit(self: *Graphics) void {
         self.queue.waitIdle() catch {};
         self.models.deinit(&self.textures);
+        self.materials.deinit();
         self.preview.deinit();
         self.textures.deinit();
         if (self.surface_active) self.surface.deinit();

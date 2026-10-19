@@ -9,6 +9,7 @@ const transform_zig = @import("transform.zig");
 const Transform = transform_zig.Transform;
 const AssetRef = @import("refs.zig").AssetRef;
 const assets = @import("eggy_assets");
+const Material = @import("material.zig").Material;
 
 /// The shapes there are, each about a metre across, centred on the entity.
 pub const Shape = enum(u32) { cube, sphere, plane, cylinder, cone };
@@ -64,6 +65,14 @@ pub const Drawable = extern struct {
     /// world's `Mesh` as `model_file` does.
     texture_file_len: u32 = 0,
     texture_file: ?[*]const u8 = null,
+    surface_color: [4]f32 = @splat(1),
+    /// Metallic, roughness, unlit, and whether this overrides imported material factors.
+    material_params: [4]f32 = .{ 0, 1, 0, 0 },
+    /// Emissive RGB and alpha-cutout threshold.
+    emissive_cutoff: [4]f32 = .{ 0, 0, 0, 0.01 },
+    material_file: ?[*]const u8 = null,
+    material_file_len: u32 = 0,
+    material_failed: bool = false,
 
     /// Reconstruct the source entity ID by value, without checking that it is still alive.
     /// Resolve it only against the world from which this drawable was gathered.
@@ -95,6 +104,22 @@ pub const Drawable = extern struct {
     pub fn textureFile(self: Drawable) ?[]const u8 {
         const file = self.texture_file orelse return null;
         return file[0..self.texture_file_len];
+    }
+
+    pub fn materialFile(self: Drawable) ?[]const u8 {
+        const file = self.material_file orelse return null;
+        return file[0..self.material_file_len];
+    }
+
+    /// Copy inline GPU factors, borrowing only the material's optional texture path.
+    pub fn applyMaterial(self: *Drawable, material: *const Material) void {
+        self.surface_color = material.color;
+        self.material_params = .{ material.metallic, material.roughness, if (material.unlit) 1 else 0, 1 };
+        self.emissive_cutoff = .{ material.emissive_color[0], material.emissive_color[1], material.emissive_color[2], material.alpha_cutoff };
+        if (material.texture.len != 0) {
+            self.texture_file = &material.texture.buffer;
+            self.texture_file_len = material.texture.len;
+        }
     }
 };
 
@@ -152,6 +177,16 @@ fn drawable(world: *ecs.World, entity: ecs.EntityId, mesh: *const Mesh) ?Drawabl
     if (mesh.texture.len > 0) {
         result.texture_file = &mesh.texture.buffer;
         result.texture_file_len = mesh.texture.len;
+    }
+    if (world.get(entity, Material)) |material| {
+        material.validate() catch {
+            std.log.err("entity {d} has invalid material parameters; it is not drawn", .{entity.id});
+            result.material_failed = true;
+        };
+        if (material.file.len != 0) {
+            result.material_file = &material.file.buffer;
+            result.material_file_len = material.file.len;
+        } else result.applyMaterial(material);
     }
     const model = transform_zig.worldMatrix(world, entity);
     for (&result.model, model.data) |*column, data| column.* = data;

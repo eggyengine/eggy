@@ -520,6 +520,15 @@ pub const HotGame = struct {
         return out[0..self.game.gather_meshes(&app.world, out.ptr, out.len)];
     }
 
+    /// Refresh lights through the library; keep the last valid frame on a logged failure.
+    pub fn gatherLights(self: *const HotGame, app: *eggy.App, out: *eggy.lighting.Frame) void {
+        if (self.library == null) {
+            out.* = .{};
+            return;
+        }
+        _ = self.game.gather_lights(&app.world, out);
+    }
+
     /// `entity`'s transform within `app`'s world, as columns; null if it isn't alive (or there
     /// is no library).
     /// Editor host only: composes ancestor transforms in scene units, returning a value copy;

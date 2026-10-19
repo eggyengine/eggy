@@ -21,7 +21,7 @@ no output devices, threads, sessions, files, fake handles, or successful empty r
 | `audio` | play, pause/unpause, stop, voice/bus gain, listener placement |
 | `animation` | play, blend, pause, stop, seek a named model clip |
 | `draw2d` | sprites and world-space text |
-| `materials`, `lighting` | material assignment, light descriptions, render effects |
+| `materials.applyEffect` | postprocessing effects |
 | `particles` | emission and stopping |
 | `network` | connection, listening, messages, polling, disconnection |
 | `navigation` | paths and destinations; no physics or collision access |
@@ -48,6 +48,7 @@ stages synchronous scene replacement for the end of the gameplay update.
 | Controllers, rumble, and touch contacts | SDL3; hardware-dependent | SDL3/browser-dependent |
 | [Game-save slots](../how-to/save-games.md) | Atomic versioned saves in project-specific user data | Persistent browser localStorage; quota/availability errors are explicit |
 | Synchronous project/packaged resource and scene providers | Implemented | Packaged assets preloaded at startup |
+| Materials and directional/point scene lights | Implemented; Inspector components and reusable material assets | Shared renderer, up to sixteen lights |
 | Weeoui game UI and custom draw hooks | Implemented | Shared runtime API; no editor import |
 | Editor context, panels, commands, actions | Desktop only | Not run or linked |
 | Missing-backend contracts listed above | `NotImplemented` | `NotImplemented` |
@@ -69,6 +70,7 @@ APK export currently targets Android 15+ devices with Vulkan 1.3.
 | `editorPanelUi(self, panel, ui)` | `editorPanelUi(self, panel, editor, ui) !void` |
 | Custom cache loader returning `?Model`/`?Texture` | Return an error union; author resource access uses the C-safe bridge |
 | Manually feeding `Input.handle(event)` | `try Input.handle(event)`; device/host failures are explicit |
+| `app.materials.assign(...)`, `app.lighting.setLight(...)` | `app.materials().assign(...)`, `app.lighting().setLight(...)`; borrowed current-world services |
 
 Rebuild the editor and game library together after updating the engine. Their ABI is
 checked, not mixed across revisions. Native World/query APIs, transforms, simple polling,

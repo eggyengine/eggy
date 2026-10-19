@@ -424,6 +424,7 @@ pub fn Editor(comptime project: type) type {
         /// if (result != .run) return result;
         /// ```
         pub fn iterate(self: *Self) !sdl3.AppResult {
+            self.app.graphics.materials.resources = self.app.resources();
             // While a new project is created, only its loading screen shows. Hidden windows aren't
             // drawn to: presenting to one can block until it is shown again.
             if (self.project_flow) |flow| if (flow.isWorking()) {
@@ -1472,6 +1473,7 @@ pub fn Editor(comptime project: type) type {
                 try self.scene.render(&self.app.graphics, frame.cmd, pixelSize(rect), meshes, self.scene_view.view, self.entity_editor.selected, !self.scene_view.throughGameCamera());
                 if (self.build_window == null and self.play_mode.playing() and !self.workspace.simulating) if (self.game) |*game| {
                     if (game.hasDraw() or game.hasGameUi()) {
+                if (self.game) |*game| game.gatherLights(&self.app, &self.app.graphics.lights);
                         const logical = self.workspace.placed.scene.?.rect;
                         const draw_context = eggy.DrawContext{
                             .cmd = frame.cmd,
