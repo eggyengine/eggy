@@ -17,7 +17,7 @@ const TextureCache = texture_cache.TextureCache;
 const frames_in_flight = @import("weeoui_vitellus").frames_in_flight;
 const lighting = @import("lighting.zig");
 
-/// The most meshes drawn in one frame; any more are left out.
+/// The most visible meshes in one pass; overflow is an explicit rendering error.
 pub const max_drawables = 4096;
 /// The selection outline: its colour, and how wide it is in pixels.
 const outline_color = [4]f32{ 1, 0.62, 0.15, 1 };
@@ -34,7 +34,7 @@ pub const Sources = struct {
 };
 
 /// Scene passes accumulated by the host during this frame, including editor camera views.
-pub const Stats = struct { draw_calls: usize = 0, meshes: usize = 0, triangles: u64 = 0 };
+pub const Stats = struct { draw_calls: usize = 0, meshes: usize = 0, triangles: u64 = 0, culled: usize = 0 };
 
 const CameraUniforms = @import("scene_uniforms.zig").Camera;
 
@@ -166,8 +166,8 @@ pub const MeshRenderer = struct {
 
     /// Load the model files and textures `drawables` need from `sources`, and ready new
     /// textures for sampling. Call outside a render pass, before `draw`.
-    /// Host-only: considers at most `max_drawables`, borrowing valid component-backed
-    /// paths. Uploads finish synchronously; failed assets are logged and cached.
+    /// Host-only: prepares every input before visibility filtering, borrowing valid
+    /// component-backed paths. Uploads finish synchronously; failed assets are logged and cached.
     ///
     /// ```zig
     /// try renderer.prepare(scene_cmd, drawables, asset_sources);
@@ -176,7 +176,7 @@ pub const MeshRenderer = struct {
     pub fn prepare(self: *MeshRenderer, cmd: vit.CommandBuffer, drawables: []mesh.Drawable, sources: Sources) !void {
         _ = self;
         _ = cmd;
-        for (drawables[0..@min(drawables.len, max_drawables)]) |*drawable| {
+        for (drawables) |*drawable| {
             if (drawable.materialFile()) |path| {
                 if (sources.materials.get(path)) |material| drawable.applyMaterial(material) else drawable.material_failed = true;
             }
@@ -186,7 +186,8 @@ pub const MeshRenderer = struct {
         }
     }
 
-    /// Draw `drawables` (at most `max_drawables`; they are sorted in place) in the render pass in
+    /// Draw up to `max_drawables` visible meshes, partitioning and sorting in place without
+    /// losing other entities; visible overflow is an error. Draw inside the render pass in
     /// progress, whose viewport is `viewport_px`, through `view_projection` (a `camera.View`'s),
     /// outlining `selected`'s, with model files and textures from `sources` (`prepare`d for
     /// them). `srgb`: whether the target encodes sRGB itself.
@@ -199,7 +200,9 @@ pub const MeshRenderer = struct {
     /// try renderer.draw(scene_cmd, drawables, asset_sources, clip_from_world, .{ 1280, 720 }, selected_entity, target_is_srgb);
     /// ```
     pub fn draw(self: *MeshRenderer, cmd: vit.CommandBuffer, drawables: []mesh.Drawable, sources: Sources, view_projection: [4][4]f32, viewport_px: [2]f32, eye: [3]f32, selected: ?ecs.EntityId, srgb: bool) !void {
-        const sorted = drawables[0..@min(drawables.len, max_drawables)];
+        const sorted = visibleFirst(drawables, sources, view_projection);
+        sources.stats.culled += drawables.len - sorted.len;
+        if (sorted.len > max_drawables) return error.TooManyVisibleMeshes;
         if (sorted.len == 0) return;
         for (sorted) |drawable| if (!drawable.material_failed) {
             sources.stats.meshes += 1;
@@ -239,7 +242,7 @@ pub const MeshRenderer = struct {
     pub fn renderShadow(self: *MeshRenderer, cmd: vit.CommandBuffer, drawables: []mesh.Drawable, sources: Sources, view: @import("camera.zig").View, aspect: f32, settings: @import("render_settings.zig").Settings) !void {
         const enabled = self.shadow.fit(view, aspect, sources.lights, settings);
         if (!enabled and self.shadow.initialized) return;
-        const casters = if (enabled) drawables else drawables[0..0];
+        const casters = if (enabled) visibleFirst(drawables, sources, self.shadow.matrix) else drawables[0..0];
         if (casters.len > max_drawables) return error.TooManyShadowMeshes;
         self.shadow.slot = (self.shadow.slot + 1) % frames_in_flight;
         const slot = self.shadow.slot;
@@ -295,6 +298,52 @@ pub const MeshRenderer = struct {
     }
 };
 
+/// Partition by swapping rather than compacting: another viewport still needs every entity.
+fn visibleFirst(drawables: []mesh.Drawable, sources: Sources, matrix: [4][4]f32) []mesh.Drawable {
+    var end = drawables.len;
+    var index: usize = 0;
+    while (index < end) {
+        const drawable = drawables[index];
+        const bounds = if (drawable.modelFile()) |path| block: {
+            const cached = sources.models.get(path, sources.textures) orelse {
+                end -= 1;
+                std.mem.swap(mesh.Drawable, &drawables[index], &drawables[end]);
+                continue;
+            };
+            break :block @import("bounds.zig").Bounds{ .min = cached.bounds.min, .max = cached.bounds.max };
+        } else @import("bounds.zig").Bounds.unit;
+        if (!drawable.material_failed and bounds.visible(@import("bounds.zig").compose(matrix, drawable.model))) {
+            index += 1;
+        } else {
+            end -= 1;
+            std.mem.swap(mesh.Drawable, &drawables[index], &drawables[end]);
+        }
+    }
+    return drawables[0..end];
+}
+
+test "visibility partition retains every entity for a second viewport" {
+    const identity: [4][4]f32 = .{ .{ 1, 0, 0, 0 }, .{ 0, 1, 0, 0 }, .{ 0, 0, 1, 0 }, .{ 0, 0, 0, 1 } };
+    var drawables = [_]mesh.Drawable{
+        .{ .model = identity, .color = @splat(1), .shape = .cube, .entity_id = 0, .entity_generation = 0 },
+        .{ .model = identity, .color = @splat(1), .shape = .plane, .entity_id = 1, .entity_generation = 0 },
+        .{ .model = identity, .color = @splat(1), .shape = .sphere, .entity_id = 2, .entity_generation = 0 },
+    };
+    drawables[0].model[3][0] = 100;
+    const sources = Sources{ .models = undefined, .textures = undefined, .materials = undefined, .lights = undefined, .stats = undefined };
+    try std.testing.expectEqual(@as(usize, 2), visibleFirst(&drawables, sources, identity).len);
+    var other_view = identity;
+    other_view[3][0] = -100;
+    const other = visibleFirst(&drawables, sources, other_view);
+    try std.testing.expectEqual(@as(usize, 1), other.len);
+    try std.testing.expectEqual(@as(u32, 0), other[0].entity_id);
+    var ids: u8 = 0;
+    for (drawables) |drawable| ids |= @as(u8, 1) << @intCast(drawable.entity_id);
+    try std.testing.expectEqual(@as(u8, 7), ids);
+}
+
+/// The order meshes are drawn in: built-in shapes first, by shape, then model files, by path,
+/// and those alike by texture. Two that neither comes before are drawn in one go.
 fn drawnBefore(_: void, a: mesh.Drawable, b: mesh.Drawable) bool {
     if (a.material_failed != b.material_failed) return !a.material_failed;
     const by_source = sourceOrder(a, b);

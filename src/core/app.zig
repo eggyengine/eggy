@@ -367,6 +367,7 @@ pub const App = struct {
         try self.profiling.counter("Entities", @floatFromInt(entities));
         try self.profiling.counter("Scene draw calls", @floatFromInt(self.graphics.stats.draw_calls));
         try self.profiling.counter("Meshes across views", @floatFromInt(self.graphics.stats.meshes));
+        try self.profiling.counter("Culled meshes across views", @floatFromInt(self.graphics.stats.culled));
         try self.profiling.counter("Triangles across views", @floatFromInt(self.graphics.stats.triangles));
         try self.profiling.counter("Cached textures", @floatFromInt(self.graphics.textures.entries.count()));
         try self.profiling.counter("Scene lights", @floatFromInt(self.graphics.lights.count));

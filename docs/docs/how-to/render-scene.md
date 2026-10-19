@@ -101,6 +101,12 @@ without a fixed buffer limit. Free the slice with `gpa.free`; model and texture 
 still borrow the world's Mesh components. The non-allocating `gather(world, buffer)`
 continues to return only as many drawables as fit.
 
+Meshes outside each camera's frustum are culled using transformed bounds. Each view
+retains the complete entity list for other cameras. The renderer accepts up to 4096
+**visible** meshes per color or shadow pass; exceeding a pass's limit reports an error
+instead of silently dropping the end of the scene. Profiling counters include culled
+meshes across views.
+
 ## Check the game camera {#cameras-and-custom-drawing}
 
 The game looks through an active Camera entity, placed by its world transform.
@@ -132,13 +138,11 @@ does not need to manage these objects.
 
 ## Related rendering contracts
 
-Materials and directional/point scene lights have [working components and reusable
-assets](materials-and-lighting.md). [Debug lines, boxes and labels](debug-and-profile.md)
-are available as frame-owned overlays. Postprocessing, world text/sprites, particles,
-and skeletal animation have
-[missing-backend contracts](../reference/feature-support.md#capability-support).
-Mesh color and texture rendering is implemented. The missing-backend contracts do not
-add shaders or modify physics.
+Materials, directional/point/spot lights and directional shadows have
+[working components and reusable assets](materials-and-lighting.md).
+[World sprites and text](world-drawing.md) share the scene camera and depth buffer.
+[Debug lines, boxes and labels](debug-and-profile.md) are frame-owned overlays.
+See [feature support](../reference/feature-support.md) for the remaining backend contracts.
 
 See [ownership and reload](../explanation/ownership-and-reload.md) for borrowed world
 storage and [game UI](../how-to/game-ui.md) for drawing over the scene.

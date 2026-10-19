@@ -97,6 +97,19 @@ fn checker(_: *anyopaque, gpa: std.mem.Allocator, _: []const u8) !assets.Texture
     return .{ .width = width, .height = height, .pixels = pixels };
 }
 
+fn triangle(_: *anyopaque, gpa: std.mem.Allocator, _: []const u8) !assets.Model {
+    const vertices = try gpa.dupe(assets.model.Vertex, &.{
+        .{ .position = .{ -1, -1, 0 }, .normal = .{ 0, 0, 1 }, .uv = .{ 0, 1 } },
+        .{ .position = .{ 1, -1, 0 }, .normal = .{ 0, 0, 1 }, .uv = .{ 1, 1 } },
+        .{ .position = .{ 0, 1, 0 }, .normal = .{ 0, 0, 1 }, .uv = .{ 0.5, 0 } },
+    });
+    errdefer gpa.free(vertices);
+    const indices = try gpa.dupe(u32, &.{ 0, 1, 2 });
+    errdefer gpa.free(indices);
+    const parts = try gpa.dupe(assets.model.Part, &.{.{ .first_index = 0, .index_count = 3 }});
+    return .{ .vertices = vertices, .indices = indices, .parts = parts, .textures = &.{} };
+}
+
 test "GPU texture transfers preserve padded rows in every mip level" {
     if (comptime builtin.os.tag == .emscripten) return error.SkipZigTest;
     if ((try sdl.getEnvironment()).getVariable("EGGY_GPU_TEST") == null) return error.SkipZigTest;
@@ -190,6 +203,30 @@ test "GPU directional shadows darken receivers and world sprites and text reach 
     defer gpa.free(spot_lit);
     try std.testing.expect(rgbSum(spot_lit) > rgbSum(ambient));
     try std.testing.expect(rgbSum(point_lit) > rgbSum(spot_lit));
+    const many = try gpa.alloc(mesh.Drawable, @import("mesh_renderer.zig").max_drawables + 1);
+    defer gpa.free(many);
+    for (many) |*drawable| {
+        drawable.* = drawables[0];
+        drawable.model[3][0] = 1000;
+    }
+    many[many.len - 1] = drawables[0];
+    const culled = try scenePixels(gpa, &graphics, &scene, many, view);
+    defer gpa.free(culled);
+    graphics.models.loader = .{ .context = &context, .load = triangle };
+    for (many) |*drawable| drawable.model[3][0] = 1000;
+    const empty_scene = try scenePixels(gpa, &graphics, &scene, many, view);
+    defer gpa.free(empty_scene);
+    many[many.len - 1] = drawables[0];
+    many[many.len - 1].model_file = "late.glb";
+    many[many.len - 1].model_file_len = "late.glb".len;
+    const late_model = try scenePixels(gpa, &graphics, &scene, many, view);
+    defer gpa.free(late_model);
+    try std.testing.expect(!std.mem.eql(u8, culled, late_model));
+    try std.testing.expect(!std.mem.eql(u8, empty_scene, late_model));
+    for (many) |*drawable| drawable.* = drawables[0];
+    const overflow_frame = try graphics.beginFrame();
+    try std.testing.expectError(error.TooManyVisibleMeshes, scene.render(&graphics, overflow_frame.cmd, .{ .width = 128, .height = 128 }, many, view, null, false));
+    try graphics.endFrame(overflow_frame);
 }
 
 fn rgbSum(pixels: []const u8) u64 {

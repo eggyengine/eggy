@@ -24,7 +24,6 @@ pub fn Runtime(comptime project: type) type {
         app: eggy.App,
         plugins: Plugins,
         /// The meshes drawn each frame, gathered from the world.
-        drawables: []eggy.mesh.Drawable,
         /// "No camera available", made the first time the scene has no camera to look through.
         notice: ?eggy.Notice = null,
         /// What packaging put beside or inside the game (null when data cannot be read), and the
@@ -47,7 +46,7 @@ pub fn Runtime(comptime project: type) type {
         }
 
         /// Host startup: open the App, install packaged providers/preferences, start enabled
-        /// plugins and world schedules, then allocate draw storage. `args` is currently ignored.
+        /// plugins and world schedules. `args` is currently ignored.
         /// `process_init` must outlive the result; pair success with `deinit` on the main thread.
         /// Core setup failures propagate; unavailable packaged data/scenes are logged and skipped.
         ///
@@ -104,10 +103,8 @@ pub fn Runtime(comptime project: type) type {
                 plugins.deinit();
             }
             try app.startWorld();
-            const drawables = try gpa.alloc(eggy.mesh.Drawable, eggy.max_drawables);
             return .{
                 .gpa = gpa,
-                .drawables = drawables,
                 .plugins = plugins,
                 .app = app,
                 .data = data,
@@ -126,8 +123,8 @@ pub fn Runtime(comptime project: type) type {
             if (made.skipped > 0) std.log.warn("{s}: {d} components or fields left out (see above)", .{ path, made.skipped });
         }
 
-        /// Host shutdown: release notice rendering, plugins, App, packaged providers and draw
-        /// storage, in that order. Call exactly once on a fully initialized state, on the main
+        /// Host shutdown: cancel resource jobs, release notice rendering, plugins, App and
+        /// packaged providers, in that order. Call exactly once on a fully initialized state, on the main
         /// thread; invalidates all pointers borrowed from it. World teardown failures are logged.
         ///
         /// ```zig
@@ -144,7 +141,6 @@ pub fn Runtime(comptime project: type) type {
             self.plugins.deinit();
             self.app.deinit();
             if (self.data) |packaged| packaged.close();
-            self.gpa.free(self.drawables);
         }
 
         /// Run one host frame: synchronize scenes, tick time/input, update plugins/world and
@@ -174,8 +170,9 @@ pub fn Runtime(comptime project: type) type {
             const frame = try self.app.graphics.beginFrame();
             // Through the game's camera; without one, there is nothing to see it from.
             if (eggy.camera.find(&self.app.world)) |view| {
-                const drawn = eggy.mesh.gather(&self.app.world, self.drawables);
-                try self.app.graphics.drawScene(frame, self.drawables[0..drawn], view);
+                const drawn = try eggy.mesh.gatherAlloc(self.gpa, &self.app.world);
+                defer self.gpa.free(drawn);
+                try self.app.graphics.drawScene(frame, drawn, view);
             } else if (!self.plugins.hasGameUi() and !self.plugins.hasDraw()) {
                 if (self.notice == null) self.notice = try eggy.Notice.init(self.gpa, &self.app.graphics);
                 try self.notice.?.draw(frame, "No camera available");
