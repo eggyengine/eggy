@@ -32,6 +32,8 @@ pub const Graphics = struct {
     /// The images meshes are painted with, likewise; set its `loader`.
     textures: TextureCache,
     materials: MaterialCache,
+    /// The authored animation clips entities play, shared by every scene drawn; set its `resources`.
+    clips: @import("clip_cache.zig").ClipCache,
     lights: @import("lighting.zig").Frame = .{},
     stats: @import("mesh_renderer.zig").Stats = .{},
     world_draw: ?*const @import("draw2d.zig").Draw2d = null,
@@ -144,6 +146,7 @@ pub const Graphics = struct {
             .models = .init(allocator, device),
             .textures = textures,
             .materials = .{ .gpa = allocator },
+            .clips = .{ .gpa = allocator },
             .render_settings = settings,
             .cached_caps = caps,
         };
@@ -195,7 +198,7 @@ pub const Graphics = struct {
     /// const asset_sources = graphics.sources();
     /// ```
     pub fn sources(self: *Graphics) Sources {
-        return .{ .models = &self.models, .textures = &self.textures, .materials = &self.materials, .lights = &self.lights, .stats = &self.stats, .world_draw = self.world_draw };
+        return .{ .models = &self.models, .textures = &self.textures, .materials = &self.materials, .clips = &self.clips, .lights = &self.lights, .stats = &self.stats, .world_draw = self.world_draw };
     }
 
     /// Forget every model file and image, so each loads again when next drawn: their files may
@@ -210,6 +213,7 @@ pub const Graphics = struct {
         self.queue.waitIdle() catch {};
         self.models.forgetAll(&self.textures);
         self.materials.forgetAll();
+        self.clips.forgetAll();
         self.textures.forgetAll();
     }
 
@@ -259,6 +263,7 @@ pub const Graphics = struct {
         self.queue.waitIdle() catch {};
         self.models.deinit(&self.textures);
         self.materials.deinit();
+        self.clips.deinit();
         self.preview.deinit();
         self.textures.deinit();
         if (self.surface_active) self.surface.deinit();

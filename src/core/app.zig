@@ -342,6 +342,8 @@ pub const App = struct {
         try self.world.insertResource(self.input);
         try self.world.insertResource(self.time);
         inline for (.{ .PreUpdate, .Update, .PostUpdate }) |stage| try self.world.runStage(stage);
+        // Clips play after the game's systems, by the game's (scaled, pause-held) time.
+        @import("animation.zig").step(&self.world, &self.graphics.clips, self.time.delta_s);
         self.world.tick();
         if (self.scene_transition.pending != null) if (self.scene_access) |access| {
             if (try self.scene_transition.apply(&self.world, access, self.sceneInstances())) self.input.cancel();

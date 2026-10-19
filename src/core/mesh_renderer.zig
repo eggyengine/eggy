@@ -16,6 +16,7 @@ const texture_cache = @import("texture_cache.zig");
 const TextureCache = texture_cache.TextureCache;
 const frames_in_flight = @import("weeoui_vitellus").frames_in_flight;
 const lighting = @import("lighting.zig");
+const Deformation = @import("deformation.zig").Deformation;
 
 /// The most visible meshes in one pass; overflow is an explicit rendering error.
 pub const max_drawables = 4096;
@@ -28,6 +29,8 @@ pub const Sources = struct {
     models: *ModelCache,
     textures: *TextureCache,
     materials: *@import("material_cache.zig").MaterialCache,
+    /// The authored clips entities play; null (no authored clip plays) until the host sets it.
+    clips: ?*@import("clip_cache.zig").ClipCache = null,
     lights: *const lighting.Frame,
     stats: *Stats,
     world_draw: ?*const @import("draw2d.zig").Draw2d = null,
@@ -55,6 +58,8 @@ pub const MeshRenderer = struct {
     shadow: @import("shadows.zig").Map,
     shadow_pipeline_layout: vit.PipelineLayout,
     shadow_pipeline: vit.GraphicsPipeline,
+    /// The posed corners of animated models, one buffer each per entity.
+    deformation: Deformation,
 
     /// Build the shapes and a pipeline drawing into `format`, with a `.d32_float` depth buffer,
     /// painting with textures bound as `texture_layout` describes (`TextureCache.layout`).
@@ -136,6 +141,7 @@ pub const MeshRenderer = struct {
             .shadow = shadow,
             .shadow_pipeline_layout = shadow_pipeline_layout,
             .shadow_pipeline = shadow_pipeline,
+            .deformation = Deformation.init(std.heap.c_allocator, device),
         };
     }
 
@@ -147,6 +153,7 @@ pub const MeshRenderer = struct {
     /// renderer.deinit();
     /// ```
     pub fn deinit(self: *MeshRenderer) void {
+        self.deformation.deinit();
         self.shadow_pipeline.deinit();
         self.shadow_pipeline_layout.deinit();
         self.mask_pipeline.deinit();
@@ -174,7 +181,6 @@ pub const MeshRenderer = struct {
     /// // Begin the compatible scene render pass before calling renderer.draw.
     /// ```
     pub fn prepare(self: *MeshRenderer, cmd: vit.CommandBuffer, drawables: []mesh.Drawable, sources: Sources) !void {
-        _ = self;
         _ = cmd;
         for (drawables) |*drawable| {
             if (drawable.materialFile()) |path| {
@@ -184,6 +190,8 @@ pub const MeshRenderer = struct {
             if (drawable.modelFile()) |file| _ = sources.models.get(file, sources.textures);
             if (drawable.textureFile()) |file| _ = sources.textures.get(file);
         }
+        // Animated models are posed once here, for the shadow, colour and selection passes alike.
+        self.deformation.prepare(drawables, sources.models, sources.textures, sources.clips);
     }
 
     /// Draw up to `max_drawables` visible meshes, partitioning and sorting in place without
@@ -277,7 +285,7 @@ pub const MeshRenderer = struct {
         const own = if (drawable.textureFile()) |file| sources.textures.get(file) else null;
         if (drawable.modelFile()) |file| {
             const model = sources.models.get(file, sources.textures) orelse return;
-            cmd.setVertexBuffer(0, model.vertices, 0);
+            cmd.setVertexBuffer(0, self.deformation.vertices(drawable) orelse model.vertices, 0);
             cmd.setIndexBuffer(model.indices, .uint32, 0);
             for (model.parts) |part| {
                 const paint = own orelse part.texture orelse sources.textures.white;
@@ -310,6 +318,8 @@ fn visibleFirst(drawables: []mesh.Drawable, sources: Sources, matrix: [4][4]f32)
                 std.mem.swap(mesh.Drawable, &drawables[index], &drawables[end]);
                 continue;
             };
+            // A posed model is measured as posed; others by the box holding every pose they reach.
+            if (drawable.deformed != 0) break :block @import("bounds.zig").Bounds{ .min = drawable.bounds_min, .max = drawable.bounds_max };
             break :block @import("bounds.zig").Bounds{ .min = cached.bounds.min, .max = cached.bounds.max };
         } else @import("bounds.zig").Bounds.unit;
         if (!drawable.material_failed and bounds.visible(@import("bounds.zig").compose(matrix, drawable.model))) {
@@ -348,7 +358,14 @@ fn drawnBefore(_: void, a: mesh.Drawable, b: mesh.Drawable) bool {
     if (a.material_failed != b.material_failed) return !a.material_failed;
     const by_source = sourceOrder(a, b);
     if (by_source != .eq) return by_source == .lt;
-    return std.mem.order(u8, a.textureFile() orelse "", b.textureFile() orelse "") == .lt;
+    const by_texture = std.mem.order(u8, a.textureFile() orelse "", b.textureFile() orelse "");
+    if (by_texture != .eq) return by_texture == .lt;
+    // A posed model has its own vertices, so each is a run of its own.
+    return posedKey(a) < posedKey(b);
+}
+
+fn posedKey(drawable: mesh.Drawable) u64 {
+    return if (drawable.deformed == 0) 0 else (@as(u64, drawable.entity_generation) << 32 | drawable.entity_id) + 1;
 }
 
 fn sourceOrder(a: mesh.Drawable, b: mesh.Drawable) std.math.Order {

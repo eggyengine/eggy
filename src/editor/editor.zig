@@ -436,6 +436,7 @@ pub fn Editor(comptime project: type) type {
             try self.app.applyGraphicsSettings();
             self.app.beginDiagnosticsFrame();
             self.app.graphics.materials.resources = self.app.resources();
+            self.app.graphics.clips.resources = self.app.resources();
             const result = try self.iterateFrame();
             try self.app.finishDiagnosticsFrame();
             return result;

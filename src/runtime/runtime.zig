@@ -84,6 +84,7 @@ pub fn Runtime(comptime project: type) type {
             }
             app.scene_access = eggy.scene.registryAccess(Plugins.Components);
             app.graphics.materials.resources = app.resources();
+            app.graphics.clips.resources = app.resources();
             // The project's preferences, baked in by `addGame`, before the plugins start.
             if (@hasDecl(project, "preference_files")) for (project.preference_files) |file| {
                 app.preference_values.read(.project, file.key, file.zon) catch |err| std.log.warn("the preferences for {s} don't parse ({t}): they are ignored", .{ file.key, err });

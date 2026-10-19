@@ -10,6 +10,7 @@ const Transform = transform_zig.Transform;
 const AssetRef = @import("refs.zig").AssetRef;
 const assets = @import("eggy_assets");
 const Material = @import("material.zig").Material;
+const Animator = @import("animation.zig").Animator;
 
 /// The shapes there are, each about a metre across, centred on the entity.
 pub const Shape = enum(u32) { cube, sphere, plane, cylinder, cone };
@@ -73,6 +74,14 @@ pub const Drawable = extern struct {
     material_file: ?[*]const u8 = null,
     material_file_len: u32 = 0,
     material_failed: bool = false,
+    /// What plays on the entity's model, if it has an `Animator`; borrowed from the world like the
+    /// paths above. `MeshRenderer.prepare` poses the model from it.
+    animator: ?*const Animator = null,
+    /// Set by `MeshRenderer.prepare`: whether this entity's corners are posed (so it is drawn
+    /// from its own vertex buffer, on its own), and the box round them in model space.
+    deformed: u32 = 0,
+    bounds_min: [3]f32 = @splat(0),
+    bounds_max: [3]f32 = @splat(0),
 
     /// Reconstruct the source entity ID by value, without checking that it is still alive.
     /// Resolve it only against the world from which this drawable was gathered.
@@ -171,6 +180,7 @@ fn drawable(world: *ecs.World, entity: ecs.EntityId, mesh: *const Mesh) ?Drawabl
             if (file.len == 0) return null;
             result.model_file = &file.buffer;
             result.model_file_len = file.len;
+            result.animator = world.get(entity, Animator);
         },
         inline else => |_, tag| result.shape = @field(Shape, @tagName(tag)),
     }

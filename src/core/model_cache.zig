@@ -24,6 +24,9 @@ pub const Gpu = struct {
     parts: []const Part,
     /// The box round its vertices in its own space, widened to hold every pose its clips reach.
     bounds: assets.Bounds,
+    /// A moveable model's nodes, skins, blend shapes and clips with its stored corners, kept for
+    /// `deformation.zig`; null for a static model. Owned by the cache.
+    rig: ?*assets.Model = null,
 
     pub const Part = struct {
         first_index: u32,
@@ -41,6 +44,10 @@ pub const Gpu = struct {
             if (!shared) textures.release(texture);
         };
         gpa.free(self.parts);
+        if (self.rig) |kept| {
+            kept.deinit(gpa);
+            gpa.destroy(kept);
+        }
         self.indices.deinit();
         self.vertices.deinit();
     }
@@ -145,15 +152,27 @@ pub const ModelCache = struct {
             log.err("cannot load model {s}: {t}", .{ path, err });
             return null;
         };
-        defer model.deinit(self.gpa);
+        // A moveable model is kept whole, for deforming; the rest are done with once uploaded.
+        var kept = false;
+        defer if (!kept) model.deinit(self.gpa);
         if (model.indices.len == 0) {
             log.warn("{s} has no triangles", .{path});
             return null;
         }
-        return self.uploadModel(path, model, textures) catch |err| {
+        var gpu = self.uploadModel(path, model, textures) catch |err| {
             log.err("cannot upload {s}: {t}", .{ path, err });
             return null;
         };
+        if (!model.isRigged()) return gpu;
+        const owned = self.gpa.create(assets.Model) catch |err| {
+            log.err("cannot keep the rig of {s}: {t}", .{ path, err });
+            gpu.deinit(self.gpa, textures);
+            return null;
+        };
+        owned.* = model;
+        kept = true;
+        gpu.rig = owned;
+        return gpu;
     }
 
     fn uploadModel(self: *ModelCache, path: []const u8, model: assets.Model, textures: *TextureCache) !Gpu {
