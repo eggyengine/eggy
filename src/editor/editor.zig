@@ -1466,6 +1466,8 @@ pub fn Editor(comptime project: type) type {
             const preview_px = if (scene_px != null and self.scene_view.preview != null) eggy.game_ui.pixelRect(scene_view.previewRect(self.workspace.placed.scene.?.rect), viewport, frame.extent) else null;
             if (scene_px) |rect| {
                 const gathered = if (self.game) |*game| game.gatherMeshes(&self.app, self.drawables) else self.drawables[0..0];
+                if (self.game) |*game| game.gatherLights(&self.app, &self.app.graphics.lights);
+                if (!self.play_mode.playing()) self.entity_editor.view_state.visibleLights(&self.app.world, &self.app.graphics.lights);
                 const visible = if (self.play_mode.playing()) gathered else self.entity_editor.view_state.visibleMeshes(&self.app.world, gathered);
                 const meshes = if (self.scene_view.no_camera) visible[0..0] else visible;
                 self.scene_view.drawn = meshes;
@@ -1473,7 +1475,6 @@ pub fn Editor(comptime project: type) type {
                 try self.scene.render(&self.app.graphics, frame.cmd, pixelSize(rect), meshes, self.scene_view.view, self.entity_editor.selected, !self.scene_view.throughGameCamera());
                 if (self.build_window == null and self.play_mode.playing() and !self.workspace.simulating) if (self.game) |*game| {
                     if (game.hasDraw() or game.hasGameUi()) {
-                if (self.game) |*game| game.gatherLights(&self.app, &self.app.graphics.lights);
                         const logical = self.workspace.placed.scene.?.rect;
                         const draw_context = eggy.DrawContext{
                             .cmd = frame.cmd,

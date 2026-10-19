@@ -40,10 +40,11 @@ The arrow beside a parent folds or expands its children in the Hierarchy. It doe
 not affect the Scene view. Searching temporarily reveals folded matches; clearing
 the search restores the folds.
 
-The **eye** at the right of each row hides or shows that entity's meshes in the
-editor Scene view. Hiding is inherited by descendants, including scene-instance
+The **eye** at the right of each row hides or shows that entity's meshes and authored
+lights in the editor Scene view. Hiding is inherited by descendants, including scene-instance
 contents; a child cannot override a hidden parent. Hidden meshes cannot be picked,
-and hidden selections have no gizmo or camera preview. Right-click also offers
+hidden lights no longer illuminate the scene, and hidden selections have no gizmo
+or camera preview. Right-click also offers
 **Hide in editor** / **Show in editor**, with Undo/Redo support.
 
 Folds and eye visibility are editor-only and reset when the world is replaced,

@@ -34,9 +34,17 @@ pub const GpuLight = extern struct {
     color_intensity: [4]f32 = @splat(0),
 };
 
+/// Source identity across the game-library boundary, independent of ECS type numbering.
+pub const LightEntity = extern struct {
+    id: u32 = 0,
+    generation: u32 = 0,
+};
+
 /// Plain C data, populated where the game's ECS type numbering lives.
 pub const Frame = extern struct {
     lights: [max_lights]GpuLight = @splat(.{}),
+    /// Parallel source identities for host visibility filtering; never uploaded as uniforms.
+    entities: [max_lights]LightEntity = @splat(.{}),
     count: u32 = 0,
 };
 
@@ -84,6 +92,7 @@ pub fn gather(world: *ecs.World) !Frame {
             .direction_range = .{ direction[0], direction[1], direction[2], light.range_m },
             .color_intensity = .{ light.color[0], light.color[1], light.color[2], if (light.kind == .directional) light.illuminance_lux / 1000 else light.intensity_cd / 100 },
         };
+        result.entities[result.count] = .{ .id = view.entity.id, .generation = view.entity.generation };
         result.count += 1;
     }
     return result;
@@ -97,6 +106,8 @@ test "scene lights follow world transforms and validate changes" {
     try lighting.setLight(entity, .{ .point = .{ .range_m = 5 } });
     const frame = try gather(&world);
     try std.testing.expectEqual(@as(u32, 1), frame.count);
+    try std.testing.expectEqual(entity.id, frame.entities[0].id);
+    try std.testing.expectEqual(entity.generation, frame.entities[0].generation);
     try std.testing.expectEqualSlices(f32, &.{ 2, 3, 4, 1 }, &frame.lights[0].position_kind);
     try std.testing.expectEqual(@as(f32, 5), frame.lights[0].direction_range[3]);
     try std.testing.expectError(error.InvalidLight, lighting.setLight(entity, .{ .point = .{ .range_m = -1 } }));
@@ -109,4 +120,20 @@ test "light overflow is reported rather than silently dropping lights" {
     defer world.deinit();
     for (0..max_lights + 1) |_| _ = try world.spawn(.{ transform.Transform{}, SceneLight{} });
     try std.testing.expectError(error.TooManyLights, gather(&world));
+}
+
+test "light source identities retain reused generations without changing GPU records" {
+    var world = ecs.World.init(std.testing.allocator);
+    defer world.deinit();
+    const old = try world.spawn(.{ transform.Transform{}, SceneLight{} });
+    world.despawn(old);
+    const replacement = try world.spawn(.{ transform.Transform{}, SceneLight{} });
+    try std.testing.expectEqual(old.id, replacement.id);
+    try std.testing.expect(old.generation != replacement.generation);
+    const frame = try gather(&world);
+    try std.testing.expectEqual(@as(u32, 1), frame.count);
+    try std.testing.expectEqual(replacement.id, frame.entities[0].id);
+    try std.testing.expectEqual(replacement.generation, frame.entities[0].generation);
+    try std.testing.expectEqual(@as(usize, 48), @sizeOf(GpuLight));
+    try std.testing.expectEqual(@as(usize, 8), @sizeOf(LightEntity));
 }

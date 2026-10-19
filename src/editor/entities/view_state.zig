@@ -76,6 +76,20 @@ pub const ViewState = struct {
         }
         return meshes[0..count];
     }
+
+    /// Remove hidden lights in place, keeping their plain-C source identities aligned.
+    pub fn visibleLights(self: *const ViewState, world: *ecs.World, frame: *eggy.lighting.Frame) void {
+        var count: u32 = 0;
+        for (0..frame.count) |index| {
+            const source = frame.entities[index];
+            const entity = ecs.EntityId.init(source.id, source.generation);
+            if (!world.isAlive(entity) or self.isHidden(world, entity)) continue;
+            frame.lights[count] = frame.lights[index];
+            frame.entities[count] = source;
+            count += 1;
+        }
+        frame.count = count;
+    }
 };
 
 test "folds do not hide meshes, visibility inherits, and dead generations are pruned" {
@@ -120,4 +134,44 @@ test "folds do not hide meshes, visibility inherits, and dead generations are pr
     try state.setHidden(replacement, true);
     state.reset();
     try std.testing.expect(!state.isHidden(&world, replacement));
+}
+
+test "editor hiding removes descendant and directly hidden lights without mixing source IDs" {
+    const gpa = std.testing.allocator;
+    var world = ecs.World.init(gpa);
+    defer world.deinit();
+    var state = ViewState{ .gpa = gpa };
+    defer state.deinit();
+    const parent = try world.spawn(.{});
+    const nested = try world.spawn(.{ eggy.Transform{ .position = .{ 2, 0, 0 } }, eggy.lighting.SceneLight{} });
+    const direct = try world.spawn(.{ eggy.Transform{ .position = .{ 4, 0, 0 } }, eggy.lighting.SceneLight{} });
+    const visible = try world.spawn(.{ eggy.Transform{ .position = .{ 9, 0, 0 } }, eggy.lighting.SceneLight{} });
+    try world.setParent(nested, parent);
+    try state.toggleCollapse(parent);
+    var frame = try eggy.lighting.gather(&world);
+    state.visibleLights(&world, &frame);
+    try std.testing.expectEqual(@as(u32, 3), frame.count);
+
+    try state.setHidden(parent, true);
+    try state.setHidden(direct, true);
+    state.visibleLights(&world, &frame);
+    try std.testing.expectEqual(@as(u32, 1), frame.count);
+    try std.testing.expectEqual(visible.id, frame.entities[0].id);
+    try std.testing.expectEqual(visible.generation, frame.entities[0].generation);
+    try std.testing.expectEqual(@as(f32, 9), frame.lights[0].position_kind[0]);
+
+    try state.setHidden(parent, false);
+    frame = try eggy.lighting.gather(&world);
+    state.visibleLights(&world, &frame);
+    try std.testing.expectEqual(@as(u32, 2), frame.count);
+    for (frame.lights[0..frame.count], frame.entities[0..frame.count]) |light, source| {
+        try std.testing.expect(source.id == nested.id or source.id == visible.id);
+        try std.testing.expectEqual(@as(f32, if (source.id == nested.id) 2 else 9), light.position_kind[0]);
+    }
+    world.despawn(visible);
+    state.visibleLights(&world, &frame);
+    try std.testing.expectEqual(@as(u32, 1), frame.count);
+    try std.testing.expectEqual(nested.id, frame.entities[0].id);
+    // Filtering is editor state only: it never removes or modifies authored lights.
+    try std.testing.expectEqual(@as(u32, 2), (try eggy.lighting.gather(&world)).count);
 }
