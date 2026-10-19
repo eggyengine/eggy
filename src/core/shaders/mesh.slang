@@ -155,9 +155,9 @@ VertexOutput vertexMask(VertexInput input) {
     float4 clip = toClip(world);
     VertexOutput output;
     output.position = float4(clip.xy, mask_depth * clip.w, clip.w);
-    output.normal = input.normal;
+    output.normal = float3(0.0, 1.0, 0.0);
     output.color = input.color;
-    output.uv = input.uv;
+    output.uv = float2(0.0, 0.0);
     output.world = world.xyz;
     output.material = float4(0, 1, 0, 0);
     output.emissive_cutoff = float4(0, 0, 0, 0);
@@ -179,7 +179,7 @@ VertexOutput vertexOutline(VertexInput input) {
     output.position = float4(clip.xy + push * clip.w, outline_depth * clip.w, clip.w);
     output.normal = float3(0.0, 1.0, 0.0);
     output.color = outline;
-    output.uv = input.uv;
+    output.uv = float2(0.0, 0.0);
     output.world = world.xyz;
     output.material = float4(0, 1, 0, 0);
     output.emissive_cutoff = float4(0, 0, 0, 0);
