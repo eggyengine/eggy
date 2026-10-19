@@ -99,7 +99,10 @@ pub fn Runtime(comptime project: type) type {
             // The game's first scene, before the plugins start, as the editor puts it in.
             if (@hasDecl(project, "main_scene")) if (project.main_scene) |path| if (data) |packaged| startScene(gpa, packaged.copies(), &app.world, path);
             var plugins = try Plugins.init(gpa, &app, Plugins.enabledExcept(off));
-            errdefer plugins.deinit();
+            errdefer {
+                if (app.resource_jobs) |jobs| jobs.clear();
+                plugins.deinit();
+            }
             try app.startWorld();
             const drawables = try gpa.alloc(eggy.mesh.Drawable, eggy.max_drawables);
             return .{
@@ -132,6 +135,8 @@ pub fn Runtime(comptime project: type) type {
         /// defer runtime.deinit();
         /// ```
         pub fn deinit(self: *Self) void {
+            // Jobs may borrow allocators owned by plugins about to be destroyed.
+            if (self.app.resource_jobs) |jobs| jobs.clear();
             if (self.notice) |*notice| {
                 self.app.graphics.queue.waitIdle() catch {};
                 notice.deinit();
