@@ -23,7 +23,7 @@ to open the Input Map editor.
 
 Add named controls, choose button, axis, or vector, then add their input
 bindings. Keys and controller buttons can be captured; scales, dead zones, normalized
-movement, and hold/tap/chord triggers use the same controls as Edit > Input Mappings.
+movement, and hold/tap/chord triggers each have their own controls.
 Apply each binding or trigger edit, then press Save file. Set map priority, startup
 activation, and consumption here too if the map needs them.
 
@@ -222,12 +222,9 @@ for the timing and cancellation rules.
 
 ## 6. Save and ship project overrides {#edit-and-ship-developer-settings}
 
-Open Edit > Input Mappings, select a map/control, and add, capture, edit, or remove a
-binding. Keyboard and controller-button capture have an Escape cancel. Scales, dead zones,
-normalization, triggers, startup activation, and priority have explicit Save/Reset controls.
-Reset restores the registered map's defaults, from its asset or code. These project
-overrides take precedence over `.inmap.zon` defaults and do not rewrite the asset.
-Edits participate in the editor's undo/redo history.
+Project overrides live in `controls.zon` at the project root. They take precedence
+over `.inmap.zon` and code defaults and do not rewrite the asset. To change a map's
+defaults instead, edit its asset in the Input Map editor.
 
 Keep the project-root `controls.zon` in version control. It stores developer
 configuration. Use separate storage for player preferences or saved games.
@@ -238,7 +235,7 @@ With no `controls.zon`, the asset/code defaults apply. Editor refocus rereads th
 file; malformed external edits are reported and leave the last working
 configuration active.
 
-You can author the same file without the editor:
+Write the file by hand:
 
 ```zig
 .{
@@ -271,7 +268,7 @@ Connect the named controls to your gameplay actions, then enter Play. With the
 sample defaults, Space and the controller's south button should activate the same
 jump action. WASD and the left stick should both drive `move`.
 
-Change the jump binding in Edit > Input Mappings, save it, and check the action
+Change the jump binding in `controls.zon`, refocus the editor, and check the action
 with the new binding. Rebuild and run the runtime to verify that the project
 override ships. If an asset edit appears to have no effect, check for an override
 in `controls.zon` and start a new Play session or reload the game to load saved

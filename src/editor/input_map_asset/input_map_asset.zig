@@ -15,7 +15,7 @@ pub const Document = @import("document.zig").Document;
 const kinds = std.meta.fieldNames(eggy.input.Kind);
 const Action = enum { none, save, revert, save_close, discard_close, cancel_close };
 
-/// Window-independent UI, sharing binding/trigger controls with Edit > Input Mappings.
+/// Window-independent UI for an input-map asset, built on the shared binding/trigger controls.
 pub const View = struct {
     mappings: MappingsView = .{ .source = .asset },
     scroll: ui.Layout.ScrollState = .{},

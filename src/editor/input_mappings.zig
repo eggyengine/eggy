@@ -3,7 +3,6 @@ const std = @import("std");
 const eggy = @import("eggy");
 const ui = eggy.ui;
 const sdl = eggy.sdl_adapter.sdl;
-const ToolWindow = @import("tool_window.zig").ToolWindow;
 const page_style = @import("page_style.zig");
 const restyle = page_style.restyle;
 const beginSection = page_style.beginSection;
@@ -447,94 +446,6 @@ fn defaultBinding(kind: t.Kind, index: usize) t.Binding {
         },
     };
 }
-
-pub const InputMappingsWindow = struct {
-    gpa: std.mem.Allocator,
-    window: ToolWindow,
-    view: View = .{},
-    /// Allocate the editor's mappings tool window. SDL/graphics and its borrowed font
-    /// must outlive `close`; allocation/window/surface failures propagate.
-    ///
-    /// ```zig
-    /// const mappings = try InputMappingsWindow.open(gpa, graphics, font);
-    /// defer mappings.close(graphics);
-    /// ```
-    pub fn open(gpa: std.mem.Allocator, graphics: *const eggy.Graphics, font: *ui.Font) !*InputMappingsWindow {
-        const self = try gpa.create(InputMappingsWindow);
-        errdefer gpa.destroy(self);
-        self.* = .{ .gpa = gpa, .window = try ToolWindow.open(gpa, graphics, font, "Input Mappings", .{ 700, 700 }, .{ .resizable = true }) };
-        return self;
-    }
-    /// Destroy window/UI/surface and free `self`; registered backend maps are not owned here.
-    ///
-    /// ```zig
-    /// mappings.close(graphics); // Before shared font/device teardown.
-    /// ```
-    pub fn close(self: *InputMappingsWindow, graphics: *eggy.Graphics) void {
-        self.window.close(graphics);
-        self.gpa.destroy(self);
-    }
-    /// Route owned-window events, or controller input during capture, to the mapping view.
-    /// True means consumed; check `closeRequested` first because this does not close the tool.
-    ///
-    /// ```zig
-    /// // After the host's closeRequested check:
-    /// if (mappings.handle(event)) return;
-    /// ```
-    pub fn handle(self: *InputMappingsWindow, event: eggy.Event) bool {
-        if (self.view.capture != null and (self.window.owns(event) or eggy.game_ui.isControllerInput(event))) {
-            if (self.view.captureEvent(event)) return true;
-        }
-        if (!self.window.owns(event)) return false;
-        self.window.handle(event);
-        return true;
-    }
-    /// Test for this tool's close request or Escape outside capture mode.
-    /// Does not consume events; Escape during capture belongs to `handle` instead.
-    ///
-    /// ```zig
-    /// if (mappings.closeRequested(event)) {
-    ///     mappings.close(graphics);
-    ///     return;
-    /// }
-    /// _ = mappings.handle(event);
-    /// ```
-    pub fn closeRequested(self: *InputMappingsWindow, event: eggy.Event) bool {
-        if (!self.window.owns(event)) return false;
-        return event == .window_close_requested or (self.view.capture == null and event == .key_down and event.key_down.scancode == .escape);
-    }
-    /// Present the mapping editor using the main UI's style and borrowed backend.
-    /// Page edits may persist overrides; rendering errors propagate, while page-building
-    /// failures are stored/displayed in the view. Neither style nor backend is retained.
-    ///
-    /// ```zig
-    /// try mappings.update(graphics, style, input_state); // Editor host frame.
-    /// ```
-    pub fn update(self: *InputMappingsWindow, graphics: *eggy.Graphics, style: *const ui.Context, state: *State) !void {
-        const Page = struct {
-            view: *View,
-            state: *State,
-            /// Internal tool-page adapter: balances the scroll container and renders the
-            /// borrowed view/backend, displaying build errors rather than throwing.
-            ///
-            /// ```zig
-            /// // Inside update, ToolWindow.present supplies the active frame:
-            /// var page = Page{ .view = &self.view, .state = state };
-            /// try self.window.present(graphics, style, &page);
-            /// ```
-            pub fn build(page: *@This(), context: *ui.Context) void {
-                context.beginScroll(&page.view.scroll, @max(1, context.viewport.h - 24));
-                defer context.end();
-                page.view.build(context, page.state) catch |err| {
-                    page.view.last_error = err;
-                    context.label("Input editor: {s}", .{@errorName(err)});
-                };
-            }
-        };
-        var page = Page{ .view = &self.view, .state = state };
-        try self.window.present(graphics, style, &page);
-    }
-};
 
 test "the mapping editor captures keys/controllers and lays out a scrollable vector editor" {
     const gpa = std.testing.allocator;

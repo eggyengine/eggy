@@ -68,7 +68,6 @@ pub const Outcome = union(enum) {
     about,
     /// Edit > Preferences: open the Preferences window.
     preferences,
-    input_mappings,
     /// File > Save (Ctrl+S): save the scene.
     save,
     /// File > Export: open the Export window.
@@ -769,7 +768,6 @@ pub const Workspace = struct {
                 .link_developer => return .link_developer,
                 .devtools => return .toggle_devtools,
                 .preferences => return .preferences,
-                .input_mappings => return .input_mappings,
                 .save => return .save,
                 .export_game => return .export_game,
                 .project_settings => return .project_settings,

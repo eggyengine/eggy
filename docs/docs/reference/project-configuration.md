@@ -104,7 +104,7 @@ values cached during `init` apply at the next start.
 | `.eggy/preferences.zon` | Editor settings overriding global values |
 | `.eggy/plugins/<published-name>.zon` | Plugin settings; the game's key is `game` |
 | `.eggy/plugins.zon` | Editor-written plugin inventory, enabled state, and preference declarations |
-| `controls.zon` | Developer input mappings, edited through Edit > Input Mappings; not player preferences |
+| `controls.zon` | Developer input-mapping overrides, written by hand; not player preferences |
 
 Preference files are plain ZON, such as `.{ .volume = 0.5 }`, and may be edited and
 committed. Values of the wrong field type are ignored and defaults apply. Published

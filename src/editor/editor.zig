@@ -58,7 +58,6 @@ const extensions = @import("extensions/extensions.zig");
 const GameInput = @import("game_input.zig").State;
 const ViewportMouse = @import("viewport_mouse.zig").State;
 const InputSettings = @import("input_settings.zig").InputSettings;
-const InputMappingsWindow = @import("input_mappings.zig").InputMappingsWindow;
 const input_map_asset = @import("input_map_asset/input_map_asset.zig");
 /// The Preferences section File > Project Settings opens.
 const project_section = "Project";
@@ -89,7 +88,6 @@ pub fn Editor(comptime project: type) type {
         game_input: GameInput = .{},
         viewport_mouse: ViewportMouse = .{},
         input_settings: ?*InputSettings = null,
-        input_mappings_window: ?*InputMappingsWindow = null,
         input_map_window: ?*input_map_asset.Window = null,
         /// The game and its plugins, from their library; null if it couldn't load (logged).
         game: ?HotGame,
@@ -371,7 +369,6 @@ pub fn Editor(comptime project: type) type {
             self.extension_state.deinit(self.gpa);
             if (self.game) |*game| game.deinit(&self.app);
             if (self.input_settings) |settings| settings.close();
-            if (self.input_mappings_window) |window| window.close(&self.app.graphics);
             if (self.input_map_window) |window| window.close(&self.app.graphics);
             if (self.project_flow) |flow| flow.close(&self.app.graphics);
             if (self.build_window) |window| window.close(&self.app.graphics);
@@ -631,7 +628,6 @@ pub fn Editor(comptime project: type) type {
                     self.export_window = null;
                 }
             }
-            if (self.input_mappings_window) |window| try window.update(&self.app.graphics, &self.ui, &self.app.input_backend.?.state);
             if (self.input_map_window) |window| {
                 const result = try window.update(&self.app.graphics, &self.ui, &self.history);
                 if (result.saved) self.assets_panel.refreshSoon();
@@ -1588,14 +1584,6 @@ pub fn Editor(comptime project: type) type {
                 }
                 if (window.handle(curr_event)) return self.toolWindowTook(curr_event);
             }
-            if (self.input_mappings_window) |window| {
-                if (window.closeRequested(curr_event)) {
-                    window.close(&self.app.graphics);
-                    self.input_mappings_window = null;
-                    return .run;
-                }
-                if (window.handle(curr_event)) return self.toolWindowTook(curr_event);
-            }
             if (self.input_map_window) |window| {
                 if (window.closeRequested(curr_event)) {
                     window.close(&self.app.graphics);
@@ -1803,9 +1791,6 @@ pub fn Editor(comptime project: type) type {
                 .undo => self.undoOrRedo(.undo),
                 .redo => self.undoOrRedo(.redo),
                 .preferences => self.openPreferences(),
-                .input_mappings => if (self.input_mappings_window == null) {
-                    self.input_mappings_window = try InputMappingsWindow.open(self.gpa, &self.app.graphics, self.ui.font);
-                },
                 .link_developer => if (self.upgrades.can_link) try self.linkDeveloper() else self.upgrades.logUnavailable(.link),
                 else => {},
             }
