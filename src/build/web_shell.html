@@ -1,0 +1,60 @@
+<!doctype html>
+<!-- The page a web export runs in: the game's canvas across the whole window, a progress
+     line while its files download, and any error that stops it shown over the game. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title></title>
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #000; color: #d4d4d8;
+    font: 14px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  /* SDL follows the canvas's CSS size, so filling the viewport makes the game fill it too. */
+  canvas { display: block; width: 100vw; height: 100vh; outline: none; touch-action: none; }
+  #status { position: fixed; inset: 0; display: grid; place-content: center; gap: 10px;
+    text-align: center; pointer-events: none; transition: opacity .3s; }
+  #status[hidden] { display: none; }
+  #bar { width: 220px; height: 2px; background: #27272a; overflow: hidden; }
+  #bar > div { height: 100%; width: 0; background: #d4d4d8; transition: width .2s; }
+  #error { position: fixed; left: 16px; right: 16px; bottom: 16px; max-height: 40vh; overflow: auto;
+    margin: 0; padding: 12px 14px; background: #18181b; border: 1px solid #7f1d1d; border-radius: 6px;
+    color: #fca5a5; font: 12px/1.5 ui-monospace, monospace; white-space: pre-wrap; }
+  #error[hidden] { display: none; }
+</style>
+</head>
+<body>
+<canvas id="canvas" tabindex="-1" oncontextmenu="event.preventDefault()"></canvas>
+<div id="status"><span id="label">Loading</span><div id="bar"><div></div></div></div>
+<pre id="error" hidden></pre>
+<script>
+  const status = document.getElementById("status");
+  const label = document.getElementById("label");
+  const fill = document.querySelector("#bar > div");
+  const errors = document.getElementById("error");
+
+  // Show what stopped the game over it, and log its stack for whoever is debugging.
+  function report(error) {
+    const text = error && error.stack ? error + "\n" + error.stack : String(error);
+    console.log("[page] " + text);
+    status.hidden = true;
+    errors.hidden = false;
+    errors.textContent += (errors.textContent ? "\n\n" : "") + text;
+  }
+  window.addEventListener("error", (event) => report(event.error || event.message));
+  window.addEventListener("unhandledrejection", (event) => report(event.reason));
+
+  var Module = {
+    canvas: document.getElementById("canvas"),
+    // Emscripten reports downloads as "Downloading data... (done/total)", then "" once running.
+    setStatus(text) {
+      if (!text) { status.hidden = true; return; }
+      const progress = text.match(/\((\d+(?:\.\d+)?)\/(\d+)\)/);
+      if (progress) fill.style.width = (100 * progress[1] / progress[2]) + "%";
+      label.textContent = text.replace(/\.\.\..*$/, "");
+    },
+    onAbort: (what) => report("The game stopped: " + what),
+  };
+</script>
+{{{ SCRIPT }}}
+</body>
+</html>

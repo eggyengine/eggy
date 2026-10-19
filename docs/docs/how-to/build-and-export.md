@@ -109,6 +109,10 @@ Web setup installs emsdk 4.0.14 and prepares its WebGPU port. An installed SDK s
 through `EMSDK`, or an installation in `~/emsdk`, takes precedence. Browser builds
 preload the game's scenes and converted assets into their packaged filesystem;
 distribute the generated `.data` file together with the HTML, JavaScript and WebAssembly.
+The page shows the game across the whole browser window, with a progress bar while it
+downloads and any error that stops it shown over the game. Serve the folder from a web
+server (any static host, such as GitHub Pages, works): browsers won't load the `.data`
+file from a page opened straight from disk.
 
 Android export currently requires a Linux x86-64 or macOS host, `sh`, and `patch`.
 It installs missing Android command-line tools, API 35, build-tools 36.0.0, NDK

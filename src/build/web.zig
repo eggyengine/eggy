@@ -5,7 +5,14 @@ const manifest = @import("../core/assets/manifest.zig");
 
 /// Attach lazy packaged assets to Vitellus's Emscripten link step before installing its page.
 pub fn addApp(b: *std.Build, engine: *std.Build, emscripten: anytype, root: *std.Build.Module, name: []const u8, files: []const manifest.Entry) @TypeOf(emscripten).App {
-    const app = emscripten.addApp(b, .{ .name = name, .root_module = root });
+    // Eggy's own page, the canvas filling the window, rather than Emscripten's.
+    const app = emscripten.addApp(b, .{
+        .name = name,
+        .root_module = root,
+        .shell_file = engine.path("src/build/web_shell.html"),
+        // The engine's stack use, as on the desktop (8 MiB); Vitellus's 1 MiB overflows.
+        .args = &.{"-sSTACK_SIZE=8388608"},
+    });
     const link: *std.Build.Step.Run = @fieldParentPtr("step", app.install.options.source_dir.generated.file.step);
     const bundled = resources.bundledDirectory(b, engine, root.optimize orelse .Debug, files);
     link.addArg("--preload-file");
