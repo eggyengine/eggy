@@ -474,6 +474,8 @@ pub const EntityEditor = struct {
     /// Clear world-specific UI state without discarding the independent entity clipboard.
     pub fn resetWorldView(self: *EntityEditor) void {
         self.view_state.reset();
+        self.clipboard.worldChanged();
+        self.root_order.entities.clearRetainingCapacity();
         self.selected = null;
         self.hierarchy.rows.clearRetainingCapacity();
         self.hierarchy.menu = null;
@@ -481,6 +483,7 @@ pub const EntityEditor = struct {
         self.hierarchy.renaming = null;
         self.hierarchy.name_press = null;
         self.inspector.shown = null;
+        self.inspector.values.reset();
         self.pending_paste = null;
         self.pending_extract = null;
         self.pending_visibility = null;
@@ -601,4 +604,56 @@ test "moves place an entity before or after a sibling, at the top level or under
     // Beside a top-level entity takes it out of its parent.
     try editor.moveEntity(&world, b, .{ .before = a });
     try std.testing.expectEqualSlices(ecs.EntityId, &.{ b, a }, editor.roots(&world));
+}
+
+test "replaced worlds discard old root order and view state but retain copied trees" {
+    const gpa = std.testing.allocator;
+    var world = ecs.World.init(gpa);
+    defer world.deinit();
+    var editor = EntityEditor.init(gpa);
+    defer editor.deinit();
+    const first = try world.spawn(.{});
+    const second = try world.spawn(.{});
+    try editor.moveEntity(&world, second, .{ .before = first });
+    try std.testing.expectEqualSlices(ecs.EntityId, &.{ second, first }, editor.roots(&world));
+    try editor.clipboard.copy(&world, eggy.scene.registryAccess(eggy.components.Registry(&.{}, &.{})), first);
+    editor.selected = first;
+    try editor.view_state.toggleCollapse(first);
+    try editor.view_state.setHidden(second, true);
+    editor.resetWorldView();
+    try std.testing.expectEqualSlices(ecs.EntityId, &.{ first, second }, editor.roots(&world));
+    try std.testing.expect(editor.selected == null);
+    try std.testing.expectEqual(@as(usize, 0), editor.view_state.collapsed.count());
+    try std.testing.expectEqual(@as(usize, 0), editor.view_state.hidden.count());
+    try std.testing.expect(editor.clipboard.scene != null);
+}
+
+test "preparing extraction history excludes the original and restores its sibling position" {
+    const gpa = std.testing.allocator;
+    const access = eggy.scene.registryAccess(eggy.components.Registry(&.{}, &.{}));
+    var world = ecs.World.init(gpa);
+    defer world.deinit();
+    var editor = EntityEditor.init(gpa);
+    defer editor.deinit();
+    const parent = try world.spawn(.{});
+    const original = try world.spawn(.{});
+    const child = try world.spawn(.{});
+    const sibling = try world.spawn(.{});
+    const replacement = try world.spawn(.{});
+    try world.setParent(original, parent);
+    try world.setParent(child, original);
+    try world.setParent(sibling, parent);
+    try editor.placeReplacement(&world, replacement, original);
+    const after = try editor.textWithout(&world, access, original);
+    defer gpa.free(after);
+    const text = try gpa.dupeZ(u8, after);
+    defer gpa.free(text);
+    var captured = try eggy.scene.Scene.parse(gpa, text);
+    defer captured.deinit();
+    try std.testing.expectEqual(@as(usize, 3), captured.entities.len);
+    try std.testing.expect(world.isAlive(original) and world.isAlive(child));
+    var children = world.children(parent);
+    try std.testing.expectEqual(replacement, children.next().?);
+    try std.testing.expectEqual(original, children.next().?);
+    try std.testing.expectEqual(sibling, children.next().?);
 }

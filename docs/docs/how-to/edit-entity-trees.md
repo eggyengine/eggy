@@ -15,7 +15,9 @@ references outside the tree keep their existing targets.
 
 The clipboard survives deleting the source tree and reloading game code. Paste is
 an individual Undo/Redo step. Scene instances copy their source-scene reference,
-not the generated entities inside them.
+not the generated entities inside them. Replacing the world clears clipboard
+references to entities outside the copied tree, so reused entity IDs cannot bind
+the paste to unrelated objects.
 
 ## Extract a reusable scene
 
