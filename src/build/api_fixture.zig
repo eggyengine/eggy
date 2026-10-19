@@ -133,15 +133,16 @@ const Custom = struct {
         if (try app.input.map(PlayerInput).pressed(.jump)) self.gameplay_presses += 1;
     }
 
-    /// A minimal custom renderer: clear the owned target without creating a Weeoui overlay.
-    /// Requires no active render pass and `app.ui_layer == null`. Borrows `target` only for
+    /// A minimal custom renderer: clear the owned target without creating a Weeoui overlay of
+    /// its own. Requires no active render pass, and no overlay unless the graphics menu (which
+    /// creates one when first opened, and keeps it) is available. Borrows `target` only for
     /// this frame; the host submits/presents it. Propagates render-pass setup errors.
     ///
     /// ```zig
     /// try custom.draw(app, draw_context); // After scene drawing, before frame submission.
     /// ```
     pub fn draw(self: *Custom, app: *eggy.App, target: eggy.DrawContext) !void {
-        std.debug.assert(app.ui_layer == null);
+        std.debug.assert(app.ui_layer == null or app.graphics_settings_ui.toggle_key != null);
         try target.cmd.beginRenderPass(.{ .color_attachments = &.{.{
             .view = target.target,
             .load_op = .clear,
