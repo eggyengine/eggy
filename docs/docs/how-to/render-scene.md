@@ -123,8 +123,10 @@ does not need to manage these objects.
 
 ## Related rendering contracts
 
-General materials, scene lighting, postprocessing, world text/sprites, particles, debug
-drawing, and skeletal animation have
+Materials and directional/point scene lights have [working components and reusable
+assets](materials-and-lighting.md). [Debug lines, boxes and labels](debug-and-profile.md)
+are available as frame-owned overlays. Postprocessing, world text/sprites, particles,
+and skeletal animation have
 [missing-backend contracts](../reference/feature-support.md#capability-support).
 Mesh color and texture rendering is implemented. The missing-backend contracts do not
 add shaders or modify physics.

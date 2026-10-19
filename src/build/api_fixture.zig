@@ -18,7 +18,7 @@ const Hud = struct {
     text: eggy.ui.TextEdit(128) = .{},
     player: eggy.EntityRef(eggy.Transform) = .{},
 
-    /// Demo startup hook: install the bundled font, create a cube/camera and return HUD state.
+    /// Demo startup hook: install the bundled font, create a lit cube/camera and return HUD state.
     /// The App owns entities/UI; propagates font/GPU/entity allocation failures.
     /// The engine calls this after registering PlayerInput.
     ///
@@ -30,6 +30,9 @@ const Hud = struct {
         const layer = try app.gameUi();
         try layer.setFont(@embedFile("api_fixture_font"));
         const player = try app.world.spawn(.{ eggy.Name.init("API Cube"), eggy.Transform{}, eggy.Mesh{} });
+        try app.materials().assign(player, .{ .metallic = 0.45, .roughness = 0.25 });
+        const sun = try app.world.spawn(.{ eggy.Name.init("API Sun"), eggy.Transform{ .rotation_deg = .{ -35, 25, 0 } } });
+        try app.lighting().setLight(sun, .{ .directional = .{} });
         _ = try app.world.spawn(.{ eggy.Camera{}, eggy.Transform{ .position = .{ 0, 2, 7 }, .rotation_deg = .{ -15, 0, 0 } } });
         return .{ .player = .init(player) };
     }
@@ -41,12 +44,32 @@ const Hud = struct {
     /// try hud.update(app); // Once per running frame, before ECS Update systems.
     /// ```
     pub fn update(self: *Hud, app: *eggy.App) !void {
+        const timing = try app.profiling.begin("API demo update");
+        defer app.profiling.end(timing) catch |err| std.log.err("cannot finish demo sample: {t}", .{err});
         const player = app.input.map(PlayerInput);
         if (try player.pressed(.jump)) self.gameplay_presses += 1;
         const transform = self.player.get(&app.world) orelse return;
         const direction = try player.vector(.move);
         transform.translate(.{ direction.x * app.time.delta_s, 0, direction.y * app.time.delta_s });
         app.world.markChanged(self.player.entity.?, eggy.Transform);
+        try self.debugFrame(app);
+    }
+
+    /// Exercise frame-owned debug drawing through the editor's Scene camera too.
+    pub fn editorUpdate(self: *Hud, editor: *eggy.editor.Context) !void {
+        try self.debugFrame(editor.app);
+    }
+
+    fn debugFrame(self: *Hud, app: *eggy.App) !void {
+        const entity = self.player.entity orelse return;
+        if (!app.world.isAlive(entity)) return;
+        const matrix = eggy.transform.worldMatrix(&app.world, entity).data;
+        const x = matrix[3][0];
+        const y = matrix[3][1];
+        const z = matrix[3][2];
+        try app.debug_draw.box(.{ x - 0.55, y - 0.55, z - 0.55 }, .{ x + 0.55, y + 0.55, z + 0.55 }, .{ 0, 1, 0, 1 });
+        try app.debug_draw.text(.{ x, y + 1, z }, "API Cube");
+        try app.profiling.counter("Demo UI clicks", @floatFromInt(self.clicks));
     }
 
     /// Build the demo's dark HUD into a borrowed, already-begun UI context.
@@ -63,7 +86,7 @@ const Hud = struct {
         _ = ui.textInput("UI text", &self.text, "Space here must not reach gameplay");
         ui.label("UI clicks: {d}", .{self.clicks});
         ui.label("Gameplay jump presses: {d}", .{self.gameplay_presses});
-        ui.muted("Mapped keys or a controller move the cube outside UI keyboard focus.");
+        ui.muted("Click the scene to move the cube with mapped keys or a controller.");
     }
 
     pub const editor_panels = [_]eggy.plugins.EditorPanel{.{ .key = "api-tools", .title = "API Tools" }};

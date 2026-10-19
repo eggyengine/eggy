@@ -51,14 +51,6 @@ test "every missing backend operation returns NotImplemented" {
     const localization = @import("localization.zig").Localization{};
     try expect(error.NotImplemented, localization.setLocale("en"));
     try expect(error.NotImplemented, localization.text(std.testing.allocator, "hello"));
-    const debug = @import("debug_draw.zig").DebugDraw{};
-    try expect(error.NotImplemented, debug.line(@splat(0), @splat(1), @splat(1)));
-    try expect(error.NotImplemented, debug.box(@splat(0), @splat(1), @splat(1)));
-    try expect(error.NotImplemented, debug.text(@splat(0), "hello"));
-    const profiling = @import("profiling.zig").Profiling{};
-    try expect(error.NotImplemented, profiling.begin("frame"));
-    try expect(error.NotImplemented, profiling.end(@enumFromInt(0)));
-    try expect(error.NotImplemented, profiling.counter("entities", 1));
 
     const resources = @import("resources/resources.zig").Resources{};
     try expect(error.NotImplemented, resources.readAsync(std.testing.allocator, @import("refs.zig").AssetRef(.text).init("notes.txt")));
@@ -70,4 +62,9 @@ test "every missing backend operation returns NotImplemented" {
     const scenes = @import("scenes/scenes.zig").Scenes{ .world = &world, .instances = &instances, .resources = .{}, .access = null };
     try expect(error.NotImplemented, scenes.stream(.init("level.scene.zon"), .{}));
     try expect(error.NoSceneRegistry, scenes.replace(.init("level.scene.zon")));
+}
+
+test {
+    _ = @import("debug_draw.zig");
+    _ = @import("profiling.zig");
 }

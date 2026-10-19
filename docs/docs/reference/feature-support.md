@@ -26,7 +26,6 @@ no output devices, threads, sessions, files, fake handles, or successful empty r
 | `network` | connection, listening, messages, polling, disconnection |
 | `navigation` | paths and destinations; no physics or collision access |
 | `localization` | locale selection and translated-text lookup |
-| `debug_draw`, `profiling` | debug primitives, samples, and counters |
 
 `eggy.audio.support` reports support without an App. Components can store sound references;
 `try app.audio.play(sound, .{})` returns `error.NotImplemented`. Animation references do
@@ -46,10 +45,11 @@ stages synchronous scene replacement for the end of the gameplay update.
 | Value timers and gameplay time scaling | Implemented | Same allocation-free API |
 | Named input maps, priorities, modifiers, hold/tap/chord triggers | Implemented; project editor included | Shared runtime API |
 | Controllers, rumble, and touch contacts | SDL3; hardware-dependent | SDL3/browser-dependent |
-| [Game-save slots](../how-to/save-games.md) | Atomic versioned saves in project-specific user data | Persistent browser localStorage; quota/availability errors are explicit |
 | Synchronous project/packaged resource and scene providers | Implemented | Packaged assets preloaded at startup |
-| Materials and directional/point scene lights | Implemented; Inspector components and reusable material assets | Shared renderer, up to sixteen lights |
+| [Game-save slots](../how-to/save-games.md) | Atomic versioned saves in project-specific user data | Persistent browser localStorage; quota/availability errors are explicit |
 | Weeoui game UI and custom draw hooks | Implemented | Shared runtime API; no editor import |
+| Materials and directional/point scene lights | Implemented; Inspector components and reusable material assets | Shared renderer, up to sixteen lights |
+| [Debug drawing and CPU profiling](../how-to/debug-and-profile.md) | World-space overlays, named samples/counters; DevTools Game tab | Same frame-owned collectors and drawing |
 | Editor context, panels, commands, actions | Desktop only | Not run or linked |
 | Missing-backend contracts listed above | `NotImplemented` | `NotImplemented` |
 

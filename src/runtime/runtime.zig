@@ -150,6 +150,7 @@ pub fn Runtime(comptime project: type) type {
         /// ```
         pub fn iterate(self: *Self) !sdl3.AppResult {
             if (builtin.abi.isAndroid() and !self.app.graphics.surface_active) return .run;
+            self.app.beginDiagnosticsFrame();
             try self.app.graphics.syncSize(self.app.window);
             // The browser already paces frames to the display.
             if (!web) _ = self.fps_capper.delay();
@@ -160,8 +161,8 @@ pub fn Runtime(comptime project: type) type {
             try self.plugins.update(&self.app);
             try self.app.updateWorld();
             self.app.input.endFrame();
-            const frame = try self.app.graphics.beginFrame();
             self.app.graphics.lights = try eggy.lighting.gather(&self.app.world);
+            const frame = try self.app.graphics.beginFrame();
             // Through the game's camera; without one, there is nothing to see it from.
             if (eggy.camera.find(&self.app.world)) |view| {
                 const drawn = eggy.mesh.gather(&self.app.world, self.drawables);
@@ -193,8 +194,10 @@ pub fn Runtime(comptime project: type) type {
                         if (layer.context.wants_text) try sdl3.keyboard.startTextInput(window) else try sdl3.keyboard.stopTextInput(window);
                     }
                 }
+                if (eggy.camera.find(&self.app.world)) |view| try self.app.drawDebug(draw, view);
             }
             try self.app.graphics.endFrame(frame);
+            try self.app.finishDiagnosticsFrame();
             return .run;
         }
 

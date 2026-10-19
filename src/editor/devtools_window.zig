@@ -9,7 +9,7 @@ const ToolWindow = @import("tool_window.zig").ToolWindow;
 const hit_test = eggy.ui_hit_test;
 
 const tools_shown = [_]ui.devtools.Tool{ .elements, .performance };
-const tool_labels = [_][]const u8{ "Elements", "Performance" };
+const tool_labels = [_][]const u8{ "Elements", "Performance", "Game" };
 
 pub const DevtoolsWindow = struct {
     gpa: std.mem.Allocator,
@@ -127,13 +127,14 @@ pub const DevtoolsWindow = struct {
     ///
     /// ```zig
     /// // Host: main_tree is this frame's laid-out main-window tree.
-    /// try tools.update(graphics, style, main_tree);
+    /// try tools.update(graphics, style, main_tree, &app.profiling);
     /// // Draw the main window's highlight before releasing main_tree.
     /// ```
-    pub fn update(self: *DevtoolsWindow, graphics: *eggy.Graphics, style: *const ui.Context, page: *const ui.Layout.Element) !void {
+    pub fn update(self: *DevtoolsWindow, graphics: *eggy.Graphics, style: *const ui.Context, page: *const ui.Layout.Element, profile: *const eggy.profiling.Profiling) !void {
         try self.tools.prepare(self.gpa, page);
         const Page = struct {
             window: *DevtoolsWindow,
+            profile: *const eggy.profiling.Profiling,
             /// Internal page adapter used synchronously by `ToolWindow.present`.
             /// Appends tool tabs/content in the active context frame, borrowing the window.
             ///
@@ -145,13 +146,35 @@ pub const DevtoolsWindow = struct {
             pub fn build(p: *@This(), context: *ui.Context) void {
                 const tools_window = p.window;
                 _ = context.tabs(&tool_labels, &tools_window.tab);
+                if (tools_window.tab == 2) {
+                    p.gameProfile(context);
+                    return;
+                }
                 // The tabs take the top.
                 const area = ui.Rect{ .x = 0, .y = 0, .w = context.contentWidth(), .h = @max(0, context.viewport.h - 2 * context.pagePadding() - 40) };
                 const view = tools_window.tools.view(context.builder(), tools_window.gpa, tools_shown[tools_window.tab], area) catch return;
                 context.element(view);
             }
+
+            fn gameProfile(p: *@This(), context: *ui.Context) void {
+                const profile_frame = &p.profile.last;
+                const frame_ms = @as(f64, @floatFromInt(profile_frame.frame_duration_ns)) / std.time.ns_per_ms;
+                context.label("CPU frame: {d:.3} ms", .{frame_ms});
+                context.label("CPU samples (not GPU timings)", .{});
+                for (profile_frame.samples[0..profile_frame.sample_count]) |*sample| {
+                    const elapsed_ms = @as(f64, @floatFromInt(sample.duration_ns)) / std.time.ns_per_ms;
+                    if (sample.finished)
+                        context.label("{s}: {d:.3} ms", .{ sample.name.text(), elapsed_ms })
+                    else
+                        context.label("{s}: unfinished", .{sample.name.text()});
+                }
+                context.label("Counters", .{});
+                for (profile_frame.counters[0..profile_frame.counter_count]) |*counter| {
+                    context.label("{s}: {d:.2}", .{ counter.name.text(), counter.value });
+                }
+            }
         };
-        var page_builder = Page{ .window = self };
+        var page_builder = Page{ .window = self, .profile = profile };
         try self.window.present(graphics, style, &page_builder);
         // `present` let go of the page: prepare again for the main window's highlight.
         try self.tools.prepare(self.gpa, page);

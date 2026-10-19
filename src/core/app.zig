@@ -100,10 +100,11 @@ pub const App = struct {
     pub fn deinit(self: *App) void {
         self.stopWorld();
         self.clearGameUi();
+        self.debug_draw.deinit(self.world.allocator);
         self.scene_transition.deinit();
         if (self.instances) |*instances| instances.deinit();
-        self.storage.deinit();
         self.world.deinit();
+        self.storage.deinit();
         if (self.input_backend) |backend| backend.deinit();
         self.preference_values.deinit();
         self.graphics.deinit();
@@ -139,7 +140,6 @@ pub const App = struct {
         return self.resource_provider;
     }
 
-    /// Borrow the current world's scene service; do not retain across reset/reload.
     /// Borrow material access for the current world; do not retain across reset/reload.
     pub fn materials(self: *App) @import("materials.zig").Materials {
         return .{ .world = &self.world };
@@ -150,6 +150,7 @@ pub const App = struct {
         return .{ .world = &self.world };
     }
 
+    /// Borrow the current world's scene service; do not retain across reset/reload.
     /// Lazily creates the instance registry; the App owns it and any instantiated entities.
     ///
     /// ```zig
@@ -219,8 +220,10 @@ pub const App = struct {
     pub fn resetWorld(self: *App) void {
         self.stopWorld();
         self.clearGameUi();
-        self.scene_transition.deinit();
+        self.debug_draw.deinit(self.world.allocator);
+        self.profiling = .{};
         self.graphics.lights = .{};
+        self.scene_transition.deinit();
         if (self.instances) |*instances| instances.deinit();
         self.instances = null;
         self.scene_access = null;
@@ -262,6 +265,8 @@ pub const App = struct {
     /// app.input.endFrame();
     /// ```
     pub fn updateWorld(self: *App) !void {
+        const sample = try self.profiling.begin("ECS update");
+        errdefer self.profiling.end(sample) catch |err| std.log.err("cannot finish ECS timing: {t}", .{err});
         try self.world.insertResource(self.input);
         try self.world.insertResource(self.time);
         inline for (.{ .PreUpdate, .Update, .PostUpdate }) |stage| try self.world.runStage(stage);
@@ -269,6 +274,34 @@ pub const App = struct {
         if (self.scene_transition.pending != null) if (self.scene_access) |access| {
             if (try self.scene_transition.apply(&self.world, access, self.sceneInstances())) self.input.cancel();
         };
+        try self.profiling.end(sample);
+    }
+
+    /// Start frame-local diagnostics before any game/editor hooks run.
+    pub fn beginDiagnosticsFrame(self: *App) void {
+        self.debug_draw.clear();
+        self.profiling.beginFrame(sdl3.timer.getNanosecondsSinceInit());
+        self.graphics.stats = .{};
+    }
+
+    /// Publish host counters and finish CPU frame timing after rendering/presentation.
+    pub fn finishDiagnosticsFrame(self: *App) !void {
+        var entities: usize = 0;
+        for (self.world.slots.items) |slot| if (slot.alive) {
+            entities += 1;
+        };
+        try self.profiling.counter("Entities", @floatFromInt(entities));
+        try self.profiling.counter("Scene draw calls", @floatFromInt(self.graphics.stats.draw_calls));
+        try self.profiling.counter("Meshes across views", @floatFromInt(self.graphics.stats.meshes));
+        try self.profiling.counter("Triangles across views", @floatFromInt(self.graphics.stats.triangles));
+        try self.profiling.counter("Cached textures", @floatFromInt(self.graphics.textures.entries.count()));
+        try self.profiling.counter("Scene lights", @floatFromInt(self.graphics.lights.count));
+        try self.profiling.finishFrame(sdl3.timer.getNanosecondsSinceInit());
+    }
+
+    /// Render copied debug requests through a camera, without input capture or depth testing.
+    pub fn drawDebug(self: *App, draw: @import("game_ui/game_ui.zig").DrawContext, view: @import("camera.zig").View) !void {
+        try self.debug_draw.render(self.world.allocator, self.graphics.device, self.graphics.queue, draw, view);
     }
 
     /// Host device bookkeeping before UI/gameplay routing; opens/closes controllers as needed.

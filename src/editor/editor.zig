@@ -424,7 +424,14 @@ pub fn Editor(comptime project: type) type {
         /// if (result != .run) return result;
         /// ```
         pub fn iterate(self: *Self) !sdl3.AppResult {
+            self.app.beginDiagnosticsFrame();
             self.app.graphics.materials.resources = self.app.resources();
+            const result = try self.iterateFrame();
+            try self.app.finishDiagnosticsFrame();
+            return result;
+        }
+
+        fn iterateFrame(self: *Self) !sdl3.AppResult {
             // While a new project is created, only its loading screen shows. Hidden windows aren't
             // drawn to: presenting to one can block until it is shown again.
             if (self.project_flow) |flow| if (flow.isWorking()) {
@@ -515,7 +522,7 @@ pub fn Editor(comptime project: type) type {
                 const now = sdl3.timer.getNanosecondsSinceInit();
                 if (self.frame_start_ns != 0) window.tools.recordFrame(@as(f32, @floatFromInt(now - self.frame_start_ns)) / std.time.ns_per_ms);
                 self.frame_start_ns = now;
-                try window.update(&self.app.graphics, &self.ui, self.workspace.roots[main_slot].?);
+                try window.update(&self.app.graphics, &self.ui, self.workspace.roots[main_slot].?, &self.app.profiling);
                 self.workspace.devtools = &window.tools;
             }
             self.frame.* = self.workspace.titlebarFrame();
@@ -1473,18 +1480,20 @@ pub fn Editor(comptime project: type) type {
                 self.scene_view.drawn = meshes;
                 // The ground grid only through the panel's own camera, not the game's.
                 try self.scene.render(&self.app.graphics, frame.cmd, pixelSize(rect), meshes, self.scene_view.view, self.entity_editor.selected, !self.scene_view.throughGameCamera());
-                if (self.build_window == null and self.play_mode.playing() and !self.workspace.simulating) if (self.game) |*game| {
-                    if (game.hasDraw() or game.hasGameUi()) {
-                        const logical = self.workspace.placed.scene.?.rect;
-                        const draw_context = eggy.DrawContext{
-                            .cmd = frame.cmd,
-                            .target = try self.scene.beginOverlay(frame.cmd),
-                            .extent_px = pixelSize(rect),
-                            .viewport = .{ .x = 0, .y = 0, .w = logical.w, .h = logical.h },
-                            .color_format = self.app.graphics.color_format,
-                            .frame_owner = surface,
-                            .frame_slot = surface.slot,
-                        };
+                const game_overlay = self.build_window == null and self.play_mode.playing() and !self.workspace.simulating;
+                const has_game_overlay = game_overlay and if (self.game) |*game| game.hasDraw() or game.hasGameUi() else false;
+                if (has_game_overlay or self.app.debug_draw.line_count != 0 or self.app.debug_draw.label_count != 0) {
+                    const logical = self.workspace.placed.scene.?.rect;
+                    const draw_context = eggy.DrawContext{
+                        .cmd = frame.cmd,
+                        .target = try self.scene.beginOverlay(frame.cmd),
+                        .extent_px = pixelSize(rect),
+                        .viewport = .{ .x = 0, .y = 0, .w = logical.w, .h = logical.h },
+                        .color_format = self.app.graphics.color_format,
+                        .frame_owner = surface,
+                        .frame_slot = surface.slot,
+                    };
+                    if (has_game_overlay) if (self.game) |*game| {
                         game.draw(&self.app, draw_context);
                         if (game.hasGameUi()) {
                             const layer = try self.app.gameUi();
@@ -1493,9 +1502,10 @@ pub fn Editor(comptime project: type) type {
                             if (try layer.render(draw_context)) self.app.input.cancel();
                             try layer.syncClipboard();
                         }
-                        try self.scene.endOverlay(frame.cmd);
-                    }
-                };
+                    };
+                    try self.app.drawDebug(draw_context, self.scene_view.view);
+                    try self.scene.endOverlay(frame.cmd);
+                }
                 // The selected camera's view, unoutlined. Rendering sorts `meshes`, which is no matter.
                 if (preview_px) |inset| try self.camera_preview.render(&self.app.graphics, frame.cmd, pixelSize(inset), meshes, self.scene_view.preview.?, null, false);
             }
