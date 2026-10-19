@@ -28,6 +28,10 @@ pub const Options = struct {
     caps: *const Capabilities,
     /// A GPU is a machine's choice, so a project's defaults leave it out.
     adapter: bool = true,
+    /// The backend `caps.adapters` belong to. A draft on any other backend can't pick from them
+    /// (an index means a different GPU there), so the card stays Automatic until a restart.
+    /// Null skips the check.
+    adapters_backend: ?render_settings.Backend = null,
 };
 
 /// A draft of the graphics settings and the text behind its number fields. Keep it where it
@@ -105,10 +109,16 @@ pub const Form = struct {
         const arena = context.builder().allocator;
 
         beginCard(context, "Graphics API", "What draws the game. Takes effect after the game restarts.");
-        _ = pick(context, "##graphics api", render_settings.Backend, &draft.backend, &backend_labels, caps.backends);
+        // A GPU chosen for the old backend means nothing on the new one.
+        if (pick(context, "##graphics api", render_settings.Backend, &draft.backend, &backend_labels, caps.backends)) draft.adapter_index = null;
         endCard(context);
 
-        if (options.adapter and caps.adapter_count > 0) {
+        const adapters_listed = adaptersFit(options, draft.backend);
+        if (options.adapter and caps.adapter_count > 0 and !adapters_listed) {
+            beginCard(context, "Graphics card", "Cards are listed for the graphics API in use. Restart with this API to choose one.");
+            context.muted(if (draft.adapter_index == null) "Automatic" else "Chosen earlier, for the next start");
+            endCard(context);
+        } else if (options.adapter and caps.adapter_count > 0) {
             beginCard(context, "Graphics card", "Which GPU draws the game. Takes effect after the game restarts.");
             // Names live in the frame's arena: the caller's capabilities may not outlive it.
             const names = arena.alloc([]const u8, caps.adapter_count + 1) catch return false;
@@ -238,6 +248,11 @@ fn setNumber(edit: *NumberEdit, value: anytype) void {
 
 fn parseNumber(comptime T: type, edit: *const NumberEdit) ?T {
     return std.fmt.parseInt(T, std.mem.trim(u8, edit.text(), " "), 10) catch null;
+}
+
+/// Whether the adapter list in `options` is for `backend`, so one of its indices may be picked.
+fn adaptersFit(options: Options, backend: render_settings.Backend) bool {
+    return if (options.adapters_backend) |listed| listed == backend else true;
 }
 
 /// A dropdown of `E`'s choices that `allowed` has, with `value`'s even when it isn't: a project
@@ -395,6 +410,25 @@ test "restart notices appear only for the settings that need one" {
     try std.testing.expect((render_settings.Settings{ .backend = .vulkan }).requiresRestart(.{}));
     try std.testing.expect((render_settings.Settings{ .present_mode = .mailbox }).requiresRestart(.{}));
     try std.testing.expect((render_settings.Settings{ .adapter_index = 1 }).requiresRestart(.{}));
+}
+
+test "a GPU is offered only for the backend its list belongs to" {
+    const caps = testCapabilities();
+    const vulkan_list = Options{ .caps = &caps, .adapters_backend = .vulkan };
+    try std.testing.expect(adaptersFit(vulkan_list, .vulkan));
+    try std.testing.expect(!adaptersFit(vulkan_list, .dx12));
+    try std.testing.expect(adaptersFit(.{ .caps = &caps }, .dx12));
+
+    // A draft on another backend still renders, and building it leaves its settings alone.
+    const gpa = std.testing.allocator;
+    var context = try ui.Context.init(gpa);
+    defer context.deinit();
+    var form = Form{};
+    form.load(.{ .backend = .dx12, .adapter_index = null });
+    context.newFrame(.{ .x = 0, .y = 0, .w = 720, .h = 2400 });
+    try std.testing.expect(!form.build(&context, vulkan_list));
+    try std.testing.expectEqual(@as(?u16, null), form.draft.adapter_index);
+    try std.testing.expect((try context.render()).len > 0);
 }
 
 test "the choice labels cover every enum value in order" {
