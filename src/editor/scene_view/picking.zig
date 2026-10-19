@@ -29,7 +29,7 @@ pub fn pick(drawn: []const eggy.mesh.Drawable, models: *const eggy.model_cache.M
         const along = eggy.transform.apply(to_local, ray.direction, 0);
         const hit: ?f32 = if (drawable.modelFile()) |file| blk: {
             const box = models.bounds(file) orelse continue;
-            break :blk hitBox(origin, along, box[0], box[1]);
+            break :blk hitBox(origin, along, box.min, box.max);
         } else switch (drawable.shape) {
             .sphere => hitSphere(origin, along),
             .plane => hitBox(origin, along, .{ -0.5, -0.001, -0.5 }, .{ 0.5, 0.001, 0.5 }),
@@ -124,7 +124,7 @@ test "the nearest mesh under the pointer is picked, and empty space picks nothin
     var model = at(0, 3);
     model.model_file = "rat.glb";
     model.model_file_len = 7;
-    try models.entries.put(std.testing.allocator, "rat.glb", .{ .vertices = undefined, .indices = undefined, .parts = &.{}, .min = .{ -2, -2, -2 }, .max = .{ 2, 2, 2 } });
+    try models.entries.put(std.testing.allocator, "rat.glb", .{ .vertices = undefined, .indices = undefined, .parts = &.{}, .bounds = .{ .min = .{ -2, -2, -2 }, .max = .{ 2, 2, 2 } } });
     defer models.entries.deinit(std.testing.allocator);
     try std.testing.expectEqual(@as(u32, 3), pick(&.{model}, &models, view, scene, .{ .x = 520, .y = 300 }).?.id);
 }

@@ -22,9 +22,8 @@ pub const Gpu = struct {
     indices: vit.Buffer,
     /// Owned by the cache.
     parts: []const Part,
-    /// The box round its vertices, in its own space.
-    min: [3]f32,
-    max: [3]f32,
+    /// The box round its vertices in its own space, widened to hold every pose its clips reach.
+    bounds: assets.Bounds,
 
     pub const Part = struct {
         first_index: u32,
@@ -106,18 +105,18 @@ pub const ModelCache = struct {
 
     /// The box round the model at `path`, in its own space, if it is loaded (this doesn't
     /// load it).
-    /// Returns `{ minimum, maximum }` by value in model-space units, or null for missing
-    /// and failed entries; does not transform the box to world space.
+    /// Returns the `Bounds` by value in model-space units, or null for missing and failed
+    /// entries; does not transform the box to world space. It is conservative for animated
+    /// models: it holds every pose a clip reaches, so culling by it never hides a moving part.
     ///
     /// ```zig
     /// const box = models.bounds("resources/ship.glb") orelse return;
-    /// const minimum = box[0];
-    /// const maximum = box[1];
+    /// const visible = box.visible(clip_from_local);
     /// ```
-    pub fn bounds(self: *const ModelCache, path: []const u8) ?[2][3]f32 {
+    pub fn bounds(self: *const ModelCache, path: []const u8) ?assets.Bounds {
         const known = self.entries.get(path) orelse return null;
         const gpu = known orelse return null;
-        return .{ gpu.min, gpu.max };
+        return gpu.bounds;
     }
 
     /// Forget every model, so each loads again when next drawn (its file or import settings may
@@ -158,7 +157,10 @@ pub const ModelCache = struct {
     }
 
     fn uploadModel(self: *ModelCache, path: []const u8, model: assets.Model, textures: *TextureCache) !Gpu {
-        const vertices = try vit.Buffer.init(self.device, .{ .label = "model vertices", .size = model.vertices.len * @sizeOf(assets.model.Vertex), .usage = .{ .vertex = true }, .initial_data = std.mem.sliceAsBytes(model.vertices) });
+        // A rigged model's stored corners are in their own space; draw it as its rest pose places them.
+        const rest = try assets.rig.restVertices(self.gpa, model);
+        defer self.gpa.free(rest);
+        const vertices = try vit.Buffer.init(self.device, .{ .label = "model vertices", .size = rest.len * @sizeOf(assets.model.Vertex), .usage = .{ .vertex = true }, .initial_data = std.mem.sliceAsBytes(rest) });
         errdefer vertices.deinit();
         const indices = try vit.Buffer.init(self.device, .{ .label = "model indices", .size = model.indices.len * @sizeOf(u32), .usage = .{ .index = true }, .initial_data = std.mem.sliceAsBytes(model.indices) });
         errdefer indices.deinit();
@@ -180,12 +182,6 @@ pub const ModelCache = struct {
             } else false;
             if (!used) textures.release(gpu);
         };
-        var min: [3]f32 = @splat(std.math.inf(f32));
-        var max: [3]f32 = @splat(-std.math.inf(f32));
-        for (model.vertices) |vertex| for (&min, &max, vertex.position) |*low, *high, at| {
-            low.* = @min(low.*, at);
-            high.* = @max(high.*, at);
-        };
-        return .{ .vertices = vertices, .indices = indices, .parts = parts, .min = min, .max = max };
+        return .{ .vertices = vertices, .indices = indices, .parts = parts, .bounds = model.bounds() };
     }
 };
