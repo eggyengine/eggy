@@ -392,6 +392,8 @@ fn addEngine(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.buil
     // On Windows DirectX 12 comes first, running the SPIR-V shaders through SPIRV-Cross and DXC.
     const windows = target.result.os.tag == .windows;
     const android = target.result.abi.isAndroid();
+    // Slang's prebuilt library, which compiles shaders at run time, is glibc-only on Linux.
+    const slang = !android and (target.result.os.tag != .linux or target.result.abi.isGnu());
     const vitellus = b.dependency("vitellus", .{
         .target = target,
         .optimize = optimize,
@@ -400,7 +402,7 @@ fn addEngine(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.buil
         .enable_spirv_cross = windows,
         .vk = !web,
         .emsdk = emscripten.emsdk,
-        .enable_slang = !android,
+        .enable_slang = slang,
     });
 
     // Built-in shaders: WGSL on the web, SPIR-V elsewhere.
@@ -462,7 +464,12 @@ fn addEngine(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.buil
     if (android) b.addNamedLazyPath("android_java", weeoui.path("examples/android/java"));
     const nvdialog = b.dependency("nvdialog", .{});
     const fatal_dialog = b.createModule(.{ .root_source_file = b.path("src/core/fatal_dialog.zig"), .target = target, .optimize = optimize, .link_libc = true });
-    if (!web and !android) addNvdialog(b, fatal_dialog, nvdialog, target.result);
+    // Linux's dialog links this system's GTK, so a game built for another Linux logs instead.
+    const native_dialog = !web and !android and (target.result.os.tag != .linux or (target.query.isNativeOs() and target.query.isNativeAbi() and target.query.cpu_arch == null));
+    const dialog_options = b.addOptions();
+    dialog_options.addOption(bool, "native_dialog", native_dialog);
+    fatal_dialog.addOptions("fatal_dialog_options", dialog_options);
+    if (native_dialog) addNvdialog(b, fatal_dialog, nvdialog, target.result);
     const sdl3 = sdl_build.dependency(b, target, optimize, if (web) emscripten.include else null) orelse return null;
     const sdl_adapter = b.createModule(.{
         .root_source_file = vitellus.path("src/windowing/sdl3.zig"),
@@ -496,7 +503,7 @@ fn addEngine(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.buil
         .imports = &.{ .{ .name = "weeoui", .module = weeoui.module("weeoui") }, .{ .name = "vitellus", .module = vitellus.module("vitellus") }, .{ .name = "vitellus_spirv", .module = vitellus.module("vitellus_spirv") } },
     });
     engine.addImport("weeoui_vitellus", weeoui_vitellus);
-    const slangc = if (!android) vitellus.module("vitellus_slangc") else blk: {
+    const slangc = if (slang) vitellus.module("vitellus_slangc") else blk: {
         const disabled = b.addOptions();
         disabled.addOption(bool, "available", false);
         const module = b.createModule(.{

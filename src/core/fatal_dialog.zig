@@ -1,6 +1,7 @@
-//! Fatal errors through desktop dialogs or the browser/Android platform logger.
+//! Fatal errors through desktop dialogs, or the platform logger where there is none: the
+//! browser, Android, and Linux games built on another system (whose GTK the dialog can't link).
 const std = @import("std");
-const no_dialog = @import("builtin").os.tag == .emscripten or @import("builtin").abi.isAndroid();
+const no_dialog = !@import("fatal_dialog_options").native_dialog;
 const nvd = if (no_dialog) struct {} else @cImport({
     @cDefine("NVD_STATIC_LINKAGE", "1");
     @cInclude("nvdialog.h");
@@ -27,7 +28,7 @@ pub fn report(stage: []const u8, err: anyerror, detail: ?[]const u8) void {
 
 /// Show a bounded fatal message in a native desktop dialog, borrowing both slices during
 /// the call. May block until dismissed; logs native-dialog failures and does not exit.
-/// On Web/Android this does nothing: use `report` for a console/logcat message.
+/// Without a dialog (Web, Android, cross-built Linux) this does nothing: use `report` to log.
 ///
 /// ```zig
 /// fatal_dialog.show("panic", "A required renderer resource is missing.");
