@@ -178,7 +178,7 @@ pub const Overlay = struct {
     /// Route an already viewport-local SDL event. Standalone UIs use the SDL accessibility
     /// adapter; embedded UIs leave the host window's accessibility adapter in charge.
     /// Host-only: returns whether gameplay must withhold this event; updates UI/capture state,
-    /// consumes synthetic touch-mouse duplicates, and cancels focus on window focus loss.
+    /// Clicking outside controls releases keyboard focus; window focus loss cancels capture.
     ///
     /// ```zig
     /// // Host routing an event into an embedded Scene viewport:
@@ -194,6 +194,7 @@ pub const Overlay = struct {
             else => {},
         }
         var consumed = captures(&self.context, event);
+        if (event == .mouse_button_down and !consumed) self.releaseKeyboard();
         switch (event) {
             .key_down => |key| if (key.scancode) |code| {
                 const index = @intFromEnum(code);
@@ -235,10 +236,7 @@ pub const Overlay = struct {
             const root = self.context.last_root;
             const over_ui = self.context.open_popup != 0 or (if (root) |tree| hit_test.controlAt(tree, point.x, point.y) != 0 or scrollableAt(tree, point.x, point.y) else false);
             if (!over_ui) {
-                if (self.primary_touch == null) {
-                    self.context.focus = 0;
-                    self.context.wants_text = false;
-                }
+                if (self.primary_touch == null) self.releaseKeyboard();
                 return false;
             }
             self.touch_owners.put(self.gpa, key, {}) catch |err| {
@@ -280,17 +278,21 @@ pub const Overlay = struct {
     /// ```
     pub fn cancel(self: *Overlay) void {
         self.pointer_active = false;
-        self.keyboard_owned = false;
+        self.releaseKeyboard();
         self.touch_owners.clearRetainingCapacity();
         self.primary_touch = null;
         self.finger_lifted = false;
-        self.context.focus = 0;
         self.context.active = 0;
         self.context.press = null;
         self.context.pointer_held = false;
         self.context.scroll_drag = null;
         self.context.open_popup = 0;
+    }
+
+    fn releaseKeyboard(self: *Overlay) void {
+        self.context.focus = 0;
         self.context.wants_text = false;
+        self.keyboard_owned = false;
     }
 
     /// Synchronize this UI's clipboard requests; text input ownership is managed by the host.
@@ -470,6 +472,73 @@ test "viewport pixels use the actual window scale" {
     const pixels = pixelRect(.{ .x = 10, .y = 20, .w = 100, .h = 50 }, .{ .x = 0, .y = 0, .w = 400, .h = 300 }, .{ .width = 800, .height = 600 });
     try std.testing.expectEqual(ui.Rect{ .x = 20, .y = 40, .w = 200, .h = 100 }, pixels);
     std.testing.refAllDecls(Overlay);
+}
+
+test "clicking outside game UI restores gameplay keys and preserves captured releases" {
+    for ([_]bool{ false, true }) |embedded| {
+        var overlay = Overlay{
+            .gpa = std.testing.allocator,
+            .queue = undefined,
+            .device = undefined,
+            .color_format = undefined,
+            .renderer = undefined,
+            .context = try ui.Context.init(std.testing.allocator),
+        };
+        defer overlay.context.deinit();
+        var edit = ui.TextEdit(16){};
+        const viewport = ui.Rect{ .x = 0, .y = 0, .w = 400, .h = 300 };
+        overlay.context.newFrame(viewport);
+        _ = overlay.context.textInput("UI text", &edit, "Type here");
+        _ = try overlay.context.render();
+        const field = overlay.context.last_root.?.find(overlay.context.last_focusables.items[0]).?.bounds;
+        var mouse = sdl.events.Event{ .mouse_button_down = .{
+            .common = undefined,
+            .button = .left,
+            .down = true,
+            .clicks = 1,
+            .x = field.x + field.w / 2,
+            .y = field.y + field.h / 2,
+        } };
+        try std.testing.expect(overlay.handle(mouse, embedded));
+        var up = mouse.mouse_button_down;
+        up.down = false;
+        try std.testing.expect(overlay.handle(.{ .mouse_button_up = up }, embedded));
+        overlay.context.newFrame(viewport);
+        _ = overlay.context.textInput("UI text", &edit, "Type here");
+        _ = try overlay.context.render();
+        try std.testing.expect(overlay.context.focus != 0);
+        try std.testing.expect(overlay.context.wants_text);
+        overlay.keyboard_owned = true;
+        const key = sdl.events.Event{ .key_down = .{
+            .common = undefined,
+            .id = null,
+            .scancode = .w,
+            .key = .w,
+            .mod = .{},
+            .raw = 0,
+            .down = true,
+            .repeat = false,
+        } };
+        try std.testing.expect(overlay.handle(key, embedded));
+
+        mouse.mouse_button_down.x = 350;
+        mouse.mouse_button_down.y = 250;
+        try std.testing.expect(!overlay.handle(mouse, embedded));
+        up = mouse.mouse_button_down;
+        up.down = false;
+        try std.testing.expect(!overlay.handle(.{ .mouse_button_up = up }, embedded));
+        try std.testing.expectEqual(@as(u32, 0), overlay.context.focus);
+        try std.testing.expect(!overlay.context.wants_text);
+        try std.testing.expect(!overlay.keyboard_owned);
+        var released = key.key_down;
+        released.down = false;
+        try std.testing.expect(overlay.handle(.{ .key_up = released }, embedded));
+        try std.testing.expect(!overlay.handle(key, embedded));
+        overlay.context.newFrame(viewport);
+        _ = overlay.context.textInput("UI text", &edit, "Type here");
+        _ = try overlay.context.render();
+        try std.testing.expect(!captures(&overlay.context, key));
+    }
 }
 
 test "UI owns touch drags but leaves other contacts to gameplay" {

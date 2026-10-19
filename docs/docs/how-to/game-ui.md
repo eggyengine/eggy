@@ -116,7 +116,8 @@ reaches gameplay's `event` hook and `app.input`; consumed input reaches neither.
 
 Default UI capture clears gameplay holds without inventing release actions. Call
 `app.input.cancel()` when a custom modal interface takes focus. OS lifecycle events
-are never swallowed. Editor shortcuts and modal tools retain precedence.
+are never swallowed. Click outside UI controls to return keyboard input to gameplay.
+Editor shortcuts and modal tools retain precedence.
 
 ## Check layout and input ownership {#exercise-the-examples}
 
@@ -124,7 +125,8 @@ With the first example, click Count and check that the displayed number increase
 
 From an Eggy checkout, run `zig build run-runtime -Dapi-demo=weeoui` to display the
 themed HUD with a copied custom font and a text field. Focus the field and press
-Space: the gameplay counter must not increase.
+Space: the gameplay counter must not increase. Click empty scene space, then use the
+movement keys again: the cube must move and Space must reach gameplay.
 
 Use `-Dapi-demo=custom` to run the custom-renderer-only example, which asserts
 that no default overlay was created. Run `zig build run -Dapi-demo=weeoui` to open
