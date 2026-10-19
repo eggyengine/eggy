@@ -18,7 +18,7 @@ const Job = job_zig.Job;
 const Upgrades = @import("projects/upgrades.zig").Upgrades;
 const file_manager = @import("file_manager.zig");
 const BuildWindow = @import("build_window.zig").BuildWindow;
-const ExportWindow = @import("export_window.zig").ExportWindow;
+const ExportWindow = @import("export/export.zig").ExportWindow;
 const project_settings_zig = @import("project_settings.zig");
 const ProjectSettings = project_settings_zig.ProjectSettings;
 const DevtoolsWindow = @import("devtools_window.zig").DevtoolsWindow;
@@ -617,12 +617,14 @@ pub fn Editor(comptime project: type) type {
             }
             // File > Export, if open.
             if (self.export_window) |window| {
-                const result = try window.update(&self.app.graphics, &self.ui);
+                var editor_context = extensions.context(self);
+                const result = try window.update(&self.app.graphics, &self.ui, if (self.game) |*game| game else null, &editor_context);
                 // Choosing the scene it starts in keeps it as the default: a step to undo.
                 if (result.change) |change| {
                     self.history.recordProjectSettings(change.before, change.after, self.workspace.time_ms);
                     if (self.project_settings) |settings| settings.reload() catch {};
                 }
+                if (result.project_settings) self.showProjectSettings() catch |err| std.log.err("cannot open Project Settings: {t}", .{err});
                 if (!result.open) {
                     window.close(&self.app.graphics);
                     self.export_window = null;
@@ -1402,6 +1404,16 @@ pub fn Editor(comptime project: type) type {
             self.workspace.scene_unsaved = false;
         }
 
+        /// File > Project Settings (and Export's button): Preferences on its Project section.
+        fn showProjectSettings(self: *Self) !void {
+            if (self.project == null) return;
+            self.openPreferences();
+            const window = self.preferences_window orelse return;
+            var arena = std.heap.ArenaAllocator.init(self.gpa);
+            defer arena.deinit();
+            window.show(try self.preferenceSections(arena.allocator()), project_section);
+        }
+
         /// Open Edit > Preferences, with the open project's `eggy.zon` for its Project section.
         fn openPreferences(self: *Self) void {
             if (self.preferences_window != null) return;
@@ -1774,14 +1786,7 @@ pub fn Editor(comptime project: type) type {
                 },
                 .save => self.saveScene(),
                 // Project Settings are the Preferences window's Project section.
-                .project_settings => if (self.project != null) {
-                    self.openPreferences();
-                    if (self.preferences_window) |window| {
-                        var arena = std.heap.ArenaAllocator.init(self.gpa);
-                        defer arena.deinit();
-                        window.show(try self.preferenceSections(arena.allocator()), project_section);
-                    }
-                },
+                .project_settings => try self.showProjectSettings(),
                 .export_game => if (self.export_window == null) if (self.project) |opened| {
                     self.export_window = ExportWindow.open(self.gpa, &self.app.graphics, self.ui.font, self.mono, opened.dir) catch |err| blk: {
                         std.log.err("cannot open Export: {t}", .{err});
@@ -2652,7 +2657,7 @@ test {
     _ = @import("projects/upgrades.zig");
     _ = @import("file_manager.zig");
     _ = @import("build_window.zig");
-    _ = @import("export_window.zig");
+    _ = @import("export/export.zig");
     _ = @import("project_settings.zig");
     _ = @import("devtools_window.zig");
     _ = @import("about_window.zig");

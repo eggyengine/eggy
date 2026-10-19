@@ -26,7 +26,7 @@ pub fn build(b: *std.Build) void {
 
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
-    const macos_sdk = b.option([]const u8, "macos-sdk", "MacOSX.sdk path (default: $HOME/SDKs or --sysroot)");
+    const macos_sdk = b.option([]const u8, "macos-sdk", "MacOSX.sdk path (default: Xcode's on a Mac, else $HOME/SDKs, or --sysroot)");
     if (target.result.os.tag == .macos and b.sysroot == null) {
         b.sysroot = macos_sdk orelse defaultMacSdk(b) orelse {
             std.log.err("macOS builds need --sysroot or -Dmacos-sdk pointing at a MacOSX.sdk", .{});
@@ -834,7 +834,12 @@ fn addNvdialog(b: *std.Build, fatal_dialog: *std.Build.Module, nvdialog: *std.Bu
     }
 }
 
+/// On a Mac, the SDK Xcode or its Command Line Tools installed; elsewhere `~/SDKs`.
 fn defaultMacSdk(b: *std.Build) ?[]const u8 {
+    if (b.graph.host.result.os.tag == .macos) {
+        const sdk = b.run(&.{ "xcrun", "--sdk", "macosx", "--show-sdk-path" });
+        return std.mem.trimEnd(u8, sdk, "\n");
+    }
     const home = b.graph.environ_map.get("HOME") orelse return null;
     return b.pathJoin(&.{ home, "SDKs" });
 }

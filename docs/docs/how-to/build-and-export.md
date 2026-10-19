@@ -49,16 +49,36 @@ the runtime and desktop editor without opening either one.
 
 ### Export for the target platform
 
-File > Export opens the editor workflow and asks for a scene when one is needed.
-From the package directory, the equivalent build step is:
+File > Export lists the platforms down the left, with the chosen one's settings beside
+them and the scene the game starts in above. It asks for that scene first only when the
+project has no default scene; changing it there changes the default. Each platform offers:
+
+- **Architecture**: x86-64 or ARM64 for Windows, Linux and Android, Apple silicon or Intel
+  for macOS.
+- **C library**, for Linux: glibc for most desktop distributions, or musl for Alpine and
+  other small systems. A musl build has no screen reader support and can't compile shaders
+  while it runs. A Linux build for another architecture or C library logs fatal errors
+  instead of showing a dialog.
+- **Optimize for**: Speed (ReleaseFast), Size (ReleaseSmall), Speed with safety checks
+  (ReleaseSafe), or Debugging (Debug).
+- **Tune for this computer**, on this computer's own system: faster here, but the game may
+  not start on older processors.
+- **ZIP archive**, on desktop platforms: whether to zip the folder as well.
+- **macOS SDK**, for macOS from another system: the MacOSX.sdk folder to build with; type
+  its path or choose it with the folder button. On a Mac, Eggy uses the SDK Xcode or its Command Line Tools installed.
+
+Plugins can add platforms and settings; see [Export platforms](../reference/plugin-hooks.md#export-platforms).
+Export shows a progress bar for the whole build and the step under way, with Zig's
+output a click away. From the package directory, the equivalent build step is:
 
 ```sh
 zig build export
 ```
 
 The step builds a ReleaseFast runtime and packages resources and libraries. `-Dtarget`
-selects a platform; ordinary builds also accept `-Doptimize`, but export uses
-ReleaseFast regardless of the current debug build.
+selects a platform, `-Dexport-optimize` the optimization (default ReleaseFast),
+`-Dexport-zip=false` skips the ZIP, and `--sysroot` names a macOS SDK. Ordinary builds'
+`-Doptimize` doesn't apply to export.
 
 For interactive terminal export, run `eggy_editor export`. It lists scenes and common
 target triples. To skip prompts, supply the answers:
@@ -73,7 +93,7 @@ selection. Web and Android exports set up missing SDKs automatically; see
 
 ### Export for Web or Android
 
-Choose **Web** or **Android APK (ARM64)** in File > Export, or use:
+Choose **Web** or **Android** in File > Export, or use:
 
 ```sh
 zig build export -Dtarget=wasm32-emscripten

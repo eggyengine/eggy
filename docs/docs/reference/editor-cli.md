@@ -123,7 +123,8 @@ Run these from the game's package directory. The package must call `eggy.addGame
 | `zig build export` | ReleaseFast runtime directory and ZIP under `zig-out/export/` |
 
 `-Dtarget` selects the target and `-Doptimize` selects optimization for ordinary builds.
-Export always builds the runtime in ReleaseFast. It needs a scene from `-Dscene` or
+Export builds the runtime in ReleaseFast unless `-Dexport-optimize` says otherwise, and
+skips the ZIP with `-Dexport-zip=false`. It needs a scene from `-Dscene` or
 `eggy.zon`'s `.default_scene`; it does not use the editor's last-open scene.
 See [Startup scene selection](project-configuration.md#startup-scene-selection).
 
@@ -132,8 +133,9 @@ See [Startup scene selection](project-configuration.md#startup-scene-selection).
 | Target | Requirements and limits |
 | --- | --- |
 | `native` | Uses the host platform and its native dependencies |
+| `aarch64-linux-gnu`, `x86_64-linux-musl` | Linux for another architecture or C library; fatal errors are logged, not shown in a dialog. musl builds have no screen reader support or run-time shader compiling |
 | `x86_64-windows-gnu` | Builds a Windows desktop runtime; keep its bundled DLLs |
-| `aarch64-macos` | Requires a macOS SDK as well as the Zig target selection |
+| `aarch64-macos` | Uses Xcode's SDK on a Mac; elsewhere requires a macOS SDK through `--sysroot` |
 | `wasm32-emscripten` | Automatic emsdk/WebGPU-port setup; packaged assets preload into the browser; no editor |
 | `aarch64-linux-android.35` | Test-signed APK; automatic Android SDK/NDK/JDK setup on Linux x86-64 and macOS hosts |
 
@@ -146,6 +148,7 @@ Google's Android SDK licenses. SDK downloads and installation errors appear in b
 The CLI exposes no SDK flags: set `EMSDK`, `ANDROID_HOME`/`ANDROID_SDK_ROOT` and
 `JAVA_HOME`/`JDK_HOME` to reuse installed tools. Web also checks `~/emsdk`.
 Eggy's own checkout accepts `-Demsdk` and `-Dandroid-sdk` overrides.
-macOS builds still require `--sysroot` or `-Dmacos-sdk`; that SDK is not downloaded.
+macOS builds on a Mac use the SDK `xcrun` reports. Elsewhere they require `--sysroot`
+(or `-Dmacos-sdk` in Eggy's own checkout) and default to `~/SDKs`; that SDK is not downloaded.
 See [Android and Web export details](../how-to/build-and-export.md#export-for-web-or-android).
 See [Feature support](feature-support.md#capability-support) before choosing a web target.

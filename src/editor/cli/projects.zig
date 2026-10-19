@@ -4,7 +4,7 @@ const eggy = @import("eggy");
 const jobs = @import("../projects/job.zig");
 const template = @import("../projects/template.zig");
 const listing = @import("../assets/listing.zig");
-const platforms = @import("../export_window.zig").platforms;
+const platforms = @import("../export/platforms.zig");
 const Prompt = @import("prompt.zig").Prompt;
 
 pub const New = struct {
@@ -81,7 +81,12 @@ pub fn exportGame(process: *const std.process.Init, prompt: *Prompt, options: Ex
     const scene = try prompt.text(options.scene, "Startup scene (project-relative path)", "scene", config.default_scene);
     try validateScene(process.io, project, scene);
     if (options.target == null and !prompt.non_interactive) {
-        for (platforms) |platform| try prompt.output.print("  {s}: {s}. {s}\n", .{ platform.target, platform.label, platform.note });
+        const defaults = platforms.Settings.defaults();
+        for (defaults, 0..) |settings, i| {
+            const platform: platforms.Platform = @enumFromInt(i);
+            if (platforms.unavailable(platform) != null) continue;
+            try prompt.output.print("  {s}: {s}. {s}\n", .{ platforms.target(platform, settings), platforms.title(platform), platforms.note(platform) });
+        }
     }
     const target = try prompt.text(options.target, "Zig target", "target", "native");
     _ = std.Target.Query.parse(.{ .arch_os_abi = target }) catch |err| {
@@ -93,7 +98,7 @@ pub fn exportGame(process: *const std.process.Init, prompt: *Prompt, options: Ex
         .dir = dir,
         .resources_dir = folders.resources_dir,
         .engines_dir = folders.engines_dir,
-        .action = .{ .export_game = .{ .target = target, .scene = scene } },
+        .action = .{ .export_game = &.{ try std.fmt.allocPrint(prompt.arena, "-Dtarget={s}", .{target}), try std.fmt.allocPrint(prompt.arena, "-Dscene={s}", .{scene}) } },
     });
     defer job.deinit();
     try follow(process, prompt, job);

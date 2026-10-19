@@ -6,7 +6,7 @@ const settings = @import("../project_settings.zig");
 const file_ops = @import("../assets/file_ops.zig");
 const workspace = @import("../workspace.zig");
 const ProjectFlow = @import("../projects/flow.zig").ProjectFlow;
-const ExportWindow = @import("../export_window.zig").ExportWindow;
+const ExportWindow = @import("../export/export.zig").ExportWindow;
 const layout_file = @import("../layout_file.zig");
 const sdl = eggy.sdl_adapter.sdl;
 
