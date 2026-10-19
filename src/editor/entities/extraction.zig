@@ -89,6 +89,7 @@ fn validateReferences(gpa: std.mem.Allocator, world: *ecs.World, access: eggy.sc
         for (access.types(), 0..) |component, index| {
             if (!access.has(world, entity, index)) continue;
             for (component.fields, 0..) |field, field_index| {
+                try @import("snapshot.zig").validateReferenceField(field);
                 if (field.kind != .entity) continue;
                 const text = try access.readFieldAlloc(arena.allocator(), world, entity, index, field_index);
                 const source = try arena.allocator().dupeZ(u8, text);
@@ -152,6 +153,18 @@ test "extraction refuses incoming and outgoing references instead of breaking th
     try std.testing.expectError(error.CrossSceneEntityReference, validateReferences(std.testing.allocator, &world, access, &.{root}));
     world.get(outside, Link).?.target = .{};
     try validateReferences(std.testing.allocator, &world, access, &.{root});
+}
+
+test "extraction rejects incoming nested entity references outside the extracted tree" {
+    const Nested = struct { value: struct { target: eggy.EntityRef(void) = .{} } = .{} };
+    const access = eggy.scene.registryAccess(eggy.components.Registry(&.{Nested}, &.{"game"}));
+    var world = ecs.World.init(std.testing.allocator);
+    defer world.deinit();
+    const root = try world.spawn(.{});
+    const outside = try world.spawn(.{Nested{ .value = .{ .target = .init(root) } }});
+    try std.testing.expectError(error.NestedEntityReferencesUnsupported, validateReferences(std.testing.allocator, &world, access, &.{root}));
+    try std.testing.expect(world.isAlive(root));
+    try std.testing.expectEqual(root, world.get(outside, Nested).?.value.target.entity.?);
 }
 
 test "extraction saves a unique scene and descriptor before replacing anything" {

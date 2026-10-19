@@ -19,6 +19,13 @@ not the generated entities inside them. Replacing the world clears clipboard
 references to entities outside the copied tree, so reused entity IDs cannot bind
 the paste to unrelated objects.
 
+Tree copy, extraction, and undo snapshots currently reject components containing
+`EntityRef` inside a struct, array, optional, or union field. Only direct `EntityRef`
+fields can be remapped safely. This includes inactive union variants and unset
+nested references; rejected copies leave the previous clipboard unchanged.
+Extraction also rejects these fields outside the selected tree, because their
+incoming references cannot be verified safely.
+
 ## Extract a reusable scene
 
 Right-click an entity and choose **Extract tree to scene**. Eggy saves its tree to
