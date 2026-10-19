@@ -84,6 +84,7 @@ test {
     _ = setting_rows;
     _ = @import("game_ui/graphics_form.zig");
     _ = resources;
+    _ = @import("resources/async.zig");
     _ = scenes;
     _ = @import("action.zig");
     _ = @import("graphics.zig");

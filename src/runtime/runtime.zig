@@ -74,7 +74,10 @@ pub fn Runtime(comptime project: type) type {
                 std.log.warn("the game's data folder can't be read ({t}): it starts with no scene, models or textures", .{err});
                 break :blk null;
             };
-            errdefer if (data) |packaged| packaged.close();
+            errdefer if (data) |packaged| {
+                if (app.resource_jobs) |jobs| jobs.clear();
+                packaged.close();
+            };
             if (data) |packaged| {
                 app.graphics.models.loader = packaged.models();
                 app.graphics.textures.loader = packaged.textures();

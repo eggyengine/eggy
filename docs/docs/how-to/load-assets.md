@@ -16,9 +16,9 @@ editor's file operations when moving or renaming them. See
 [assets, scenes, and packaging](../explanation/assets-and-scenes.md) for how IDs and
 packaged files relate to project paths.
 
-Resource providers are synchronous, so load outside hot frame paths when possible.
-Browser resource providers are not implemented. Async reads, streaming, and scene
-replacement return `NotImplemented`.
+Synchronous loading is useful during setup. Use owned asynchronous requests for loads
+that would otherwise stall gameplay. Browser exports read their preloaded packaged data;
+scene streaming is not implemented.
 
 ## Create files in Assets
 
@@ -93,6 +93,35 @@ JPEG, GIF, and BMP. SVG and WebP classification does not imply texture decoding:
 Missing/corrupt/unsupported resources return errors, not empty successful data.
 Common errors include `UnsetAsset`, `FileNotFound`, `NotPackaged`, `InvalidAssetData`,
 `OutOfMemory`, and `AssetLoadFailed`. Provider diagnostics explain other failures.
+
+## Load without blocking gameplay
+
+Store the returned request in your plugin and poll it on later updates:
+
+```zig
+const request = try app.resources().loadModelAsync(gpa, model);
+// On later updates, while this request is pending:
+if (try app.resources().poll(request)) |loaded| {
+    var result = loaded;
+    defer result.deinit();
+    // result.value.model is owned CPU data; upload GPU resources on the render thread.
+}
+```
+
+`readAsync` reads copied files; `loadImageAsync` decodes pixels. `progress` reports
+queued, loading, cancelling, or complete. Poll consumes completed requests, including
+errors, exactly once; using a consumed handle returns `InvalidResourceRequest`.
+Results remain independently owned after the request or world is gone.
+
+Keep the supplied allocator alive until completion or world reset. Request bookkeeping
+and result allocation happen on the caller thread; native imports use private worker
+arenas. At most eight outstanding requests are allowed, including completed results not
+yet polled. Additional requests return `TooManyResourceRequests`.
+
+`cancel(request)` is cooperative and does not wait: an in-progress import finishes,
+discards its output, then polling returns `ResourceCancelled`. Reset/reload/shutdown joins
+workers before unloading code or closing providers. Browser builds do not create threads;
+polling decodes already-preloaded data on the main thread, not a background network fetch.
 
 ## Instantiate a scene
 

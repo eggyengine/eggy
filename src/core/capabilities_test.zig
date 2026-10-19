@@ -53,8 +53,8 @@ test "every missing backend operation returns NotImplemented" {
     try expect(error.NotImplemented, localization.text(std.testing.allocator, "hello"));
 
     const resources = @import("resources/resources.zig").Resources{};
-    try expect(error.NotImplemented, resources.readAsync(std.testing.allocator, @import("refs.zig").AssetRef(.text).init("notes.txt")));
-    try expect(error.NotImplemented, resources.cancel(@enumFromInt(0)));
+    try expect(error.NoAsyncResourceProvider, resources.readAsync(std.testing.allocator, @import("refs.zig").AssetRef(.text).init("notes.txt")));
+    try expect(error.NoAsyncResourceProvider, resources.cancel(@enumFromInt(0)));
     var world = @import("clutch").World.init(std.testing.allocator);
     defer world.deinit();
     var instances = @import("scene_instances.zig").SceneInstances.init(std.testing.allocator);

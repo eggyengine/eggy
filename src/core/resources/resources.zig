@@ -8,11 +8,37 @@ const ModelLoader = @import("../model_cache.zig").Loader;
 const ImageLoader = @import("../texture_cache.zig").Loader;
 const Read = *const fn (*anyopaque, std.mem.Allocator, []const u8) anyerror![:0]u8;
 const support = @import("../support.zig");
-pub const async_support: support.Support = .not_implemented;
-pub const Request = enum(u32) { _ };
+pub const async_support: support.Support = .available;
+pub const Request = enum(u64) { _ };
+pub const LoadKind = enum(u32) { bytes, model, image };
+pub const Progress = enum(u32) { queued, loading, cancelling, complete };
+
+/// An independently owned asynchronous result. Free it with `deinit`, not through the queue.
+pub const Result = struct {
+    gpa: std.mem.Allocator,
+    value: union(LoadKind) { bytes: [:0]u8, model: assets.Model, image: assets.Texture },
+
+    pub fn deinit(self: *Result) void {
+        switch (self.value) {
+            .bytes => |bytes| self.gpa.free(bytes),
+            .model => |*model| model.deinit(self.gpa),
+            .image => |*image| image.deinit(self.gpa),
+        }
+        self.* = undefined;
+    }
+};
+
+/// Host-owned callbacks; no worker ever retains code supplied by a game library.
+pub const AsyncProvider = struct {
+    context: *anyopaque,
+    submit: *const fn (*anyopaque, *const anyopaque, LoadKind, [*]const u8, usize, *u64) callconv(.c) Status,
+    poll: *const fn (*anyopaque, u64, *anyopaque) callconv(.c) Status,
+    cancel: *const fn (*anyopaque, u64) callconv(.c) Status,
+    progress: *const fn (*anyopaque, u64, *Progress) callconv(.c) Status,
+};
 
 /// Stable error codes: Zig error numbers are local to each compilation.
-pub const Status = enum(u32) { ok, not_found, not_packaged, invalid_data, invalid_path, out_of_memory, failed };
+pub const Status = enum(u32) { ok, not_found, not_packaged, invalid_data, invalid_path, out_of_memory, failed, pending, cancelled, invalid_request, too_many_requests };
 const Bytes = extern struct { ptr: [*]u8, len: usize };
 const Provider = struct {
     context: *anyopaque,
@@ -24,6 +50,7 @@ const Provider = struct {
 /// A borrowed, C-safe provider view. Results belong to the caller, never GPU caches.
 pub const Resources = struct {
     provider: ?Provider = null,
+    async_provider: ?AsyncProvider = null,
 
     /// Install host-local loaders. Instantiate in the executable that owns `context` and the
     /// callbacks, which must outlive this view. Only generated C callbacks cross the boundary.
@@ -114,30 +141,60 @@ pub const Resources = struct {
         return result;
     }
 
-    // ponytail: resource providers are synchronous, add request ownership and completion before async reads.
-    /// Reserved asynchronous read API; always returns `NotImplemented`, allocates nothing,
-    /// and never starts a request. Use `read` for supported synchronous reads.
-    ///
-    /// ```zig
-    /// // Capability check, with resources and gpa:
-    /// try std.testing.expectError(error.NotImplemented,
-    ///     resources.readAsync(gpa, refs.AssetRef(.text).init("notes.txt")));
-    /// ```
-    pub fn readAsync(_: Resources, gpa: std.mem.Allocator, file: anytype) support.Error!Request {
+    /// Queue copied-file I/O without blocking native gameplay. `gpa` must remain alive until
+    /// cancellation/reset or completion; results use it only when polled on the caller thread.
+    pub fn readAsync(self: Resources, gpa: std.mem.Allocator, file: anytype) !Request {
         comptime {
             if (refs.refKind(@TypeOf(file)) != .asset) @compileError("readAsync expects an AssetRef");
         }
-        return support.notImplemented(.{ gpa, file });
+        if (assets.manifest.Packaged.of(file.path()) != .copy) return error.ConvertedResource;
+        return self.submit(gpa, .bytes, file.path());
     }
-    /// Reserved cancellation API; always returns `NotImplemented` and changes no state.
-    /// No supported operation currently produces a `Request`.
-    ///
-    /// ```zig
-    /// // Given a future/externally supplied request token:
-    /// try std.testing.expectError(error.NotImplemented, resources.cancel(request));
-    /// ```
-    pub fn cancel(_: Resources, request: Request) support.Error!void {
-        return support.notImplemented(request);
+
+    /// Import/decode CPU model data on a native worker. GPU upload remains on the render thread.
+    pub fn loadModelAsync(self: Resources, gpa: std.mem.Allocator, file: refs.AssetRef(.model)) !Request {
+        return self.submit(gpa, .model, file.path());
+    }
+
+    /// Decode CPU pixels on a native worker, without creating GPU resources.
+    pub fn loadImageAsync(self: Resources, gpa: std.mem.Allocator, file: refs.AssetRef(.image)) !Request {
+        if (!assets.Kind.isTexture(file.path())) return error.UnsupportedImageFormat;
+        return self.submit(gpa, .image, file.path());
+    }
+
+    fn submit(self: Resources, gpa: std.mem.Allocator, kind: LoadKind, path: []const u8) !Request {
+        if (path.len == 0) return error.UnsetAsset;
+        try refs.validatePath(path);
+        const provider = self.async_provider orelse return error.NoAsyncResourceProvider;
+        var id: u64 = undefined;
+        try check(provider.submit(provider.context, &gpa, kind, path.ptr, path.len, &id));
+        return @enumFromInt(id);
+    }
+
+    /// Take a completed result once; null means pending. Failures/cancellation consume the
+    /// request and propagate explicitly. Browser preloads decode when polled, without threads.
+    pub fn poll(self: Resources, request: Request) !?Result {
+        const provider = self.async_provider orelse return error.NoAsyncResourceProvider;
+        var result: Result = undefined;
+        const outcome = provider.poll(provider.context, @intFromEnum(request), &result);
+        if (outcome == .pending) return null;
+        try check(outcome);
+        return result;
+    }
+
+    /// Request cooperative cancellation. Already-running imports finish but their result is
+    /// discarded; poll until `ResourceCancelled`. Cancellation itself does not block.
+    pub fn cancel(self: Resources, request: Request) !void {
+        const provider = self.async_provider orelse return error.NoAsyncResourceProvider;
+        try check(provider.cancel(provider.context, @intFromEnum(request)));
+    }
+
+    /// Observe queued/loading/cancelling/complete state without taking the result.
+    pub fn progress(self: Resources, request: Request) !Progress {
+        const provider = self.async_provider orelse return error.NoAsyncResourceProvider;
+        var result: Progress = undefined;
+        try check(provider.progress(provider.context, @intFromEnum(request), &result));
+        return result;
     }
 
     /// Adapt to a local scene reader. This callback and its caller must be in the same
@@ -157,13 +214,17 @@ pub const Resources = struct {
     }
 };
 
-fn status(err: anyerror, path: []const u8) Status {
+/// Host-only conversion of local errors to stable resource-bridge status codes.
+pub fn status(err: anyerror, path: []const u8) Status {
     return switch (err) {
         error.FileNotFound => .not_found,
         error.NotPackaged => .not_packaged,
-        error.UnexpectedData, error.ParseZon => .invalid_data,
+        error.UnexpectedData, error.ParseZon, error.InvalidAssetData => .invalid_data,
         error.InvalidPath, error.PathTooLong, error.WrongAssetKind => .invalid_path,
         error.OutOfMemory => .out_of_memory,
+        error.ResourceCancelled => .cancelled,
+        error.InvalidResourceRequest => .invalid_request,
+        error.TooManyResourceRequests => .too_many_requests,
         else => {
             std.log.err("resource {s} failed: {t}", .{ path, err });
             return .failed;
@@ -180,6 +241,10 @@ fn check(result: Status) !void {
         .invalid_path => error.InvalidPath,
         .out_of_memory => error.OutOfMemory,
         .failed => error.AssetLoadFailed,
+        .pending => error.ResourcePending,
+        .cancelled => error.ResourceCancelled,
+        .invalid_request => error.InvalidResourceRequest,
+        .too_many_requests => error.TooManyResourceRequests,
     };
 }
 

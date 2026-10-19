@@ -35,8 +35,10 @@ Inspector.
 Working low-level graphics (`eggy.vit`), UI (`eggy.ui`), math (`eggy.math`), ECS
 (`eggy.ecs`), scene formats, and asset formats remain available directly. SDL controllers,
 touch gameplay input, [named input maps](../how-to/map-input.md), value timers, and gameplay
-time scaling are implemented. Streaming and async resource loading are not:
-`Resources.readAsync`/`cancel` and `Scenes.stream` fail explicitly. `Scenes.replace`
+time scaling are implemented. Resource reads, model imports and image decoding have
+owned asynchronous requests with polling, progress and cooperative cancellation.
+Native requests use bounded worker threads; browser builds defer decoding of already-preloaded
+data until polling. `Scenes.stream` is not implemented. `Scenes.replace`
 stages synchronous scene replacement for the end of the gameplay update.
 
 | Surface | Desktop | Web |

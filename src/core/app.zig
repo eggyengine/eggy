@@ -43,6 +43,7 @@ pub const App = struct {
     time: Time = .{},
     /// Installed by the executable before plugin initialization.
     resource_provider: Resources = .{},
+    resource_jobs: ?*@import("resources/async.zig").Queue = null,
     /// Typed registry installed by the game library, never the editor host.
     scene_access: ?scene.Access = null,
     instances: ?SceneInstances = null,
@@ -114,11 +115,13 @@ pub const App = struct {
             break :blk try Graphics.initWithDefaults(gpa, window, options.requested);
         };
         errdefer graphics.deinit();
+        const resource_jobs = try @import("resources/async.zig").Queue.create(gpa);
+        errdefer resource_jobs.destroy();
         options.defaults = options.defaults.supportedDefaults(graphics.capabilities());
         options.requested = graphics.render_settings;
         if (builtin.os.tag == .windows) try window.window.show();
 
-        return .{ .window = window, .process_init = process_init, .init_flags = init_flags, .graphics = graphics, .graphics_options = options, .world = .init(gpa), .preference_values = .init(gpa), .input_backend = input_backend, .input = .{ .backend = input_backend.state.interface() } };
+        return .{ .window = window, .process_init = process_init, .init_flags = init_flags, .graphics = graphics, .graphics_options = options, .world = .init(gpa), .preference_values = .init(gpa), .input_backend = input_backend, .input = .{ .backend = input_backend.state.interface() }, .resource_jobs = resource_jobs };
     }
 
     /// Queue validated live choices; restart-only selections remain pending until next launch.
@@ -151,6 +154,7 @@ pub const App = struct {
     /// ```
     pub fn deinit(self: *App) void {
         self.stopWorld();
+        if (self.resource_jobs) |jobs| jobs.destroy();
         self.clearGameUi();
         self.debug_draw.deinit(self.world.allocator);
         self.scene_transition.deinit();
@@ -190,6 +194,7 @@ pub const App = struct {
     /// defer gpa.free(bytes);
     /// ```
     pub fn resources(self: *const App) Resources {
+        if (self.resource_jobs) |jobs| return jobs.attach(self.resource_provider);
         return self.resource_provider;
     }
 
@@ -277,6 +282,7 @@ pub const App = struct {
     /// ```
     pub fn resetWorld(self: *App) void {
         self.stopWorld();
+        if (self.resource_jobs) |jobs| jobs.clear();
         self.clearGameUi();
         self.debug_draw.deinit(self.world.allocator);
         self.profiling = .{};
