@@ -36,6 +36,7 @@ const ProjectFlow = @import("projects/flow.zig").ProjectFlow;
 const HotGame = @import("hot_reload/hot_reload.zig").HotGame;
 const preferences = @import("preferences/preferences.zig");
 const entities = @import("entities/entities.zig");
+const extraction = @import("entities/extraction.zig");
 const scene_file = @import("scene_file.zig");
 const layout_file = @import("layout_file.zig");
 const PlayMode = @import("play_mode.zig").PlayMode;
@@ -1084,6 +1085,13 @@ pub fn Editor(comptime project: type) type {
 
         /// Clipboard edits are discrete undo steps, not part of a pending field edit.
         fn applyEntityCommands(self: *Self) void {
+            if (self.entity_editor.pending_extract) |entity| {
+                self.entity_editor.pending_extract = null;
+                self.extractEntityTree(entity) catch |err| {
+                    std.log.err("cannot extract entity tree: {t}", .{err});
+                    self.workspace.toast(if (err == error.CrossSceneEntityReference) "Extraction needs all entity references inside the tree" else "Couldn't extract tree: original kept; see the Console");
+                };
+            }
             const request = self.entity_editor.pending_paste orelse return;
             self.entity_editor.pending_paste = null;
             self.pasteEntityTree(request.beside) catch |err| {
@@ -1100,6 +1108,7 @@ pub fn Editor(comptime project: type) type {
             self.history.watch(try self.gpa.dupe(u8, before), std.math.maxInt(u64), false);
             try self.history.reserve();
             const selection = self.entity_editor.selected;
+            const selection_before = self.entity_editor.selectionPlace(&self.app, game);
             const made = (try self.entity_editor.paste(&self.app, game, beside)) orelse return;
             errdefer {
                 self.app.world.despawnRecursive(made);
@@ -1108,8 +1117,59 @@ pub fn Editor(comptime project: type) type {
             const after = self.sceneText() orelse return error.CannotCaptureScene;
             errdefer self.gpa.free(after);
             const baseline = try self.gpa.dupe(u8, after);
-            self.history.record(.{ .scene = .{ .before = before, .after = after } });
+            self.history.record(.{ .scene = .{
+                .before = before,
+                .after = after,
+                .selection_recorded = true,
+                .selection_before = selection_before,
+                .selection_after = self.entity_editor.selectionPlace(&self.app, game),
+            } });
             self.history.setBaseline(baseline);
+        }
+
+        fn extractEntityTree(self: *Self, entity: eggy.ecs.EntityId) !void {
+            if (self.play_mode.playing()) return error.NotEditing;
+            const opened = self.project orelse return error.NoProject;
+            const game = self.gamePtr() orelse return error.NoGameLibrary;
+            const before = self.sceneText() orelse return error.CannotCaptureScene;
+            errdefer self.gpa.free(before);
+            const selection_before = self.entity_editor.selectionPlace(&self.app, game);
+            self.history.watch(try self.gpa.dupe(u8, before), std.math.maxInt(u64), false);
+            try self.history.reserve();
+            const steps = try self.gpa.alloc(history_zig.Step, 2);
+            errdefer self.gpa.free(steps);
+            const label = try self.gpa.dupe(u8, "extracting an entity tree");
+            errdefer self.gpa.free(label);
+
+            var threaded: std.Io.Threaded = .init_single_threaded;
+            const io = threaded.io();
+            var files = try std.Io.Dir.cwd().openDir(io, opened.dir, .{});
+            defer files.close(io);
+            const prepared = try extraction.prepare(self.gpa, io, files, &self.app.world, game.sceneAccess(), entity, eggy.project.scenes_dir);
+            errdefer {
+                prepared.rollback(io, files, &self.app.world);
+                self.gpa.free(prepared.path);
+            }
+            try self.entity_editor.placeReplacement(&self.app.world, prepared.instance, entity);
+            const after = try self.entity_editor.textWithout(&self.app.world, game.sceneAccess(), entity);
+            errdefer self.gpa.free(after);
+            const baseline = try self.gpa.dupe(u8, after);
+
+            // All files and history allocations succeeded; only now remove the original tree.
+            steps[0] = .{ .create = .{ .path = prepared.path } };
+            steps[1] = .{ .scene = .{
+                .before = before,
+                .after = after,
+                .selection_recorded = true,
+                .selection_before = selection_before,
+                .selection_after = selection_before,
+            } };
+            self.app.world.despawnRecursive(entity);
+            self.entity_editor.selected = prepared.instance;
+            self.history.record(.{ .group = .{ .label = label, .steps = steps } });
+            self.history.setBaseline(baseline);
+            self.filesChanged();
+            self.workspace.toast("Extracted tree to resources/scene");
         }
 
         /// Edit > Undo or Redo: carry the step back (`.undo`) or out again (`.redo`).
@@ -1166,7 +1226,10 @@ pub fn Editor(comptime project: type) type {
                     var scene = try eggy.scene.Scene.parse(self.gpa, source);
                     defer scene.deinit();
                     // The world is made anew: the selection follows its entity's place.
-                    const place = self.entity_editor.selectionPlace(&self.app, game);
+                    const place = if (change.selection_recorded)
+                        (if (back) change.selection_before else change.selection_after)
+                    else
+                        self.entity_editor.selectionPlace(&self.app, game);
                     game.restart(&self.app, &scene, self.plugin_switches.off(), .discard);
                     self.entity_editor.reselect(&self.app, game, place);
                     self.history.setBaseline(try self.gpa.dupe(u8, text));

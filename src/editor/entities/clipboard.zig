@@ -15,7 +15,7 @@ pub const Clipboard = struct {
     /// Replace the clipboard only after capturing the complete tree successfully.
     pub fn copy(self: *Clipboard, world: *ecs.World, access: eggy.scene.Access, entity: ecs.EntityId) !void {
         if (!world.isAlive(entity)) return error.DeadEntity;
-        const captured = try eggy.scene.Scene.capture(self.gpa, world, access, &.{entity});
+        const captured = try @import("snapshot.zig").capture(self.gpa, world, access, &.{entity});
         self.deinit();
         self.scene = captured;
     }

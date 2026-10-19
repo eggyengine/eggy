@@ -270,7 +270,7 @@ test "deferred workflow requests are taken once without retaining callbacks" {
 /// ```
 pub fn snapshot(host: anytype) ![]u8 {
     const game = if (host.game) |*loaded| loaded else return error.NoGameLibrary;
-    var scene = try eggy.scene.Scene.capture(host.gpa, &host.app.world, game.sceneAccess(), host.entity_editor.roots(&host.app.world));
+    var scene = try @import("../entities/snapshot.zig").capture(host.gpa, &host.app.world, game.sceneAccess(), host.entity_editor.roots(&host.app.world));
     defer scene.deinit();
     var text: std.Io.Writer.Allocating = .init(host.gpa);
     defer text.deinit();

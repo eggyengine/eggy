@@ -17,9 +17,22 @@ const typing_pause_ms = 1000;
 /// A change as the text before and after it, owned.
 pub const Texts = eggy.Action([]u8);
 
+/// Scene text plus optional traversal positions for an explicit entity command's selection.
+pub const SceneChange = struct {
+    before: []u8,
+    after: []u8,
+    selection_recorded: bool = false,
+    selection_before: ?usize = null,
+    selection_after: ?usize = null,
+
+    pub fn value(self: SceneChange, direction: eggy.Direction) []u8 {
+        return if (direction == .undo) self.before else self.after;
+    }
+};
+
 pub const Step = union(enum) {
     /// The world went from `before` to `after` (both scene files' text).
-    scene: Texts,
+    scene: SceneChange,
     /// Several changes presented as one user operation, owning the label and children.
     group: struct { label: []u8, steps: []Step },
     /// A file or folder was renamed (or moved).

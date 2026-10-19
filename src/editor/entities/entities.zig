@@ -28,6 +28,7 @@ pub const EntityEditor = struct {
     clipboard: Clipboard,
     /// Commands needing the host's immediate undo snapshot.
     pending_paste: ?struct { beside: ?ecs.EntityId } = null,
+    pending_extract: ?ecs.EntityId = null,
 
     /// Create editor-only hierarchy, inspector and root-order state using `gpa`.
     /// Does not create a world; pair with `deinit`.
@@ -257,6 +258,7 @@ pub const EntityEditor = struct {
                 self.hierarchy.can_paste = true;
             },
             .paste => |beside| self.pending_paste = .{ .beside = beside },
+            .extract => |entity| self.pending_extract = entity,
         }
     }
 
@@ -269,6 +271,37 @@ pub const EntityEditor = struct {
         if (target) |entity| try self.moveEntity(&app.world, made, .{ .after = entity });
         self.selected = made;
         return made;
+    }
+
+    /// Prepare a replacement's sibling order while keeping the original tree alive.
+    pub fn placeReplacement(self: *EntityEditor, world: *ecs.World, instance: ecs.EntityId, source: ecs.EntityId) !void {
+        try self.moveEntity(world, instance, .{ .before = source });
+    }
+
+    /// Capture the replacement world without destroying the source until history is ready.
+    pub fn textWithout(self: *EntityEditor, world: *ecs.World, access: eggy.scene.Access, source: ecs.EntityId) ![]u8 {
+        const ordered = self.roots(world);
+        var kept_roots: std.ArrayList(ecs.EntityId) = .empty;
+        defer kept_roots.deinit(self.gpa);
+        for (ordered) |root| if (!root.eql(source)) try kept_roots.append(self.gpa, root);
+        const parent = world.getParent(source);
+        var sibling_index: usize = 0;
+        if (parent) |up| {
+            var children = world.children(up);
+            while (children.next()) |child| {
+                if (child.eql(source)) break;
+                sibling_index += 1;
+            }
+            world.removeParent(source);
+        }
+        // Removing one child leaves capacity for restoring it without allocation.
+        defer if (parent) |up| world.insertChild(up, source, sibling_index) catch unreachable;
+        var scene = try @import("snapshot.zig").capture(self.gpa, world, access, kept_roots.items);
+        defer scene.deinit();
+        var text: std.Io.Writer.Allocating = .init(self.gpa);
+        defer text.deinit();
+        try scene.write(&text.writer);
+        return text.toOwnedSlice();
     }
 
     /// Move `entity` to `place`: under a parent (last), beside a sibling, or to the end of the
@@ -502,6 +535,7 @@ fn referenceLabel(arena: std.mem.Allocator, app: *eggy.App, game: *const HotGame
 
 test {
     _ = @import("clipboard.zig");
+    _ = @import("extraction.zig");
     _ = @import("root_order.zig");
     _ = @import("tree.zig");
     _ = @import("hierarchy.zig");

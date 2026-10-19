@@ -31,6 +31,7 @@ pub const Action = union(enum) {
     duplicate: ecs.EntityId,
     copy: ecs.EntityId,
     paste: ?ecs.EntityId,
+    extract: ecs.EntityId,
 };
 
 const NameEdit = ui.TextEdit(eggy.Name.max_len);
@@ -51,7 +52,7 @@ const same_spot: f32 = 2;
 const name_size: f32 = 12;
 const components_size: f32 = 11;
 
-const MenuItem = enum(u32) { rename, add_child, duplicate, copy, paste, to_top, delete, add_entity };
+const MenuItem = enum(u32) { rename, add_child, duplicate, copy, paste, extract, to_top, delete, add_entity };
 
 /// Where an entity moves to.
 pub const Place = union(enum) {
@@ -380,6 +381,7 @@ pub const Hierarchy = struct {
                 .{ .id = menuId(.copy), .label = "Copy tree" },
             }) catch return null;
             if (self.can_paste) choices.append(arena, .{ .id = menuId(.paste), .label = "Paste tree" }) catch return null;
+            choices.append(arena, .{ .id = menuId(.extract), .label = "Extract tree to scene" }) catch return null;
             if (menu.has_parent) choices.append(arena, .{ .id = menuId(.to_top), .label = "Move to top level" }) catch return null;
             choices.append(arena, .{ .id = menuId(.delete), .label = "Delete" }) catch return null;
         } else {
@@ -410,6 +412,7 @@ pub const Hierarchy = struct {
                 .duplicate => .{ .duplicate = entity.? },
                 .copy => .{ .copy = entity.? },
                 .paste => .{ .paste = entity },
+                .extract => .{ .extract = entity.? },
                 .to_top => .{ .move = .{ .entity = entity.?, .place = .top_level } },
                 .delete => .{ .delete = entity.? },
                 .add_entity => .{ .spawn = null },
