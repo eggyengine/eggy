@@ -73,6 +73,7 @@ pub const editor = @import("editor_api/editor_api.zig");
 pub const game_ui = @import("game_ui/game_ui.zig");
 pub const DrawContext = game_ui.DrawContext;
 pub const graphics_settings = @import("game_ui/graphics_settings.zig");
+pub const setting_rows = @import("game_ui/setting_rows.zig");
 pub const ui_hit_test = @import("ui_hit_test.zig");
 
 test {
@@ -80,6 +81,7 @@ test {
     _ = editor;
     _ = game_ui;
     _ = graphics_settings;
+    _ = setting_rows;
     _ = @import("game_ui/graphics_form.zig");
     _ = resources;
     _ = scenes;

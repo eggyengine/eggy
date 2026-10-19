@@ -1,7 +1,7 @@
-//! Edit > Preferences: a section for the editor's preferences and, with a project open, one for
-//! its `eggy.zon` (`project_settings.zig`), one for how the editor draws (graphics), one with a switch for each of its plugins and one for
-//! each plugin's preferences, each field with the
-//! control its kind calls for. The editor's apply to every
+//! Edit > Preferences: a section for the editor's preferences, one for how the editor draws
+//! (graphics) and, with a project open, one for its `eggy.zon` (`project_settings.zig`), one with
+//! a switch for each of its plugins and one for each plugin's preferences: each a list of rows
+//! (`eggy.setting_rows`), each field with the control its kind calls for. The editor's apply to every
 //! project (the global layer) or to this one (its `.eggy/`), which overrides the global value; a
 //! plugin's apply to the project only. Reset drops a scope's value. Every change is saved as it
 //! is made.
@@ -18,6 +18,8 @@ const History = @import("../history.zig").History;
 const page_style = @import("../page_style.zig");
 const ProjectSettings = @import("../project_settings.zig").ProjectSettings;
 const graphics_settings = eggy.graphics_settings;
+const setting_rows = eggy.setting_rows;
+const SettingRows = setting_rows.SettingRows;
 const restyle = page_style.restyle;
 const smallText = page_style.smallText;
 const noteText = page_style.noteText;
@@ -49,8 +51,7 @@ pub const Switch = struct { key: []const u8, on: bool };
 const max_fields = 64;
 const NumberEdit = ui.TextEdit(64);
 const scopes = [_][]const u8{ "All projects", "This project" };
-const sidebar_width: f32 = 170;
-const control_width: f32 = 200;
+const sidebar_width: f32 = 160;
 /// Which tab and scope the window shows.
 const Showing = struct { section: usize, scope: usize };
 
@@ -76,6 +77,9 @@ pub const PreferencesWindow = struct {
     graphics_loaded: bool = false,
     capturing_stop_key: bool = false,
     captured_stop_key: ?eggy.Key = null,
+    /// The sections' list and the section shown scroll apart.
+    sidebar_scroll: ui.Layout.ScrollState = .{},
+    section_scroll: ui.Layout.ScrollState = .{},
 
     /// Open the window. On the heap, as its page keeps a pointer to it.
     /// Desktop editor only: borrows live graphics/font resources and returns a caller-managed
@@ -88,7 +92,7 @@ pub const PreferencesWindow = struct {
     pub fn open(gpa: std.mem.Allocator, graphics: *const eggy.Graphics, font: *ui.Font) !*PreferencesWindow {
         const self = try gpa.create(PreferencesWindow);
         errdefer gpa.destroy(self);
-        self.* = .{ .gpa = gpa, .window = try ToolWindow.open(gpa, graphics, font, "Preferences", .{ 620, 520 }, .{ .resizable = true }) };
+        self.* = .{ .gpa = gpa, .window = try ToolWindow.open(gpa, graphics, font, "Preferences", .{ 760, 560 }, .{ .resizable = true }) };
         return self;
     }
 
@@ -196,17 +200,19 @@ pub const PreferencesWindow = struct {
             self.scope_picked = true;
         }
 
+        // Two panes the window's height, each scrolling on its own.
+        const pane_height = page_style.pageHeight(context);
         context.begin(.row);
-        context.begin(.column);
+        context.beginScroll(&self.sidebar_scroll, pane_height);
         for (sections, 0..) |section, i| self.sidebarItem(context, section.title, i);
         context.end();
         restyle(context, .{ .width = sidebar_width, .gap = 2 });
-        context.begin(.column);
+        context.beginScroll(&self.section_scroll, pane_height);
         self.buildSection(context, sections[self.section], store, folders);
         context.end();
-        restyle(context, .{ .grow = 1, .gap = 10 });
+        restyle(context, .{ .grow = 1, .gap = 16 });
         context.end();
-        restyle(context, .{ .direction = .row, .gap = 20, .align_items = .start });
+        restyle(context, .{ .direction = .row, .gap = 24, .align_items = .start });
     }
 
     /// A section's row in the sidebar, lit while it is shown; pressing it shows it.
@@ -216,6 +222,7 @@ pub const PreferencesWindow = struct {
         if (context.activated(id) and self.section != index) {
             self.section = index;
             self.synced = null;
+            self.section_scroll = .{};
         }
         const row = context.builder().node(id, .{ .height = 30 }, .{ .menu_item = .{ .label = title, .hot = self.section == index } }, &.{}) catch return;
         row.cursor = .pointer;
@@ -223,52 +230,47 @@ pub const PreferencesWindow = struct {
         context.element(row);
     }
 
-    /// The section shown: its title and where its values apply, then a card per preference.
+    /// The section shown: its title, what it is and where its values are saved, then its settings.
     fn buildSection(self: *PreferencesWindow, context: *ui.Context, section: Section, store: *Store, folders: files.Folders) void {
-        // The header: the section, and (with a project) which layer the values go to.
+        // Only the editor's preferences also apply to every project; a plugin's are the project's.
+        const is_editor = section.content == .preferences and std.mem.eql(u8, section.content.preferences.key, files.editor_key);
+        const scope: usize = if (is_editor) self.scope else 1;
+        const saved_where: []const u8 = switch (section.content) {
+            .preferences => if (!is_editor)
+                "Saved in this project and built into the game."
+            else if (scope == 0)
+                "Your defaults for every project. A project can override them."
+            else
+                "For this project only, overriding All projects.",
+            .plugins => "Saved in this project. A plugin that is off doesn't run in the editor or the game; its components and preferences keep their values.",
+            .project => "Saved in eggy.zon as you change them.",
+            .graphics => "Saved for you, not the project. Players choose their own in the game.",
+        };
+
+        // The header: the section and what it holds, and (for the editor's, with a project)
+        // which layer the values go to.
+        const arena = context.builder().allocator;
         context.begin(.row);
         context.begin(.column);
         context.heading(3, section.title);
-        context.muted(section.subtitle);
-        smallText(context, 13);
+        context.muted(std.fmt.allocPrint(arena, "{s} {s}", .{ section.subtitle, saved_where }) catch section.subtitle);
+        smallText(context, 12);
         context.end();
-        restyle(context, .{ .grow = 1, .gap = 2 });
-        // Only the editor's preferences also apply to every project; a plugin's are the project's.
-        const manifest = switch (section.content) {
-            .preferences => |manifest| manifest,
-            .plugins => |plugins| {
-                context.end();
-                restyle(context, .{ .direction = .row, .gap = 16, .align_items = .center });
-                return self.pluginCards(context, plugins);
-            },
-            .project => |settings| {
-                context.end();
-                restyle(context, .{ .direction = .row, .gap = 16, .align_items = .center });
-                return settings.build(context);
-            },
-            .graphics => |app| {
-                context.end();
-                restyle(context, .{ .direction = .row, .gap = 16, .align_items = .center });
-                return self.graphicsCards(context, app);
-            },
-        };
-        const is_editor = std.mem.eql(u8, manifest.key, files.editor_key);
+        restyle(context, .{ .grow = 1, .gap = 4 });
         if (is_editor and folders.project != null) {
             if (context.tabs(&scopes, &self.scope)) self.synced = null;
         }
         context.end();
-        restyle(context, .{ .direction = .row, .gap = 16, .align_items = .center });
-        const scope: usize = if (is_editor) self.scope else 1;
-        context.muted(if (!is_editor)
-            "Saved in this project's .eggy folder and built into the game."
-        else if (scope == 0)
-            "Your defaults for every project, kept in Eggy's data folder. A project can override them."
-        else
-            "Saved in this project's .eggy folder, overriding All projects.");
-        smallText(context, 12);
+        restyle(context, .{ .direction = .row, .gap = 16, .align_items = .start });
 
-        const layer: Store.Layer = if (scope == 1) .project else .global;
+        const manifest = switch (section.content) {
+            .preferences => |manifest| manifest,
+            .plugins => |plugins| return self.pluginRows(context, plugins),
+            .project => |settings| return settings.build(context),
+            .graphics => |app| return self.graphicsRows(context, app),
+        };
         if (manifest.fields.len == 0) return context.muted("Nothing to set here.");
+        const layer: Store.Layer = if (scope == 1) .project else .global;
 
         // The number fields start from the values shown, for each section and scope.
         const showing = Showing{ .section = self.section, .scope = scope };
@@ -278,68 +280,52 @@ pub const PreferencesWindow = struct {
             }
             self.synced = showing;
         }
-        for (manifest.fields[0..@min(manifest.fields.len, max_fields)], 0..) |field, i| self.fieldCard(context, store, folders, layer, manifest.key, field, &self.edits[i]);
+        var rows = SettingRows{};
+        setting_rows.beginGroup(context);
+        for (manifest.fields[0..@min(manifest.fields.len, max_fields)], 0..) |field, i| self.fieldRow(context, &rows, store, folders, layer, manifest.key, field, &self.edits[i]);
+        setting_rows.endGroup(context);
     }
 
     /// The Graphics section: the editor's own choices, kept for the user beside the editor's
     /// preferences, applied (and saved) with a button.
-    fn graphicsCards(self: *PreferencesWindow, context: *ui.Context, app: *eggy.App) void {
-        context.muted("How the editor draws its own view. Saved for you, not the project; a game's players choose theirs in the game.");
-        smallText(context, 12);
+    fn graphicsRows(self: *PreferencesWindow, context: *ui.Context, app: *eggy.App) void {
         if (!self.graphics_loaded) {
             self.graphics.load(app.graphics_options.requested);
             self.graphics_loaded = true;
         }
+        setting_rows.beginGroup(context);
         graphics_settings.buildOptions(&self.graphics, context, app);
+        setting_rows.endGroup(context);
         if (graphics_settings.buildButtons(&self.graphics, context, app, "Revert")) self.graphics.load(app.graphics_options.requested);
     }
 
-    /// The Plugins section: a card per plugin with its switch.
-    fn pluginCards(self: *PreferencesWindow, context: *ui.Context, plugins: []const Plugin) void {
-        context.muted("A plugin that is off doesn't start and none of its code runs, in the editor or the game. Its components and preferences keep their values. Saved in this project's .eggy folder.");
-        smallText(context, 12);
+    /// The Plugins section: a row per plugin with its switch.
+    fn pluginRows(self: *PreferencesWindow, context: *ui.Context, plugins: []const Plugin) void {
         if (plugins.len == 0) return context.muted("This project has no plugins: list them in addGame's .plugins in build.zig.");
         const arena = context.builder().allocator;
+        var rows = SettingRows{};
+        setting_rows.beginGroup(context);
         for (plugins) |plugin| {
-            context.begin(.card);
-            context.begin(.row);
-            context.begin(.column);
-            context.text(plugin.title);
-            context.muted(std.fmt.allocPrint(arena, "{s} · {s}", .{ plugin.key, if (plugin.on) "on" else "off" }) catch plugin.key);
-            smallText(context, 13);
-            context.end();
-            restyle(context, .{ .grow = 1, .gap = 4 });
+            const hidden = std.fmt.allocPrint(arena, "##plugin {s}", .{plugin.key}) catch continue;
+            rows.begin(context, plugin.title, plugin.key);
             var on = plugin.on;
-            const hidden = std.fmt.allocPrint(arena, "##plugin {s}", .{plugin.key}) catch return;
             if (context.toggle(hidden, &on)) self.flipped = .{ .key = plugin.key, .on = on };
-            context.end();
-            restyle(context, .{ .direction = .row, .gap = 20, .align_items = .center });
-            context.end();
-            restyle(context, .{ .padding = .{ .left = 16, .right = 16, .top = 12, .bottom = 12 } });
+            rows.end(context);
         }
+        setting_rows.endGroup(context);
     }
 
-    /// One preference: its name and description on the left, its control on the right, and
-    /// under the control where the value comes from (or Reset, when this scope sets it).
-    fn fieldCard(self: *PreferencesWindow, context: *ui.Context, store: *Store, folders: files.Folders, layer: Store.Layer, key: []const u8, field: prefs.Field, edit: *NumberEdit) void {
+    /// One preference as a row: its name and description on the left, its control on the right,
+    /// and under the control Reset when this scope sets it, or where an inherited value is from.
+    fn fieldRow(self: *PreferencesWindow, context: *ui.Context, rows: *SettingRows, store: *Store, folders: files.Folders, layer: Store.Layer, key: []const u8, field: prefs.Field, edit: *NumberEdit) void {
         const arena = context.builder().allocator;
         const title = files.displayName(arena, field.name) catch field.name;
         const value = current(store, layer, key, field);
         // Controls take their ids from their (hidden) label: the field's name.
         const hidden = std.fmt.allocPrint(arena, "##{s}", .{field.name}) catch return;
+        const global_sets_it = store.literal(.global, key, field.name) != null;
 
-        context.begin(.card);
-        context.begin(.row);
-        context.begin(.column);
-        context.text(title);
-        if (field.description.len > 0) {
-            context.muted(field.description);
-            smallText(context, 13);
-        }
-        context.end();
-        restyle(context, .{ .grow = 1, .gap = 4 });
-
-        context.begin(.column);
+        rows.begin(context, title, field.description);
         const changed: ?[]const u8 = switch (field.kind) {
             .bool => blk: {
                 var on = std.mem.eql(u8, value, "true");
@@ -374,16 +360,17 @@ pub const PreferencesWindow = struct {
         };
         if (changed) |literal| self.apply(store, folders, layer, key, field.name, literal);
 
-        // Where the value comes from; Reset drops this scope's value.
+        // Reset drops this scope's value; a value from elsewhere says where it is from. A default
+        // says nothing.
         if (store.literal(layer, key, field.name) != null) {
-            const reset_label = std.fmt.allocPrint(arena, "Reset to {s}##reset {s}", .{ if (layer == .project and store.literal(.global, key, field.name) != null) "All projects" else "default", field.name }) catch return;
+            const reset_label = std.fmt.allocPrint(arena, "Reset to {s}##reset {s}", .{ if (layer == .project and global_sets_it) "All projects" else "default", field.name }) catch "Reset";
             if (context.buttonVariant(reset_label, .link)) {
                 self.apply(store, folders, layer, key, field.name, null);
                 self.synced = null;
             }
             restyle(context, .{ .height = 20, .padding = .{} });
-        } else {
-            context.muted(if (layer == .project and store.literal(.global, key, field.name) != null) "From All projects" else "Default");
+        } else if (layer == .project and global_sets_it) {
+            context.muted("From All projects");
             noteText(context);
         }
         // All projects' value doesn't apply where the project sets its own: say so.
@@ -391,12 +378,7 @@ pub const PreferencesWindow = struct {
             context.muted(std.fmt.allocPrint(arena, "This project uses {s}", .{project_value}) catch "This project overrides it");
             noteText(context);
         };
-        context.end();
-        restyle(context, .{ .width = control_width, .gap = 4, .align_items = .end });
-        context.end();
-        restyle(context, .{ .direction = .row, .gap = 20, .align_items = .center });
-        context.end();
-        restyle(context, .{ .padding = .{ .left = 16, .right = 16, .top = 12, .bottom = 12 } });
+        rows.end(context);
     }
 
     /// Set `field` of `key` in `layer` to `literal` (null clears it), and save its file.

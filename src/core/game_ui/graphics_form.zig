@@ -1,15 +1,14 @@
-//! The graphics options as Weeoui cards (a card per option, its name and note on the left and its
-//! control on the right), shared by the player's graphics menu, the editor's Graphics
-//! preferences and the Project section's defaults. It edits a draft `Settings`; whoever shows it
-//! decides when the draft is applied.
+//! The graphics options as a list of setting rows (`setting_rows.zig`), shared by the player's
+//! graphics menu, the editor's Graphics preferences and the Project section's defaults. It edits
+//! a draft `Settings`; whoever shows it decides when the draft is applied.
 const std = @import("std");
 const ui = @import("weeoui");
 const render_settings = @import("../render_settings.zig");
+const SettingRows = @import("setting_rows.zig").SettingRows;
 
 const Settings = render_settings.Settings;
 const Capabilities = render_settings.Capabilities;
 const NumberEdit = ui.TextEdit(12);
-const control_width: f32 = 240;
 const render_scale_step: f32 = 0.05;
 
 const backend_labels = [_][]const u8{ "Automatic", "Vulkan", "Direct3D 12", "WebGPU" };
@@ -96,7 +95,7 @@ pub const Form = struct {
         self.message_kind = if (applied == .queued) .saved else .restart;
     }
 
-    /// Declare a card per option the machine offers, editing the draft. Returns whether the
+    /// Declare a row per option the machine offers, editing the draft. Returns whether the
     /// draft changed this frame. Call in a frame with an active `context`; borrows nothing past it.
     ///
     /// ```zig
@@ -107,78 +106,83 @@ pub const Form = struct {
         const caps = options.caps;
         const draft = &self.draft;
         const arena = context.builder().allocator;
+        var rows = SettingRows{};
 
-        beginCard(context, "Graphics API", "What draws the game. Takes effect after the game restarts.");
+        rows.begin(context, "Graphics API", "What draws the game. Takes effect after the game restarts.");
         // A GPU chosen for the old backend means nothing on the new one.
         if (pick(context, "##graphics api", render_settings.Backend, &draft.backend, &backend_labels, caps.backends)) draft.adapter_index = null;
-        endCard(context);
+        rows.end(context);
 
         const adapters_listed = adaptersFit(options, draft.backend);
         if (options.adapter and caps.adapter_count > 0 and !adapters_listed) {
-            beginCard(context, "Graphics card", "Cards are listed for the graphics API in use. Restart with this API to choose one.");
+            rows.begin(context, "Graphics card", "Cards are listed for the graphics API in use. Restart with this API to choose one.");
             context.muted(if (draft.adapter_index == null) "Automatic" else "Chosen earlier, for the next start");
-            endCard(context);
+            rows.end(context);
         } else if (options.adapter and caps.adapter_count > 0) {
-            beginCard(context, "Graphics card", "Which GPU draws the game. Takes effect after the game restarts.");
+            rows.begin(context, "Graphics card", "Which GPU draws the game. Takes effect after the game restarts.");
             // Names live in the frame's arena: the caller's capabilities may not outlive it.
             const names = arena.alloc([]const u8, caps.adapter_count + 1) catch return false;
             names[0] = "Automatic";
             for (caps.adapters[0..caps.adapter_count], names[1..]) |*adapter, *name| name.* = arena.dupe(u8, adapter.nameSlice()) catch return false;
             var selected: usize = if (draft.adapter_index) |index| @min(@as(usize, index) + 1, caps.adapter_count) else 0;
             if (context.select("##graphics card", names, &selected)) draft.adapter_index = if (selected == 0) null else @intCast(selected - 1);
-            endCard(context);
+            rows.end(context);
         }
 
         if (caps.window_settings) {
-            beginCard(context, "Window mode", "Borderless fullscreen fills the screen without changing its resolution.");
+            rows.begin(context, "Window mode", "Borderless fullscreen fills the screen without changing its resolution.");
             _ = pick(context, "##window mode", render_settings.WindowMode, &draft.window_mode, &window_mode_labels, .initFull());
-            endCard(context);
+            rows.end(context);
             if (draft.window_mode == .windowed) {
-                beginCard(context, "Window size", "How big the window opens, in pixels.");
+                rows.begin(context, "Window size", "How big the window opens, in pixels.");
+                // Both numbers on one line, each just wide enough for a resolution.
                 context.begin(.row);
                 _ = context.textInput("##window width", &self.width, "900");
+                if (context.last_added) |element| element.style.width = 96;
                 context.text("×");
                 _ = context.textInput("##window height", &self.height, "675");
+                if (context.last_added) |element| element.style.width = 96;
                 context.end();
-                endCard(context);
+                if (context.last_added) |element| element.style.wrap = false;
+                rows.end(context);
             }
         }
 
-        beginCard(context, "Vertical sync", "Waits for the screen to refresh: no tearing, but more delay. Takes effect after the game restarts.");
+        rows.begin(context, "Vertical sync", "Waits for the screen to refresh: no tearing, but more delay. Takes effect after the game restarts.");
         _ = pick(context, "##present mode", render_settings.PresentMode, &draft.present_mode, &present_mode_labels, caps.present_modes);
-        endCard(context);
+        rows.end(context);
 
         if (caps.frame_limit) {
-            beginCard(context, "Frame rate limit", "Frames per second, up to 1000. 0 is unlimited.");
+            rows.begin(context, "Frame rate limit", "Frames per second, up to 1000. 0 is unlimited.");
             _ = context.textInput("##frame limit", &self.frame_limit, "0");
-            endCard(context);
+            rows.end(context);
         }
 
-        beginCard(context, "Render scale", "How many pixels the 3D scene is drawn at, from 0.25x to 2x. Below 1 is faster, above 1 is crisper. The interface stays sharp.");
+        rows.begin(context, "Render scale", "How many pixels the 3D scene is drawn at, from 0.25x to 2x. Below 1 is faster, above 1 is crisper. The interface stays sharp.");
         var scale = draft.render_scale;
         if (context.slider("##render scale", &scale, 0.25, 2)) draft.render_scale = @round(scale / render_scale_step) * render_scale_step;
         context.muted(std.fmt.allocPrint(arena, "{d:.2}×", .{draft.render_scale}) catch "");
-        endCard(context);
+        rows.end(context);
 
-        beginCard(context, "Antialiasing", "Smooths jagged edges. MSAA is sharper; FXAA is cheaper and softens textures a little.");
+        rows.begin(context, "Antialiasing", "Smooths jagged edges. MSAA is sharper; FXAA is cheaper and softens textures a little.");
         _ = pick(context, "##anti aliasing", render_settings.AntiAliasing, &draft.anti_aliasing, &anti_aliasing_labels, caps.anti_aliasing);
-        endCard(context);
+        rows.end(context);
 
-        beginCard(context, "Mipmapping", "Smaller copies of each texture for distant surfaces: less shimmer, a little more memory.");
-        _ = context.checkbox("Enabled##mipmaps", &draft.mipmaps);
-        endCard(context);
+        rows.begin(context, "Mipmapping", "Smaller copies of each texture for distant surfaces: less shimmer, a little more memory.");
+        _ = context.toggle("##mipmaps", &draft.mipmaps);
+        rows.end(context);
 
-        beginCard(context, "Texture filtering", "How textures are smoothed up close. Linear with mipmapping is trilinear.");
+        rows.begin(context, "Texture filtering", "How textures are smoothed up close. Linear with mipmapping is trilinear.");
         if (pick(context, "##texture filter", render_settings.TextureFilter, &draft.texture_filter, &texture_filter_labels, .initFull())) {
             // Anisotropic filtering works only on smoothed textures.
             if (draft.texture_filter == .nearest) draft.anisotropy = 1;
         }
-        endCard(context);
+        rows.end(context);
 
         if (caps.max_anisotropy > 1 and draft.texture_filter == .linear) {
-            beginCard(context, "Anisotropic filtering", "Keeps textures sharp at a slant, such as a road stretching away.");
+            rows.begin(context, "Anisotropic filtering", "Keeps textures sharp at a slant, such as a road stretching away.");
             pickAnisotropy(context, &draft.anisotropy, caps.max_anisotropy);
-            endCard(context);
+            rows.end(context);
         }
 
         // The number fields count only while they are whole numbers; `settings` says otherwise.
@@ -289,39 +293,6 @@ fn pickAnisotropy(context: *ui.Context, value: *u16, max: u16) void {
         levels.append(arena, level) catch return;
     }
     if (context.select("##anisotropy", names.items, &selected)) value.* = levels.items[selected];
-}
-
-/// Open a card: its `title` and `note` on the left; its control follows, then `endCard`.
-fn beginCard(context: *ui.Context, title: []const u8, note: []const u8) void {
-    context.begin(.card);
-    context.begin(.row);
-    context.begin(.column);
-    context.text(title);
-    context.muted(note);
-    context.end();
-    if (context.last_added) |element| {
-        element.style.grow = 1;
-        element.style.gap = 4;
-    }
-    context.begin(.column);
-}
-
-/// Close the card `beginCard` opened, its control right-aligned.
-fn endCard(context: *ui.Context) void {
-    context.end();
-    if (context.last_added) |element| {
-        element.style.width = control_width;
-        element.style.align_items = .end;
-    }
-    context.end();
-    if (context.last_added) |element| {
-        element.style.direction = .row;
-        element.style.gap = 20;
-        element.style.align_items = .center;
-        element.style.wrap = false;
-    }
-    context.end();
-    if (context.last_added) |element| element.style.max_width = null;
 }
 
 fn testCapabilities() Capabilities {

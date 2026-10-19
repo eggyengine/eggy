@@ -11,13 +11,14 @@ const listing = @import("assets/listing.zig");
 const page_style = @import("page_style.zig");
 const restyle = page_style.restyle;
 const smallText = page_style.smallText;
+const setting_rows = eggy.setting_rows;
+const SettingRows = setting_rows.SettingRows;
 
 const render_settings = eggy.render_settings;
 const ShortEdit = ui.TextEdit(64);
 const LongEdit = ui.TextEdit(256);
 /// The most entries of the project's own it holds.
 const max_extra = 32;
-const control_width: f32 = 240;
 
 /// `eggy.zon` changed from `before` to `after` (both its text, owned by `gpa`).
 pub const Change = struct { before: []u8, after: []u8 };
@@ -135,8 +136,8 @@ pub const ProjectSettings = struct {
         };
     }
 
-    /// The section's cards, in the Preferences window's style: a card per setting, its name and
-    /// note on the left and its control on the right.
+    /// The section's settings, in groups of rows (`eggy.setting_rows`): the game, its starting
+    /// graphics, and its executable.
     /// Builds in an active editor UI frame, mutating draft fields only; call `save` afterward
     /// to persist and obtain undo text. Frame elements borrow the form through rendering.
     ///
@@ -146,54 +147,56 @@ pub const ProjectSettings = struct {
     ///     history.recordProjectSettings(change.before, change.after, now_ms);
     /// ```
     pub fn build(self: *ProjectSettings, context: *ui.Context) void {
-        context.muted("Saved in eggy.zon as you change them; Edit > Undo takes them back.");
-        smallText(context, 12);
-
-        beginCard(context, "Title", "What players see in the window's title and the executable's name for itself.");
+        var general = SettingRows{};
+        setting_rows.beginGroup(context);
+        general.begin(context, "Title", "What players see in the window's title, and the executable's name for itself.");
         _ = context.textInput("##title", &self.title, "My Game");
-        endCard(context);
-        beginCard(context, "Version", "The game's version, shown in its executable.");
+        general.end(context);
+        general.begin(context, "Version", "The game's version, shown in its executable.");
         _ = context.textInput("##version", &self.version, "0.0.1");
-        endCard(context);
-        beginCard(context, "Default scene", "Where the built game starts, and exports unless you pick another.");
+        general.end(context);
+        general.begin(context, "Default scene", "Where the built game starts, and exports unless you pick another.");
         _ = context.select("##default scene", self.scenes, &self.scene);
-        endCard(context);
+        general.end(context);
+        setting_rows.endGroup(context);
 
-        context.heading(4, "Graphics");
-        context.muted("What the game starts with. Players can change these in the game, and the editor's own view has its own in Preferences > Graphics.");
-        smallText(context, 12);
+        groupHeading(context, "Graphics", "What the game starts with. Players can change these in the game.");
+        setting_rows.beginGroup(context);
         _ = self.graphics.build(context, .{ .caps = &self.caps, .adapter = false });
+        setting_rows.endGroup(context);
         self.graphics.notice(context);
 
-        context.heading(4, "Executable");
-        context.muted("What the game's executable says about itself: on Windows, in its Properties.");
-        smallText(context, 12);
-        beginCard(context, "Company", "");
+        groupHeading(context, "Executable", "What the game's executable says about itself: on Windows, in its Properties.");
+        var executable = SettingRows{};
+        setting_rows.beginGroup(context);
+        executable.begin(context, "Company", "");
         _ = context.textInput("##company", &self.company, "");
-        endCard(context);
-        beginCard(context, "Description", "");
+        executable.end(context);
+        executable.begin(context, "Description", "");
         _ = context.textInput("##description", &self.description, "");
-        endCard(context);
-        beginCard(context, "Copyright", "");
+        executable.end(context);
+        executable.begin(context, "Copyright", "");
         _ = context.textInput("##copyright", &self.copyright, "");
-        endCard(context);
+        executable.end(context);
 
-        // The project's own, a card each: name, value, and a button taking it away.
+        // The project's own, a row each: name, value, and a button taking it away.
         var removed: ?usize = null;
         const arena = context.builder().allocator;
         for (self.extra.items, 0..) |*entry, i| {
-            context.begin(.card);
+            const name_id = std.fmt.allocPrint(arena, "##extra name {d}", .{i}) catch continue;
+            const value_id = std.fmt.allocPrint(arena, "##extra value {d}", .{i}) catch continue;
+            const remove_label = std.fmt.allocPrint(arena, "Remove##extra {d}", .{i}) catch continue;
+            executable.divide(context);
             context.begin(.row);
-            _ = context.textInput(std.fmt.allocPrint(arena, "##extra name {d}", .{i}) catch return, &entry.name, "Name");
+            _ = context.textInput(name_id, &entry.name, "Name");
             restyle(context, .{ .width = 160 });
-            _ = context.textInput(std.fmt.allocPrint(arena, "##extra value {d}", .{i}) catch return, &entry.value, "Value");
+            _ = context.textInput(value_id, &entry.value, "Value");
             restyle(context, .{ .grow = 1 });
-            if (context.buttonVariant(std.fmt.allocPrint(arena, "Remove##extra {d}", .{i}) catch return, .ghost)) removed = i;
+            if (context.buttonVariant(remove_label, .ghost)) removed = i;
             context.end();
-            restyle(context, .{ .direction = .row, .gap = 8, .align_items = .center });
-            context.end();
-            restyle(context, .{ .padding = .{ .left = 16, .right = 16, .top = 10, .bottom = 10 } });
+            restyle(context, .{ .direction = .row, .gap = 8, .align_items = .center, .padding = .{ .top = 8, .bottom = 8 } });
         }
+        setting_rows.endGroup(context);
         if (removed) |i| _ = self.extra.orderedRemove(i);
         if (self.extra.items.len < max_extra and context.buttonVariant("Add an entry", .outline)) {
             self.extra.append(self.gpa, .{ .name = ShortEdit.init("") catch unreachable, .value = LongEdit.init("") catch unreachable }) catch {};
@@ -277,29 +280,14 @@ pub fn loadGraphics(gpa: std.mem.Allocator, project_dir: []const u8) !render_set
     return (try eggy.project.load(arena_state.allocator(), io, project)).graphics;
 }
 
-/// Open a setting's card: its name and `note` on the left; its control follows, then `endCard`.
-fn beginCard(context: *ui.Context, title: []const u8, note: []const u8) void {
-    context.begin(.card);
-    context.begin(.row);
+/// A heading over a group of rows, with a line on what the group is.
+fn groupHeading(context: *ui.Context, title: []const u8, note: []const u8) void {
     context.begin(.column);
-    context.text(title);
-    if (note.len > 0) {
-        context.muted(note);
-        smallText(context, 13);
-    }
+    context.heading(4, title);
+    context.muted(note);
+    smallText(context, 12);
     context.end();
-    restyle(context, .{ .grow = 1, .gap = 4 });
-    context.begin(.column);
-}
-
-/// Close the card `beginCard` opened, with its control right-aligned.
-fn endCard(context: *ui.Context) void {
-    context.end();
-    restyle(context, .{ .width = control_width, .align_items = .end });
-    context.end();
-    restyle(context, .{ .direction = .row, .gap = 20, .align_items = .center });
-    context.end();
-    restyle(context, .{ .padding = .{ .left = 16, .right = 16, .top = 12, .bottom = 12 } });
+    restyle(context, .{ .gap = 2, .padding = .{ .top = 8 } });
 }
 
 /// Make `scene` the default scene in the `eggy.zon` of the project in `project_dir`; what changed

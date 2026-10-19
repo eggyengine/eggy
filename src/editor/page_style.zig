@@ -174,3 +174,13 @@ pub fn endRow(context: *ui.Context) void {
     context.end();
     restyle(context, .{ .direction = .row, .gap = 8, .align_items = .center });
 }
+
+/// The height inside the page's padding, which panes filling a tool window share out. Panes
+/// size from it because weeoui's page scrolls rather than shrinking what it holds.
+///
+/// ```zig
+/// context.beginScroll(&self.sidebar_scroll, page_style.pageHeight(context) - footer_height);
+/// ```
+pub fn pageHeight(context: *const ui.Context) f32 {
+    return @max(1, context.viewport.h - 2 * context.pagePadding());
+}
