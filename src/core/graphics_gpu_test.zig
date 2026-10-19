@@ -12,6 +12,8 @@ const camera = @import("camera.zig");
 const assets = @import("eggy_assets");
 const control = @import("graphics_control.zig");
 const identityHash = @import("storage.zig").identityHash;
+const vit = @import("vitellus");
+const mipmaps = @import("mipmaps.zig");
 
 test "GPU renders every supported AA mode through live texture and scene changes" {
     if (comptime builtin.os.tag == .emscripten) return error.SkipZigTest;
@@ -93,4 +95,75 @@ fn checker(_: *anyopaque, gpa: std.mem.Allocator, _: []const u8) !assets.Texture
         @memcpy(pixels[offset..][0..4], &[_]u8{ value, value, value, 255 });
     };
     return .{ .width = width, .height = height, .pixels = pixels };
+}
+
+test "GPU texture transfers preserve padded rows in every mip level" {
+    if (comptime builtin.os.tag == .emscripten) return error.SkipZigTest;
+    if ((try sdl.getEnvironment()).getVariable("EGGY_GPU_TEST") == null) return error.SkipZigTest;
+    const instance = try vit.Instance.init(std.testing.allocator, .{ .backend = .{ .vulkan = true }, .validation = .core });
+    defer instance.deinit();
+    const gpu = try vit.Adapter.init(instance, .{});
+    defer gpu.deinit();
+    const device = try vit.Device.init(gpu, .{});
+    defer device.deinit();
+    const queue = try vit.Queue.init(device, .{});
+    defer queue.deinit();
+    for ([_][2]u32{ .{ 32, 32 }, .{ 63, 35 }, .{ 1, 5 } }) |extent|
+        try checkTextureRows(device, queue, extent[0], extent[1]);
+}
+
+fn checkTextureRows(device: vit.Device, queue: vit.Queue, width: u32, height: u32) !void {
+    const gpa = std.testing.allocator;
+    const pixels = try gpa.alloc(u8, @as(usize, width) * height * 4);
+    defer gpa.free(pixels);
+    for (0..height) |y| for (0..width) |x| {
+        pixels[(y * width + x) * 4 ..][0..4].* = .{ @truncate(x * 7), @truncate(y * 11), @truncate((x + y) * 3), 255 };
+    };
+    var chain = try mipmaps.Chain.init(gpa, width, height, pixels, true);
+    defer chain.deinit(gpa);
+    const source = try vit.Buffer.init(device, .{ .size = chain.bytes.len, .usage = .{ .transfer_src = true }, .memory = .upload, .initial_data = chain.bytes });
+    defer source.deinit();
+    const padded_offset = std.mem.alignForward(usize, chain.bytes.len, 512);
+    const destination = try vit.Buffer.init(device, .{ .size = padded_offset + chain.bytes.len, .usage = .{ .transfer_dst = true }, .memory = .readback });
+    defer destination.deinit();
+    const texture = try vit.Texture.init(device, .{ .width = width, .height = height, .mip_levels = chain.count, .format = .rgba8_unorm, .usage = .{ .transfer_src = true, .transfer_dst = true } });
+    defer texture.deinit();
+    const pool = try vit.CommandPool.init(device, .{});
+    defer pool.deinit();
+    const cmd = try vit.CommandBuffer.init(pool, .{});
+    defer cmd.deinit();
+    try cmd.barrier(&.{.{ .texture = .{ .texture = texture, .before = .common, .after = .copy_destination } }});
+    for (chain.levels[0..chain.count], 0..) |level, index| {
+        try cmd.copyBufferToTexture(.{
+            .buffer = source,
+            .buffer_offset = level.offset,
+            .bytes_per_row = level.row_bytes,
+            .texture = .{ .texture = texture, .mip_level = @intCast(index) },
+            .extent = .{ .width = level.width, .height = level.height },
+        });
+    }
+    try cmd.barrier(&.{.{ .texture = .{ .texture = texture, .before = .copy_destination, .after = .copy_source } }});
+    for (chain.levels[0..chain.count], 0..) |level, index| {
+        for ([_]bool{ false, true }) |padded| {
+            try cmd.copyTextureToBuffer(.{
+                .buffer = destination,
+                .buffer_offset = level.offset + if (padded) padded_offset else @as(usize, 0),
+                .bytes_per_row = if (padded) level.row_bytes else 0,
+                .texture = .{ .texture = texture, .mip_level = @intCast(index) },
+                .extent = .{ .width = level.width, .height = level.height },
+            });
+        }
+    }
+    try cmd.finish();
+    try queue.submit(.{ .command_buffers = &.{cmd} });
+    try queue.waitIdle();
+    const read = try destination.map(.read, .{ .size = padded_offset + chain.bytes.len });
+    defer destination.unmap(null);
+    for (chain.levels[0..chain.count]) |level| for (0..level.height) |row| {
+        const expected = chain.bytes[level.offset + row * level.row_bytes ..][0 .. level.width * 4];
+        const tight = read[level.offset + row * level.width * 4 ..][0 .. level.width * 4];
+        const padded = read[padded_offset + level.offset + row * level.row_bytes ..][0 .. level.width * 4];
+        try std.testing.expectEqualSlices(u8, expected, tight);
+        try std.testing.expectEqualSlices(u8, expected, padded);
+    };
 }
