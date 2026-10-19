@@ -2,19 +2,26 @@
 //! packaging carry them, and the editor links it rather than building it into itself. It
 //! imports a model file into one list of triangles, every part placed where the file puts it,
 //! scaled, with smooth normals, each mesh a part with its material's texture (an image file
-//! beside the model, or one inside it); and it decodes image files.
+//! beside the model, or one inside it); and it decodes image files. A model that moves (bones,
+//! blend shapes, baked frames or clips) keeps its node tree, skins and clips instead (`rig_import.zig`).
 const std = @import("std");
 const c = @import("assimp");
 const Bytes = @import("abi.zig").Bytes;
 const assets = @import("eggy_assets");
 const Vertex = assets.model.Vertex;
+const surfaces = @import("surfaces.zig");
+const rig_import = @import("rig_import.zig");
 const gpa = std.heap.c_allocator;
 
-/// What assimp does to every model: triangles only, each part moved to where its node puts it,
-/// normals where the file has none, shared corners joined, textures' rows top first, and sizes in
+/// What assimp does to a model that doesn't move: triangles only, each part moved to where its
+/// node puts it, normals where the file has none, shared corners joined, textures' rows top first, and sizes in
 /// metres, whatever unit the file is in (an FBX file's centimetres, say), so a model is as big as
 /// it was made.
-const steps = c.aiProcess_Triangulate | c.aiProcess_PreTransformVertices | c.aiProcess_GenSmoothNormals | c.aiProcess_JoinIdenticalVertices | c.aiProcess_SortByPType | c.aiProcess_FlipUVs | c.aiProcess_GlobalScale;
+const static_steps = c.aiProcess_Triangulate | c.aiProcess_PreTransformVertices | c.aiProcess_GenSmoothNormals | c.aiProcess_JoinIdenticalVertices | c.aiProcess_SortByPType | c.aiProcess_FlipUVs | c.aiProcess_GlobalScale;
+
+/// The same for one that moves, minus pretransforming: its nodes stay, and a corner is pulled by
+/// at most four bones.
+const moving_steps = (static_steps & ~@as(c_uint, c.aiProcess_PreTransformVertices)) | c.aiProcess_LimitBoneWeights;
 
 /// Import the model file at `path`, `scale` times its size, into `out` as an `.eggmodel`'s
 /// bytes. False when it can't be (`eggy_import_error` says why).
@@ -30,14 +37,22 @@ const steps = c.aiProcess_Triangulate | c.aiProcess_PreTransformVertices | c.aiP
 /// ```
 export fn eggy_import_model(path: [*:0]const u8, scale: f32, out: *Bytes) bool {
     failure = null;
-    const scene: *const c.struct_aiScene = c.aiImportFile(path, steps) orelse return false;
-    defer c.aiReleaseImport(scene);
-    var model = importScene(scene, std.fs.path.dirname(std.mem.span(path)) orelse ".", scale) catch |err| return fail(switch (err) {
+    // Read it untouched, to see whether anything moves, then process it for what it is.
+    const scene: *const c.struct_aiScene = c.aiImportFile(path, 0) orelse return false;
+    const dir = std.fs.path.dirname(std.mem.span(path)) orelse ".";
+    const moves = rig_import.isAnimated(scene);
+    const processed = c.aiApplyPostProcessing(scene, if (moves) moving_steps else static_steps) orelse return false;
+    // Post-processing frees the scene itself when it fails, so only now is it ours to release.
+    defer c.aiReleaseImport(processed);
+    var model = (if (moves) rig_import.import(processed, dir, scale) else importScene(processed, dir, scale)) catch |err| return fail(switch (err) {
         error.NoMeshes => "it has no meshes",
         error.InvalidMaterial => "it has invalid material parameters",
         error.OutOfMemory => "out of memory",
+        error.UnknownJoint => "a bone has no node in the file",
+        error.MismatchedBlendShape => "a blend shape or baked frame doesn't match its mesh",
     });
     defer model.deinit(gpa);
+    if (!model.isWhole()) return fail("its animation data is inconsistent");
     return serialize(assets.model.write, model, out);
 }
 
@@ -127,14 +142,14 @@ fn importScene(scene: *const c.struct_aiScene, dir: []const u8, scale: f32) !ass
     errdefer gpa.free(indices);
     const parts = try gpa.alloc(assets.model.Part, meshes.len);
     errdefer gpa.free(parts);
-    var textures = Textures{ .scene = scene, .dir = dir };
+    var textures = surfaces.Textures{ .scene = scene, .dir = dir };
     errdefer textures.deinit();
 
     // Each mesh's corners, then its triangles pointing at them, as a part with its material's texture.
     var next_vertex: usize = 0;
     var next_index: usize = 0;
     for (meshes, parts) |mesh, *part| {
-        const material = try materialOf(scene, mesh.*.mMaterialIndex);
+        const material = try surfaces.materialOf(scene, mesh.*.mMaterialIndex);
         const first: u32 = @intCast(next_vertex);
         const channels = mesh.*.mTextureCoords;
         const uvs: [*c]c.struct_aiVector3D = channels[0];
@@ -159,114 +174,4 @@ fn importScene(scene: *const c.struct_aiScene, dir: []const u8, scale: f32) !ass
     const decoded = try textures.list.toOwnedSlice(gpa);
     textures.by_material.deinit(gpa);
     return .{ .vertices = vertices, .indices = indices, .parts = parts, .textures = decoded };
-}
-
-const Surface = struct {
-    color: [4]f32 = @splat(1),
-    metallic_roughness: [2]f32 = .{ 0, 1 },
-    emissive_color: [3]f32 = @splat(0),
-};
-
-fn materialOf(scene: *const c.struct_aiScene, index: u32) error{InvalidMaterial}!Surface {
-    var surface = Surface{};
-    if (index >= scene.mNumMaterials) return surface;
-    const material = scene.mMaterials[index];
-    var color: c.struct_aiColor4D = undefined;
-    if (c.aiGetMaterialColor(material, "$clr.base", 0, 0, &color) == c.aiReturn_SUCCESS or
-        c.aiGetMaterialColor(material, "$clr.diffuse", 0, 0, &color) == c.aiReturn_SUCCESS)
-    {
-        surface.color = .{ color.r, color.g, color.b, color.a };
-    }
-    if (c.aiGetMaterialColor(material, "$clr.emissive", 0, 0, &color) == c.aiReturn_SUCCESS) surface.emissive_color = .{ color.r, color.g, color.b };
-    var count: c_uint = 1;
-    _ = c.aiGetMaterialFloatArray(material, "$mat.metallicFactor", 0, 0, &surface.metallic_roughness[0], &count);
-    count = 1;
-    _ = c.aiGetMaterialFloatArray(material, "$mat.roughnessFactor", 0, 0, &surface.metallic_roughness[1], &count);
-    for (surface.color) |value| if (!std.math.isFinite(value) or value < 0 or value > 1) return error.InvalidMaterial;
-    for (surface.metallic_roughness) |value| if (!std.math.isFinite(value) or value < 0 or value > 1) return error.InvalidMaterial;
-    for (surface.emissive_color) |value| if (!std.math.isFinite(value) or value < 0) return error.InvalidMaterial;
-    return surface;
-}
-
-/// The textures a model's materials use, each decoded once.
-const Textures = struct {
-    scene: *const c.struct_aiScene,
-    /// The model file's folder, which a material's texture path is relative to.
-    dir: []const u8,
-    list: std.ArrayList(assets.Texture) = .empty,
-    /// Which of `list` each material's texture is (null: it has none, or it didn't decode).
-    by_material: std.AutoHashMapUnmanaged(u32, ?u32) = .empty,
-
-    fn deinit(self: *Textures) void {
-        for (self.list.items) |*texture| texture.deinit(gpa);
-        self.list.deinit(gpa);
-        self.by_material.deinit(gpa);
-    }
-
-    /// The texture of material `index` (its base colour's, else its diffuse one's).
-    fn ofMaterial(self: *Textures, index: u32) !?u32 {
-        if (self.by_material.get(index)) |known| return known;
-        const found = self.decode(index);
-        if (found) |texture| try self.list.append(gpa, texture);
-        const result: ?u32 = if (found != null) @intCast(self.list.items.len - 1) else null;
-        try self.by_material.put(gpa, index, result);
-        return result;
-    }
-
-    fn decode(self: *Textures, index: u32) ?assets.Texture {
-        if (index >= self.scene.mNumMaterials) return null;
-        const material = self.scene.mMaterials[index];
-        var path: c.aiString = undefined;
-        const kinds = [_]c_uint{ c.aiTextureType_BASE_COLOR, c.aiTextureType_DIFFUSE };
-        const named = for (kinds) |kind| {
-            if (c.aiGetMaterialTexture(material, kind, 0, &path, null, null, null, null, null, null) == c.aiReturn_SUCCESS) break path.data[0..path.length];
-        } else return null;
-        if (self.embedded(named)) |texture| return decodeEmbedded(texture);
-        // A file beside the model.
-        var buffer: [std.fs.max_path_bytes]u8 = undefined;
-        const file = std.fmt.bufPrintZ(&buffer, "{s}/{s}", .{ self.dir, named }) catch return null;
-        var width: c_int = 0;
-        var height: c_int = 0;
-        var channels: c_int = 0;
-        const pixels = c.stbi_load(file.ptr, &width, &height, &channels, 4) orelse return null;
-        defer c.stbi_image_free(pixels);
-        return copied(pixels, width, height);
-    }
-
-    /// The texture inside the model file that `named` refers to (`*2`, or its file name).
-    fn embedded(self: *const Textures, named: []const u8) ?*const c.struct_aiTexture {
-        const all = if (self.scene.mTextures) |list| list[0..self.scene.mNumTextures] else return null;
-        if (named.len > 1 and named[0] == '*') {
-            const at = std.fmt.parseInt(usize, named[1..], 10) catch return null;
-            return if (at < all.len) all[at] else null;
-        }
-        for (all) |texture| {
-            const name = texture.*.mFilename.data[0..texture.*.mFilename.length];
-            if (std.mem.eql(u8, std.fs.path.basename(name), std.fs.path.basename(named))) return texture;
-        }
-        return null;
-    }
-};
-
-/// An embedded texture's pixels: a compressed image (PNG, JPEG...) decoded, or its texels.
-fn decodeEmbedded(texture: *const c.struct_aiTexture) ?assets.Texture {
-    if (texture.mHeight == 0) {
-        var width: c_int = 0;
-        var height: c_int = 0;
-        var channels: c_int = 0;
-        const pixels = c.stbi_load_from_memory(@ptrCast(texture.pcData), @intCast(texture.mWidth), &width, &height, &channels, 4) orelse return null;
-        defer c.stbi_image_free(pixels);
-        return copied(pixels, width, height);
-    }
-    // Texels are blue, green, red and alpha.
-    const count = @as(usize, texture.mWidth) * texture.mHeight;
-    const pixels = gpa.alloc(u8, count * 4) catch return null;
-    for (texture.pcData[0..count], 0..) |texel, i| pixels[i * 4 ..][0..4].* = .{ texel.r, texel.g, texel.b, texel.a };
-    return .{ .width = texture.mWidth, .height = texture.mHeight, .pixels = pixels };
-}
-
-/// stb_image's `pixels` (`width` by `height`, four bytes each) in memory of our own.
-fn copied(pixels: [*c]u8, width: c_int, height: c_int) ?assets.Texture {
-    const size: usize = @intCast(width * height * 4);
-    return .{ .width = @intCast(width), .height = @intCast(height), .pixels = gpa.dupe(u8, pixels[0..size]) catch return null };
 }
