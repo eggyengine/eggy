@@ -65,6 +65,7 @@ pub fn Runtime(comptime project: type) type {
             if (@hasDecl(project, "metadata_text")) std.mem.doNotOptimizeAway(&project.metadata_text);
             var app = try eggy.App.init(process_init, project.name);
             errdefer app.deinit();
+            app.storage = try eggy.storage.Storage.init(gpa, process_init.io, project.name);
             if (@hasDecl(project, "input_bindings")) try app.input_backend.?.state.readOverrides(project.input_bindings);
             // Model and image files, and scenes, as packaging made them.
             const data: ?*packaged_assets.Data = packaged_assets.Data.open(gpa, process_init.io) catch |err| blk: {

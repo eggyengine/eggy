@@ -25,7 +25,6 @@ no output devices, threads, sessions, files, fake handles, or successful empty r
 | `particles` | emission and stopping |
 | `network` | connection, listening, messages, polling, disconnection |
 | `navigation` | paths and destinations; no physics or collision access |
-| `storage` | game-save bytes by slot, separate from preferences |
 | `localization` | locale selection and translated-text lookup |
 | `debug_draw`, `profiling` | debug primitives, samples, and counters |
 
@@ -47,6 +46,7 @@ stages synchronous scene replacement for the end of the gameplay update.
 | Value timers and gameplay time scaling | Implemented | Same allocation-free API |
 | Named input maps, priorities, modifiers, hold/tap/chord triggers | Implemented; project editor included | Shared runtime API |
 | Controllers, rumble, and touch contacts | SDL3; hardware-dependent | SDL3/browser-dependent |
+| [Game-save slots](../how-to/save-games.md) | Atomic versioned saves in project-specific user data | Persistent browser localStorage; quota/availability errors are explicit |
 | Synchronous project/packaged resource and scene providers | Implemented | Packaged assets preloaded at startup |
 | Weeoui game UI and custom draw hooks | Implemented | Shared runtime API; no editor import |
 | Editor context, panels, commands, actions | Desktop only | Not run or linked |

@@ -47,9 +47,9 @@ test "every missing backend operation returns NotImplemented" {
     try expect(error.NotImplemented, navigation.setDestination(entity, @splat(1)));
     try expect(error.NotImplemented, navigation.cancel(entity));
     const storage = @import("storage.zig").Storage{};
-    try expect(error.NotImplemented, storage.read(std.testing.allocator, "slot"));
-    try expect(error.NotImplemented, storage.write("slot", "bytes"));
-    try expect(error.NotImplemented, storage.remove("slot"));
+    try expect(error.StorageNotInitialized, storage.read(std.testing.allocator, "slot"));
+    try expect(error.StorageNotInitialized, storage.write("slot", "bytes"));
+    try expect(error.StorageNotInitialized, storage.remove("slot"));
     const localization = @import("localization.zig").Localization{};
     try expect(error.NotImplemented, localization.setLocale("en"));
     try expect(error.NotImplemented, localization.text(std.testing.allocator, "hello"));

@@ -104,6 +104,7 @@ pub const App = struct {
         self.clearGameUi();
         self.scene_transition.deinit();
         if (self.instances) |*instances| instances.deinit();
+        self.storage.deinit();
         self.world.deinit();
         if (self.input_backend) |backend| backend.deinit();
         self.preference_values.deinit();
