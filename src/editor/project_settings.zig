@@ -1,8 +1,9 @@
 //! The Preferences window's Project section: the open project's `eggy.zon`: its title and
 //! version, the scene the built game starts in (the default scene, which exports start in unless
 //! told otherwise), and what the game's executable says about itself (company, description,
-//! copyright and any more of the project's own, by name). Every change is written as it is made,
-//! and handed back to the editor as a step to undo.
+//! copyright and any more of the project's own, by name), and the graphics the game starts with
+//! (which players can change in the game). Every change is written as it is made, and handed back
+//! to the editor as a step to undo.
 const std = @import("std");
 const eggy = @import("eggy");
 const ui = eggy.ui;
@@ -11,6 +12,7 @@ const page_style = @import("page_style.zig");
 const restyle = page_style.restyle;
 const smallText = page_style.smallText;
 
+const render_settings = eggy.render_settings;
 const ShortEdit = ui.TextEdit(64);
 const LongEdit = ui.TextEdit(256);
 /// The most entries of the project's own it holds.
@@ -41,21 +43,31 @@ pub const ProjectSettings = struct {
     scenes: []const []const u8 = &.{},
     scenes_arena: std.heap.ArenaAllocator,
     scene: usize = 0,
+    /// The graphics the game starts with, as the form edits them; `saved_graphics` is what the
+    /// file has (the last valid choice, while a number field is half typed).
+    graphics: eggy.graphics_settings.Form = .{},
+    saved_graphics: render_settings.Settings = .{},
+    /// What this machine offers, with the game's window and frame limit choices always shown:
+    /// they are for the built game, not the editor's own window.
+    caps: render_settings.Capabilities,
 
-    /// Read the project in `project_dir`'s `eggy.zon` into a new form.
+    /// Read the project in `project_dir`'s `eggy.zon` into a new form, offering the graphics `caps` allows.
     /// Editor-only heap state: copies the path and owns field/scene storage until `close`.
     /// Allocation/read/parse/field-capacity errors propagate, cleaning partially opened state.
     ///
     /// ```zig
-    /// const settings = try ProjectSettings.open(gpa, project_dir);
+    /// const settings = try ProjectSettings.open(gpa, project_dir, app.graphics.capabilities());
     /// defer settings.close();
     /// ```
-    pub fn open(gpa: std.mem.Allocator, project_dir: []const u8) !*ProjectSettings {
+    pub fn open(gpa: std.mem.Allocator, project_dir: []const u8, caps: render_settings.Capabilities) !*ProjectSettings {
         const self = try gpa.create(ProjectSettings);
         errdefer gpa.destroy(self);
         const dir = try gpa.dupe(u8, project_dir);
         errdefer gpa.free(dir);
-        self.* = .{ .gpa = gpa, .project_dir = dir, .name_arena = .init(gpa), .scenes_arena = .init(gpa) };
+        self.* = .{ .gpa = gpa, .project_dir = dir, .name_arena = .init(gpa), .scenes_arena = .init(gpa), .caps = caps };
+        // ponytail: backends, present modes and antialiasing are this machine's, not every player's; list the build target's when addGame knows it.
+        self.caps.window_settings = true;
+        self.caps.frame_limit = true;
         // From here `close` frees all of it.
         self.reload() catch |err| {
             self.close();
@@ -97,6 +109,8 @@ pub const ProjectSettings = struct {
         const text = try project.readFileAllocOptions(io, eggy.project.file_name, arena, .limited(1 << 20), .of(u8), 0);
         const config = try eggy.project.parse(arena, text);
         self.name = config.name;
+        self.graphics.load(config.graphics);
+        self.saved_graphics = config.graphics;
         self.gpa.free(self.written);
         self.written = try self.gpa.dupe(u8, text);
 
@@ -144,6 +158,12 @@ pub const ProjectSettings = struct {
         beginCard(context, "Default scene", "Where the built game starts, and exports unless you pick another.");
         _ = context.select("##default scene", self.scenes, &self.scene);
         endCard(context);
+
+        context.heading(4, "Graphics");
+        context.muted("What the game starts with. Players can change these in the game, and the editor's own view has its own in Preferences > Graphics.");
+        smallText(context, 12);
+        _ = self.graphics.build(context, .{ .caps = &self.caps, .adapter = false });
+        self.graphics.notice(context);
 
         context.heading(4, "Executable");
         context.muted("What the game's executable says about itself: on Windows, in its Properties.");
@@ -201,11 +221,18 @@ pub const ProjectSettings = struct {
             if (entry.name.text().len == 0) continue; // still being written
             try extra.append(arena, .{ .name = entry.name.text(), .value = entry.value.text() });
         }
+        // A number half typed keeps the last valid choice, and an invalid one isn't written.
+        var graphics = self.graphics.read() catch self.graphics.draft;
+        graphics.validateValues() catch |err| {
+            self.graphics.report(err);
+            graphics = self.saved_graphics;
+        };
         const config = eggy.project.Config{
             .name = self.name,
             .title = self.title.text(),
             .version = self.version.text(),
             .default_scene = if (self.scene == 0) null else self.scenes[self.scene],
+            .graphics = graphics,
             .metadata = .{ .company = self.company.text(), .description = self.description.text(), .copyright = self.copyright.text(), .extra = extra.items },
         };
         var text: std.Io.Writer.Allocating = .init(arena);
@@ -220,9 +247,35 @@ pub const ProjectSettings = struct {
         const after = try self.gpa.dupe(u8, text.written());
         const before = self.written;
         self.written = try self.gpa.dupe(u8, after);
+        self.saved_graphics = graphics;
         return .{ .before = before, .after = after };
     }
 };
+
+/// The graphics `eggy.zon`'s `text` asks for (the project's defaults), for applying the
+/// config that undo or redo just wrote. Parse and allocation errors propagate.
+///
+/// ```zig
+/// _ = try app.setGraphicsDefaults(try graphicsIn(gpa, change.value(direction)));
+/// ```
+pub fn graphicsIn(gpa: std.mem.Allocator, text: []const u8) !render_settings.Settings {
+    var arena_state = std.heap.ArenaAllocator.init(gpa);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    return (try eggy.project.parse(arena, try arena.dupeZ(u8, text))).graphics;
+}
+
+/// The graphics in the `eggy.zon` of the project in `project_dir`, which the editor makes its
+/// defaults as it opens the project. I/O and parse errors propagate.
+pub fn loadGraphics(gpa: std.mem.Allocator, project_dir: []const u8) !render_settings.Settings {
+    var threaded: std.Io.Threaded = .init_single_threaded;
+    const io = threaded.io();
+    var project = try std.Io.Dir.cwd().openDir(io, project_dir, .{});
+    defer project.close(io);
+    var arena_state = std.heap.ArenaAllocator.init(gpa);
+    defer arena_state.deinit();
+    return (try eggy.project.load(arena_state.allocator(), io, project)).graphics;
+}
 
 /// Open a setting's card: its name and `note` on the left; its control follows, then `endCard`.
 fn beginCard(context: *ui.Context, title: []const u8, note: []const u8) void {
@@ -301,7 +354,7 @@ test "the Project section lays out every eggy.zon field in cards and writes a ch
     try tmp.dir.writeFile(std.testing.io, .{ .sub_path = eggy.project.file_name, .data = ".{ .name = \"rats\", .title = \"Rats\" }\n" });
     const dir = try tmp.dir.realPathFileAlloc(std.testing.io, ".", gpa);
     defer gpa.free(dir);
-    const settings = try ProjectSettings.open(gpa, dir);
+    const settings = try ProjectSettings.open(gpa, dir, .{});
     defer settings.close();
     var context = try ui.Context.init(gpa);
     defer context.deinit();
@@ -315,4 +368,63 @@ test "the Project section lays out every eggy.zon field in cards and writes a ch
     defer gpa.free(change.after);
     try std.testing.expect(std.mem.indexOf(u8, change.after, "Sewer Rats") != null);
     try std.testing.expect(try settings.save() == null);
+}
+
+test "graphics are saved in eggy.zon, kept by other edits, and read back after undo" {
+    const gpa = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = eggy.project.file_name, .data = ".{ .name = \"rats\", .title = \"Rats\" }\n" });
+    const dir = try tmp.dir.realPathFileAlloc(std.testing.io, ".", gpa);
+    defer gpa.free(dir);
+    const settings = try ProjectSettings.open(gpa, dir, .{});
+    defer settings.close();
+    // A project that says nothing gets the engine's defaults.
+    try std.testing.expectEqual(render_settings.Settings{}, settings.saved_graphics);
+
+    // Choices are written, and a later unrelated edit keeps them.
+    const chosen = render_settings.Settings{ .mipmaps = false, .anti_aliasing = .fxaa, .frame_limit = 60, .width = 1280, .height = 720 };
+    settings.graphics.load(chosen);
+    const first = (try settings.save()).?;
+    defer gpa.free(first.before);
+    defer gpa.free(first.after);
+    try settings.title.set("Sewer Rats");
+    const second = (try settings.save()).?;
+    defer gpa.free(second.before);
+    defer gpa.free(second.after);
+    try std.testing.expectEqual(chosen, try loadGraphics(gpa, dir));
+
+    // Undo restores the earlier file, whose graphics the editor then makes the defaults.
+    try std.testing.expectEqual(render_settings.Settings{}, try graphicsIn(gpa, first.before));
+    try std.testing.expectEqual(chosen, try graphicsIn(gpa, second.before));
+    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = eggy.project.file_name, .data = first.before });
+    try settings.reload();
+    try std.testing.expectEqual(render_settings.Settings{}, settings.saved_graphics);
+    try std.testing.expectEqual(render_settings.Settings{}, settings.graphics.draft);
+}
+
+test "a half typed or invalid number is not written to eggy.zon, and says why" {
+    const gpa = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = eggy.project.file_name, .data = ".{ .name = \"rats\", .title = \"Rats\" }\n" });
+    const dir = try tmp.dir.realPathFileAlloc(std.testing.io, ".", gpa);
+    defer gpa.free(dir);
+    const settings = try ProjectSettings.open(gpa, dir, .{});
+    defer settings.close();
+
+    // Too small a window is refused, and the file keeps the last good choice.
+    try settings.graphics.width.set("10");
+    settings.graphics.draft.width = 10;
+    const change = (try settings.save()).?; // only the file's normal form, not the window
+    defer gpa.free(change.before);
+    defer gpa.free(change.after);
+    try std.testing.expect(settings.graphics.message_kind == .failed);
+    try std.testing.expectEqual(render_settings.Settings{}, try loadGraphics(gpa, dir));
+    try std.testing.expect(try settings.save() == null);
+
+    // A number half typed keeps the last good choice too.
+    try settings.graphics.width.set("12x");
+    try std.testing.expect(try settings.save() == null);
+    try std.testing.expectEqual(render_settings.Settings{}, try loadGraphics(gpa, dir));
 }

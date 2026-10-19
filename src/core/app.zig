@@ -14,6 +14,7 @@ const Scenes = @import("scenes/scenes.zig").Scenes;
 const SceneInstances = @import("scene_instances.zig").SceneInstances;
 const scene = @import("scene.zig");
 const Overlay = @import("game_ui/game_ui.zig").Overlay;
+const GraphicsSettingsUi = @import("game_ui/graphics_settings.zig").GraphicsSettingsUi;
 
 const web = builtin.os.tag == .emscripten;
 const width = 900;
@@ -45,6 +46,8 @@ pub const App = struct {
     instances: ?SceneInstances = null,
     scene_transition: @import("scenes/scenes.zig").Transition = .{},
     ui_layer: ?*Overlay = null,
+    /// The player's graphics menu: F10 opens it, or `graphics_settings_ui.open()` (see `GraphicsSettingsUi`).
+    graphics_settings_ui: GraphicsSettingsUi = .{},
     audio: @import("audio.zig").Audio = .{},
     animation: @import("animation.zig").Animation = .{},
     draw2d: @import("draw2d.zig").Draw2d = .{},

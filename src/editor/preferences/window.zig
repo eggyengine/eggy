@@ -1,5 +1,5 @@
 //! Edit > Preferences: a section for the editor's preferences and, with a project open, one for
-//! its `eggy.zon` (`project_settings.zig`), one with a switch for each of its plugins and one for
+//! its `eggy.zon` (`project_settings.zig`), one for how the editor draws (graphics), one with a switch for each of its plugins and one for
 //! each plugin's preferences, each field with the
 //! control its kind calls for. The editor's apply to every
 //! project (the global layer) or to this one (its `.eggy/`), which overrides the global value; a
@@ -17,6 +17,7 @@ const files = @import("preferences.zig");
 const History = @import("../history.zig").History;
 const page_style = @import("../page_style.zig");
 const ProjectSettings = @import("../project_settings.zig").ProjectSettings;
+const graphics_settings = eggy.graphics_settings;
 const restyle = page_style.restyle;
 const smallText = page_style.smallText;
 const noteText = page_style.noteText;
@@ -33,6 +34,8 @@ pub const Section = struct {
         plugins: []const Plugin,
         /// The project's `eggy.zon`, which the caller saves after each frame.
         project: *ProjectSettings,
+        /// How the editor itself draws: the user's own graphics choices, applied with a button.
+        graphics: *eggy.App,
     },
 };
 
@@ -68,6 +71,9 @@ pub const PreferencesWindow = struct {
     /// Whether the scope was picked yet: with a project, the window starts on This project,
     /// where changes usually belong.
     scope_picked: bool = false,
+    /// The Graphics section's draft, loaded when it is first shown.
+    graphics: graphics_settings.Form = .{},
+    graphics_loaded: bool = false,
     capturing_stop_key: bool = false,
     captured_stop_key: ?eggy.Key = null,
 
@@ -240,6 +246,11 @@ pub const PreferencesWindow = struct {
                 restyle(context, .{ .direction = .row, .gap = 16, .align_items = .center });
                 return settings.build(context);
             },
+            .graphics => |app| {
+                context.end();
+                restyle(context, .{ .direction = .row, .gap = 16, .align_items = .center });
+                return self.graphicsCards(context, app);
+            },
         };
         const is_editor = std.mem.eql(u8, manifest.key, files.editor_key);
         if (is_editor and folders.project != null) {
@@ -268,6 +279,19 @@ pub const PreferencesWindow = struct {
             self.synced = showing;
         }
         for (manifest.fields[0..@min(manifest.fields.len, max_fields)], 0..) |field, i| self.fieldCard(context, store, folders, layer, manifest.key, field, &self.edits[i]);
+    }
+
+    /// The Graphics section: the editor's own choices, kept for the user beside the editor's
+    /// preferences, applied (and saved) with a button.
+    fn graphicsCards(self: *PreferencesWindow, context: *ui.Context, app: *eggy.App) void {
+        context.muted("How the editor draws its own view. Saved for you, not the project; a game's players choose theirs in the game.");
+        smallText(context, 12);
+        if (!self.graphics_loaded) {
+            self.graphics.load(app.graphics_options.requested);
+            self.graphics_loaded = true;
+        }
+        graphics_settings.buildOptions(&self.graphics, context, app);
+        if (graphics_settings.buildButtons(&self.graphics, context, app, "Revert")) self.graphics.load(app.graphics_options.requested);
     }
 
     /// The Plugins section: a card per plugin with its switch.

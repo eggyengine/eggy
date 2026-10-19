@@ -150,6 +150,8 @@ pub fn Runtime(comptime project: type) type {
         /// ```
         pub fn iterate(self: *Self) !sdl3.AppResult {
             if (builtin.abi.isAndroid() and !self.app.graphics.surface_active) return .run;
+            // Graphics choices queued since last frame take effect before anything is drawn.
+            try self.app.applyGraphicsSettings();
             self.app.beginDiagnosticsFrame();
             try self.app.graphics.syncSize(self.app.window);
             // The browser already paces frames to the display.
@@ -183,10 +185,11 @@ pub fn Runtime(comptime project: type) type {
                     .frame_slot = self.app.graphics.surface.slot,
                 };
                 try self.plugins.draw(&self.app, draw);
-                if (self.plugins.hasGameUi()) {
+                if (self.plugins.hasGameUi() or self.app.graphics_settings_ui.isOpen()) {
                     const layer = try self.app.gameUi();
                     layer.begin(draw, sdl3.timer.getMillisecondsSinceInit());
-                    try self.plugins.gameUi(&self.app, &layer.context);
+                    if (self.plugins.hasGameUi()) try self.plugins.gameUi(&self.app, &layer.context);
+                    self.app.graphics_settings_ui.draw(&self.app, &layer.context);
                     if (try layer.render(draw)) self.app.input.cancel();
                     try layer.syncClipboard();
                     const window = self.app.window.window;
@@ -222,6 +225,7 @@ pub fn Runtime(comptime project: type) type {
             const lifecycle = try self.app.event(curr_event);
             if (lifecycle != .run) return lifecycle;
             if (eggy.game_ui.syntheticTouchMouse(curr_event)) return .run;
+            if (self.app.graphics_settings_ui.event(&self.app, curr_event)) return .run;
             const width, const height = try self.app.window.window.getSize();
             self.app.input.viewport_points = .{ @floatFromInt(width), @floatFromInt(height) };
             if (eggy.game_ui.isTouchInput(curr_event) and (width == 0 or height == 0)) return .run;

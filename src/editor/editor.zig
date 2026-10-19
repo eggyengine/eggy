@@ -19,7 +19,8 @@ const Upgrades = @import("projects/upgrades.zig").Upgrades;
 const file_manager = @import("file_manager.zig");
 const BuildWindow = @import("build_window.zig").BuildWindow;
 const ExportWindow = @import("export_window.zig").ExportWindow;
-const ProjectSettings = @import("project_settings.zig").ProjectSettings;
+const project_settings_zig = @import("project_settings.zig");
+const ProjectSettings = project_settings_zig.ProjectSettings;
 const DevtoolsWindow = @import("devtools_window.zig").DevtoolsWindow;
 const AboutWindow = @import("about_window.zig").AboutWindow;
 const window_placement = @import("window_placement.zig");
@@ -235,6 +236,14 @@ pub fn Editor(comptime project: type) type {
             app.storage = try eggy.storage.Storage.init(gpa, process_init.io, project.name);
             const opened_project = try openProject(gpa, app.window.window, args);
             errdefer if (opened_project) |opened| freeProject(gpa, opened);
+            // The project's graphics defaults, before anything is drawn.
+            if (opened_project) |opened| {
+                const wanted = project_settings_zig.loadGraphics(gpa, opened.dir) catch |err| blk: {
+                    std.log.warn("cannot read the graphics settings from {s}: {t}", .{ eggy.project.file_name, err });
+                    break :blk app.graphics_options.defaults;
+                };
+                _ = app.setGraphicsDefaults(wanted) catch |err| std.log.err("cannot use the project's graphics defaults: {t}", .{err});
+            }
             // Every project has its resources and scene folders.
             if (opened_project) |opened| {
                 var threaded: std.Io.Threaded = .init_single_threaded;
@@ -424,6 +433,8 @@ pub fn Editor(comptime project: type) type {
         /// if (result != .run) return result;
         /// ```
         pub fn iterate(self: *Self) !sdl3.AppResult {
+            // Graphics choices queued since last frame take effect before anything is drawn.
+            try self.app.applyGraphicsSettings();
             self.app.beginDiagnosticsFrame();
             self.app.graphics.materials.resources = self.app.resources();
             const result = try self.iterateFrame();
@@ -602,7 +613,10 @@ pub fn Editor(comptime project: type) type {
                 if (self.project_settings) |settings| if (settings.save() catch |err| blk: {
                     std.log.err("cannot write {s}: {t}", .{ eggy.project.file_name, err });
                     break :blk null;
-                }) |change| self.history.recordProjectSettings(change.before, change.after, self.workspace.time_ms);
+                }) |change| {
+                    self.history.recordProjectSettings(change.before, change.after, self.workspace.time_ms);
+                    self.setGraphicsDefaults(settings.saved_graphics);
+                };
             }
             // File > Export, if open.
             if (self.export_window) |window| {
@@ -1309,6 +1323,7 @@ pub fn Editor(comptime project: type) type {
                 .project_settings => |change| {
                     try files.writeFile(io, .{ .sub_path = eggy.project.file_name, .data = change.value(direction) });
                     if (self.project_settings) |settings| try settings.reload();
+                    self.setGraphicsDefaults(try project_settings_zig.graphicsIn(self.gpa, change.value(direction)));
                 },
                 .input_bindings => |change| {
                     const settings = self.input_settings orelse return error.NoProject;
@@ -1398,9 +1413,19 @@ pub fn Editor(comptime project: type) type {
                 std.log.err("cannot open Preferences: {t}", .{err});
                 return;
             };
-            if (self.project) |opened| self.project_settings = ProjectSettings.open(self.gpa, opened.dir) catch |err| blk: {
+            if (self.project) |opened| self.project_settings = ProjectSettings.open(self.gpa, opened.dir, self.app.graphics.capabilities()) catch |err| blk: {
                 std.log.err("cannot read {s}: {t}", .{ eggy.project.file_name, err });
                 break :blk null;
+            };
+        }
+
+        /// Make `wanted` the project's graphics defaults, which the editor's view uses unless the
+        /// user chose their own in Preferences. Backend and GPU changes wait for a restart.
+        /// A default this machine can't use is said in the Project section and the log, not hidden.
+        fn setGraphicsDefaults(self: *Self, wanted: eggy.render_settings.Settings) void {
+            _ = self.app.setGraphicsDefaults(wanted) catch |err| {
+                std.log.err("cannot use the project's graphics defaults: {t}", .{err});
+                if (self.project_settings) |settings| settings.graphics.report(err);
             };
         }
 
@@ -1413,9 +1438,10 @@ pub fn Editor(comptime project: type) type {
 
         /// The Preferences window's sections: the editor's, then (with a project) its eggy.zon,
         /// each plugin's that has any, the game's titled after the project. In `arena`.
-        fn preferenceSections(self: *const Self, arena: std.mem.Allocator) ![]const preferences.Section {
+        fn preferenceSections(self: *Self, arena: std.mem.Allocator) ![]const preferences.Section {
             var sections: std.ArrayList(preferences.Section) = .empty;
             try sections.append(arena, .{ .title = "Editor", .subtitle = "How the editor looks and behaves.", .content = .{ .preferences = preferences.editor_manifest } });
+            try sections.append(arena, .{ .title = "Graphics", .subtitle = "How the editor draws its view.", .content = .{ .graphics = &self.app } });
             // Plugins' switches and preferences are the project's: without one, there is nowhere to
             // keep them.
             if (self.project == null) return sections.items;
