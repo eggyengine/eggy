@@ -695,6 +695,76 @@ pub const HotGame = struct {
         return if (self.game.find_camera(&app.world, &view)) view else null;
     }
 
+    /// Start previewing animation on `entity`, remembering what the preview will move. False
+    /// without a library or game, or when the entity can't be previewed (logged).
+    /// Editor host only: end it with `endAnimationPreview` before the library reloads or the
+    /// scene is saved, played or snapshotted.
+    pub fn beginAnimationPreview(self: *const HotGame, app: *eggy.App, entity: eggy.ecs.EntityId) bool {
+        const state = self.state orelse return false;
+        return self.game.animation_preview_begin(state, &app.world, entityOf(entity));
+    }
+
+    /// Pose the previewed entity in the authored clip `clip` (a project path, may be empty) and
+    /// model clip `model_clip` (may be empty) at `time_s`, using `app.graphics.clips`.
+    /// False without a preview, or for paths the entity can't hold.
+    pub fn showAnimationPreview(self: *const HotGame, app: *eggy.App, clip: []const u8, model_clip: []const u8, time_s: f32) bool {
+        const state = self.state orelse return false;
+        var clip_z: [eggy.refs.max_path_len + 1:0]u8 = undefined;
+        var model_z: [eggy.refs.max_path_len + 1:0]u8 = undefined;
+        if (clip.len > eggy.refs.max_path_len or model_clip.len > eggy.refs.max_path_len) return false;
+        @memcpy(clip_z[0..clip.len], clip);
+        clip_z[clip.len] = 0;
+        @memcpy(model_z[0..model_clip.len], model_clip);
+        model_z[model_clip.len] = 0;
+        return self.game.animation_preview_show(state, &app.world, &app.graphics.clips, &clip_z, &model_z, time_s);
+    }
+
+    /// Put the previewed entity back as it was; does nothing without a preview.
+    pub fn endAnimationPreview(self: *const HotGame, app: *eggy.App) void {
+        const state = self.state orelse return;
+        self.game.animation_preview_end(state, &app.world);
+    }
+
+    /// The child paths below `entity` a clip track can name, one per line, allocated with `gpa`.
+    pub fn animationTargets(self: *const HotGame, gpa: std.mem.Allocator, app: *eggy.App, entity: eggy.ecs.EntityId) ![]u8 {
+        if (self.library == null) return gpa.alloc(u8, 0);
+        var buffer = try gpa.alloc(u8, 512);
+        errdefer gpa.free(buffer);
+        const needed = self.game.animation_targets(&app.world, entityOf(entity), buffer.ptr, buffer.len);
+        if (needed > buffer.len) {
+            buffer = try gpa.realloc(buffer, needed);
+            _ = self.game.animation_targets(&app.world, entityOf(entity), buffer.ptr, buffer.len);
+        }
+        return gpa.realloc(buffer, needed);
+    }
+
+    /// Position, rotation (degrees) and scale of the child of `entity` at `path` (empty: itself).
+    pub fn animationTransform(self: *const HotGame, app: *eggy.App, entity: eggy.ecs.EntityId, path: []const u8) ?[9]f32 {
+        if (self.library == null) return null;
+        var out: [9]f32 = undefined;
+        return if (self.game.animation_transform(&app.world, entityOf(entity), path.ptr, path.len, &out)) out else null;
+    }
+
+    /// The model `entity` draws, copied into `buffer`; null when it draws none or the path is
+    /// longer than `buffer`.
+    pub fn animationModel(self: *const HotGame, app: *eggy.App, entity: eggy.ecs.EntityId, buffer: []u8) ?[]const u8 {
+        if (self.library == null) return null;
+        const len = self.game.animation_model(&app.world, entityOf(entity), buffer.ptr, buffer.len);
+        if (len < 0 or len > buffer.len) return null;
+        return buffer[0..@intCast(len)];
+    }
+
+    /// Give `entity` an `Animator` playing the authored clip at `clip`, adding the component
+    /// if needed. A scene change, so undo covers it. False when it can't be done.
+    pub fn assignAnimation(self: *const HotGame, app: *eggy.App, entity: eggy.ecs.EntityId, clip: []const u8) bool {
+        if (self.library == null) return false;
+        var clip_z: [eggy.refs.max_path_len + 1:0]u8 = undefined;
+        if (clip.len > eggy.refs.max_path_len) return false;
+        @memcpy(clip_z[0..clip.len], clip);
+        clip_z[clip.len] = 0;
+        return self.game.animation_assign(&app.world, entityOf(entity), &clip_z);
+    }
+
     /// The typed steps scenes need, through the library (see `eggy.scene.Access`).
     /// Editor host only: retains a pointer to this HotGame, which must stay at a stable address.
     /// Its world argument must be exactly the enclosing App's `world`, not a standalone World.

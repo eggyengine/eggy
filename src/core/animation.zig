@@ -239,7 +239,7 @@ fn advance(animator: *Animator, delta_s: f32) void {
 }
 
 /// Write the entity-targeted tracks of the animator's clips into transforms, blended while fading.
-fn applyTracks(world: *ecs.World, entity: ecs.EntityId, animator: Animator, clips: *ClipCache) void {
+pub fn applyTracks(world: *ecs.World, entity: ecs.EntityId, animator: Animator, clips: *ClipCache) void {
     const current: ?*const assets.clip.Clip = if (animator.clip.len > 0) clips.get(animator.clip.path()) else null;
     const previous: ?*const assets.clip.Clip = if (animator.isBlending() and animator.previous_clip.len > 0) clips.get(animator.previous_clip.path()) else null;
     const weight: f32 = if (animator.isBlending()) animator.blendWeight() else 1;
@@ -283,7 +283,7 @@ fn entityTarget(world: *ecs.World, root: ecs.EntityId, track: assets.clip.Track)
     return at;
 }
 
-fn childNamed(world: *ecs.World, parent: ecs.EntityId, name: []const u8) ?ecs.EntityId {
+pub fn childNamed(world: *ecs.World, parent: ecs.EntityId, name: []const u8) ?ecs.EntityId {
     var children = world.children(parent);
     while (children.next()) |child| {
         const label = world.get(child, Name) orelse continue;

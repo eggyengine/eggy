@@ -238,6 +238,23 @@ test "typed actions and game UI cross the real ABI and undo after library replac
         game.editorPanelUi(0, &editor, &ui);
         try std.testing.expect((try ui.render()).len > 0);
     }
+    // Animation preview crosses the boundary: assign, pose, and end without leaving a trace.
+    {
+        const actor = try app.world.spawn(.{});
+        try std.testing.expect(game.assignAnimation(&app, actor, "resources/walk.clip.zon"));
+        try std.testing.expect(!game.assignAnimation(&app, actor, "resources/walk.txt"));
+        try std.testing.expect(!game.showAnimationPreview(&app, "", "run", 1));
+        try std.testing.expect(game.beginAnimationPreview(&app, actor));
+        try std.testing.expect(game.showAnimationPreview(&app, "", "run", 1));
+        game.endAnimationPreview(&app);
+        try std.testing.expect(!game.showAnimationPreview(&app, "", "run", 1));
+        const targets = try game.animationTargets(gpa, &app, actor);
+        defer gpa.free(targets);
+        try std.testing.expectEqual(@as(usize, 0), targets.len);
+        try std.testing.expectEqual(@as(?[9]f32, null), game.animationTransform(&app, actor, ""));
+        var model: [64]u8 = undefined;
+        try std.testing.expectEqual(@as(?[]const u8, null), game.animationModel(&app, actor, &model));
+    }
     var kept = try eggy.scene.Scene.capture(gpa, &app.world, game.sceneAccess(), null);
     defer kept.deinit();
     try game.reload(&app);

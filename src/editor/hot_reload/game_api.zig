@@ -220,4 +220,26 @@ pub const Game = extern struct {
     world_matrix: *const fn (world: *anyopaque, entity: Entity, out: *[4][4]f32) callconv(.c) bool,
     /// The view through the game's camera (`eggy.camera.find`) into `out`; false without one.
     find_camera: *const fn (world: *anyopaque, out: *eggy.camera.View) callconv(.c) bool,
+    /// Start previewing animation on `entity`: remember its `Animator` and the transforms of it
+    /// and its descendants, so `animation_preview_end` can put them back. Ends a preview already
+    /// under way; false (logged) if the entity isn't alive or memory ran out.
+    animation_preview_begin: *const fn (state: *anyopaque, world: *anyopaque, entity: Entity) callconv(.c) bool,
+    /// Pose the previewed entity: its authored clip (`clip`, a project path, may be empty) and
+    /// model clip (`model_clip`, a name, may be empty) at `time_s`. `clips` is the host's
+    /// `*eggy.ClipCache`. False without a preview or for a clip the entity can't hold.
+    animation_preview_show: *const fn (state: *anyopaque, world: *anyopaque, clips: *anyopaque, clip: [*:0]const u8, model_clip: [*:0]const u8, time_s: f32) callconv(.c) bool,
+    /// Put the previewed entity back as it was. Does nothing without a preview.
+    animation_preview_end: *const fn (state: *anyopaque, world: *anyopaque) callconv(.c) void,
+    /// The child paths below `entity` a clip track can name, one per line, into `buffer`;
+    /// returns the length, more than `capacity` when cut off.
+    animation_targets: *const fn (world: *anyopaque, entity: Entity, buffer: [*]u8, capacity: usize) callconv(.c) usize,
+    /// The position, rotation (degrees) and scale of the child of `entity` at `path` (empty: the
+    /// entity itself) into `out`; false when there is none.
+    animation_transform: *const fn (world: *anyopaque, entity: Entity, path: [*]const u8, path_len: usize, out: *[9]f32) callconv(.c) bool,
+    /// The model `entity` draws (its `Mesh`) into `buffer`, returning its length; -1 if it
+    /// doesn't draw one, or more than `capacity` when cut off.
+    animation_model: *const fn (world: *anyopaque, entity: Entity, buffer: [*]u8, capacity: usize) callconv(.c) isize,
+    /// Give `entity` an `Animator` playing the authored clip at `clip` (adding the component if
+    /// needed); false if the entity isn't alive or the path isn't an animation's.
+    animation_assign: *const fn (world: *anyopaque, entity: Entity, clip: [*:0]const u8) callconv(.c) bool,
 };

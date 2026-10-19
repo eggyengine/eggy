@@ -17,6 +17,8 @@ var host: ?*const api.Host = null;
 const State = struct {
     gpa: std.mem.Allocator,
     plugins: Plugins,
+    /// The animation preview under way, if any; ended before the library unloads.
+    preview: ?eggy.animation_preview.Preview = null,
 };
 
 const panels = blk: {
@@ -176,6 +178,13 @@ const game = api.Game{
     .gather_lights = gatherLights,
     .world_matrix = worldMatrix,
     .find_camera = findCamera,
+    .animation_preview_begin = animationPreviewBegin,
+    .animation_preview_show = animationPreviewShow,
+    .animation_preview_end = animationPreviewEnd,
+    .animation_targets = animationTargets,
+    .animation_transform = animationTransform,
+    .animation_model = animationModel,
+    .animation_assign = animationAssign,
 };
 
 /// Names go through the same code the runtime uses (`eggy.scene.registryAccess`).
@@ -251,6 +260,8 @@ fn recovered(hook: Hook) void {
 
 fn stop(state_ptr: *anyopaque) callconv(.c) void {
     const state = stateOf(state_ptr);
+    // The world may already be gone: free the snapshot without restoring it.
+    if (state.preview) |preview| state.gpa.free(preview.saved);
     state.plugins.deinit();
     state.gpa.destroy(state);
 }
@@ -456,6 +467,65 @@ fn worldMatrix(world: *anyopaque, entity: api.Entity, out: *[4][4]f32) callconv(
 
 fn findCamera(world: *anyopaque, out: *eggy.camera.View) callconv(.c) bool {
     out.* = eggy.camera.find(worldOf(world)) orelse return false;
+    return true;
+}
+
+fn animationPreviewBegin(state_ptr: *anyopaque, world: *anyopaque, entity: api.Entity) callconv(.c) bool {
+    const state = stateOf(state_ptr);
+    animationPreviewEnd(state_ptr, world);
+    state.preview = eggy.animation_preview.Preview.begin(state.gpa, worldOf(world), entityOf(entity)) catch |err| {
+        std.log.err("cannot preview animation: {t}", .{err});
+        return false;
+    };
+    return true;
+}
+
+fn animationPreviewShow(state_ptr: *anyopaque, world: *anyopaque, clips: *anyopaque, clip: [*:0]const u8, model_clip: [*:0]const u8, time_s: f32) callconv(.c) bool {
+    const preview = stateOf(state_ptr).preview orelse return false;
+    const cache: *eggy.ClipCache = @ptrCast(@alignCast(clips));
+    preview.show(worldOf(world), cache, .{ .clip = std.mem.span(clip), .model_clip = std.mem.span(model_clip), .time_s = time_s }) catch |err| {
+        std.log.err("cannot show the animation: {t}", .{err});
+        return false;
+    };
+    return true;
+}
+
+fn animationPreviewEnd(state_ptr: *anyopaque, world: *anyopaque) callconv(.c) void {
+    const state = stateOf(state_ptr);
+    var preview = state.preview orelse return;
+    state.preview = null;
+    preview.end(worldOf(world));
+}
+
+fn animationTargets(world: *anyopaque, entity: api.Entity, buffer: [*]u8, capacity: usize) callconv(.c) usize {
+    var writer = std.Io.Writer.fixed(buffer[0..capacity]);
+    var total: usize = 0;
+    // Count everything written, even past the buffer, so the host can ask again with more room.
+    var counting = std.Io.Writer.Discarding.init(&.{});
+    eggy.animation_preview.writeTargets(worldOf(world), entityOf(entity), &counting.writer) catch return 0;
+    total = @intCast(counting.fullCount());
+    eggy.animation_preview.writeTargets(worldOf(world), entityOf(entity), &writer) catch {};
+    return total;
+}
+
+fn animationTransform(world: *anyopaque, entity: api.Entity, path: [*]const u8, path_len: usize, out: *[9]f32) callconv(.c) bool {
+    out.* = eggy.animation_preview.transformAt(worldOf(world), entityOf(entity), path[0..path_len]) orelse return false;
+    return true;
+}
+
+fn animationModel(world: *anyopaque, entity: api.Entity, buffer: [*]u8, capacity: usize) callconv(.c) isize {
+    const mesh = worldOf(world).get(entityOf(entity), eggy.Mesh) orelse return -1;
+    const model = switch (mesh.shape) {
+        .model => |drawn| drawn.path(),
+        else => return -1,
+    };
+    @memcpy(buffer[0..@min(model.len, capacity)], model[0..@min(model.len, capacity)]);
+    return @intCast(model.len);
+}
+
+fn animationAssign(world: *anyopaque, entity: api.Entity, clip: [*:0]const u8) callconv(.c) bool {
+    const asset = eggy.refs.AssetRef(.animation).parse(std.mem.span(clip)) catch return false;
+    (eggy.animation.Animation{ .world = worldOf(world) }).play(entityOf(entity), .{ .asset = asset }, .{ .repeat = .loop }) catch return false;
     return true;
 }
 

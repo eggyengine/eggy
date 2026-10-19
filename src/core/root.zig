@@ -57,6 +57,8 @@ pub const scenes = @import("scenes/scenes.zig");
 pub const Support = @import("support.zig").Support;
 pub const audio = @import("audio.zig");
 pub const animation = @import("animation.zig");
+pub const animation_preview = @import("animation_preview.zig");
+pub const ClipCache = @import("clip_cache.zig").ClipCache;
 pub const draw2d = @import("draw2d.zig");
 pub const materials = @import("materials.zig");
 pub const Material = materials.Material;
@@ -119,6 +121,7 @@ test {
     _ = @import("clip_cache.zig");
     _ = @import("deformation.zig");
     _ = animation;
+    _ = animation_preview;
     _ = @import("eggy_assets");
     _ = @import("camera.zig");
     _ = @import("bounds.zig");
