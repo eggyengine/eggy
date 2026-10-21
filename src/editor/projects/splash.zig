@@ -1,10 +1,10 @@
 //! The loading screen while a project is made or opened, and built: what is happening and how
-//! far along it is, or, if it failed, why.
+//! far along it is (`build_progress.zig`, as the Build window shows it), or, if it failed, why.
 const std = @import("std");
 const ui = @import("eggy").ui;
 const Status = @import("job.zig").Status;
 const terminal_view = @import("../terminal_view.zig");
-const TerminalView = terminal_view.TerminalView;
+const BuildProgress = @import("../build_progress.zig").BuildProgress;
 
 /// What the screen's buttons asked for this frame.
 pub const Action = enum { none, close, cancel };
@@ -16,24 +16,27 @@ pub const Splash = struct {
     heading_len: usize = 0,
     /// The egg, drawn from the window icon.
     egg: ?ui.Image,
-    /// Whether the job's output is shown; it opens by itself if the job fails.
-    show_output: bool = false,
-    terminal: TerminalView,
+    progress: BuildProgress,
 
     /// Create an editor loading page, copying up to 96 heading bytes and borrowing font/image.
-    /// The owner releases `terminal` and any owned `egg` after UI use ends; Splash has no
-    /// separate deinit. The monospace font must outlive the terminal.
+    /// The owner calls `deinit` after UI use ends. The monospace font must outlive it.
     ///
     /// ```zig
     /// // Given allocator gpa and a live monospace UI font:
     /// var splash = Splash.init(gpa, mono, "Opening project", null);
-    /// defer splash.terminal.deinit();
+    /// defer splash.deinit(gpa);
     /// ```
     pub fn init(gpa: std.mem.Allocator, mono: *const ui.Font, heading: []const u8, egg: ?ui.Image) Splash {
-        var self = Splash{ .egg = egg, .terminal = .init(gpa, mono) };
+        var self = Splash{ .egg = egg, .progress = .init(gpa, mono) };
         self.heading_len = @min(heading.len, self.heading_buffer.len);
         @memcpy(self.heading_buffer[0..self.heading_len], heading[0..self.heading_len]);
         return self;
+    }
+
+    /// Free the progress view and the egg; `gpa` is the egg's allocator.
+    pub fn deinit(self: *Splash, gpa: std.mem.Allocator) void {
+        self.progress.deinit();
+        if (self.egg) |*egg| egg.deinit(gpa);
     }
 
     /// Build one editor loading frame from a job status snapshot; return close/cancel intent.
@@ -47,27 +50,13 @@ pub const Splash = struct {
         if (self.egg) |*egg| context.image(egg, 56);
         context.heading(2, self.heading_buffer[0..self.heading_len]);
 
-        if (status.stage == .failed) {
-            context.alert("Couldn't open the project", status.detail, true);
-            self.terminal.add(context, status.log, status.log.len, 180);
-            context.begin(.row);
-            defer context.end();
-            if (context.buttonVariant("Copy all", .outline)) terminal_view.copyToClipboard(status.log);
-            return if (context.button("Close")) .close else .none;
-        }
+        // The output takes the screen's height less the egg, heading, status lines and buttons.
+        self.progress.add(context, status, .{ .failed = "Couldn't open the project" }, @max(150, context.viewport.h - 290));
 
-        // How far the whole job is, and what it is doing now.
-        context.label("{s}...", .{status.stage.label()});
-        context.progress(status.fraction);
-        context.muted(if (status.detail.len > 0) status.detail else " ");
-
-        // The job's output as it happens, behind a button.
-        if (self.show_output) self.terminal.add(context, status.log, status.log.len, 150) else self.terminal.area = null;
         context.begin(.row);
         defer context.end();
-        if (context.buttonVariant("Cancel", .ghost)) return .cancel;
-        if (context.buttonVariant(if (self.show_output) "Hide output" else "Show output", .outline)) self.show_output = !self.show_output;
-        if (self.show_output and context.buttonVariant("Copy all", .ghost)) terminal_view.copyToClipboard(status.log);
-        return .none;
+        if (context.buttonVariant("Copy all", .ghost)) terminal_view.copyToClipboard(status.log);
+        if (status.stage == .failed) return if (context.button("Close")) .close else .none;
+        return if (context.buttonVariant("Cancel", .outline)) .cancel else .none;
     }
 };

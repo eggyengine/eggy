@@ -95,8 +95,7 @@ pub const ProjectFlow = struct {
             .wizard => |*wizard| wizard.deinit(),
             .working => |*working| {
                 working.job.deinit();
-                working.splash.terminal.deinit();
-                if (working.splash.egg) |*egg| egg.deinit(self.gpa);
+                working.splash.deinit(self.gpa);
             },
         }
         self.window.close(graphics);
@@ -125,7 +124,7 @@ pub const ProjectFlow = struct {
     pub fn handle(self: *ProjectFlow, curr_event: sdl3.events.Event) bool {
         if (!self.window.owns(curr_event)) return false;
         if (self.phase == .working) if (@import("weeoui_sdl3").translate(curr_event)) |input| {
-            if (self.phase.working.splash.terminal.handle(input)) return true;
+            if (self.phase.working.splash.progress.handle(input)) return true;
         };
         self.window.handle(curr_event);
         return true;
