@@ -1,5 +1,6 @@
 //! One SDL instance shared by desktop executables and their hot-loaded game libraries.
 const std = @import("std");
+const c_libraries = @import("c_libraries.zig");
 
 /// Desktop SDL is dynamic, packaged under its loader name; the web stays statically linked.
 /// Null until SDL's lazy C dependency has been fetched.
@@ -13,8 +14,8 @@ const std = @import("std");
 /// ```
 pub fn dependency(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builtin.OptimizeMode, web_include: ?std.Build.LazyPath) ?*std.Build.Dependency {
     // ponytail: SDL 3.4.0's Wayland pointer-leave shifts by -1; restore C UB traps after an SDL bump.
-    if (web_include) |include| return b.dependency("sdl3", .{ .target = target, .optimize = optimize, .c_sdl_sanitize_c = .off, .sdl_system_include_path = include });
-    const dep = b.dependency("sdl3", .{ .target = target, .optimize = optimize, .c_sdl_sanitize_c = .off, .c_sdl_preferred_linkage = .dynamic });
+    if (web_include) |include| return b.dependency("sdl3", .{ .target = target, .optimize = c_libraries.optimize(optimize), .c_sdl_sanitize_c = .off, .sdl_system_include_path = include });
+    const dep = b.dependency("sdl3", .{ .target = target, .optimize = c_libraries.optimize(optimize), .c_sdl_sanitize_c = .off, .c_sdl_preferred_linkage = .dynamic });
     const module = dep.module("sdl3");
     switch (target.result.os.tag) {
         .linux => module.addRPathSpecial("$ORIGIN/../lib"),

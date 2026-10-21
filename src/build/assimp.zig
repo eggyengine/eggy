@@ -7,6 +7,7 @@
 //! source and binary forms, with or without modification, are permitted provided that the
 //! conditions of its BSD licence are met (https://github.com/allyourcodebase/assimp/blob/master/LICENCE).
 const std = @import("std");
+const c_libraries = @import("c_libraries.zig");
 
 /// The model formats Eggy imports, as assimp's importers are named.
 pub const formats = [_][]const u8{ "Obj", "glTF", "glTF2", "FBX", "Collada", "Ply", "STL", "3DS" };
@@ -33,7 +34,7 @@ pub fn build(b: *std.Build, source: *std.Build.Dependency, target: std.Build.Res
     const library = b.addLibrary(.{
         .name = "assimp",
         .linkage = .static,
-        .root_module = b.createModule(.{ .target = target, .optimize = optimize, .link_libc = true, .link_libcpp = target.result.abi != .msvc, .pic = true }),
+        .root_module = b.createModule(.{ .target = target, .optimize = c_libraries.optimize(optimize), .link_libc = true, .link_libcpp = target.result.abi != .msvc, .pic = true }),
     });
     const module = library.root_module;
     if (target.result.os.tag == .windows) {
