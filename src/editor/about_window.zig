@@ -1,9 +1,10 @@
-//! Help > About Eggy: the version, links and credits, with a small hatch hidden in the illustrated egg.
+//! Help > About Eggy: the version, links and credits, with a small hatch hidden in Eggy's icon.
 const std = @import("std");
 const builtin = @import("builtin");
 const eggy = @import("eggy");
 const ui = eggy.ui;
 const ToolWindow = @import("tool_window.zig").ToolWindow;
+const icon = @import("icon.zig");
 const page_style = @import("page_style.zig");
 const restyle = page_style.restyle;
 const smallText = page_style.smallText;
@@ -12,6 +13,8 @@ const hatch_taps = 7;
 const egg_id = "about-egg";
 
 const View = struct {
+    /// Eggy's icon, drawn as the egg; see-through until `AboutWindow.open` reads it.
+    egg: icon.Pixels = std.mem.zeroes(icon.Pixels),
     taps: u8 = 0,
     hatched_at_ms: ?u64 = null,
     closed: bool = false,
@@ -40,6 +43,7 @@ const View = struct {
             return;
         };
         glyph.* = .{
+            .egg = &self.egg,
             .cracks = self.taps,
             .hatch = if (self.hatched_at_ms) |start| @min(1, @as(f32, @floatFromInt(context.time_ms -| start)) / 700) else 0,
         };
@@ -104,11 +108,11 @@ fn drawHeart(_: *const anyopaque, canvas: *ui.Canvas, rect: ui.Rect) !void {
 }
 
 const links = [_]struct { label: []const u8, url: [:0]const u8 }{
-    .{ .label = "Documentation", .url = "https://eggyengine.github.io/eggy" },
+    .{ .label = "Documentation", .url = @import("help_menu.zig").documentation_url },
     .{ .label = "GitHub", .url = "https://github.com/eggyengine/eggy" },
 };
 
-const Glyph = struct { cracks: u8, hatch: f32 };
+const Glyph = struct { egg: *const icon.Pixels, cracks: u8, hatch: f32 };
 
 fn disc(canvas: *ui.Canvas, center: [2]f32, radii: [2]f32, color: [4]f32) !void {
     for (0..32) |i| {
@@ -118,61 +122,59 @@ fn disc(canvas: *ui.Canvas, center: [2]f32, radii: [2]f32, color: [4]f32) !void 
     }
 }
 
-/// Where the shell breaks, across the egg's middle (offsets from its centre); a tap cracks one
-/// segment more, and the last tap breaks it open.
-const break_line = [_][2]f32{ .{ -38, 0 }, .{ -25, 2 }, .{ -15, -6 }, .{ -5, 4 }, .{ 5, -5 }, .{ 15, 5 }, .{ 25, -2 }, .{ 38, 0 } };
+/// The pixel row the shell breaks at in column `x`: a zigzag across the egg's middle.
+fn breakRow(x: usize) usize {
+    return if (x / 3 % 2 == 0) 16 else 17;
+}
 
-/// The shell above the break line (`top`) or below it, out to `radii`, moved by `offset`.
-fn shellHalf(canvas: *ui.Canvas, center: [2]f32, radii: [2]f32, top: bool, offset: [2]f32, color: [4]f32) !void {
-    var points: [break_line.len + 17][2]f32 = undefined;
-    for (break_line, points[0..break_line.len]) |p, *point| point.* = .{ center[0] + std.math.clamp(p[0], -radii[0], radii[0]) + offset[0], center[1] + p[1] + offset[1] };
-    // The rim, from the line's right end round to its left: under the egg, or over it.
-    for (points[break_line.len..], 0..) |*point, i| {
-        const a = @as(f32, @floatFromInt(i)) * std.math.pi / 16;
-        const turn = if (top) -a else a;
-        point.* = .{ center[0] + @cos(turn) * radii[0] + offset[0], center[1] + @sin(turn) * radii[1] + offset[1] };
-    }
-    // A fan from inside the half; it sees every point of the line and the rim.
-    const hub = [2]f32{ center[0] + offset[0], center[1] + offset[1] + (if (top) -radii[1] else radii[1]) * 0.6 };
-    for (points, 0..) |a, i| {
-        const b = points[(i + 1) % points.len];
-        try canvas.triangle(.{ hub, a, b }, .{ color, color, color });
-    }
+/// Draw the icon's pixel art in `rect`, its blocks `scale` points wide: the shell above the break
+/// (`top`), or below it, moved by `offset`. Pixels on the break up to column `cracked` are dark.
+fn drawShell(canvas: *ui.Canvas, art: *const icon.Pixels, origin: [2]f32, scale: f32, top: bool, offset: [2]f32, cracked: usize) !void {
+    const dark = [4]f32{ 0.45, 0.24, 0.09, 1 };
+    for (art, 0..) |row, y| for (row, 0..) |pixel, x| {
+        if (pixel[3] == 0 or (y < breakRow(x)) != top) continue;
+        const on_crack = y == breakRow(x) and x < cracked;
+        const color = if (on_crack) dark else [4]f32{ toUnit(pixel[0]), toUnit(pixel[1]), toUnit(pixel[2]), toUnit(pixel[3]) };
+        const left = origin[0] + @as(f32, @floatFromInt(x)) * scale + offset[0];
+        const up = origin[1] + @as(f32, @floatFromInt(y)) * scale + offset[1];
+        try canvas.triangle(.{ .{ left, up }, .{ left + scale, up }, .{ left, up + scale } }, .{ color, color, color });
+        try canvas.triangle(.{ .{ left + scale, up }, .{ left + scale, up + scale }, .{ left, up + scale } }, .{ color, color, color });
+    };
+}
+
+fn toUnit(channel: u8) f32 {
+    return @as(f32, @floatFromInt(channel)) / 255;
 }
 
 fn drawEgg(raw: *const anyopaque, canvas: *ui.Canvas, rect: ui.Rect) !void {
     const glyph: *const Glyph = @ptrCast(@alignCast(raw));
-    const center = rect.center();
-    const shell = [4]f32{ 1, 0.78, 0.36, 1 };
-    const dark = [4]f32{ 0.45, 0.24, 0.09, 1 };
-    const y = center.y + 18;
-    if (glyph.hatch > 0) {
-        // The chick rises from the lower shell, wearing the top of it.
-        const chick = [4]f32{ 1, 0.92, 0.35, 1 };
-        const head_y = y + 5 - 30 * glyph.hatch;
-        try disc(canvas, .{ center.x, y + 10 }, .{ 27, 27 }, chick);
-        try disc(canvas, .{ center.x, head_y }, .{ 22, 22 }, chick);
-        try disc(canvas, .{ center.x - 8, head_y - 1 }, .{ 2.5, 3.5 }, dark);
-        try disc(canvas, .{ center.x + 8, head_y - 1 }, .{ 2.5, 3.5 }, dark);
-        const beak = [4]f32{ 0.95, 0.42, 0.1, 1 };
-        try canvas.triangle(.{ .{ center.x - 5, head_y + 6 }, .{ center.x + 5, head_y + 6 }, .{ center.x, head_y + 12 } }, .{ beak, beak, beak });
-        try shellHalf(canvas, .{ center.x, y }, .{ 38, 49 }, false, .{ 0, -2 }, dark);
-        try shellHalf(canvas, .{ center.x, y }, .{ 35, 46 }, false, .{ 0, 0 }, shell);
-        const lift = [2]f32{ 6 * glyph.hatch, -35 * glyph.hatch };
-        try shellHalf(canvas, .{ center.x, y }, .{ 38, 49 }, true, .{ lift[0], lift[1] + 2 }, dark);
-        try shellHalf(canvas, .{ center.x, y }, .{ 35, 46 }, true, lift, shell);
+    // The icon at a whole number of points per pixel, at the bottom of `rect`, leaving room above
+    // for the shell's top to lift off.
+    const scale = @floor(@min(rect.w, rect.h) / icon.size);
+    const extent = scale * icon.size;
+    const origin = [2]f32{ rect.x + (rect.w - extent) / 2, rect.y + rect.h - extent };
+    // Each tap cracks a stretch more of the break, left to right.
+    const cracked = @as(usize, glyph.cracks) * icon.size / hatch_taps;
+    if (glyph.hatch == 0) {
+        try drawShell(canvas, glyph.egg, origin, scale, true, .{ 0, 0 }, cracked);
+        try drawShell(canvas, glyph.egg, origin, scale, false, .{ 0, 0 }, cracked);
         return;
     }
-    try disc(canvas, .{ center.x, y }, .{ 38, 49 }, dark);
-    try disc(canvas, .{ center.x, y - 1 }, .{ 35, 46 }, shell);
-    try disc(canvas, .{ center.x - 13, y - 23 }, .{ 7, 15 }, .{ 1, 0.95, 0.78, 1 });
-    for (0..@min(glyph.cracks, break_line.len - 1)) |i| {
-        // The line's ends lie on the rim; the crack starts and stops inside it.
-        const a = [2]f32{ center.x + std.math.clamp(break_line[i][0], -30, 30), y + break_line[i][1] };
-        const b = [2]f32{ center.x + std.math.clamp(break_line[i + 1][0], -30, 30), y + break_line[i + 1][1] };
-        try canvas.triangle(.{ a, b, .{ a[0], a[1] + 2 } }, .{ dark, dark, dark });
-        try canvas.triangle(.{ b, .{ b[0], b[1] + 2 }, .{ a[0], a[1] + 2 } }, .{ dark, dark, dark });
-    }
+
+    // The chick rises from the lower shell, wearing the top of it.
+    const center_x = origin[0] + extent / 2;
+    const break_y = origin[1] + 16 * scale;
+    const chick = [4]f32{ 1, 0.92, 0.35, 1 };
+    const dark = [4]f32{ 0.45, 0.24, 0.09, 1 };
+    const head_y = break_y + 5 - 30 * glyph.hatch;
+    try disc(canvas, .{ center_x, break_y + 10 }, .{ 27, 27 }, chick);
+    try disc(canvas, .{ center_x, head_y }, .{ 22, 22 }, chick);
+    try disc(canvas, .{ center_x - 8, head_y - 1 }, .{ 2.5, 3.5 }, dark);
+    try disc(canvas, .{ center_x + 8, head_y - 1 }, .{ 2.5, 3.5 }, dark);
+    const beak = [4]f32{ 0.95, 0.42, 0.1, 1 };
+    try canvas.triangle(.{ .{ center_x - 5, head_y + 6 }, .{ center_x + 5, head_y + 6 }, .{ center_x, head_y + 12 } }, .{ beak, beak, beak });
+    try drawShell(canvas, glyph.egg, origin, scale, false, .{ 0, 0 }, 0);
+    try drawShell(canvas, glyph.egg, origin, scale, true, .{ 6 * glyph.hatch, -35 * glyph.hatch }, 0);
 }
 
 /// A heap-owned editor tool; its UI and surface close before the shared editor font.
@@ -193,6 +195,10 @@ pub const AboutWindow = struct {
         const self = try gpa.create(AboutWindow);
         errdefer gpa.destroy(self);
         self.* = .{ .gpa = gpa, .window = try ToolWindow.open(gpa, graphics, font, "About Eggy", .{ 480, 520 }, .{}) };
+        self.view.egg = icon.pixels() catch |err| blk: {
+            std.log.warn("cannot read Eggy's icon for About: {t}", .{err});
+            break :blk self.view.egg;
+        };
         return self;
     }
     /// Destroy the About window and free `self`; use the graphics device that opened it.

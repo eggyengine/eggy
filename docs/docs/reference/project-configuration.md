@@ -45,7 +45,7 @@ See [Create reusable plugins](../how-to/create-plugins.md#using-plugins).
 | `version` | `"0.0.1"` | Game version stored in executable metadata |
 | `default_scene` | `null` | Project-relative startup scene; exports require this or an explicit scene |
 | `metadata` | Empty fields | Executable metadata below |
-| `plugins` | Empty | Plugins installed from File > Plugins, which the game is built with |
+| `plugins` | Empty | Plugins installed from Edit > Plugins, which the game is built with |
 | `plugin` | `null` | This folder's plugin, for others to install; see [Share the plugin](../how-to/create-plugins.md#share-the-plugin) |
 
 File > Project Settings opens the Project section of Edit > Preferences and edits

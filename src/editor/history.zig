@@ -49,6 +49,9 @@ pub const Step = union(enum) {
     preference: struct { layer: eggy.preferences.Store.Layer, key: []u8, field: []u8, before: ?[]u8, after: ?[]u8 },
     /// The project's settings (`eggy.zon`) went from `before` to `after` (its text).
     project_settings: Texts,
+    /// A plugin was installed or uninstalled: `eggy.zon`'s texts, and `build.zig.zon`'s when its
+    /// package came or went too.
+    plugins: struct { project: Texts, package: ?Texts = null },
     input_bindings: Texts,
     /// The complete defaults in one `.inmap.zon` asset.
     input_map: struct { path: []u8, text: Texts },
@@ -102,6 +105,10 @@ pub const Step = union(enum) {
                 if (step.trashed) |trashed| gpa.free(trashed);
             },
             .plugin => |step| gpa.free(step.key),
+            .plugins => |step| for ([_]?Texts{ step.project, step.package }) |maybe| if (maybe) |texts| {
+                gpa.free(texts.before);
+                gpa.free(texts.after);
+            },
             .input_map => |step| {
                 gpa.free(step.path);
                 gpa.free(step.text.before);
@@ -149,6 +156,7 @@ pub const Step = union(enum) {
             .preference => "a preference",
             .layout => "a layout change",
             .project_settings => "a project setting",
+            .plugins => "installing or uninstalling a plugin",
             .input_bindings => "input mappings",
             .input_map => "an input map",
             .animation_clip => "an animation edit",

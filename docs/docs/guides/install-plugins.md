@@ -2,7 +2,7 @@
 title: Install plugins from the editor
 ---
 
-Plugins add features to your game or to the editor. **File > Plugins...** finds them,
+Plugins add features to your game or to the editor. **Edit > Plugins...** finds them,
 shows their read-me, and installs them into your project. Nothing is installed until you
 choose to.
 
@@ -32,7 +32,19 @@ into your `build.zig.zon`, lists it in your `eggy.zon`, then rebuilds the game w
 Edit > Undo takes the install back.
 
 When a page shows a newer version of a plugin you have, its button reads **Update to
-1.2.0**. **Uninstall** removes a plugin from the game.
+1.2.0**.
+
+## Turn it off, or uninstall it
+
+**Disable** turns an installed plugin off without removing anything: the game runs
+without it until you press **Enable**. Preferences > Plugins has the same switch.
+
+Once a plugin is off, **Uninstall** appears beside it. Uninstalling takes the plugin out of
+your `eggy.zon` and its package out of your `build.zig.zon`, then rebuilds the game. When
+other installed plugins come from the same package, the package stays for them; remove it
+from `build.zig.zon` yourself once you want none of them. Plugins made by Eggy ship inside
+Eggy, so uninstalling one only takes it off your project. Edit > Undo takes an uninstall
+back.
 
 ## Why an install can be refused
 
@@ -54,6 +66,7 @@ install it.
 
 Some plugins help you make the game rather than being part of it. Git is one. A plugin
 marked **Dev plugin** runs in the editor and in `zig build run-runtime`, but File > Export
-and `zig build export` leave it out of the game you ship.
+and `zig build export` leave it out of the game you ship. A plugin marked **Library
+plugin** is part of the game and ships with it.
 
 To make and publish your own, see [Create reusable plugins](../how-to/create-plugins.md#share-the-plugin).

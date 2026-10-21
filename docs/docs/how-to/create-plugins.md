@@ -165,6 +165,22 @@ pub fn build(b: *std.Build) void {
 Both helpers request the same Eggy dependency arguments. Do not add divergent engine
 options: the game and plugin must share native engine and ECS types.
 
+A plugin is an ordinary Zig package, so it can use other Zig packages. Fetch one into your
+plugin's `build.zig.zon`, then import its module into the plugin's module. Projects that
+install your plugin build it with your `build.zig`, so they get the dependency too:
+
+```bash
+zig fetch --save git+https://github.com/someone/noise
+```
+
+```zig title="build.zig"
+const noise = b.dependency("noise", .{ .target = target, .optimize = optimize });
+plugin.addImport("noise", noise.module("noise"));
+```
+
+Don't fetch your own copy of Eggy this way: `addPlugin` already gives the plugin
+`@import("eggy")`, and it must be the game's Eggy.
+
 To use another package's published plugin, fetch it and add its module to `.plugins`.
 Replace the example URL and module name with the package you want:
 
@@ -188,7 +204,7 @@ and preference declarations remain available.
 
 ### Share the plugin {#share-the-plugin}
 
-Other projects can install your plugin from the editor's **File > Plugins...** window
+Other projects can install your plugin from the editor's **Edit > Plugins...** window
 when its folder holds an `eggy.zon` with a `.plugin` section and, beside it, a `README.md`
 that the window shows before anyone installs it:
 

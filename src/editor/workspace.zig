@@ -9,6 +9,7 @@ const L = ui.Layout;
 const widgets = ui.widgets;
 const titlebar = ui.titlebar;
 const dock = ui.dock;
+const help_menu = @import("help_menu.zig");
 const menus = @import("menus.zig");
 const plugin_bars = @import("plugin_bars.zig");
 const panels = @import("panels.zig");
@@ -75,7 +76,7 @@ pub const Outcome = union(enum) {
     export_game,
     /// File > Project Settings: open Preferences on its Project section.
     project_settings,
-    /// File > Plugins: open the Plugins window.
+    /// Edit > Plugins: open the Plugins window.
     plugins,
     /// Edit > Undo (Ctrl+Z) and Redo (Ctrl+Shift+Z, Ctrl+Y).
     undo,
@@ -663,22 +664,15 @@ pub const Workspace = struct {
             c.srgb_target = style.srgb_target;
             c.hot_id = if (slot == self.pointer_slot) self.controlAt(slot, self.pointer.x, self.pointer.y) else 0;
             c.rect(root.bounds, c.theme.background) catch continue;
-            root.drawWithoutOverlays(&c) catch |err| switch (err) {
-                error.OutOfVertices => continue,
-                else => return err,
-            };
-            root.drawOverlays(&c) catch |err| switch (err) {
-                error.OutOfVertices => continue,
-                else => return err,
-            };
+            // Out of vertices is the canvas's flag, not the error: plugin panels draw from the
+            // game library, whose error numbers differ from the editor's.
+            root.drawWithoutOverlays(&c) catch |err| if (c.out_of_vertices) continue else return err;
+            root.drawOverlays(&c) catch |err| if (c.out_of_vertices) continue else return err;
             // DevTools' highlight of the element inspected, over everything. It lets go of the
             // page it was given, so a retry hands it over again.
             if (slot == main_slot) if (self.devtools) |tools| {
                 tools.page = root;
-                tools.highlight(&c, gpa) catch |err| switch (err) {
-                    error.OutOfVertices => continue,
-                    else => return err,
-                };
+                tools.highlight(&c, gpa) catch |err| if (c.out_of_vertices) continue else return err;
             };
             break buffer[0..c.len];
         };
@@ -836,6 +830,9 @@ pub const Workspace = struct {
                 .redo => return .redo,
                 .reset_layout => self.resetLayout() catch |err| std.log.warn("cannot reset the layout: {t}", .{err}),
                 .about => return .about,
+                .documentation => help_menu.openUrl(help_menu.documentation_url),
+                .report_issue => help_menu.openUrl(help_menu.issues_url),
+                .show_logs => if (!help_menu.showLogs(self.arena.allocator())) self.toast("This run has no log file"),
             },
         }
         return .handled;

@@ -238,6 +238,7 @@ pub fn Editor(comptime project: type) type {
         /// _ = try host.iterate();
         /// ```
         pub fn init(process_init: *const std.process.Init, args: []const [*:0]const u8) !Self {
+            eggy.log.start(process_init.io, .editor, project.name ++ "_editor", args);
             const gpa = process_init.gpa;
             var app = try eggy.App.initForProject(process_init, title, project.name, .editor, .{});
             errdefer app.deinit();
@@ -275,6 +276,9 @@ pub fn Editor(comptime project: type) type {
             errdefer gpa.destroy(mono);
             mono.* = try ui.Font.initCompanion(gpa, @embedFile("mono_font"), context.font, &.{ 10, 11, 12, 13, 14, 15, 16, 18, 20, 24 });
             errdefer mono.deinit();
+            // Nerd Font icons for the characters the faces lack in private-use areas, in both.
+            try context.font.setSymbolsFont(@embedFile("symbols_font"));
+            try mono.setSymbolsFont(@embedFile("symbols_font"));
             var console_ui = ui.Context.initWithFont(gpa, context.font);
             errdefer console_ui.deinit();
             var hierarchy_ui = ui.Context.initWithFont(gpa, context.font);
@@ -524,6 +528,7 @@ pub fn Editor(comptime project: type) type {
             defer frame_arena.deinit();
             self.workspace.build_state = try self.rebuildState(frame_arena.allocator());
             self.workspace.time_ms = sdl3.timer.getMillisecondsSinceInit();
+            eggy.log.setLevel(@enumFromInt(@intFromEnum(preferences.editor(&self.app.preference_values).log_level)));
             self.ui.theme = switch (preferences.editor(&self.app.preference_values).theme) {
                 .system => weeoui_sdl3.systemTheme(),
                 .light => .{},
@@ -667,12 +672,17 @@ pub fn Editor(comptime project: type) type {
                     self.export_window = null;
                 }
             }
-            // File > Plugins, if open: an install or uninstall is a step to undo, and a rebuild.
-            if (self.plugins_window) |window| if (try window.update(&self.app.graphics, &self.ui)) |change| {
-                self.history.record(.{ .project_settings = .{ .before = change.before, .after = change.after } });
-                if (self.project_settings) |settings| settings.reload() catch {};
-                self.rebuildForPlugins();
-            };
+            // Edit > Plugins, if open: an install or uninstall is a step to undo, and a rebuild; a
+            // switch is as Preferences > Plugins makes it.
+            if (self.plugins_window) |window| {
+                const outcome = try window.update(&self.app.graphics, &self.ui, self.plugin_switches.off());
+                if (outcome.change) |change| {
+                    self.history.record(.{ .plugins = .{ .project = change.project, .package = change.package } });
+                    if (self.project_settings) |settings| settings.reload() catch {};
+                    self.rebuildForPlugins();
+                }
+                if (outcome.switched) |switched| self.flipPlugin(.{ .key = switched.module, .on = switched.on });
+            }
             if (self.input_map_window) |window| {
                 const result = try window.update(&self.app.graphics, &self.ui, &self.history);
                 if (result.saved) self.assets_panel.refreshSoon();
@@ -1407,6 +1417,13 @@ pub fn Editor(comptime project: type) type {
                     }
                     self.setGraphicsDefaults(try project_settings_zig.graphicsIn(self.gpa, change.value(direction)));
                 },
+                .plugins => |change| {
+                    try files.writeFile(io, .{ .sub_path = eggy.project.file_name, .data = change.project.value(direction) });
+                    if (change.package) |package| try files.writeFile(io, .{ .sub_path = "build.zig.zon", .data = package.value(direction) });
+                    if (self.project_settings) |settings| try settings.reload();
+                    if (self.plugins_window) |window| window.reloadInstalled();
+                    self.rebuildForPlugins();
+                },
                 .input_bindings => |change| {
                     const settings = self.input_settings orelse return error.NoProject;
                     try settings.restore(change.value(direction));
@@ -1742,7 +1759,7 @@ pub fn Editor(comptime project: type) type {
                 }
                 if (window.handle(curr_event)) return self.toolWindowTook(curr_event);
             }
-            // File > Plugins' window takes its own events; closing it, or Escape, closes it.
+            // Edit > Plugins' window takes its own events; closing it, or Escape, closes it.
             if (self.plugins_window) |window| {
                 if (window.closeRequested(curr_event)) {
                     window.close(&self.app.graphics);
@@ -2395,7 +2412,7 @@ pub fn Editor(comptime project: type) type {
             self.filesChanged();
         }
 
-        /// A plugin's `eggy.zon` dropped anywhere opens in File > Plugins, to read and install;
+        /// A plugin's `eggy.zon` dropped anywhere opens in Edit > Plugins, to read and install;
         /// returns whether `path` was one.
         fn openDroppedPlugin(self: *Self, path: []const u8) bool {
             if (!std.mem.eql(u8, std.fs.path.basename(path), eggy.project.file_name)) return false;
@@ -2413,7 +2430,7 @@ pub fn Editor(comptime project: type) type {
             return true;
         }
 
-        /// File > Plugins, opened if it isn't; null without a project, or if it can't open.
+        /// Edit > Plugins, opened if it isn't; null without a project, or if it can't open.
         fn showPlugins(self: *Self) ?*plugin_manager.PluginsWindow {
             if (self.plugins_window) |window| return window;
             const opened = self.project orelse return null;
@@ -2862,6 +2879,7 @@ test {
     _ = @import("code_editor.zig");
     _ = @import("history.zig");
     _ = @import("plugin_switches.zig");
+    _ = icon;
     _ = @import("plugin_manager/plugin_manager.zig");
     _ = @import("dragged.zig");
     _ = @import("scene_view/scene_view.zig");
@@ -2893,4 +2911,23 @@ test "the editor compiles for a project" {
         };
     };
     std.testing.refAllDecls(Editor(project));
+}
+
+test "Nerd Font icons draw from the symbols font, and text from the UI's" {
+    var context = try ui.Context.init(std.testing.allocator);
+    defer context.deinit();
+    const font = context.font;
+    const strike = font.strike(14);
+    const missing = strike.glyph('?');
+    // Without the symbols font, Powerline's branch icon (private use) is missing.
+    var i: usize = 0;
+    try std.testing.expect(std.meta.eql(font.next(strike, "\u{e0a0}", &i), missing));
+    // With it, Material Design's first icon draws.
+    try font.setSymbolsFont(@embedFile("symbols_font"));
+    i = 0;
+    const material = font.next(strike, "\u{f0001}", &i);
+    try std.testing.expect(!std.meta.eql(material, missing) and material.w > 0);
+    // Text is still the UI font's.
+    i = 0;
+    try std.testing.expect(std.meta.eql(font.next(strike, "A", &i), strike.glyph('A')));
 }

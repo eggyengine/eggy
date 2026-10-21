@@ -1,7 +1,9 @@
-//! File > Plugins: the project's installed plugins, the plugins that ship inside Eggy, and any
+//! Edit > Plugins: the project's installed plugins, the plugins that ship inside Eggy, and any
 //! other fetched by its `eggy.zon`'s address or path (or dropped on the editor). Opening one shows
 //! its read-me, then Install (or Update) adds it to the project's `eggy.zon`, which `addGame`
-//! builds the game with; Uninstall takes it out. Each is a step to undo.
+//! builds the game with. An installed plugin can be turned off and on (its switch, as in
+//! Preferences > Plugins), and once off, uninstalled: taken out of `eggy.zon`, with its package
+//! out of `build.zig.zon` unless another installed plugin comes from it. Each is a step to undo.
 const std = @import("std");
 const eggy = @import("eggy");
 const sdl3 = eggy.sdl_adapter.sdl;
@@ -15,6 +17,7 @@ const smallText = page_style.smallText;
 const fetch_zig = @import("fetch.zig");
 const install_zig = @import("install.zig");
 const source = @import("source.zig");
+const package_removal = @import("package_removal.zig");
 const Fetched = fetch_zig.Fetched;
 const Installed = eggy.plugin_manifest.Installed;
 const Manifest = eggy.plugin_manifest.Manifest;
@@ -38,8 +41,19 @@ const Section = enum {
     }
 };
 
-/// `eggy.zon` before and after an install or uninstall, owned by whoever takes it: a step to undo.
-pub const Change = struct { before: []u8, after: []u8 };
+/// A file's text before and after a change.
+pub const Texts = eggy.Action([]u8);
+
+/// An install or uninstall, owned by whoever takes it: `eggy.zon`'s texts, and `build.zig.zon`'s
+/// when an uninstall took the plugin's package out too. A step to undo.
+pub const Change = struct { project: Texts, package: ?Texts = null };
+
+/// What a frame of the window asks of the editor.
+pub const Outcome = struct {
+    change: ?Change = null,
+    /// A plugin to turn on or off (its module, borrowed until the next frame).
+    switched: ?struct { module: []const u8, on: bool } = null,
+};
 
 pub const PluginsWindow = struct {
     gpa: std.mem.Allocator,
@@ -61,8 +75,10 @@ pub const PluginsWindow = struct {
     /// Why the last fetch or install failed, owned.
     problem: std.ArrayList(u8) = .empty,
     installing: ?*install_zig.Install = null,
-    /// An install or uninstall this frame, for `update` to return.
-    change: ?Change = null,
+    /// What this frame asks of the editor, for `update` to return.
+    outcome: Outcome = .{},
+    /// The modules of the plugins turned off, borrowed from the editor for a frame.
+    off: []const []const u8 = &.{},
     sidebar_scroll: ui.Layout.ScrollState = .{},
     content_scroll: ui.Layout.ScrollState = .{},
 
@@ -96,10 +112,7 @@ pub const PluginsWindow = struct {
         self.freeBuiltins();
         self.installed_arena.deinit();
         self.problem.deinit(gpa);
-        if (self.change) |change| {
-            gpa.free(change.before);
-            gpa.free(change.after);
-        }
+        if (self.outcome.change) |change| freeChange(gpa, change);
         gpa.free(self.project_dir);
         gpa.destroy(self);
     }
@@ -149,10 +162,12 @@ pub const PluginsWindow = struct {
         self.installed = config.plugins;
     }
 
-    /// Draw a frame; returns an install or uninstall made in it (the caller owns its texts and
-    /// rebuilds the project).
-    pub fn update(self: *PluginsWindow, graphics: *eggy.Graphics, style: *const ui.Context) !?Change {
+    /// Draw a frame, showing the plugins keyed in `off` as off; returns what it asks of the
+    /// editor: an install or uninstall (the caller owns its texts and rebuilds the project), or a
+    /// plugin to switch.
+    pub fn update(self: *PluginsWindow, graphics: *eggy.Graphics, style: *const ui.Context, off: []const []const u8) !Outcome {
         self.collect();
+        self.off = off;
         const Page = struct {
             window: *PluginsWindow,
             /// ToolWindow callback for one frame of the Plugins window.
@@ -162,8 +177,8 @@ pub const PluginsWindow = struct {
         };
         var page = Page{ .window = self };
         try self.window.present(graphics, style, &page);
-        defer self.change = null;
-        return self.change;
+        defer self.outcome = .{};
+        return self.outcome;
     }
 
     /// Take what a fetch or install finished with.
@@ -231,7 +246,8 @@ pub const PluginsWindow = struct {
     }
 
     fn buildInstalled(self: *PluginsWindow, context: *ui.Context) void {
-        header(context, "Installed", "The plugins this project installed here, which its game is built with. Plugins its build.zig adds aren't listed.");
+        header(context, "Installed", "The plugins this project installed here, which its game is built with. Plugins its build.zig adds aren't listed. Turn one off to uninstall it.");
+        if (self.problem.items.len > 0) context.alert("Couldn't uninstall the plugin", self.problem.items, true);
         if (self.installed.len == 0) {
             context.muted("None yet. Find one in Made by Eggy, or fetch one From an Address.");
             return;
@@ -240,15 +256,16 @@ pub const PluginsWindow = struct {
         for (self.installed) |installed| {
             const builtin = self.builtinFor(installed.module);
             page_style.beginSection(context, if (builtin) |found| found.manifest.title else installed.module);
-            badges(context, installed.version, installed.dev, installed.dependency == null, false);
+            badges(context, .{ .version = installed.version, .dev = installed.dev, .in_eggy = installed.dependency == null, .off = self.isOff(installed.module) });
             context.muted(if (installed.dependency) |dependency| std.fmt.allocPrint(arena, "Module {s}, from {s}", .{ installed.module, dependency }) catch "" else "Ships inside Eggy");
             smallText(context, 12);
             context.begin(.row);
             if (context.buttonVariant(std.fmt.allocPrint(arena, "Read Me##r{s}", .{installed.module}) catch "Read Me", .outline)) {
                 if (builtin) |found| self.show(found, true) else if (installed.source.len > 0) self.fetchFrom(installed.source);
             }
-            if (context.buttonVariant(std.fmt.allocPrint(arena, "Uninstall##u{s}", .{installed.module}) catch "Uninstall", .ghost)) self.uninstall(installed.module);
+            self.switchButtons(context, installed);
             page_style.endRow(context);
+            self.uninstallNote(context, installed);
             page_style.endSection(context);
         }
     }
@@ -259,7 +276,7 @@ pub const PluginsWindow = struct {
         for (self.builtins) |fetched| {
             const manifest = fetched.manifest;
             page_style.beginSection(context, manifest.title);
-            badges(context, manifest.version, manifest.dev, false, self.installedFor(manifest.module) != null);
+            badges(context, .{ .version = manifest.version, .dev = manifest.dev, .installed = self.installedFor(manifest.module) != null, .off = self.isOff(manifest.module) });
             if (manifest.description.len > 0) context.muted(manifest.description);
             if (context.buttonVariant(std.fmt.allocPrint(arena, "Read Me##b{s}", .{manifest.module}) catch "Read Me", .outline)) self.show(fetched, true);
             page_style.endSection(context);
@@ -288,7 +305,7 @@ pub const PluginsWindow = struct {
             return;
         }
         context.heading(2, manifest.title);
-        badges(context, manifest.version, manifest.dev, fetched.package == .eggy, false);
+        badges(context, .{ .version = manifest.version, .dev = manifest.dev, .in_eggy = fetched.package == .eggy, .off = self.installedFor(manifest.module) != null and self.isOff(manifest.module) });
         if (manifest.description.len > 0) context.text(manifest.description);
         context.muted(std.fmt.allocPrint(arena, "Repository: {s}", .{manifest.repository}) catch "");
         smallText(context, 12);
@@ -326,15 +343,19 @@ pub const PluginsWindow = struct {
             return;
         };
         context.begin(.row);
-        if (self.installedFor(manifest.module)) |installed| {
-            switch (eggy.plugin_manifest.compareVersions(manifest.version, installed.version)) {
-                .gt => if (self.installButton(context, std.fmt.allocPrint(arena, "Update to {s}", .{manifest.version}) catch "Update")) self.install(fetched),
-                .eq => context.muted(std.fmt.allocPrint(arena, "Version {s} is installed.", .{installed.version}) catch ""),
-                .lt => context.muted(std.fmt.allocPrint(arena, "The installed version, {s}, is newer.", .{installed.version}) catch ""),
-            }
-            if (context.buttonVariant("Uninstall", .ghost) and self.installing == null) self.uninstall(manifest.module);
-        } else if (self.installButton(context, "Install")) self.install(fetched);
+        const installed = self.installedFor(manifest.module) orelse {
+            if (self.installButton(context, "Install")) self.install(fetched);
+            page_style.endRow(context);
+            return;
+        };
+        switch (eggy.plugin_manifest.compareVersions(manifest.version, installed.version)) {
+            .gt => if (self.installButton(context, std.fmt.allocPrint(arena, "Update to {s}", .{manifest.version}) catch "Update")) self.install(fetched),
+            .eq => context.muted(std.fmt.allocPrint(arena, "Version {s} is installed.", .{installed.version}) catch ""),
+            .lt => context.muted(std.fmt.allocPrint(arena, "The installed version, {s}, is newer.", .{installed.version}) catch ""),
+        }
+        self.switchButtons(context, installed);
         page_style.endRow(context);
+        self.uninstallNote(context, installed);
     }
 
     fn installButton(self: *PluginsWindow, context: *ui.Context, label: []const u8) bool {
@@ -346,15 +367,45 @@ pub const PluginsWindow = struct {
         return context.button(label);
     }
 
-    /// The plugin's version, and badges for a dev plugin, one inside Eggy and one installed.
-    fn badges(context: *ui.Context, version: []const u8, dev: bool, in_eggy: bool, installed: bool) void {
+    /// An installed plugin's switch, Disable or Enable, and once it is off, Uninstall.
+    fn switchButtons(self: *PluginsWindow, context: *ui.Context, installed: Installed) void {
+        const arena = context.builder().allocator;
+        const off = self.isOff(installed.module);
+        if (context.buttonVariant(std.fmt.allocPrint(arena, "{s}##s{s}", .{ if (off) "Enable" else "Disable", installed.module }) catch "Switch", .outline)) {
+            self.outcome.switched = .{ .module = installed.module, .on = off };
+        }
+        if (off and context.buttonVariant(std.fmt.allocPrint(arena, "Uninstall##u{s}", .{installed.module}) catch "Uninstall", .destructive) and self.installing == null) self.uninstall(installed);
+    }
+
+    /// What uninstalling an installed plugin that is off leaves behind, when it leaves anything.
+    fn uninstallNote(self: *PluginsWindow, context: *ui.Context, installed: Installed) void {
+        if (!self.isOff(installed.module)) return;
+        const arena = context.builder().allocator;
+        const note = if (installed.dependency) |dependency| note: {
+            const sharing = self.sharingPackage(installed) orelse break :note null;
+            break :note std.fmt.allocPrint(arena, "Its package, {s}, holds {s} too, so uninstalling leaves the package in build.zig.zon: remove it yourself once you no longer want any of them.", .{ dependency, sharing.module }) catch null;
+        } else "Uninstalling takes it off this project; Eggy keeps it, to install again.";
+        if (note) |text| {
+            context.muted(text);
+            smallText(context, 12);
+        }
+    }
+
+    const Marks = struct { version: []const u8, dev: bool, in_eggy: bool = false, installed: bool = false, off: bool = false };
+
+    /// The plugin's version and what kind it is (a library plugin, which ships in the game, or a
+    /// dev plugin, which only helps make it), then whether it is inside Eggy, installed or off.
+    fn badges(context: *ui.Context, marks: Marks) void {
         const arena = context.builder().allocator;
         context.begin(.row);
-        if (version.len > 0) badge(context, std.fmt.allocPrint(arena, "v{s}", .{version}) catch "");
-        if (dev) badge(context, "Dev plugin");
-        if (in_eggy) badge(context, "Inside Eggy");
-        if (installed) badge(context, "Installed");
+        if (marks.version.len > 0) badge(context, std.fmt.allocPrint(arena, "v{s}", .{marks.version}) catch "", .secondary);
+        if (marks.dev) badge(context, "Dev plugin: not exported", .outline) else badge(context, "Library plugin", .default);
+        if (marks.in_eggy) badge(context, "Inside Eggy", .secondary);
+        if (marks.installed) badge(context, "Installed", .secondary);
+        if (marks.off) badge(context, "Off", .destructive);
         page_style.endRow(context);
+        // Narrow windows put the badges on more lines.
+        if (context.last_added) |row| row.style.wrap = true;
     }
 
     // Installing.
@@ -403,10 +454,44 @@ pub const PluginsWindow = struct {
         log.info("installed {s} {s}", .{ manifest.module, manifest.version });
     }
 
-    fn uninstall(self: *PluginsWindow, module: []const u8) void {
+    /// Take `installed` out of the project's `eggy.zon`, and its package out of `build.zig.zon`
+    /// unless another installed plugin comes from it (or it is Eggy's own).
+    fn uninstall(self: *PluginsWindow, installed: Installed) void {
         self.problem.clearRetainingCapacity();
+        // Copied, as `rewritePlugins` frees `installed`'s strings.
+        var arena_state = std.heap.ArenaAllocator.init(self.gpa);
+        defer arena_state.deinit();
+        const arena = arena_state.allocator();
+        const module = arena.dupe(u8, installed.module) catch |err| return self.failInstall(err);
+        const package: ?[]const u8 = if (installed.dependency != null and self.sharingPackage(installed) == null)
+            arena.dupe(u8, installed.dependency.?) catch |err| return self.failInstall(err)
+        else
+            null;
+
         self.rewritePlugins(module, null) catch |err| return self.failInstall(err);
+        if (package) |name| self.removePackage(name) catch |err| {
+            log.err("cannot take {s} out of build.zig.zon: {t}", .{ name, err });
+            self.setProblem("The plugin is uninstalled, but its package is still in build.zig.zon: see the Console.");
+        };
         log.info("uninstalled {s}", .{module});
+    }
+
+    /// Take dependency `name` out of the project's `build.zig.zon`, as this frame's change's
+    /// `package`.
+    fn removePackage(self: *PluginsWindow, name: []const u8) !void {
+        var arena_state = std.heap.ArenaAllocator.init(self.gpa);
+        defer arena_state.deinit();
+        const arena = arena_state.allocator();
+        var threaded: std.Io.Threaded = .init_single_threaded;
+        const io = threaded.io();
+        var dir = try std.Io.Dir.cwd().openDir(io, self.project_dir, .{});
+        defer dir.close(io);
+        const before = try dir.readFileAllocOptions(io, "build.zig.zon", arena, .limited(1 << 20), .of(u8), 0);
+        const after = try package_removal.withoutDependency(arena, before, name) orelse return;
+        try dir.writeFile(io, .{ .sub_path = "build.zig.zon", .data = after });
+        const before_copy = try self.gpa.dupe(u8, before);
+        errdefer self.gpa.free(before_copy);
+        self.outcome.change.?.package = .{ .before = before_copy, .after = try self.gpa.dupe(u8, after) };
     }
 
     /// Write the project's `eggy.zon` with `module`'s entry replaced by `entry` (or removed), as
@@ -440,7 +525,7 @@ pub const PluginsWindow = struct {
         try dir.writeFile(io, .{ .sub_path = eggy.project.file_name, .data = after.written() });
         const before_copy = try self.gpa.dupe(u8, before);
         errdefer self.gpa.free(before_copy);
-        self.change = .{ .before = before_copy, .after = try self.gpa.dupe(u8, after.written()) };
+        self.outcome.change = .{ .project = .{ .before = before_copy, .after = try self.gpa.dupe(u8, after.written()) } };
         self.reloadInstalled();
     }
 
@@ -469,6 +554,21 @@ pub const PluginsWindow = struct {
         if (self.shown) |fetched| if (!self.shown_builtin) fetched.destroy();
         self.shown = null;
         self.shown_builtin = false;
+    }
+
+    fn isOff(self: *const PluginsWindow, module: []const u8) bool {
+        for (self.off) |key| if (std.mem.eql(u8, key, module)) return true;
+        return false;
+    }
+
+    /// Another installed plugin from `installed`'s package, if any.
+    fn sharingPackage(self: *const PluginsWindow, installed: Installed) ?Installed {
+        const dependency = installed.dependency orelse return null;
+        for (self.installed) |other| {
+            if (std.mem.eql(u8, other.module, installed.module)) continue;
+            if (other.dependency) |name| if (std.mem.eql(u8, name, dependency)) return other;
+        }
+        return null;
     }
 
     fn installedFor(self: *const PluginsWindow, module: []const u8) ?Installed {
@@ -507,9 +607,17 @@ pub const PluginsWindow = struct {
     }
 };
 
+/// Free `change`'s texts.
+pub fn freeChange(gpa: std.mem.Allocator, change: Change) void {
+    for ([_]?Texts{ change.project, change.package }) |maybe| if (maybe) |texts| {
+        gpa.free(texts.before);
+        gpa.free(texts.after);
+    };
+}
+
 /// A small badge, as wide as its text.
-fn badge(context: *ui.Context, text: []const u8) void {
-    context.badge(text, .secondary);
+fn badge(context: *ui.Context, text: []const u8, variant: anytype) void {
+    context.badge(text, variant);
     restyle(context, .{ .width = context.font.measure(text, context.theme.small_text_size) + 20 });
 }
 
@@ -606,6 +714,7 @@ test {
     _ = source;
     _ = fetch_zig;
     _ = install_zig;
+    _ = package_removal;
 }
 
 test "Eggy's own plugins have readable manifests that name Eggy" {
@@ -627,8 +736,10 @@ test "every page of the Plugins window fits it, narrow or wide" {
     try window.readBuiltins();
     defer window.freeBuiltins();
     defer window.problem.deinit(gpa);
+    window.off = &.{ "eggy_git", "a_plugin_with_a_rather_long_module_name" };
     window.installed = &.{
         .{ .module = "eggy_git", .version = "0.1.0", .dev = true },
+        .{ .module = "a_second_plugin_from_the_collection", .dependency = "someone_elses_plugin_collection", .version = "1.0.0" },
         .{ .module = "a_plugin_with_a_rather_long_module_name", .dependency = "someone_elses_plugin_collection", .version = "12.0.0-beta.3", .source = "https://raw.githubusercontent.com/someone/plugins/main/x/eggy.zon" },
     };
     // A plugin fetched from elsewhere, without a read-me.
