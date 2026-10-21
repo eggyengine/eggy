@@ -140,10 +140,19 @@ fn apply(host: anytype, request: api.Request, response: *api.Response) !void {
             }
             return;
         },
+        .show_panel => return host.workspace.showPluginPanel(text),
         .select => {
             const entity = eggy.ecs.EntityId.init(request.entity.id, request.entity.generation);
             if (request.has_entity and !host.app.world.isAlive(entity)) return error.InvalidEntity;
             host.entity_editor.selected = if (request.has_entity) entity else null;
+            return;
+        },
+        .project_folder => {
+            const project = host.project orelse return error.NoProject;
+            response.length = project.dir.len;
+            if (request.capacity == 0) return;
+            if (project.dir.len > request.capacity) return error.BufferTooSmall;
+            @memcpy(request.buffer[0..project.dir.len], project.dir);
             return;
         },
         .project_settings => {
@@ -247,7 +256,7 @@ fn apply(host: anytype, request: api.Request, response: *api.Response) !void {
             try host.history.reserve();
             if (try settings.setDefaultScene(host.gpa, project.dir, text)) |change| host.history.recordProjectSettings(change.before, change.after, host.workspace.time_ms);
         },
-        .selection, .select, .project_settings, .request_build, .request_reload, .show_export, .show_new_project, .show_open_project => unreachable,
+        .selection, .select, .show_panel, .project_settings, .project_folder, .request_build, .request_reload, .show_export, .show_new_project, .show_open_project => unreachable,
     }
 }
 

@@ -176,8 +176,60 @@ zig fetch --save git+https://github.com/someone/stats
 .plugins = &.{ plugin, b.dependency("stats", .{}).module("stats") },
 ```
 
+To help only while you make the game, pass a plugin in `.dev_plugins` instead: the
+editor and `zig build run-runtime` run it, and `zig build export` leaves it out.
+
+```zig
+.dev_plugins = &.{b.dependency("level_tools", .{}).module("level_tools")},
+```
+
 Plugins run after the game in list order. A disabled plugin does not run; its component
 and preference declarations remain available.
+
+### Share the plugin {#share-the-plugin}
+
+Other projects can install your plugin from the editor's **File > Plugins...** window
+when its folder holds an `eggy.zon` with a `.plugin` section and, beside it, a `README.md`
+that the window shows before anyone installs it:
+
+```zig title="eggy.zon"
+.{
+    .plugin = .{
+        .title = "Stats",
+        .module = "stats", // the name you gave addPlugin
+        .version = "1.2.0", // semver
+        .description = "Frame times in a corner of the game.",
+        .repository = "https://github.com/someone/stats",
+        .fingerprint = 0x1234abcd5678ef90, // .fingerprint in your build.zig.zon
+    },
+}
+```
+
+| Field | Default | Meaning |
+| --- | --- | --- |
+| `title` | Required | The plugin's name in the Plugins window |
+| `module` | Required | The module your package publishes with `addPlugin` |
+| `version` | Required | Semver; a higher version shows as an update |
+| `repository` | Required | The https address of the repository hosting the plugin |
+| `fingerprint` | Required | Your package's `build.zig.zon` fingerprint; installs check it |
+| `description` | `""` | One line under the title |
+| `dev` | `false` | Leave the plugin out of exported games |
+| `readme` | `"README.md"` | The read-me, relative to this file |
+| `package` | Worked out | Where to fetch the package, as `zig fetch` takes it, inside `repository` |
+| `minimum_eggy_version` | None | The oldest Eggy the plugin works with |
+
+People install the plugin by its `eggy.zon`'s raw address, for example
+`https://raw.githubusercontent.com/someone/stats/v1.2.0/eggy.zon`, or by the GitHub page
+of its folder. Without `.package`, the editor fetches your repository at the commit or
+tag in that address (or at tag `v<version>` when the address isn't on GitHub). The
+editor refuses an `eggy.zon` hosted outside `repository`, and a package whose fingerprint
+doesn't match, so keep `.fingerprint` in step with `build.zig.zon` and never change it
+between versions.
+
+One repository can publish several plugins: give each its own folder with its own
+`eggy.zon` and `README.md`, publish each module from the repository's `build.zig`, and
+name the same repository and fingerprint in each. Projects fetch the package once and
+build each installed plugin's module from it.
 
 ## Verify
 

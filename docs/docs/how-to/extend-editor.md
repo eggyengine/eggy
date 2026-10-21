@@ -122,6 +122,8 @@ Use `selection` and `select` to read or change selection, and `openScene` and `s
 to use the editor's scene workflow.
 
 `projectSettings(arena)` returns `eggy.project.Config`, with strings owned by your arena.
+`projectFolder(arena)` returns the open project's absolute folder, for tools that run
+programs in it (the Git plugin runs `git` there).
 `setDefaultScene(path)` changes the project's startup scene as an undoable setting.
 Plugin preference values remain available through `editor.app.preferences(Preferences)`.
 

@@ -1,0 +1,12 @@
+.{
+    .plugin = .{
+        .title = "Frame Stats",
+        .module = "eggy_frame_stats",
+        .version = "0.1.0",
+        .description = "Frames per second and frame times in a corner of the game; F3 shows and hides them.",
+        .repository = "https://github.com/eggyengine/eggy",
+        // Eggy's own build.zig.zon fingerprint: this plugin ships inside Eggy.
+        .fingerprint = 0x634131700cbdf8dd,
+        .package = "eggy",
+    },
+}

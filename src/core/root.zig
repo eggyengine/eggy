@@ -17,6 +17,7 @@ pub const Notice = @import("notice.zig").Notice;
 pub const entry = @import("entry.zig");
 pub const plugins = @import("plugins.zig");
 pub const project = @import("project.zig");
+pub const plugin_manifest = @import("plugin_manifest.zig");
 pub const preferences = @import("preferences.zig");
 pub const components = @import("components.zig");
 pub const scene = @import("scene.zig");
@@ -107,6 +108,7 @@ test {
     _ = @import("process_init.zig");
     _ = @import("plugins.zig");
     _ = @import("project.zig");
+    _ = @import("plugin_manifest.zig");
     _ = @import("preferences.zig");
     _ = @import("components.zig");
     _ = @import("scene.zig");

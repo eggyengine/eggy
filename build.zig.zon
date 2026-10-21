@@ -57,6 +57,7 @@
         "build.zig",
         "build.zig.zon",
         "packages",
+        "plugins",
         "resources",
         "src",
     },

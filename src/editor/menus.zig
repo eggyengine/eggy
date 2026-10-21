@@ -53,6 +53,7 @@ pub const Command = enum(u32) {
     reset_layout,
     devtools,
     about,
+    plugins,
 };
 /// Window menu items: `window_item_first` + panel id.
 const window_item_first: u32 = first_id + 0x200;
@@ -136,6 +137,7 @@ pub const Menubar = struct {
             .{ .id = @intFromEnum(Command.save), .label = "Save", .shortcut = "Ctrl+S" },
             .{ .id = @intFromEnum(Command.export_game), .label = "Export...", .disabled = !project.open },
             .{ .id = @intFromEnum(Command.project_settings), .label = "Project Settings...", .disabled = !project.open },
+            .{ .id = @intFromEnum(Command.plugins), .label = "Plugins...", .disabled = !project.open },
             .{ .kind = .separator },
             if (project.shift_held)
                 .{ .id = @intFromEnum(Command.link_developer), .label = "Link Developer Eggy...", .disabled = !project.can_link }

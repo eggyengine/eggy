@@ -10,6 +10,8 @@ const sdl_build = @import("src/build/sdl.zig");
 const sdk_setup = @import("src/build/sdk_setup.zig");
 const android_build = @import("src/build/android.zig");
 const web_build = @import("src/build/web.zig");
+const game_plugins = @import("src/build/game_plugins.zig");
+const builtin_plugins = @import("src/build/builtin_plugins.zig");
 
 /// Configure Eggy's own runtime/editor, tests, package resources and API-reference steps.
 /// Zig owns `b` and invokes this once per build-graph evaluation; games use `addGame` instead.
@@ -69,6 +71,8 @@ pub fn build(b: *std.Build) void {
     const test_step = b.step("test", "Run every test");
     const core_tests = addCoreTests(b, engine);
     test_step.dependOn(core_tests);
+    // The plugins inside Eggy, each on its own.
+    for (engine.plugins) |plugin| test_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = plugin, .use_llvm = true })).step);
     const runtime_tests = &b.addRunArtifact(b.addTest(.{ .root_module = b.modules.get("eggy_runtime").?, .use_llvm = true })).step;
     b.step("test-runtime", "Run eggy_runtime's tests").dependOn(runtime_tests);
     test_step.dependOn(runtime_tests);
@@ -103,8 +107,12 @@ pub const GameOptions = struct {
     name: []const u8,
     /// The game's root module. It declares `pub const Game`, Eggy's first plugin (see `eggy.plugins`).
     game: *std.Build.Module,
-    /// Plugin modules, each declaring `pub const Plugin`. Eggy runs them after the game, in order.
+    /// Plugin modules, each declaring `pub const Plugin`. Eggy runs them after the game, in order,
+    /// then `dev_plugins`, then those installed from the editor's Plugins window (`eggy.zon`).
     plugins: []const *std.Build.Module = &.{},
+    /// Plugins that help make the game, such as editor tools: the editor and `zig build
+    /// run-runtime` run them, but `zig build export` leaves them out of the game it ships.
+    dev_plugins: []const *std.Build.Module = &.{},
     /// Default: `-Dtarget`.
     target: ?std.Build.ResolvedTarget = null,
     /// Default: `-Doptimize`.
@@ -187,29 +195,34 @@ fn addProject(b: *std.Build, engine: *std.Build, emscripten: Emscripten, target:
     const files = if (own) &.{} else game_resources.entries(b);
     const prepared = models.prepare(b, engine, target, optimize, files) orelse return null;
 
-    // The project module: the game's name and its plugin types, the game first.
+    // The project module: the game's name and its plugin types, the game first. The editor's
+    // game library has every plugin; the runtime leaves dev plugins out when exporting.
     options.game.addImport("eggy", eggy);
-    var source: std.ArrayList(u8) = .empty;
-    source.print(b.allocator, "pub const name = \"{f}\";\npub const asset_ids = @import(\"eggy_asset_ids\");\npub const plugins = .{{ @import(\"game\").Game", .{std.zig.fmtString(options.name)}) catch @panic("OOM");
-    for (options.plugins, 0..) |plugin, i| {
-        plugin.addImport("eggy", eggy);
-        source.print(b.allocator, ", @import(\"plugin_{d}\").Plugin", .{i}) catch @panic("OOM");
+    const plugins = game_plugins.collect(b, engine, target, optimize, options.plugins, options.dev_plugins) orelse return null;
+    const dev_plugins = b.option(bool, "dev-plugins", "Build the runtime with dev plugins (default: true; export leaves them out)") orelse true;
+    var all_modules: std.ArrayList(*std.Build.Module) = .empty;
+    var all_keys: std.ArrayList([]const u8) = .empty;
+    var runtime_modules: std.ArrayList(*std.Build.Module) = .empty;
+    var runtime_keys: std.ArrayList([]const u8) = .empty;
+    for (plugins, 0..) |plugin, i| {
+        plugin.module.addImport("eggy", eggy);
+        const key = pluginKey(b, plugin.module, i);
+        all_modules.append(b.allocator, plugin.module) catch @panic("OOM");
+        all_keys.append(b.allocator, key) catch @panic("OOM");
+        if (!dev_plugins and plugin.dev) continue;
+        runtime_modules.append(b.allocator, plugin.module) catch @panic("OOM");
+        runtime_keys.append(b.allocator, key) catch @panic("OOM");
     }
-    source.appendSlice(b.allocator, " };\n") catch @panic("OOM");
-    // Whose preferences each is (`plugins/<key>.zon`): the game's are `game`, a plugin's are its
-    // module's name, as its package publishes it with `addPlugin`.
-    source.appendSlice(b.allocator, "pub const plugin_keys = [_][:0]const u8{ \"game\"") catch @panic("OOM");
-    for (options.plugins, 0..) |plugin, i| source.print(b.allocator, ", \"{f}\"", .{std.zig.fmtString(pluginKey(b, plugin, i))}) catch @panic("OOM");
-    source.appendSlice(b.allocator, " };\n") catch @panic("OOM");
-    const project = b.createModule(.{ .root_source_file = b.addWriteFiles().add("eggy_project.zig", source.items), .target = target, .optimize = optimize });
+    const project = b.createModule(.{ .root_source_file = b.addWriteFiles().add("eggy_project.zig", projectSource(b, options.name, all_modules.items.len, all_keys.items).items), .target = target, .optimize = optimize });
     project.addImport("game", options.game);
     project.addImport("eggy_asset_ids", prepared.ids);
-    for (options.plugins, 0..) |plugin, i| project.addImport(b.fmt("plugin_{d}", .{i}), plugin);
+    for (all_modules.items, 0..) |plugin, i| project.addImport(b.fmt("plugin_{d}", .{i}), plugin);
 
     // The runtime's project module also carries the project's preferences (`.eggy/plugins`),
     // baked in. The editor's game library doesn't, so changing them doesn't rebuild it.
     // It starts in the project's main scene (none for Eggy's own executables, whose resources
     // are the editor's).
+    var source = projectSource(b, options.name, runtime_modules.items.len, runtime_keys.items);
     const scene_option = b.option([]const u8, "scene", "The scene the game starts in (default: eggy.zon's .default_scene); export needs one");
     const main_scene = if (own) null else game_resources.mainScene(b, files, scene_option, false);
     if (main_scene) |path| source.print(b.allocator, "pub const main_scene: ?[]const u8 = \"{s}\";\n", .{game_resources.sceneKey(b, files, path)}) catch @panic("OOM");
@@ -220,7 +233,7 @@ fn addProject(b: *std.Build, engine: *std.Build, emscripten: Emscripten, target:
     const runtime_project = b.createModule(.{ .root_source_file = addPreferenceFiles(b, source.items), .target = target, .optimize = optimize });
     runtime_project.addImport("game", options.game);
     runtime_project.addImport("eggy_asset_ids", prepared.ids);
-    for (options.plugins, 0..) |plugin, i| runtime_project.addImport(b.fmt("plugin_{d}", .{i}), plugin);
+    for (runtime_modules.items, 0..) |plugin, i| runtime_project.addImport(b.fmt("plugin_{d}", .{i}), plugin);
 
     // The runtime, on every platform.
     const runtime_module = b.createModule(.{
@@ -313,6 +326,21 @@ fn addProject(b: *std.Build, engine: *std.Build, emscripten: Emscripten, target:
     return game_library;
 }
 
+/// The project module's start: the game's `name`, its asset ids, and the plugin types (the game
+/// first, then `plugin_count` plugins, imported as `plugin_<index>`) with their `keys`.
+fn projectSource(b: *std.Build, name: []const u8, plugin_count: usize, keys: []const []const u8) std.ArrayList(u8) {
+    var source: std.ArrayList(u8) = .empty;
+    source.print(b.allocator, "pub const name = \"{f}\";\npub const asset_ids = @import(\"eggy_asset_ids\");\npub const plugins = .{{ @import(\"game\").Game", .{std.zig.fmtString(name)}) catch @panic("OOM");
+    for (0..plugin_count) |i| source.print(b.allocator, ", @import(\"plugin_{d}\").Plugin", .{i}) catch @panic("OOM");
+    source.appendSlice(b.allocator, " };\n") catch @panic("OOM");
+    // Whose preferences each is (`plugins/<key>.zon`): the game's are `game`, a plugin's are its
+    // module's name, as its package publishes it with `addPlugin`.
+    source.appendSlice(b.allocator, "pub const plugin_keys = [_][:0]const u8{ \"game\"") catch @panic("OOM");
+    for (keys) |key| source.print(b.allocator, ", \"{f}\"", .{std.zig.fmtString(key)}) catch @panic("OOM");
+    source.appendSlice(b.allocator, " };\n") catch @panic("OOM");
+    return source;
+}
+
 /// The name `plugin`'s package published it under (`addPlugin`). A plugin in the project's own
 /// source (a module made with `createModule`) is named after its file (`src/stats.zig`: `stats`),
 /// unless that is just `root` or `main`; failing all that, `plugin_<index>`.
@@ -389,6 +417,7 @@ const Engine = struct {
     shader_module: *std.Build.Module,
     weeoui_vitellus: *std.Build.Module,
     assets: *std.Build.Module,
+    plugins: []const *std.Build.Module,
 };
 
 /// Publish Eggy's modules (`eggy`, `eggy_runtime`, and `eggy_editor` on desktop) and the runtime
@@ -583,6 +612,8 @@ fn addEngine(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.buil
         .optimize = optimize,
         .imports = &.{.{ .name = "eggy", .module = engine }},
     });
+    // The plugins inside Eggy (`plugins/`), which projects install from the editor.
+    const plugins = builtin_plugins.publish(b, target, optimize, engine);
 
     // eggy_editor: a game with Weeoui tooling over it, desktop only.
     if (!web and !android) {
@@ -606,10 +637,14 @@ fn addEngine(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.buil
         const build_options = b.addOptions();
         build_options.addOption([]const u8, "version", @import("build.zig.zon").version);
         build_options.addOption([]const u8, "zig_version", @import("build.zig.zon").minimum_zig_version);
+        // Eggy's fingerprint, which the plugins inside it name (see `plugin_manifest`).
+        build_options.addOption(u64, "fingerprint", @import("build.zig.zon").fingerprint);
         const source_dir = b.build_root.handle.realPathFileAlloc(b.graph.io, ".", b.allocator) catch |err| std.debug.panic("cannot resolve Eggy's directory: {t}", .{err});
         build_options.addOption([]const u8, "source_dir", source_dir);
         editor.addOptions("build_options", build_options);
         editor.addAnonymousImport("mono_font", .{ .root_source_file = b.path("resources/fonts/JetBrainsMono-Regular.ttf") });
+        // The plugins inside Eggy, as its Plugins window lists them.
+        editor.addImport("eggy_builtin_plugins", builtin_plugins.embedded(b));
         // Model files, imported through assimp in a library of its own, installed beside the editor.
         const importer = models.addImporter(b, target, optimize, assets) orelse return null;
         editor.addImport("eggy_model_import", importer.module);
@@ -625,6 +660,7 @@ fn addEngine(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.buil
         .shader_module = shader_module,
         .weeoui_vitellus = weeoui_vitellus,
         .assets = assets,
+        .plugins = plugins,
     };
 }
 
@@ -640,7 +676,7 @@ fn installEditorResources(b: *std.Build, engine: *std.Build) *std.Build.Step {
     step.dependOn(packTarball(b, engine, tool, "resources/template", &.{}, "template.tar"));
     // The package as `zig fetch` would see it (build.zig.zon's `.paths`), less the submodules,
     // which are dependencies fetched by URL.
-    step.dependOn(packTarball(b, engine, tool, ".", &.{ "build.zig", "build.zig.zon", "resources", "src" }, "eggy.tar"));
+    step.dependOn(packTarball(b, engine, tool, ".", &.{ "build.zig", "build.zig.zon", "plugins", "resources", "src" }, "eggy.tar"));
     b.getInstallStep().dependOn(step);
     return step;
 }

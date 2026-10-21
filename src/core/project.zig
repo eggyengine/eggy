@@ -2,6 +2,7 @@
 //! `build.zig.zon`), which the editor reads when it opens the project and File > Project Settings
 //! writes, and the folders every project has, which the editor makes if they are missing.
 const std = @import("std");
+const plugin_manifest = @import("plugin_manifest.zig");
 
 pub const file_name = "eggy.zon";
 /// Developer input overrides, versioned with the project and baked into exported games.
@@ -37,6 +38,11 @@ pub const Config = struct {
     metadata: Metadata = .{},
     /// Shipped graphics defaults; a user's graphics preferences override them.
     graphics: @import("render_settings.zig").Settings = .{},
+    /// The plugins installed from the editor's Plugins window, which `addGame` builds the game
+    /// with after those its `build.zig` lists.
+    plugins: []const plugin_manifest.Installed = &.{},
+    /// What this package says about itself when it is a plugin too (see `plugin_manifest`).
+    plugin: ?plugin_manifest.Manifest = null,
 };
 
 /// What a game's executable says about itself: on Windows, its version information (in the
@@ -81,7 +87,45 @@ pub fn write(writer: *std.Io.Writer, config: Config) std.Io.Writer.Error!void {
         }
         try writer.writeAll("    },\n");
     }
+    if (config.plugins.len > 0) {
+        try writer.writeAll("    // The plugins installed from the editor's Plugins window.\n    .plugins = .{\n");
+        for (config.plugins) |installed| {
+            try writer.writeAll("        ");
+            try writeLine(writer, installed);
+            try writer.writeAll(",\n");
+        }
+        try writer.writeAll("    },\n");
+    }
+    if (config.plugin) |manifest| {
+        try writer.writeAll("    // What this package says about itself as a plugin.\n    .plugin = ");
+        try writeLine(writer, manifest);
+        try writer.writeAll(",\n");
+    }
     try writer.writeAll("}\n");
+}
+
+/// `value` (a struct of strings, bools and fingerprints) as ZON on one line, leaving out fields
+/// at their defaults, with fingerprints in hex as `build.zig.zon` writes them.
+fn writeLine(writer: *std.Io.Writer, value: anytype) std.Io.Writer.Error!void {
+    try writer.writeAll(".{");
+    var first = true;
+    inline for (@typeInfo(@TypeOf(value)).@"struct".fields) |field| {
+        const field_value = @field(value, field.name);
+        const shown: ?@TypeOf(field_value) = if (field.defaultValue()) |default| if (std.meta.eql(field_value, default) or (@TypeOf(field_value) == []const u8 and std.mem.eql(u8, field_value, default))) null else field_value else field_value;
+        if (shown) |kept| {
+            try writer.writeAll(if (first) " ." ++ field.name ++ " = " else ", ." ++ field.name ++ " = ");
+            first = false;
+            switch (@TypeOf(kept)) {
+                []const u8 => try writer.print("\"{f}\"", .{std.zig.fmtString(kept)}),
+                ?[]const u8 => try writer.print("\"{f}\"", .{std.zig.fmtString(kept.?)}),
+                u64 => try writer.print("0x{x}", .{kept}),
+                ?u64 => try writer.print("0x{x}", .{kept.?}),
+                bool => try writer.print("{}", .{kept}),
+                else => @compileError("no ZON for " ++ @typeName(@TypeOf(kept))),
+            }
+        }
+    }
+    try writer.writeAll(" }");
 }
 
 /// `source` (an `eggy.zon`) parsed. Strings live in `arena`.
@@ -142,6 +186,8 @@ test "eggy.zon written reads back the same, its metadata included" {
         .default_scene = "resources/scene/start.scene.zon",
         .metadata = .{ .company = "Rat Co", .extra = &.{.{ .name = "Website", .value = "rats.example" }} },
         .graphics = .{ .anti_aliasing = .fxaa, .mipmaps = false, .frame_limit = 120 },
+        .plugins = &.{ .{ .module = "eggy_git", .version = "0.1.0", .dev = true }, .{ .module = "stats", .dependency = "stat_pack", .version = "1.0.0", .repository = "https://github.com/rat/stat_pack", .fingerprint = 0x1234 } },
+        .plugin = .{ .title = "Space", .module = "space", .version = "0.2.0", .repository = "https://github.com/rat/space", .fingerprint = 0x634131700cbdf8dd },
     };
     var text: std.Io.Writer.Allocating = .init(arena.allocator());
     try write(&text.writer, config);
@@ -152,4 +198,6 @@ test "eggy.zon written reads back the same, its metadata included" {
     try std.testing.expectEqualStrings("rats.example", read.metadata.extra[0].value);
     try std.testing.expectEqual(@as(usize, 0), read.metadata.copyright.len);
     try std.testing.expectEqualDeep(config.graphics, read.graphics);
+    try std.testing.expectEqualDeep(config.plugins, read.plugins);
+    try std.testing.expectEqualStrings("space", read.plugin.?.module);
 }

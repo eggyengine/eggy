@@ -33,6 +33,8 @@ pub const Operation = enum(u32) {
     show_export,
     show_new_project,
     show_open_project,
+    project_folder,
+    show_panel,
 };
 pub const Entity = extern struct { id: u32 = 0, generation: u32 = 0 };
 /// Strings are borrowed for this synchronous request only.
@@ -281,6 +283,31 @@ pub const Context = struct {
     /// ```
     pub fn showOpenProject(self: *Context) !void {
         _ = try self.send(.{ .operation = .show_open_project });
+    }
+
+    /// The open project's folder, an absolute path in `arena`. Requires a project; host and
+    /// allocation failures propagate.
+    ///
+    /// ```zig
+    /// const folder = try editor.projectFolder(arena.allocator());
+    /// ```
+    pub fn projectFolder(self: *Context, arena: std.mem.Allocator) ![]const u8 {
+        const size = try self.send(.{ .operation = .project_folder });
+        const buffer = try arena.alloc(u8, size.length);
+        const read = try self.send(.{ .operation = .project_folder, .buffer = buffer.ptr, .capacity = buffer.len });
+        return buffer[0..read.length];
+    }
+
+    /// Open the calling plugin's panel `key` (an `EditorPanel.key`, or its title when it has no
+    /// key) and bring its tab forward, docking it again if it was closed. Fails with
+    /// `error.Failed` when no plugin declares a panel with that key; when two plugins do, the
+    /// first one's opens.
+    ///
+    /// ```zig
+    /// try editor.showPanel("git");
+    /// ```
+    pub fn showPanel(self: *Context, key: []const u8) !void {
+        try self.textRequest(.show_panel, key, "");
     }
 
     /// Parse settings into a caller-owned arena; all returned strings live in `arena`.

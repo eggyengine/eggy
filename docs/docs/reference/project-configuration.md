@@ -45,9 +45,40 @@ See [Create reusable plugins](../how-to/create-plugins.md#using-plugins).
 | `version` | `"0.0.1"` | Game version stored in executable metadata |
 | `default_scene` | `null` | Project-relative startup scene; exports require this or an explicit scene |
 | `metadata` | Empty fields | Executable metadata below |
+| `plugins` | Empty | Plugins installed from File > Plugins, which the game is built with |
+| `plugin` | `null` | This folder's plugin, for others to install; see [Share the plugin](../how-to/create-plugins.md#share-the-plugin) |
 
 File > Project Settings opens the Project section of Edit > Preferences and edits
 this file, including the startup scene.
+
+### Installed plugins
+
+The Plugins window writes each plugin it installs as an entry of `.plugins`:
+
+```zig
+.plugins = .{
+    .{ .module = "eggy_git", .version = "0.1.0", .dev = true },
+    .{
+        .module = "stats",
+        .dependency = "stats",
+        .version = "1.2.0",
+        .source = "https://raw.githubusercontent.com/someone/stats/v1.2.0/eggy.zon",
+        .repository = "https://github.com/someone/stats",
+        .fingerprint = 0x1234abcd5678ef90,
+    },
+},
+```
+
+| Field | Meaning |
+| --- | --- |
+| `module` | The plugin's module, which `addGame` builds the game with |
+| `dependency` | The `build.zig.zon` dependency publishing it; absent for plugins inside Eggy |
+| `version` | The version installed |
+| `dev` | Left out of exports (`zig build export`, or `-Ddev-plugins=false`) |
+| `source` | Where its `eggy.zon` was read, to check for a newer version |
+| `repository`, `fingerprint` | What an update must match |
+
+`addGame` builds these after the plugins its `.plugins` and `.dev_plugins` options name.
 
 ### Executable metadata
 

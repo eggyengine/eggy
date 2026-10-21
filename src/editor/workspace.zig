@@ -75,6 +75,8 @@ pub const Outcome = union(enum) {
     export_game,
     /// File > Project Settings: open Preferences on its Project section.
     project_settings,
+    /// File > Plugins: open the Plugins window.
+    plugins,
     /// Edit > Undo (Ctrl+Z) and Redo (Ctrl+Shift+Z, Ctrl+Y).
     undo,
     redo,
@@ -829,6 +831,7 @@ pub const Workspace = struct {
                 .save => return .save,
                 .export_game => return .export_game,
                 .project_settings => return .project_settings,
+                .plugins => return .plugins,
                 .undo => return .undo,
                 .redo => return .redo,
                 .reset_layout => self.resetLayout() catch |err| std.log.warn("cannot reset the layout: {t}", .{err}),
@@ -836,6 +839,20 @@ pub const Workspace = struct {
             },
         }
         return .handled;
+    }
+
+    /// Open the plugin panel whose key is `<plugin>/<key>` and bring its tab forward, docking it
+    /// again if it was closed. Fails with `error.NoSuchPanel` when no plugin declares one.
+    pub fn showPluginPanel(self: *Workspace, key: []const u8) !void {
+        for (self.plugin_panels, 0..) |panel, i| {
+            const slash = std.mem.indexOfScalar(u8, panel.key, '/') orelse continue;
+            if (!std.mem.eql(u8, panel.key[slash + 1 ..], key)) continue;
+            const id = panels.pluginId(panel, i);
+            if (self.dock.nodeOf(id) == null) try self.dock.add(id, null, .center);
+            _ = self.dock.activate(ui.dock.first_id + id);
+            return;
+        }
+        return error.NoSuchPanel;
     }
 
     fn togglePanel(self: *Workspace, panel: u32) void {

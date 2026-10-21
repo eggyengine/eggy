@@ -19,6 +19,7 @@ const Upgrades = @import("projects/upgrades.zig").Upgrades;
 const file_manager = @import("file_manager.zig");
 const BuildWindow = @import("build_window.zig").BuildWindow;
 const ExportWindow = @import("export/export.zig").ExportWindow;
+const plugin_manager = @import("plugin_manager/plugin_manager.zig");
 const project_settings_zig = @import("project_settings.zig");
 const ProjectSettings = project_settings_zig.ProjectSettings;
 const DevtoolsWindow = @import("devtools_window.zig").DevtoolsWindow;
@@ -131,6 +132,7 @@ pub fn Editor(comptime project: type) type {
         preferences_window: ?*preferences.PreferencesWindow = null,
         /// File > Export, while open.
         export_window: ?*ExportWindow = null,
+        plugins_window: ?*plugin_manager.PluginsWindow = null,
         /// File > Project Settings, while open.
         /// The Preferences window's Project section, while that window is open on a project.
         project_settings: ?*ProjectSettings = null,
@@ -397,6 +399,7 @@ pub fn Editor(comptime project: type) type {
             if (self.about_window) |window| window.close(&self.app.graphics);
             if (self.preferences_window) |window| window.close(&self.app.graphics);
             if (self.export_window) |window| window.close(&self.app.graphics);
+            if (self.plugins_window) |window| window.close(&self.app.graphics);
             if (self.project_settings) |settings| settings.close();
             if (self.save_prompt) |prompt| prompt.close(&self.app.graphics);
             // The dock as this user left it, for the next editor.
@@ -664,6 +667,12 @@ pub fn Editor(comptime project: type) type {
                     self.export_window = null;
                 }
             }
+            // File > Plugins, if open: an install or uninstall is a step to undo, and a rebuild.
+            if (self.plugins_window) |window| if (try window.update(&self.app.graphics, &self.ui)) |change| {
+                self.history.record(.{ .project_settings = .{ .before = change.before, .after = change.after } });
+                if (self.project_settings) |settings| settings.reload() catch {};
+                self.rebuildForPlugins();
+            };
             if (self.input_map_window) |window| {
                 const result = try window.update(&self.app.graphics, &self.ui, &self.history);
                 if (result.saved) self.assets_panel.refreshSoon();
@@ -1391,6 +1400,11 @@ pub fn Editor(comptime project: type) type {
                 .project_settings => |change| {
                     try files.writeFile(io, .{ .sub_path = eggy.project.file_name, .data = change.value(direction) });
                     if (self.project_settings) |settings| try settings.reload();
+                    // Installing or uninstalling a plugin, undone or redone, builds the game again.
+                    if (plugin_manager.pluginsDiffer(self.gpa, change.before, change.after)) {
+                        if (self.plugins_window) |window| window.reloadInstalled();
+                        self.rebuildForPlugins();
+                    }
                     self.setGraphicsDefaults(try project_settings_zig.graphicsIn(self.gpa, change.value(direction)));
                 },
                 .input_bindings => |change| {
@@ -1728,6 +1742,15 @@ pub fn Editor(comptime project: type) type {
                 }
                 if (window.handle(curr_event)) return self.toolWindowTook(curr_event);
             }
+            // File > Plugins' window takes its own events; closing it, or Escape, closes it.
+            if (self.plugins_window) |window| {
+                if (window.closeRequested(curr_event)) {
+                    window.close(&self.app.graphics);
+                    self.plugins_window = null;
+                    return .run;
+                }
+                if (window.handle(curr_event)) return self.toolWindowTook(curr_event);
+            }
             // File > Export's window takes its own events.
             if (self.export_window) |window| if (window.handle(curr_event)) return self.toolWindowTook(curr_event);
             // Help > DevTools' window takes its own events; while inspecting, the main window's
@@ -1873,6 +1896,7 @@ pub fn Editor(comptime project: type) type {
                 .save => self.saveScene(),
                 // Project Settings are the Preferences window's Project section.
                 .project_settings => try self.showProjectSettings(),
+                .plugins => _ = self.showPlugins(),
                 .export_game => if (self.export_window == null) if (self.project) |opened| {
                     self.export_window = ExportWindow.open(self.gpa, &self.app.graphics, self.ui.font, self.mono, opened.dir) catch |err| blk: {
                         std.log.err("cannot open Export: {t}", .{err});
@@ -2352,6 +2376,7 @@ pub fn Editor(comptime project: type) type {
         /// A file or folder dropped onto the Assets panel from outside: copy it into the project,
         /// into the folder it landed on. Dropped anywhere else, it is left where it is.
         fn importDropped(self: *Self, slot: Slot, dropped: sdl3.events.DropFile) void {
+            if (self.openDroppedPlugin(dropped.file_name)) return;
             const opened = self.project orelse return self.workspace.toast("Open a project to bring files into it");
             const at = ui.Vec2{ .x = dropped.x, .y = dropped.y };
             if (self.pageAt(slot, at.x, at.y) != panels.assets_page) return self.workspace.toast("Drop files on the Assets panel to add them to the project");
@@ -2368,6 +2393,42 @@ pub fn Editor(comptime project: type) type {
             self.workspace.toast(std.fmt.bufPrint(&message, "Added {s}", .{imported}) catch "Added the file");
             self.history.record(.{ .create = .{ .path = imported } });
             self.filesChanged();
+        }
+
+        /// A plugin's `eggy.zon` dropped anywhere opens in File > Plugins, to read and install;
+        /// returns whether `path` was one.
+        fn openDroppedPlugin(self: *Self, path: []const u8) bool {
+            if (!std.mem.eql(u8, std.fs.path.basename(path), eggy.project.file_name)) return false;
+            var arena = std.heap.ArenaAllocator.init(self.gpa);
+            defer arena.deinit();
+            var threaded: std.Io.Threaded = .init_single_threaded;
+            const text = std.Io.Dir.cwd().readFileAllocOptions(threaded.io(), path, arena.allocator(), .limited(1 << 20), .of(u8), 0) catch return false;
+            // A project's own eggy.zon, without a .plugin section, is just a file.
+            _ = eggy.plugin_manifest.parse(arena.allocator(), text) catch |err| if (err == error.NotAPlugin) return false;
+            const window = self.showPlugins() orelse {
+                self.workspace.toast("Open a project to install plugins into it");
+                return true;
+            };
+            window.fetchFrom(path);
+            return true;
+        }
+
+        /// File > Plugins, opened if it isn't; null without a project, or if it can't open.
+        fn showPlugins(self: *Self) ?*plugin_manager.PluginsWindow {
+            if (self.plugins_window) |window| return window;
+            const opened = self.project orelse return null;
+            self.plugins_window = plugin_manager.PluginsWindow.open(self.gpa, &self.app.graphics, self.ui.font, opened.dir) catch |err| {
+                std.log.err("cannot open Plugins: {t}", .{err});
+                return null;
+            };
+            return self.plugins_window;
+        }
+
+        /// The project's plugins changed: build the game with them (the Build window shows it).
+        fn rebuildForPlugins(self: *Self) void {
+            if (self.project_flow != null or self.build_window != null) return;
+            self.cancelBuild();
+            self.startBuild(.rebuild) catch |err| std.log.err("cannot rebuild for the plugins: {t}", .{err});
         }
 
         /// A file dragged from Assets let go at `at` in window `slot`, over page `over` (if any):
@@ -2801,6 +2862,7 @@ test {
     _ = @import("code_editor.zig");
     _ = @import("history.zig");
     _ = @import("plugin_switches.zig");
+    _ = @import("plugin_manager/plugin_manager.zig");
     _ = @import("dragged.zig");
     _ = @import("scene_view/scene_view.zig");
     _ = @import("save_prompt.zig");

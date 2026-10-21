@@ -5,7 +5,8 @@
 //! `<prefix>/export/<name>-<target>/`, and zips that folder beside it unless `-Dexport-zip=false`.
 //! `--sysroot` (a macOS SDK) carries through to it. The build runs as a nested `zig build runtime` (this build's
 //! runner, started directly so its steps show under this one: see `runner.zig`), so the export
-//! never shares a compilation with the debug build.
+//! never shares a compilation with the debug build, and with `-Ddev-plugins=false`, so dev plugins
+//! stay out of the shipped game.
 //! Android exports install a test-signed APK instead of a desktop folder and ZIP.
 const std = @import("std");
 const runner = @import("runner.zig");
@@ -40,7 +41,7 @@ pub fn addExport(b: *std.Build, engine: *std.Build, target: std.Build.ResolvedTa
     const asked = if (target.query.isNativeOs() and target.query.isNativeAbi() and target.query.cpu_arch == null) "native" else target.query.zigTriple(b.allocator) catch @panic("OOM");
     const nested = b.addSystemCommand(runner.argv(b));
     // No summary: whatever it writes is shown, so only its errors should be.
-    nested.addArgs(&.{ "runtime", b.fmt("-Doptimize={t}", .{optimize}), b.fmt("-Dtarget={s}", .{asked}), b.fmt("-Dscene={s}", .{start}), "--color", "off", "--summary", "none" });
+    nested.addArgs(&.{ "runtime", "-Ddev-plugins=false", b.fmt("-Doptimize={t}", .{optimize}), b.fmt("-Dtarget={s}", .{asked}), b.fmt("-Dscene={s}", .{start}), "--color", "off", "--summary", "none" });
     nested.addArg(switch (target.query.cpu_model) {
         .explicit => |model| b.fmt("-Dcpu={s}", .{model.name}),
         .native => "-Dcpu=native",
