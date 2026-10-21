@@ -10,11 +10,15 @@ const Settings = render_settings.Settings;
 const Capabilities = render_settings.Capabilities;
 const NumberEdit = ui.TextEdit(12);
 const render_scale_step: f32 = 0.05;
+// ponytail: the slider stops at 1000 m though settings accept 10000, raise it if games need farther shadows.
+const shadow_distance_slider_max: f32 = 1000;
+const shadow_bias_step: f32 = 0.0005;
 
 const backend_labels = [_][]const u8{ "Automatic", "Vulkan", "Direct3D 12", "WebGPU" };
 const present_mode_labels = [_][]const u8{ "Automatic", "On (VSync)", "Adaptive VSync", "Low latency (triple buffered)", "Off (may tear)" };
 const anti_aliasing_labels = [_][]const u8{ "Off", "2x MSAA", "4x MSAA", "8x MSAA", "FXAA" };
 const texture_filter_labels = [_][]const u8{ "Nearest (pixelated)", "Linear (smooth)" };
+const shadow_quality_labels = [_][]const u8{ "Off", "Low (1024)", "Medium (2048)", "High (4096)" };
 const window_mode_labels = [_][]const u8{ "Windowed", "Borderless fullscreen" };
 const anisotropy_levels = [_]u16{ 1, 2, 4, 8, 16 };
 
@@ -185,6 +189,24 @@ pub const Form = struct {
             rows.end(context);
         }
 
+        rows.begin(context, "Shadow quality", "How sharp light and shadow edges are. Higher costs more GPU time and memory.");
+        _ = pick(context, "##shadow quality", render_settings.ShadowQuality, &draft.shadow_quality, &shadow_quality_labels, shadowQualities(caps));
+        rows.end(context);
+
+        if (draft.shadow_quality != .off) {
+            rows.begin(context, "Shadow distance", "How far from the camera shadows are drawn, in metres. Shorter distances look sharper.");
+            var distance = draft.shadow_distance_m;
+            if (context.slider("##shadow distance", &distance, 1, shadow_distance_slider_max)) draft.shadow_distance_m = @round(distance);
+            context.muted(std.fmt.allocPrint(arena, "{d:.0} m", .{draft.shadow_distance_m}) catch "");
+            rows.end(context);
+
+            rows.begin(context, "Shadow bias", "Moves shadows off the surface that casts them. Raise it if surfaces speckle, lower it if shadows float.");
+            var bias = draft.shadow_bias;
+            if (context.slider("##shadow bias", &bias, 0, 0.1)) draft.shadow_bias = @round(bias / shadow_bias_step) * shadow_bias_step;
+            context.muted(std.fmt.allocPrint(arena, "{d:.4}", .{draft.shadow_bias}) catch "");
+            rows.end(context);
+        }
+
         // The number fields count only while they are whole numbers; `settings` says otherwise.
         if (parseNumber(u32, &self.width)) |value| draft.width = value;
         if (parseNumber(u32, &self.height)) |value| draft.height = value;
@@ -240,8 +262,20 @@ fn describe(err: anyerror) []const u8 {
         error.InvalidFrameLimit => "the frame rate limit must be a whole number from 0 to 1000.",
         error.InvalidRenderScale => "the render scale must be from 0.25 to 2.",
         error.InvalidAnisotropy => "the anisotropic filtering level must be 1, 2, 4, 8 or 16.",
+        error.UnsupportedShadowQuality => "this shadow quality is too large for this GPU.",
+        error.InvalidShadowDistance => "the shadow distance must be from 1 to 10000 metres.",
+        error.InvalidShadowBias => "the shadow bias must be from 0 to 0.1.",
         else => @errorName(err),
     };
+}
+
+/// The shadow qualities whose map fits this GPU; Off always does.
+fn shadowQualities(caps: *const Capabilities) std.enums.EnumSet(render_settings.ShadowQuality) {
+    var allowed: std.enums.EnumSet(render_settings.ShadowQuality) = .initOne(.off);
+    for (std.enums.values(render_settings.ShadowQuality)) |quality| {
+        if (quality.resolution() <= caps.max_shadow_resolution) allowed.insert(quality);
+    }
+    return allowed;
 }
 
 fn setNumber(edit: *NumberEdit, value: anytype) void {
@@ -352,6 +386,8 @@ test "every settings error has a message of its own" {
         .{ .render_scale = 3 },
         .{ .anisotropy = 3 },
         .{ .anisotropy = 2, .texture_filter = .nearest },
+        .{ .shadow_distance_m = 0 },
+        .{ .shadow_bias = 0.5 },
     };
     var form = Form{};
     for (bad) |settings| {
@@ -448,5 +484,13 @@ test "the choice labels cover every enum value in order" {
     try std.testing.expectEqual(@typeInfo(render_settings.PresentMode).@"enum".fields.len, present_mode_labels.len);
     try std.testing.expectEqual(@typeInfo(render_settings.AntiAliasing).@"enum".fields.len, anti_aliasing_labels.len);
     try std.testing.expectEqual(@typeInfo(render_settings.TextureFilter).@"enum".fields.len, texture_filter_labels.len);
+    try std.testing.expectEqual(@typeInfo(render_settings.ShadowQuality).@"enum".fields.len, shadow_quality_labels.len);
     try std.testing.expectEqual(@typeInfo(render_settings.WindowMode).@"enum".fields.len, window_mode_labels.len);
+}
+
+test "shadow quality offers only the maps the GPU can hold" {
+    var caps = Capabilities{ .max_shadow_resolution = 2048 };
+    const allowed = shadowQualities(&caps);
+    try std.testing.expect(allowed.contains(.off) and allowed.contains(.medium));
+    try std.testing.expect(!allowed.contains(.high));
 }

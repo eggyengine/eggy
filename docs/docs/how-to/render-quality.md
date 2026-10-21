@@ -3,8 +3,8 @@ title: Graphics settings
 ---
 
 Eggy lets you and your players choose how the game is drawn: graphics backend, graphics
-card, window, vertical sync, frame rate, render scale, antialiasing, mipmapping and texture
-filtering. There are three places to set them, and each is saved on its own.
+card, window, vertical sync, frame rate, render scale, antialiasing, mipmapping, texture
+filtering and shadows. There are three places to set them, and each is saved on its own.
 
 | Where | Who | Saved in |
 | --- | --- | --- |
@@ -37,6 +37,15 @@ Only choices this computer supports are listed.
   trilinear.
 - **Anisotropic filtering**: keeps textures sharp at a slant, up to what the graphics card
   reports. It needs Linear filtering, so choosing Nearest turns it off.
+
+- **Shadow quality**: Off, Low, Medium or High, the size of the shadow map. Higher is
+  sharper and costs more GPU time and memory; sizes the graphics card can't hold aren't
+  listed. Only one directional light casts shadows.
+- **Shadow distance**: 1 to 10000 metres from the camera that shadows are drawn. A shorter
+  distance looks sharper. The slider goes to 1000; write a larger value in `eggy.zon`.
+- **Shadow bias**: 0 to 0.1, how far shadows are pushed off the surface that casts them.
+  Raise it if surfaces speckle, lower it if shadows seem to float. Distance and bias show
+  only while shadow quality is not Off.
 
 New projects start with automatic backend and card, 4x MSAA, linear filtering and mipmaps
 on. A value that isn't valid is never silently changed: you get an error message saying
