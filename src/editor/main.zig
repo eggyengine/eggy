@@ -18,8 +18,9 @@ pub const WinMainCRTStartup = void;
 /// Executable panic namespace using the shared host reporter; see `eggy.entry.panic`
 /// for the canonical reporting/termination contract and usage example.
 pub const panic = std.debug.FullPanic(eggy.entry.panic);
-/// Log through the editor, which keeps messages for its Console panel.
-pub const std_options: std.Options = .{ .logFn = @import("eggy_editor").logFn };
+/// Log through the editor, which keeps messages for its Console panel; `eggy.log` chooses what is
+/// printed while running, so every level is compiled in.
+pub const std_options: std.Options = .{ .log_level = .debug, .logFn = @import("eggy_editor").logFn };
 
 // SDL's return-value adapter must not copy the editor's large state through its startup stack.
 const State = struct {

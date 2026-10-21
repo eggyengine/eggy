@@ -15,6 +15,7 @@ pub const Surface = @import("graphics.zig").Surface;
 pub const SceneTexture = @import("scene_texture.zig").SceneTexture;
 pub const Notice = @import("notice.zig").Notice;
 pub const entry = @import("entry.zig");
+pub const log = @import("log/log.zig");
 pub const plugins = @import("plugins.zig");
 pub const project = @import("project.zig");
 pub const plugin_manifest = @import("plugin_manifest.zig");
@@ -80,6 +81,8 @@ pub const setting_rows = @import("game_ui/setting_rows.zig");
 pub const ui_hit_test = @import("ui_hit_test.zig");
 
 test {
+    _ = @import("log/log.zig");
+    _ = @import("log/crash_report.zig");
     _ = @import("capabilities_test.zig");
     _ = editor;
     _ = game_ui;

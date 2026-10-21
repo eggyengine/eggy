@@ -14,7 +14,14 @@ pub const _start = void;
 pub const WinMainCRTStartup = void;
 
 pub const panic = std.debug.FullPanic(eggy.entry.panic);
-pub const std_options = if (@import("builtin").abi.isAndroid()) @import("weeoui_sdl3").std_options else eggy.vit.web.std_options;
+/// Android and the web log to their own consoles; the desktop through `eggy.log`, which chooses
+/// what is printed while running (so every level is compiled in) and keeps a log file.
+pub const std_options: std.Options = if (@import("builtin").abi.isAndroid())
+    @import("weeoui_sdl3").std_options
+else if (@import("builtin").os.tag == .emscripten)
+    eggy.vit.web.std_options
+else
+    .{ .log_level = .debug, .logFn = eggy.log.logFn };
 
 const callbacks = eggy.entry.Callbacks(Runtime);
 pub const init = callbacks.init;

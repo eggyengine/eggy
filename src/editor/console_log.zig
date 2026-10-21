@@ -64,8 +64,8 @@ const gpa = std.heap.smp_allocator;
 /// logFn(.info, .projects, "opened {s}", .{"Space"});
 /// ```
 pub fn logFn(comptime level: std.log.Level, comptime scope: @EnumLiteral(), comptime format: []const u8, args: anytype) void {
-    // Tests keep their messages here only: the test runner fails a test that logs a warning.
-    if (!@import("builtin").is_test) std.log.defaultLog(level, scope, format, args);
+    // Printed and written to the log file at the chosen level; the Console keeps them all.
+    @import("eggy").log.logFn(level, scope, format, args);
     const prefix = comptime level.asText() ++ (if (scope == .default) ": " else "(" ++ @tagName(scope) ++ "): ");
     const io = std.Options.debug_io;
     mutex.lockUncancelable(io);

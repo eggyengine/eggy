@@ -7,23 +7,25 @@ const nvd = if (no_dialog) struct {} else @cImport({
     @cInclude("nvdialog.h");
 });
 
-/// Log a fatal `stage` failure, appending optional borrowed backend diagnostics, then show it.
-/// Desktop may block for a native dialog; Web/Android log only. Truncates long detail for bounded
-/// stack storage. Reporting/dialog failures are logged, not returned; does not exit.
+/// Log a fatal `stage` failure, appending optional borrowed backend diagnostics, then show it,
+/// naming `crash_report` (the report's path) when one was written. Desktop may block for a native
+/// dialog; Web/Android log only. Truncates long detail for bounded stack storage.
+/// Reporting/dialog failures are logged, not returned; does not exit.
 ///
 /// ```zig
 /// // Host error boundary, before returning the original error:
-/// fatal_dialog.report("init", err, sdl.errors.get());
+/// fatal_dialog.report("init", @errorName(err), report_path);
 /// return err;
 /// ```
-pub fn report(stage: []const u8, err: anyerror, detail: ?[]const u8) void {
-    var buffer: [2048]u8 = undefined;
-    const message = if (detail) |text|
-        std.fmt.bufPrint(&buffer, "{s}: {s}", .{ @errorName(err), text[0..@min(text.len, 1024)] }) catch unreachable
-    else
-        @errorName(err);
+pub fn report(stage: []const u8, message: []const u8, crash_report: ?[]const u8) void {
     std.log.err("Fatal error during {s}: {s}", .{ stage, message });
-    show(stage, message);
+    var buffer: [2048]u8 = undefined;
+    const shown = if (crash_report) |path|
+        std.fmt.bufPrint(&buffer, "{s}\n\nA crash report was saved to:\n{s}", .{ message[0..@min(message.len, 1024)], path[0..@min(path.len, 900)] }) catch message
+    else
+        message;
+    if (crash_report) |path| std.log.err("crash report: {s}", .{path});
+    show(stage, shown);
 }
 
 /// Show a bounded fatal message in a native desktop dialog, borrowing both slices during

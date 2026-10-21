@@ -6,6 +6,7 @@ const vit = @import("vitellus");
 const sdl3 = @import("vitellus_sdl3").sdl;
 const fatal_dialog = @import("fatal_dialog");
 const process_init = @import("process_init.zig");
+const log = @import("log/log.zig");
 
 /// Build the process context before choosing a GUI or command-line entry point.
 /// Borrows SDL's process arena/Io and allocates the environment map there; see `fromSdl`
@@ -47,6 +48,7 @@ pub fn Callbacks(comptime AppState: type) type {
         /// pub const init = eggy.entry.Callbacks(State).init; // Executable root declaration.
         /// ```
         pub fn init(init_data: sdl3.Init) !struct { AppState, sdl3.AppResult } {
+            raiseStackLimit();
             const process = process_init.fromSdl(init_data) catch |err| {
                 reportError("init", err);
                 return err;
@@ -105,8 +107,24 @@ pub fn Callbacks(comptime AppState: type) type {
     };
 }
 
-/// Panic handler for `std.debug.FullPanic`: show the message, then panic as usual.
-/// Borrows `message` only for reporting and never returns. `first_trace_addr` is forwarded
+/// The stack Eggy's programs ask for: the editor builds its state on the stack (about 8 MiB),
+/// more than many systems' default limit.
+// ponytail: build the editor's state in place on the heap instead, then drop this; macOS's main
+// thread stack is fixed at 8 MiB and needs `-stack_size` at link time if it overflows there.
+const wanted_stack_bytes = 64 << 20;
+
+/// Raise the soft stack limit to `wanted_stack_bytes` (within the hard limit). Linux grows the main
+/// thread's stack up to the current limit, so raising it this early is enough. Zig's own start
+/// code does this from the executable's stack size, but SDL's callbacks replace it.
+fn raiseStackLimit() void {
+    if (builtin.os.tag != .linux) return;
+    const limits = std.posix.getrlimit(.STACK) catch return;
+    const wanted = @min(wanted_stack_bytes, limits.max);
+    if (wanted > limits.cur) std.posix.setrlimit(.STACK, .{ .cur = wanted, .max = limits.max }) catch {};
+}
+
+/// Panic handler for `std.debug.FullPanic`: write a crash report, show the message, then panic as
+/// usual. Borrows `message` only for reporting and never returns. `first_trace_addr` is forwarded
 /// to Zig's default handler; browser panics also use the web platform hook.
 ///
 /// ```zig
@@ -114,10 +132,20 @@ pub fn Callbacks(comptime AppState: type) type {
 /// ```
 pub fn panic(message: []const u8, first_trace_addr: ?usize) noreturn {
     if (web) vit.web.panic.call(message, first_trace_addr);
-    fatal_dialog.show("panic", message);
+    var path_buffer: [std.fs.max_path_bytes]u8 = undefined;
+    const crash_report = log.crash_report.write(std.Options.debug_io, "panic", message, .{ .current = first_trace_addr orelse @returnAddress() }, &path_buffer);
+    fatal_dialog.report("panic", message, crash_report);
     std.debug.defaultPanic(message, first_trace_addr);
 }
 
+/// Report `err`, which ended `stage`: a crash report with its return trace, then the dialog.
 fn reportError(stage: []const u8, err: anyerror) void {
-    fatal_dialog.report(stage, err, if (err == error.SdlError) sdl3.errors.get() else null);
+    var message_buffer: [1280]u8 = undefined;
+    const message = if (err == error.SdlError)
+        std.fmt.bufPrint(&message_buffer, "SdlError: {s}", .{sdl3.errors.get() orelse ""}) catch "SdlError"
+    else
+        @errorName(err);
+    const trace: log.crash_report.Trace = if (@errorReturnTrace()) |error_trace| .{ .error_return = error_trace } else .none;
+    var path_buffer: [std.fs.max_path_bytes]u8 = undefined;
+    fatal_dialog.report(stage, message, log.crash_report.write(std.Options.debug_io, stage, message, trace, &path_buffer));
 }
