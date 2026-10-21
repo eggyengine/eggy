@@ -1,7 +1,5 @@
-//! Descriptors: every file and folder in a project's `resources/` has one beside it,
-//! `<name>.eggy`, holding what Eggy knows about it: an id that stays with it through renames and
-//! moves, its kind, and how to import it. The editor makes and moves them (`src/editor/assets/descriptors.zig`);
-//! packaging reads a model's import settings from it.
+//! Legacy `<name>.eggy` sidecars, read when migrating identities and import settings into
+//! `.eggy/assets.zon`. New editor/build operations use the catalog, not resource sidecars.
 //!
 //!     .{ .id = 8410273145522034177, .kind = .model, .model = .{ .scale = 0.01 } }
 const std = @import("std");

@@ -6,6 +6,9 @@ const eggy = @import("eggy");
 const project = @import("eggy_project");
 const api = @import("game_api.zig");
 
+/// The project's asset identities, which `AssetRef.init` resolves paths through at compile time.
+pub const eggy_asset_ids = project.asset_ids;
+
 const Plugins = eggy.plugins.Set(project.plugins, &project.plugin_keys);
 
 /// The library's own log goes to the editor's Console.
@@ -399,10 +402,12 @@ fn hasComponent(world: *anyopaque, entity: api.Entity, component: usize) callcon
 }
 
 fn addComponent(world: *anyopaque, entity: api.Entity, component: usize) callconv(.c) bool {
+    const had_light = worldOf(world).get(entityOf(entity), eggy.SceneLight) != null;
     Plugins.Components.add(worldOf(world), entityOf(entity), component) catch |err| {
         std.log.err("cannot add component {d}: {t}", .{ component, err });
         return false;
     };
+    if (!had_light) eggy.lighting.aimNewLight(worldOf(world), entityOf(entity));
     return true;
 }
 
@@ -516,16 +521,17 @@ fn animationTransform(world: *anyopaque, entity: api.Entity, path: [*]const u8, 
 fn animationModel(world: *anyopaque, entity: api.Entity, buffer: [*]u8, capacity: usize) callconv(.c) isize {
     const mesh = worldOf(world).get(entityOf(entity), eggy.Mesh) orelse return -1;
     const model = switch (mesh.shape) {
-        .model => |drawn| drawn.path(),
+        .model => |drawn| drawn.key(),
         else => return -1,
     };
     @memcpy(buffer[0..@min(model.len, capacity)], model[0..@min(model.len, capacity)]);
     return @intCast(model.len);
 }
 
-fn animationAssign(world: *anyopaque, entity: api.Entity, clip: [*:0]const u8) callconv(.c) bool {
+fn animationAssign(world: *anyopaque, entity: api.Entity, clip: [*:0]const u8, imported: bool) callconv(.c) bool {
     const asset = eggy.refs.AssetRef(.animation).parse(std.mem.span(clip)) catch return false;
-    (eggy.animation.Animation{ .world = worldOf(world) }).play(entityOf(entity), .{ .asset = asset }, .{ .repeat = .loop }) catch return false;
+    const playing: eggy.animation.Clip = if (imported) .{ .imported = asset } else .{ .asset = asset };
+    (eggy.animation.Animation{ .world = worldOf(world) }).play(entityOf(entity), playing, .{ .repeat = .loop }) catch return false;
     return true;
 }
 

@@ -1,11 +1,9 @@
 //! The game's resources in desktop `data/`, Android assets or a browser preload (see
-//! `addGame`): each named after its id, found by its path in the project through
-//! `data/manifest.zon`. Models and images come as the `.eggmodel`s and `.eggtexture`s made of
-//! them, read with no importer or decoder; every other file (scenes...) as it was.
+//! `addGame`): every payload is named only by its canonical identity. Models, textures and
+//! independent animation clips are decoded without importers or an external runtime index.
 const std = @import("std");
 const eggy = @import("eggy");
 const sdl3 = eggy.sdl_adapter.sdl;
-const manifest = eggy.assets.manifest;
 const android = @import("builtin").abi.isAndroid();
 const bundled = android or @import("builtin").os.tag == .emscripten;
 
@@ -13,8 +11,6 @@ pub const Data = struct {
     gpa: std.mem.Allocator,
     io: std.Io,
     dir: std.Io.Dir,
-    arena: std.heap.ArenaAllocator,
-    files: manifest.Manifest,
 
     /// C-callable providers, matching the editor provider's author-facing results.
     /// Borrows `self` until `close`; returned CPU assets/bytes use the caller's allocator.
@@ -27,11 +23,10 @@ pub const Data = struct {
         return eggy.resources.Resources.from(self, readCopy, loadModel, loadTexture);
     }
 
-    /// The game's `data/` folder and its manifest. On the heap, as the loaders keep a pointer to
-    /// it.
+    /// The game's `data/` folder, heap-owned because loaders retain its address.
     /// Uses `<executable>/../data/` on desktop and SDL's bundled filesystem on Android/Web.
-    /// Borrows `io` through `close`; owns its parsed manifest arena and desktop directory.
-    /// Pair with `close`. Filesystem, manifest parse and allocation
+    /// Borrows `io` through `close`; owns the desktop directory.
+    /// Pair with `close`. Filesystem and allocation
     /// failures propagate without leaving a partially initialized owner.
     ///
     /// ```zig
@@ -41,23 +36,16 @@ pub const Data = struct {
     pub fn open(gpa: std.mem.Allocator, io: std.Io) !*Data {
         const self = try gpa.create(Data);
         errdefer gpa.destroy(self);
-        self.* = .{ .gpa = gpa, .io = io, .dir = undefined, .arena = .init(gpa), .files = .{} };
-        errdefer self.arena.deinit();
+        self.* = .{ .gpa = gpa, .io = io, .dir = undefined };
         if (!bundled) {
             const base = try sdl3.filesystem.getBasePath();
             var path_buffer: [std.fs.max_path_bytes]u8 = undefined;
             self.dir = try std.Io.Dir.cwd().openDir(io, try std.fmt.bufPrint(&path_buffer, "{s}../data", .{base}), .{});
         }
-        errdefer if (!bundled) self.dir.close(io);
-        const text = if (bundled)
-            try self.readBundled(self.arena.allocator(), manifest.file_name)
-        else
-            try self.dir.readFileAllocOptions(io, manifest.file_name, self.arena.allocator(), .limited(16 << 20), .of(u8), 0);
-        self.files = try manifest.parse(self.arena.allocator(), text);
         return self;
     }
 
-    /// Close the data directory and destroy this heap owner, including its manifest arena.
+    /// Close the data directory and destroy this heap owner.
     /// Call once, after all providers/caches using it have stopped; borrowed views become invalid.
     ///
     /// ```zig
@@ -66,7 +54,6 @@ pub const Data = struct {
     /// ```
     pub fn close(self: *Data) void {
         if (!bundled) self.dir.close(self.io);
-        self.arena.deinit();
         self.gpa.destroy(self);
     }
 
@@ -92,24 +79,23 @@ pub const Data = struct {
         return .{ .context = self, .load = loadTexture };
     }
 
-    /// The files packaging copied as they were (scenes...), by their paths in the project.
+    /// The files packaging copied unchanged (scenes...), addressed by identity.
     /// Borrows `self`; each successful read allocates null-terminated bytes with the supplied
-    /// allocator. Paths absent from the manifest fail with `NotPackaged`; read/size errors propagate.
+    /// allocator. Invalid identities, missing files and read/size errors propagate.
     ///
     /// ```zig
     /// const files = data.copies();
-    /// const source = try files.read(files.context, gpa, "resources/scene/main.scene.zon");
+    /// const source = try files.read(files.context, gpa, scene_ref.key());
     /// defer gpa.free(source);
     /// ```
     pub fn copies(self: *Data) eggy.scene_instances.Files {
         return .{ .context = self, .read = readCopy };
     }
 
-    /// The file packaging made of the project's file at `path`, opened.
+    /// Open an identity directly, rejecting paths and traversal at the filesystem boundary.
     fn openPackaged(self: *Data, path: []const u8) !std.Io.File {
-        const entry = self.files.find(path) orelse return error.NotPackaged;
-        var name: [32]u8 = undefined;
-        return self.dir.openFile(self.io, manifest.packagedName(&name, entry), .{});
+        var name: [eggy.assets.id.key_len]u8 = undefined;
+        return self.dir.openFile(self.io, eggy.assets.id.key(&name, try eggy.assets.id.parse(path)), .{});
     }
 
     fn loadModel(context: *anyopaque, gpa: std.mem.Allocator, path: []const u8) !eggy.assets.Model {
@@ -119,15 +105,27 @@ pub const Data = struct {
 
     fn loadTexture(context: *anyopaque, gpa: std.mem.Allocator, path: []const u8) !eggy.assets.Texture {
         const self: *Data = @ptrCast(@alignCast(context));
+        const root = @import("root");
+        if (comptime @hasDecl(root, "eggy_asset_ids")) {
+            if (root.eggy_asset_ids.findId(try eggy.assets.id.parse(path))) |entry| {
+                if (entry.kind != @intFromEnum(eggy.assets.Kind.image)) return error.WrongAssetKind;
+                if (!entry.converted) return error.UnsupportedImageFormat;
+            }
+        }
         return self.readPackaged(eggy.assets.Texture, eggy.assets.texture, gpa, path);
     }
 
     fn readCopy(context: *anyopaque, gpa: std.mem.Allocator, path: []const u8) anyerror![:0]u8 {
         const self: *Data = @ptrCast(@alignCast(context));
+        const identity = try eggy.assets.id.parse(path);
+        const root = @import("root");
+        if (comptime @hasDecl(root, "eggy_asset_ids")) {
+            if (root.eggy_asset_ids.findId(identity)) |entry| {
+                if (entry.converted) return error.ConvertedResource;
+            }
+        }
         if (bundled) {
-            const entry = self.files.find(path) orelse return error.NotPackaged;
-            var name: [32]u8 = undefined;
-            return self.readBundled(gpa, manifest.packagedName(&name, entry));
+            return self.readBundled(gpa, path);
         }
         const io = self.io;
         var file = try self.openPackaged(path);
@@ -137,12 +135,10 @@ pub const Data = struct {
         return reader.interface.allocRemainingAlignedSentinel(gpa, .limited(64 << 20), .of(u8), 0);
     }
 
-    /// What packaging made of the project's file at `path`, read by `format`'s `read`.
+    /// Decode an identity-addressed payload using the requested format.
     fn readPackaged(self: *Data, comptime T: type, comptime format: type, gpa: std.mem.Allocator, path: []const u8) !T {
         if (bundled) {
-            const entry = self.files.find(path) orelse return error.NotPackaged;
-            var name: [32]u8 = undefined;
-            const bytes = try self.readBundled(gpa, manifest.packagedName(&name, entry));
+            const bytes = try self.readBundled(gpa, path);
             defer gpa.free(bytes);
             var reader: std.Io.Reader = .fixed(bytes);
             return format.read(gpa, &reader);
@@ -156,8 +152,10 @@ pub const Data = struct {
     }
 
     fn readBundled(_: *Data, gpa: std.mem.Allocator, name: []const u8) ![:0]u8 {
+        var key: [eggy.assets.id.key_len]u8 = undefined;
+        const canonical = eggy.assets.id.key(&key, try eggy.assets.id.parse(name));
         var path_buffer: [128]u8 = undefined;
-        const path = try std.fmt.bufPrintZ(&path_buffer, "data/{s}", .{name});
+        const path = try std.fmt.bufPrintZ(&path_buffer, "data/{s}", .{canonical});
         // SDL reads Android's AssetManager or Emscripten's preloaded filesystem.
         const stream = sdl3.c.SDL_IOFromFile(path, "rb") orelse return error.AssetNotFound;
         defer _ = sdl3.c.SDL_CloseIO(stream);
@@ -175,24 +173,21 @@ test "packaged input maps are copied resources readable through the runtime brid
     const gpa = std.testing.allocator;
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
-    const entry = manifest.Entry{ .path = "resources/input/player.inmap.zon", .id = 0x2a };
-    try std.testing.expectEqual(manifest.Packaged.copy, manifest.Packaged.of(entry.path));
-    var name: [32]u8 = undefined;
     try tmp.dir.writeFile(std.testing.io, .{
-        .sub_path = manifest.packagedName(&name, entry),
+        .sub_path = "000000000000002a",
         .data = ".{ .controls = .{ .{ .name = \"jump\", .bindings = .{ .{ .key = .space } } } } }",
     });
     var data = Data{
         .gpa = gpa,
         .io = std.testing.io,
         .dir = tmp.dir,
-        .arena = .init(gpa),
-        .files = .{ .files = &.{entry} },
     };
-    defer data.arena.deinit();
-    const source = try data.resources().read(gpa, eggy.AssetRef(.input_map).init("resources/input/player.inmap.zon"));
+    const source = try data.resources().read(gpa, eggy.AssetRef(.input_map).fromId(42));
     defer gpa.free(source);
-    const file = try eggy.input.asset.File.parse(data.arena.allocator(), source);
+    var arena = std.heap.ArenaAllocator.init(gpa);
+    defer arena.deinit();
+    const file = try eggy.input.asset.File.parse(arena.allocator(), source);
     try std.testing.expectEqualStrings("jump", file.controls[0].name);
     try std.testing.expectEqual(eggy.Key.space, file.controls[0].bindings[0].key);
+    try std.testing.expectError(error.InvalidAssetId, data.copies().read(&data, gpa, "../manifest.zon"));
 }

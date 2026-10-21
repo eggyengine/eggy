@@ -400,7 +400,7 @@ fn holdsRef(comptime T: type) bool {
 fn store(comptime T: type, value: *const T) Stored(T) {
     if (comptime refs.refKind(T)) |kind| return switch (kind) {
         .entity => value.entity,
-        .asset => value.path(),
+        .asset => value.key(),
     };
     if (comptime !holdsRef(T)) return value.*;
     var out: Stored(T) = undefined;
@@ -720,7 +720,10 @@ test "references are read and written as what they point at" {
     try std.testing.expectEqualStrings(".{.id=4,.generation=2}", text.written());
     text.clearRetainingCapacity();
     try Components.writeField(&world, entity, 0, 1, &text.writer);
-    try std.testing.expectEqualStrings("\"sounds/hum.ogg\"", text.written());
+    const sound = refs.AssetRef(.audio).init("sounds/hum.ogg");
+    try std.testing.expectEqual(sound.id(), world.get(entity, Orbit).?.sound.id());
+    var expected: [18]u8 = undefined;
+    try std.testing.expectEqualStrings(try std.fmt.bufPrint(&expected, "\"{s}\"", .{sound.key()}), text.written());
     try Components.setField(&world, entity, 0, 0, "null");
     try std.testing.expect(world.get(entity, Orbit).?.around.entity == null);
 }
@@ -770,10 +773,12 @@ test "references inside a union are written as what they point at" {
     try std.testing.expectEqualStrings(".cube", text.written());
 
     try Components.setField(&world, entity, 0, 0, ".{ .model = \"art/ship.glb\" }");
-    try std.testing.expectEqualStrings("art/ship.glb", world.get(entity, Look).?.shape.model.path());
+    const model = refs.AssetRef(.any).init("art/ship.glb");
+    try std.testing.expectEqual(model.id(), world.get(entity, Look).?.shape.model.id());
     text.clearRetainingCapacity();
     try Components.writeField(&world, entity, 0, 0, &text.writer);
-    try std.testing.expectEqualStrings(".{.model=\"art/ship.glb\"}", text.written());
+    var expected: [32]u8 = undefined;
+    try std.testing.expectEqualStrings(try std.fmt.bufPrint(&expected, ".{{.model=\"{s}\"}}", .{model.key()}), text.written());
 }
 
 test "adding a component adds what it depends on" {

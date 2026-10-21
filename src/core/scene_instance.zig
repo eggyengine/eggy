@@ -4,7 +4,7 @@
 //! it is instanced. A built-in component, whose entities `scene_instances.zig` makes and remakes,
 //! in the editor and the runtime.
 //!
-//!     .{ .type = "SceneInstance", .owner = "eggy", .fields = .{ .scene = "resources/scene/rat.scene.zon" } }
+//!     .{ .type = "SceneInstance", .owner = "eggy", .fields = .{ .scene = "000000000000002a" } }
 const std = @import("std");
 const components = @import("components.zig");
 const AssetRef = @import("refs.zig").AssetRef;

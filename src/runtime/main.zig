@@ -3,6 +3,7 @@
 const std = @import("std");
 const eggy = @import("eggy");
 const Runtime = @import("eggy_runtime").Runtime(@import("eggy_project"));
+pub const eggy_asset_ids = @import("eggy_project").asset_ids;
 
 comptime {
     _ = eggy.sdl_adapter.main_callbacks;

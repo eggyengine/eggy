@@ -8,24 +8,24 @@ caller-owned CPU data; rendering a Mesh uses renderer-owned GPU caches. Those
 objects have different lifetimes even when they refer to the same model or image.
 The [loading guide](../how-to/load-assets.md) shows the calls for each task.
 
-## Descriptors connect source files to packaged data {#what-the-runtime-receives}
+## The asset catalog connects source files to packaged data {#what-the-runtime-receives}
 
-The editor maintains `<file>.eggy` descriptors beside project resources. A descriptor
-contains an ID, kind, and model import scale. Editor file operations carry descriptors
-through moves and renames; copies receive new IDs. Keep descriptors with their assets
-in version control.
+The editor keeps one hidden catalog, `.eggy/assets.zon`, giving every file and folder in
+`resources/` an ID, a kind, and (for models) an import scale. Editor file operations keep
+IDs through moves, renames, and trash and restore; copies receive new IDs. Keep the catalog
+in version control with the assets. Projects from older versions have `<file>.eggy`
+descriptors beside their resources: the editor moves them into the catalog when it opens the
+project, then deletes them.
 
-For example, a model descriptor can scale geometry imported from centimetres:
-
-```zig
-.{ .id = 8470855589818597979, .kind = .model, .model = .{ .scale = 0.01 } }
-```
+A model file opens in the Assets panel into its geometry (`Skeleton` when the model has
+animation clips, else `Static`) and one entry for each of its clips. Those entries have IDs
+of their own, so a reference field can name a single clip, but they are not files: they
+can't be renamed, moved, or deleted.
 
 The editor refreshes model and image imports after changes. Packaging converts models
 to `.eggmodel` and decoded images to `.eggtexture`, copies other resources unchanged,
-and names the packaged files after IDs in `data/`. `data/manifest.zon` maps project
-paths to those IDs. Game code uses resource services with project paths; it must not
-reconstruct packaged filenames.
+and names the packaged files after their IDs in `data/`. Game code refers to assets by
+reference, which the build resolves to IDs; it must not reconstruct packaged filenames.
 
 ## Scene instances belong to the world
 
@@ -74,12 +74,8 @@ const engine = b.dependency("eggy", .{ .target = target, .optimize = optimize })
 tool.root_module.addImport("eggy_assets", engine.module("eggy_assets"));
 ```
 
-Its descriptor, manifest, model, and texture formats use explicit readers, writers,
+Its catalog, model, imported-clip, and texture formats use explicit readers, writers,
 allocators, and `std.Io` where needed. Games can also access it as `eggy.assets`.
-
-`descriptor.pathOfAlloc(gpa, path)` and `manifest.packagedNameAlloc(gpa, entry)`
-allocate their resulting paths or names; free them with `gpa.free`. Their original
-buffer-based counterparts remain allocation-free.
 
 Browser builds read their preloaded packaged resources synchronously. Async reads and
 streaming still return `NotImplemented`.

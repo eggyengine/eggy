@@ -9,7 +9,7 @@ const texture_cache = @import("texture_cache.zig");
 const TextureCache = texture_cache.TextureCache;
 const log = std.log.scoped(.models);
 
-/// How a model file (by its path in the project) becomes triangles.
+/// How an asset's canonical identity key becomes CPU geometry.
 pub const Loader = struct {
     context: *anyopaque,
     /// Host-local loader; author code uses `Resources`' C-safe provider bridge.
@@ -90,13 +90,13 @@ pub const ModelCache = struct {
 
     /// The model at `path`, loading it the first time (its textures into `textures`); null when
     /// it can't be drawn.
-    /// Host lookup: `path` is project-relative. Returns cache-owned GPU handles and parts;
+    /// Host lookup: `path` is a canonical asset key. Returns cache-owned GPU handles and parts;
     /// do not free them or retain them past invalidation. Load/upload failures are logged
     /// and cached until `forgetAll`; allocation failure can also return null.
     /// Embedded textures are ready for sampling when loading finishes.
     ///
     /// ```zig
-    /// const gpu_model = models.get("resources/ship.glb", &textures) orelse return;
+    /// const gpu_model = models.get(ship.key(), &textures) orelse return;
     /// ```
     pub fn get(self: *ModelCache, path: []const u8, textures: *TextureCache) ?Gpu {
         if (self.entries.get(path)) |known| return known;

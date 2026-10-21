@@ -6,7 +6,7 @@ const history_zig = @import("../history.zig");
 
 const Source = struct {
     fn read(_: *anyopaque, gpa: std.mem.Allocator, path: []const u8) ![:0]u8 {
-        if (!std.mem.eql(u8, path, "resources/player.inmap.zon")) return error.FileNotFound;
+        if (!std.mem.eql(u8, path, eggy.AssetRef(.input_map).fromId(43).key())) return error.FileNotFound;
         return gpa.dupeZ(u8,
             \\.{ .controls = .{
             \\    .{ .name = "move", .kind = .vector, .bindings = .{ .{ .keys_2d = .{} } } },
@@ -240,14 +240,20 @@ test "typed actions and game UI cross the real ABI and undo after library replac
     }
     // Animation preview crosses the boundary: assign, pose, and end without leaving a trace.
     {
+        const authored = eggy.AssetRef(.animation).fromId(44).key();
+        const imported = eggy.AssetRef(.animation).fromId(45).key();
+        app.graphics.clips = .{ .gpa = gpa };
+        defer app.graphics.clips.deinit();
+        try app.graphics.clips.replace(authored, .{ .duration_s = 1, .tracks = &.{} });
         const actor = try app.world.spawn(.{});
-        try std.testing.expect(game.assignAnimation(&app, actor, "resources/walk.clip.zon"));
-        try std.testing.expect(!game.assignAnimation(&app, actor, "resources/walk.txt"));
-        try std.testing.expect(!game.showAnimationPreview(&app, "", "run", 1));
+        try std.testing.expect(game.assignAnimation(&app, actor, authored, false));
+        try std.testing.expect(game.assignAnimation(&app, actor, imported, true));
+        try std.testing.expect(!game.assignAnimation(&app, actor, "not an asset", false));
+        try std.testing.expect(!game.showAnimationPreview(&app, authored, imported, 1));
         try std.testing.expect(game.beginAnimationPreview(&app, actor));
-        try std.testing.expect(game.showAnimationPreview(&app, "", "run", 1));
+        try std.testing.expect(game.showAnimationPreview(&app, authored, imported, 1));
         game.endAnimationPreview(&app);
-        try std.testing.expect(!game.showAnimationPreview(&app, "", "run", 1));
+        try std.testing.expect(!game.showAnimationPreview(&app, authored, imported, 1));
         const targets = try game.animationTargets(gpa, &app, actor);
         defer gpa.free(targets);
         try std.testing.expectEqual(@as(usize, 0), targets.len);

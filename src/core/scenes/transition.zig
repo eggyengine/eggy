@@ -89,8 +89,8 @@ test "replacement reads fail without losing a pending or current scene" {
     const assets = @import("eggy_assets");
     const Source = struct {
         fn read(_: *anyopaque, gpa: std.mem.Allocator, path: []const u8) ![:0]u8 {
-            if (std.mem.eql(u8, path, "missing.scene.zon")) return error.FileNotFound;
-            if (std.mem.eql(u8, path, "invalid.scene.zon")) return gpa.dupeZ(u8, "broken");
+            if (std.mem.eql(u8, path, AssetRef(.scene).init("missing.scene.zon").key())) return error.FileNotFound;
+            if (std.mem.eql(u8, path, AssetRef(.scene).init("invalid.scene.zon").key())) return gpa.dupeZ(u8, "broken");
             return gpa.dupeZ(u8, ".{ .entities = .{} }");
         }
         fn model(_: *anyopaque, _: std.mem.Allocator, _: []const u8) !assets.Model {

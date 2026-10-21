@@ -11,7 +11,7 @@ const settings_zig = @import("render_settings.zig");
 const mipmaps = @import("mipmaps.zig");
 const log = std.log.scoped(.textures);
 
-/// How an image file (by its path in the project) becomes pixels.
+/// How an asset's canonical identity key becomes CPU pixels.
 pub const Loader = struct {
     context: *anyopaque,
     /// Host-local loader; author code uses `Resources`' C-safe provider bridge.
@@ -102,12 +102,12 @@ pub const TextureCache = struct {
     }
 
     /// The image at `path`, loading it the first time; null when it can't be painted with.
-    /// Host lookup by project-relative path: returns cache-owned handles, not ownership.
+    /// Host lookup by canonical asset key: returns cache-owned handles, not ownership.
     /// Do not release the result. Failures are logged/cached until `forgetAll`; configure
     /// `loader` before use.
     ///
     /// ```zig
-    /// const paint = textures.get("resources/wood.png") orelse textures.white;
+    /// const paint = textures.get(wood.key()) orelse textures.white;
     /// ```
     pub fn get(self: *TextureCache, path: []const u8) ?Gpu {
         if (self.entries.get(path)) |known| return known;

@@ -1,9 +1,9 @@
 //! What the Assets panel does to the project's files: new folders, renaming, duplicating, moving
 //! and copying into folders, importing files from outside, and deleting, which moves things into
 //! `.eggy/trash/` (so a deletion can be undone) rather than erasing them. Paths are relative to
-//! the project, with `/` between parts, and never leave it. A file's or folder's
-//! descriptor (`eggy.assets.descriptor`) goes wherever it does; a copy gets none (`descriptors.zig`
-//! makes it a new one).
+//! the project, with `/` between parts, and never leave it. These only move bytes: the asset
+//! catalog (`eggy.assets.catalog`, through `ProjectAssets`) is told afterwards what moved or was
+//! copied, so ids follow moves and copies get new ones.
 const std = @import("std");
 const descriptor = @import("eggy").assets.descriptor;
 
@@ -78,8 +78,7 @@ test "file templates create unique complete files and reject path-like names" {
 }
 
 /// Rename `path` to `new_name` in the same folder. Returns the new path; caller-owned.
-/// Editor-only: rejects invalid names and occupied destinations. Moves the descriptor too;
-/// descriptor failures are logged after the file moves, rather than rolling it back.
+/// Editor-only: rejects invalid names and occupied destinations. Tell the catalog afterwards.
 ///
 /// ```zig
 /// // Given gpa, io and an open project containing resources/old.png:
@@ -92,13 +91,12 @@ pub fn rename(gpa: std.mem.Allocator, io: std.Io, project: std.Io.Dir, path: []c
     errdefer gpa.free(target);
     if (exists(io, project, target)) return error.PathAlreadyExists;
     try project.rename(path, project, target, io);
-    carryDescriptor(io, project, path, target);
     return target;
 }
 
 /// Copy `path` (a file, or a folder and everything in it) beside itself as "<name> copy".
 /// Returns the copy's path; caller-owned.
-/// Editor-only: copies directory trees without descriptors so copies acquire new asset ids.
+/// Editor-only: copies directory trees without legacy descriptors; tell the catalog it is a copy.
 /// I/O/allocation errors propagate; a partially copied tree may remain on failure.
 ///
 /// ```zig
@@ -120,7 +118,7 @@ pub fn duplicate(gpa: std.mem.Allocator, io: std.Io, project: std.Io.Dir, path: 
 /// Move `path` into `folder` ("" for the project), keeping its name. Returns the new path;
 /// caller-owned. Fails with `error.PathAlreadyExists` when the folder has one so named.
 /// Editor-only: rejects moving into the source or its descendants; the destination folder
-/// must exist. Descriptor failures are logged after a successful file move.
+/// must exist. Tell the catalog afterwards.
 ///
 /// ```zig
 /// // Given gpa, io and an open project with these paths:
@@ -137,7 +135,7 @@ pub fn moveInto(gpa: std.mem.Allocator, io: std.Io, project: std.Io.Dir, path: [
 
 /// Copy `path` (a file, or a folder and everything in it) into `folder`, under its own name or,
 /// when that is taken, "<name> 2" and so on. Returns the copy's path; caller-owned.
-/// Editor-only: rejects copying into the source or its descendants and omits descriptors.
+/// Editor-only: rejects copying into the source or its descendants; tell the catalog it is a copy.
 /// I/O/allocation failures propagate without removing already-copied entries.
 ///
 /// ```zig
@@ -155,7 +153,7 @@ pub fn copyInto(gpa: std.mem.Allocator, io: std.Io, project: std.Io.Dir, path: [
 
 /// Copy `outside` (an absolute path: a file, or a folder and everything in it) into `folder` of
 /// the project, as `copyInto` does. Returns the copy's path; caller-owned.
-/// Editor-only: creates the destination folder, omits descriptors from copied trees, and
+/// Editor-only: creates the destination folder, omits legacy descriptors from copied trees, and
 /// propagates I/O/allocation errors; failure can leave partial output.
 ///
 /// ```zig
@@ -179,8 +177,7 @@ fn freeTarget(gpa: std.mem.Allocator, io: std.Io, project: std.Io.Dir, folder: [
 
 /// Move `path` into the trash, in a folder of its own, keeping its name. Returns where it went
 /// (for `restore`); caller-owned.
-/// Editor-only: creates a random trash subfolder and carries the descriptor when possible.
-/// Retain the original path separately for undo; filesystem/allocation failures propagate.
+/// Editor-only: creates a random trash subfolder; tell the catalog it moved. Retain the original path separately for undo; filesystem/allocation failures propagate.
 ///
 /// ```zig
 /// // Given gpa, io and an open project containing resources/old.png:
@@ -197,13 +194,12 @@ pub fn trash(gpa: std.mem.Allocator, io: std.Io, project: std.Io.Dir, path: []co
     const target = try join(gpa, folder, std.fs.path.basename(path));
     errdefer gpa.free(target);
     try project.rename(path, project, target, io);
-    carryDescriptor(io, project, path, target);
     return target;
 }
 
 /// Move `from` to `to` (both relative to the project), as undoing a rename does.
 /// Editor-only: refuses an existing destination; its parent must already exist.
-/// File-move failures propagate; a failed descriptor move only logs a warning.
+/// File-move failures propagate.
 ///
 /// ```zig
 /// // Given io and an open project with resources/new.png:
@@ -212,12 +208,11 @@ pub fn trash(gpa: std.mem.Allocator, io: std.Io, project: std.Io.Dir, path: []co
 pub fn move(io: std.Io, project: std.Io.Dir, from: []const u8, to: []const u8) !void {
     if (exists(io, project, to)) return error.PathAlreadyExists;
     try project.rename(from, project, to, io);
-    carryDescriptor(io, project, from, to);
 }
 
 /// Move `from` (in the trash) back to `to`.
 /// Editor-only: creates missing parent folders but never overwrites an existing target.
-/// File errors propagate; descriptor failures are logged without undoing the restoration.
+/// File errors propagate.
 ///
 /// ```zig
 /// // Given io, an open project and the path returned by trash:
@@ -227,20 +222,6 @@ pub fn restore(io: std.Io, project: std.Io.Dir, from: []const u8, to: []const u8
     if (exists(io, project, to)) return error.PathAlreadyExists;
     if (std.fs.path.dirname(to)) |parent| try project.createDirPath(io, parent);
     try project.rename(from, project, to, io);
-    carryDescriptor(io, project, from, to);
-}
-
-/// Move the descriptor of the file moved from `from` to `to` along with it, if it has one. A
-/// descriptor left behind is found and removed later; report the possible loss of its id.
-fn carryDescriptor(io: std.Io, project: std.Io.Dir, from: []const u8, to: []const u8) void {
-    var from_buffer: [std.fs.max_path_bytes]u8 = undefined;
-    var to_buffer: [std.fs.max_path_bytes]u8 = undefined;
-    const from_descriptor = descriptor.pathOf(&from_buffer, from) catch return;
-    const to_descriptor = descriptor.pathOf(&to_buffer, to) catch return;
-    project.rename(from_descriptor, project, to_descriptor, io) catch |err| switch (err) {
-        error.FileNotFound => {},
-        else => std.log.warn("moved {s}, but its descriptor could not follow ({t}); its asset id may change", .{ from, err }),
-    };
 }
 
 /// `name` in `folder`, or `name 2`, `name 3` and so on, whichever is free, with `extension`.
@@ -376,7 +357,7 @@ test "moving and copying into folders, and importing from outside" {
     try std.testing.expect(exists(io, project, "sounds/boom.ogg"));
 }
 
-test "a file's or folder's descriptor goes where it goes, and copies get none" {
+test "moves and copies leave legacy descriptors alone, for the catalog to migrate" {
     const gpa = std.testing.allocator;
     const io = std.testing.io;
     var tmp = std.testing.tmpDir(.{});
@@ -388,27 +369,10 @@ test "a file's or folder's descriptor goes where it goes, and copies get none" {
 
     const renamed = try rename(gpa, io, project, "ship.glb", "fighter.glb");
     defer gpa.free(renamed);
-    try std.testing.expect(exists(io, project, "fighter.glb.eggy"));
-    try std.testing.expect(!exists(io, project, "ship.glb.eggy"));
-    const moved = try moveInto(gpa, io, project, "fighter.glb", "art");
-    defer gpa.free(moved);
-    try std.testing.expect(exists(io, project, "art/fighter.glb.eggy"));
-
-    const trashed = try trash(gpa, io, project, "art/fighter.glb");
-    defer gpa.free(trashed);
-    try std.testing.expect(!exists(io, project, "art/fighter.glb.eggy"));
-    try restore(io, project, trashed, "art/fighter.glb");
-    try std.testing.expect(exists(io, project, "art/fighter.glb.eggy"));
+    try std.testing.expect(exists(io, project, "fighter.glb"));
+    try std.testing.expect(exists(io, project, "ship.glb.eggy"));
 
     const folder_copy = try duplicate(gpa, io, project, "art");
     defer gpa.free(folder_copy);
-    try std.testing.expect(exists(io, project, "art copy/fighter.glb"));
-    try std.testing.expect(!exists(io, project, "art copy/fighter.glb.eggy"));
-
-    // A folder's descriptor goes with it too.
-    try project.writeFile(io, .{ .sub_path = "art.eggy", .data = ".{ .id = 2, .kind = .folder }" });
-    const renamed_folder = try rename(gpa, io, project, "art", "props");
-    defer gpa.free(renamed_folder);
-    try std.testing.expect(exists(io, project, "props.eggy"));
-    try std.testing.expect(!exists(io, project, "art.eggy"));
+    try std.testing.expect(exists(io, project, "art copy"));
 }

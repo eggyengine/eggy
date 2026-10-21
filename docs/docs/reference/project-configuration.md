@@ -15,9 +15,8 @@ title: Project configuration and files
 | `src/root.zig` | Reusable plugin/library declaring `pub const Plugin` |
 | `eggy.zon` | Eggy's project settings, beside the Zig manifest |
 | `resources/` | Source assets; new scenes go in `resources/scene/` |
-| `<file>.eggy` | Asset/folder descriptor; keep it with its resource |
 | `controls.zon` | Developer input overrides, versioned with the project and embedded in runtime builds |
-| `.eggy/` | Project-specific editor state and preferences |
+| `.eggy/` | Project-specific editor state and preferences; `.eggy/assets.zon` is the asset catalog (IDs and model import settings), which belongs in version control |
 | `zig-out/` | Installed build/export output |
 
 A package can have both a game and a reusable plugin. Their `addGame` and `addPlugin`

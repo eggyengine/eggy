@@ -10,9 +10,9 @@ a packaged runtime.
 
 ## Prepare project resources
 
-Put the files in the project's `resources/` folder. The editor maintains their
-descriptors; keep those descriptors in version control with the assets and use the
-editor's file operations when moving or renaming them. See
+Put the files in the project's `resources/` folder. The editor gives each an ID in
+`.eggy/assets.zon`; keep that file in version control with the assets and use the
+editor's file operations when moving or renaming them, so the IDs follow. See
 [assets, scenes, and packaging](../explanation/assets-and-scenes.md) for how IDs and
 packaged files relate to project paths.
 
@@ -152,8 +152,8 @@ runtime opens a different scene from the one you expected.
 
 ## Understand packaged files {#what-the-runtime-receives}
 
-[Assets, scenes, and packaging](../explanation/assets-and-scenes.md) explains descriptors,
-packaged IDs, world-owned instances, and startup scene choices.
+[Assets, scenes, and packaging](../explanation/assets-and-scenes.md) explains the asset
+catalog, packaged IDs, world-owned instances, and startup scene choices.
 [Error handling](../how-to/handle-errors.md) covers required and optional loads.
 See [feature support](../reference/feature-support.md#capability-support) for unavailable backends.
 

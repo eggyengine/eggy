@@ -38,6 +38,12 @@ const builtins = [_]Entry{
         .extension = ".material.zon",
         .contents = ".{\n    .color = .{ 1, 1, 1, 1 },\n    .metallic = 0,\n    .roughness = 1,\n    .texture = \"\",\n    .emissive_color = .{ 0, 0, 0 },\n    .unlit = false,\n    .alpha_cutoff = 0.01,\n}\n",
     } },
+    .{ .file = .{
+        .key = "eggy/animation_clip",
+        .title = "Animation Clip",
+        .extension = ".clip.zon",
+        .contents = ".{\n    .format_version = 1,\n    .duration_s = 1,\n    .tracks = .{},\n}\n",
+    } },
     .folder,
 };
 

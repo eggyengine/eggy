@@ -250,7 +250,7 @@ pub const MeshRenderer = struct {
     pub fn renderShadow(self: *MeshRenderer, cmd: vit.CommandBuffer, drawables: []mesh.Drawable, sources: Sources, view: @import("camera.zig").View, aspect: f32, settings: @import("render_settings.zig").Settings) !void {
         const enabled = self.shadow.fit(view, aspect, sources.lights, settings);
         if (!enabled and self.shadow.initialized) return;
-        const casters = if (enabled) visibleFirst(drawables, sources, self.shadow.matrix) else drawables[0..0];
+        const casters = if (enabled) castersFirst(visibleFirst(drawables, sources, self.shadow.matrix)) else drawables[0..0];
         if (casters.len > max_drawables) return error.TooManyShadowMeshes;
         self.shadow.slot = (self.shadow.slot + 1) % frames_in_flight;
         const slot = self.shadow.slot;
@@ -307,6 +307,21 @@ pub const MeshRenderer = struct {
 };
 
 /// Partition by swapping rather than compacting: another viewport still needs every entity.
+/// Move what doesn't cast a shadow (the editor's stand-ins) after the rest, in place; returns the rest.
+fn castersFirst(drawables: []mesh.Drawable) []mesh.Drawable {
+    var end = drawables.len;
+    var index: usize = 0;
+    while (index < end) {
+        if (drawables[index].casts_shadow != 0) {
+            index += 1;
+        } else {
+            end -= 1;
+            std.mem.swap(mesh.Drawable, &drawables[index], &drawables[end]);
+        }
+    }
+    return drawables[0..end];
+}
+
 fn visibleFirst(drawables: []mesh.Drawable, sources: Sources, matrix: [4][4]f32) []mesh.Drawable {
     var end = drawables.len;
     var index: usize = 0;

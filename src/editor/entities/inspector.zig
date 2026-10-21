@@ -17,6 +17,7 @@ const ecs = eggy.ecs;
 const components = eggy.components;
 const page_style = @import("../page_style.zig");
 const Dragged = @import("../dragged.zig").Dragged;
+const ProjectAssets = @import("../assets/project_assets.zig").ProjectAssets;
 const field_editor = @import("field_editor.zig");
 const component_icons = @import("component_icons.zig");
 const restyle = page_style.restyle;
@@ -31,6 +32,8 @@ pub const Details = struct {
     addable: []const Addable,
     /// What is being dragged from another panel, if anything: the slots that take it light up.
     dragging: ?Dragged = null,
+    /// Names the assets nested reference fields hold, by their identities.
+    assets: ?*ProjectAssets = null,
 
     pub const Component = struct {
         /// Its index among the game's component types.
@@ -190,7 +193,7 @@ pub const EntityInspector = struct {
             page_style.smallText(context, 13);
         }
         const field_control = std.math.clamp(width * control_share, min_control_width, max_control_width);
-        for (details.components) |component| if (self.componentCard(context, component, field_control, details.dragging)) |card_action| {
+        for (details.components) |component| if (self.componentCard(context, component, field_control, details.dragging, details.assets)) |card_action| {
             action = card_action;
         };
         self.focused = focused;
@@ -198,7 +201,7 @@ pub const EntityInspector = struct {
     }
 
     /// A card for one component: a header (fold, name, owner, Remove), then its fields.
-    fn componentCard(self: *EntityInspector, context: *ui.Context, component: Details.Component, field_control: f32, dragging: ?Dragged) ?Action {
+    fn componentCard(self: *EntityInspector, context: *ui.Context, component: Details.Component, field_control: f32, dragging: ?Dragged, assets: ?*ProjectAssets) ?Action {
         const arena = context.builder().allocator;
         const b = context.builder();
         var action: ?Action = null;
@@ -242,6 +245,7 @@ pub const EntityInspector = struct {
                 .shown = shown,
                 .control_width = field_control,
                 .dragging = dragging,
+                .assets = assets,
             })) |text| action = .{ .set_field = .{ .component = component.index, .field = index, .text = text } };
         };
 

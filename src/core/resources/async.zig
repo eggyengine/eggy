@@ -158,7 +158,7 @@ pub const Queue = struct {
 test "asynchronous bytes, models and images transfer ownership and reject consumed handles" {
     const Source = struct {
         fn read(_: *anyopaque, gpa: std.mem.Allocator, path: []const u8) ![:0]u8 {
-            if (std.mem.eql(u8, path, "missing.txt")) return error.FileNotFound;
+            if (std.mem.eql(u8, path, refs.AssetRef(.text).init("missing.txt").key())) return error.FileNotFound;
             return gpa.dupeZ(u8, "loaded");
         }
         fn model(_: *anyopaque, gpa: std.mem.Allocator, _: []const u8) !assets.Model {

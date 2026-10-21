@@ -38,7 +38,7 @@ pub const AsyncProvider = struct {
 };
 
 /// Stable error codes: Zig error numbers are local to each compilation.
-pub const Status = enum(u32) { ok, not_found, not_packaged, invalid_data, invalid_path, out_of_memory, failed, pending, cancelled, invalid_request, too_many_requests };
+pub const Status = enum(u32) { ok, not_found, not_packaged, invalid_data, invalid_path, out_of_memory, failed, pending, cancelled, invalid_request, too_many_requests, converted_resource, unsupported_image_format };
 const Bytes = extern struct { ptr: [*]u8, len: usize };
 const Provider = struct {
     context: *anyopaque,
@@ -86,8 +86,8 @@ pub const Resources = struct {
     }
 
     /// Read an AssetRef into caller-owned sentinel-terminated bytes; free with `gpa.free`.
-    /// Only copied resources support raw reads; converted models/images return
-    /// `ConvertedResource`. Unset paths, missing providers and provider failures are errors.
+    /// Supports copied files and standalone clips; converted models/images return
+    /// `ConvertedResource`. Unset identities, missing providers and provider failures are errors.
     ///
     /// ```zig
     /// // In a game hook, with gpa:
@@ -98,11 +98,11 @@ pub const Resources = struct {
         comptime {
             if (refs.refKind(@TypeOf(file)) != .asset) @compileError("read expects an AssetRef");
         }
-        if (file.path().len == 0) return error.UnsetAsset;
-        if (assets.manifest.Packaged.of(file.path()) != .copy) return error.ConvertedResource;
+        if (file.key().len == 0) return error.UnsetAsset;
+        try checkRawAsset(file.id());
         const provider = self.provider orelse return unavailable();
         var bytes: Bytes = undefined;
-        try check(provider.read(provider.context, &gpa, file.path().ptr, file.path().len, &bytes));
+        try check(provider.read(provider.context, &gpa, file.key().ptr, file.key().len, &bytes));
         return bytes.ptr[0..bytes.len :0];
     }
 
@@ -119,7 +119,7 @@ pub const Resources = struct {
         if (file.len == 0) return error.UnsetAsset;
         const provider = self.provider orelse return unavailable();
         var result: assets.Model = undefined;
-        try check(provider.model(provider.context, &gpa, file.path().ptr, file.path().len, &result));
+        try check(provider.model(provider.context, &gpa, file.key().ptr, file.key().len, &result));
         return result;
     }
 
@@ -134,37 +134,37 @@ pub const Resources = struct {
     /// ```
     pub fn loadImage(self: Resources, gpa: std.mem.Allocator, file: refs.AssetRef(.image)) !assets.Texture {
         if (file.len == 0) return error.UnsetAsset;
-        if (!assets.Kind.isTexture(file.path())) return error.UnsupportedImageFormat;
+        try checkImageAsset(file.id());
         const provider = self.provider orelse return unavailable();
         var result: assets.Texture = undefined;
-        try check(provider.image(provider.context, &gpa, file.path().ptr, file.path().len, &result));
+        try check(provider.image(provider.context, &gpa, file.key().ptr, file.key().len, &result));
         return result;
     }
 
-    /// Queue copied-file I/O without blocking native gameplay. `gpa` must remain alive until
+    /// Queue byte-asset I/O without blocking native gameplay. `gpa` must remain alive until
     /// cancellation/reset or completion; results use it only when polled on the caller thread.
     pub fn readAsync(self: Resources, gpa: std.mem.Allocator, file: anytype) !Request {
         comptime {
             if (refs.refKind(@TypeOf(file)) != .asset) @compileError("readAsync expects an AssetRef");
         }
-        if (assets.manifest.Packaged.of(file.path()) != .copy) return error.ConvertedResource;
-        return self.submit(gpa, .bytes, file.path());
+        try checkRawAsset(file.id());
+        return self.submit(gpa, .bytes, file.key());
     }
 
     /// Import/decode CPU model data on a native worker. GPU upload remains on the render thread.
     pub fn loadModelAsync(self: Resources, gpa: std.mem.Allocator, file: refs.AssetRef(.model)) !Request {
-        return self.submit(gpa, .model, file.path());
+        return self.submit(gpa, .model, file.key());
     }
 
     /// Decode CPU pixels on a native worker, without creating GPU resources.
     pub fn loadImageAsync(self: Resources, gpa: std.mem.Allocator, file: refs.AssetRef(.image)) !Request {
-        if (!assets.Kind.isTexture(file.path())) return error.UnsupportedImageFormat;
-        return self.submit(gpa, .image, file.path());
+        try checkImageAsset(file.id());
+        return self.submit(gpa, .image, file.key());
     }
 
     fn submit(self: Resources, gpa: std.mem.Allocator, kind: LoadKind, path: []const u8) !Request {
         if (path.len == 0) return error.UnsetAsset;
-        try refs.validatePath(path);
+        _ = try assets.id.parse(path);
         const provider = self.async_provider orelse return error.NoAsyncResourceProvider;
         var id: u64 = undefined;
         try check(provider.submit(provider.context, &gpa, kind, path.ptr, path.len, &id));
@@ -214,17 +214,38 @@ pub const Resources = struct {
     }
 };
 
+fn checkRawAsset(identity: u64) !void {
+    const root = @import("root");
+    if (comptime @hasDecl(root, "eggy_asset_ids")) {
+        if (root.eggy_asset_ids.findId(identity)) |entry| {
+            if (entry.converted) return error.ConvertedResource;
+        }
+    }
+}
+
+fn checkImageAsset(identity: u64) !void {
+    const root = @import("root");
+    if (comptime @hasDecl(root, "eggy_asset_ids")) {
+        if (root.eggy_asset_ids.findId(identity)) |entry| {
+            if (entry.kind != @intFromEnum(assets.Kind.image)) return error.WrongAssetKind;
+            if (!entry.converted) return error.UnsupportedImageFormat;
+        }
+    }
+}
+
 /// Host-only conversion of local errors to stable resource-bridge status codes.
 pub fn status(err: anyerror, path: []const u8) Status {
     return switch (err) {
         error.FileNotFound => .not_found,
         error.NotPackaged => .not_packaged,
         error.UnexpectedData, error.ParseZon, error.InvalidAssetData => .invalid_data,
-        error.InvalidPath, error.PathTooLong, error.WrongAssetKind => .invalid_path,
+        error.InvalidPath, error.PathTooLong, error.WrongAssetKind, error.InvalidAssetId, error.UnknownAsset => .invalid_path,
         error.OutOfMemory => .out_of_memory,
         error.ResourceCancelled => .cancelled,
         error.InvalidResourceRequest => .invalid_request,
         error.TooManyResourceRequests => .too_many_requests,
+        error.ConvertedResource => .converted_resource,
+        error.UnsupportedImageFormat => .unsupported_image_format,
         else => {
             std.log.err("resource {s} failed: {t}", .{ path, err });
             return .failed;
@@ -245,6 +266,8 @@ fn check(result: Status) !void {
         .cancelled => error.ResourceCancelled,
         .invalid_request => error.InvalidResourceRequest,
         .too_many_requests => error.TooManyResourceRequests,
+        .converted_resource => error.ConvertedResource,
+        .unsupported_image_format => error.UnsupportedImageFormat,
     };
 }
 
@@ -255,13 +278,15 @@ fn unavailable() error{ UnsupportedPlatform, NoResourceProvider } {
 test "C-safe resource reads preserve stable failures and caller ownership" {
     const Source = struct {
         fn read(_: *anyopaque, gpa: std.mem.Allocator, path: []const u8) ![:0]u8 {
-            if (!std.mem.eql(u8, path, "notes.txt")) return error.FileNotFound;
+            if (std.mem.eql(u8, path, refs.AssetRef(.image).init("ship.png").key())) return error.ConvertedResource;
+            if (!std.mem.eql(u8, path, refs.AssetRef(.text).init("notes.txt").key())) return error.FileNotFound;
             return gpa.dupeZ(u8, "hello");
         }
         fn model(_: *anyopaque, _: std.mem.Allocator, _: []const u8) !assets.Model {
             return error.NotPackaged;
         }
-        fn image(_: *anyopaque, _: std.mem.Allocator, _: []const u8) !assets.Texture {
+        fn image(_: *anyopaque, _: std.mem.Allocator, path: []const u8) !assets.Texture {
+            if (std.mem.eql(u8, path, refs.AssetRef(.image).init("ship.svg").key())) return error.UnsupportedImageFormat;
             return error.OutOfMemory;
         }
     };

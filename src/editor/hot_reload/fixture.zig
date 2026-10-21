@@ -135,7 +135,7 @@ pub const Game = struct {
             try player.setTrigger(.jump, .immediate);
         }
         if (command == 1) {
-            if (editor.app.resources().read(editor.app.world.allocator, eggy.AssetRef(.text).init("missing.txt"))) |bytes| {
+            if (editor.app.resources().read(editor.app.world.allocator, eggy.AssetRef(.text).fromId(42))) |bytes| {
                 editor.app.world.allocator.free(bytes);
                 return error.ExpectedMissingResource;
             } else |err| if (err != error.FileNotFound) return err;

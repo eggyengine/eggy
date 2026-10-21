@@ -290,10 +290,12 @@ pub const Model = struct {
         return true;
     }
 
-    fn clipIsWhole(self: Model, clip: Clip) bool {
+    /// Check channel indices and dimensions against this already validated model.
+    pub fn clipIsWhole(self: Model, clip: Clip) bool {
         if (clip.name.len == 0 or !std.math.isFinite(clip.duration_s) or clip.duration_s < 0) return false;
         for (clip.tracks) |track| {
-            if (track.times.len == 0 or track.values.len != track.times.len * track.stride) return false;
+            const value_count = std.math.mul(usize, track.times.len, track.stride) catch return false;
+            if (track.times.len == 0 or track.values.len != value_count) return false;
             if (!allFinite(track.times) or !allFinite(track.values)) return false;
             if (track.times[0] < 0 or track.times[track.times.len - 1] > clip.duration_s) return false;
             for (track.times[1..], track.times[0 .. track.times.len - 1]) |next, previous| if (next < previous) return false;

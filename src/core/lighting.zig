@@ -128,6 +128,21 @@ pub const Lighting = struct {
     }
 };
 
+/// The rotation `aimNewLight` gives a light: down at the ground, from over the left shoulder.
+pub const new_light_rotation_deg: [3]f32 = .{ -50, -30, 0 };
+
+/// Tilt a just-added directional or spot light down when `entity` faces the horizon (an
+/// unrotated transform), which would leave the ground unlit. Leaves point lights and turned
+/// entities alone. For the editor's Add Component, not for loading: scenes keep what they saved.
+pub fn aimNewLight(world: *ecs.World, entity: ecs.EntityId) void {
+    const light = world.get(entity, SceneLight) orelse return;
+    if (light.kind == .point) return;
+    const placed = world.get(entity, transform.Transform) orelse return;
+    if (!std.mem.eql(f32, &placed.rotation_deg, &.{ 0, 0, 0 })) return;
+    placed.rotation_deg = new_light_rotation_deg;
+    world.markChanged(entity, transform.Transform);
+}
+
 /// Gather up to sixteen validated lights; invalid values and overflow are explicit errors.
 pub fn gather(world: *ecs.World) !Frame {
     var result = Frame{};
@@ -185,6 +200,24 @@ test "scene lights follow world transforms and validate changes" {
     try std.testing.expectError(error.InvalidLight, lighting.setLight(entity, .{ .point = .{ .range_m = -1 } }));
     try lighting.removeLight(entity);
     try std.testing.expectEqual(@as(u32, 0), (try gather(&world)).count);
+}
+
+test "a new light facing the horizon is tilted down to light the ground" {
+    var world = ecs.World.init(std.testing.allocator);
+    defer world.deinit();
+    const sun = try world.spawn(.{ transform.Transform{}, SceneLight{} });
+    aimNewLight(&world, sun);
+    try std.testing.expectEqualSlices(f32, &new_light_rotation_deg, &world.get(sun, transform.Transform).?.rotation_deg);
+    // The ground (+y) now faces it.
+    const frame = try gather(&world);
+    try std.testing.expect(frame.lights[0].direction_range[1] < -0.5);
+
+    const turned = try world.spawn(.{ transform.Transform{ .rotation_deg = .{ -90, 0, 0 } }, SceneLight{} });
+    aimNewLight(&world, turned);
+    try std.testing.expectEqualSlices(f32, &.{ -90, 0, 0 }, &world.get(turned, transform.Transform).?.rotation_deg);
+    const bulb = try world.spawn(.{ transform.Transform{}, SceneLight{ .kind = .point } });
+    aimNewLight(&world, bulb);
+    try std.testing.expectEqualSlices(f32, &.{ 0, 0, 0 }, &world.get(bulb, transform.Transform).?.rotation_deg);
 }
 
 test "light overflow is reported rather than silently dropping lights" {

@@ -12,25 +12,24 @@ const scene_instance = @import("scene_instance.zig");
 const refs = @import("refs.zig");
 const log = std.log.scoped(.scene_instances);
 
-/// Where scene files come from, by their paths in the project: the project's folder in the
-/// editor (`FolderFiles`), what packaging made of them in the runtime.
+/// Scene source bytes addressed by canonical asset identity, independent of source paths.
 pub const Files = struct {
     context: *anyopaque,
-    /// The file at `path`, allocated with `gpa`.
+    /// The file identified by `path` (a canonical asset key), allocated with `gpa`.
     read: *const fn (context: *anyopaque, gpa: std.mem.Allocator, path: []const u8) anyerror![:0]u8,
 };
 
-/// `Files` from a folder: paths are relative to it.
+/// `Files` from a folder whose filenames are canonical asset identities.
 pub const FolderFiles = struct {
     io: std.Io,
     dir: std.Io.Dir,
 
     /// Borrow this folder as a scene-file provider; `self`, its directory and I/O must
     /// outlive uses of the result. Reads are caller-owned, sentinel-terminated, and
-    /// limited to 64 MiB; paths are relative to `dir`.
+    /// limited to 64 MiB; source project folders need the editor's catalog-backed provider.
     ///
     /// ```zig
-    /// var folder = FolderFiles{ .io = io, .dir = project_dir };
+    /// var folder = FolderFiles{ .io = io, .dir = packaged_dir };
     /// const provider = folder.files();
     /// ```
     pub fn files(self: *FolderFiles) Files {
@@ -39,6 +38,7 @@ pub const FolderFiles = struct {
 
     fn read(context: *anyopaque, gpa: std.mem.Allocator, path: []const u8) anyerror![:0]u8 {
         const self: *FolderFiles = @ptrCast(@alignCast(context));
+        _ = try @import("eggy_assets").id.parse(path);
         return self.dir.readFileAllocOptions(self.io, path, gpa, .limited(64 << 20), .of(u8), 0);
     }
 };
@@ -97,7 +97,7 @@ pub const SceneInstances = struct {
         const root = try world.spawn(.{ Transform{}, SceneInstance{ .scene = file } });
         errdefer world.despawnRecursive(root);
         if (parent) |up| try world.setParent(root, up);
-        const path = try self.gpa.dupe(u8, file.path());
+        const path = try self.gpa.dupe(u8, file.key());
         errdefer self.gpa.free(path);
         const roots = try self.instantiate(files, world, access, root, path);
         errdefer self.gpa.free(roots);
@@ -118,8 +118,8 @@ pub const SceneInstances = struct {
 
     /// Bring each instance in `world` up to date: make the entities of one whose file is new,
     /// changed or whose entities are gone, from the scene files in `files`, and take away
-    /// those of instances that are gone. `open_scene` (the scene being edited, relative to the
-    /// project) is never made inside itself.
+    /// those of instances that are gone. `open_scene` is the edited scene's identity key;
+    /// it is never instantiated inside itself.
     /// Host update: mutates/spawns/despawns ECS entities, invalidating borrowed component
     /// pointers. File failures are logged and remembered until another remake/change;
     /// nested instances newly created here are considered by a later call. Pass null
@@ -259,7 +259,8 @@ test "an instance gets its scene's entities, again when they go, and none inside
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
     // A rat with a hat on it.
-    try tmp.dir.writeFile(io, .{ .sub_path = "rat.scene.zon", .data =
+    const rat_scene = refs.AssetRef(.scene).init("rat.scene.zon");
+    try tmp.dir.writeFile(io, .{ .sub_path = rat_scene.key(), .data =
         \\.{ .entities = .{
         \\    .{ .name = "Rat", .parent = null, .components = .{ .{ .type = "Spin", .owner = "game", .fields = .{ .speed = 3 } } } },
         \\    .{ .name = "Hat", .parent = 0, .components = .{} },
@@ -294,7 +295,7 @@ test "an instance gets its scene's entities, again when they go, and none inside
     _ = try world.spawn(.{ Transform{}, SceneInstance{ .scene = .init("rat.scene.zon") } });
     std.testing.log_level = .err;
     defer std.testing.log_level = .warn;
-    instances.sync(files, &world, access, "rat.scene.zon");
+    instances.sync(files, &world, access, rat_scene.key());
     try std.testing.expectEqual(@as(usize, 2), aliveCount(&world));
 }
 
@@ -306,7 +307,8 @@ test "explicit instances synchronize without duplicate children and failed reads
     const Registry = components.Registry(&.{ Transform, SceneInstance }, &.{ "eggy", "eggy" });
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
-    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "one.scene.zon", .data = ".{ .entities = .{ .{ .name = \"One\", .components = .{} } } }" });
+    const one = refs.AssetRef(.scene).init("one.scene.zon");
+    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = one.key(), .data = ".{ .entities = .{ .{ .name = \"One\", .components = .{} } } }" });
     var folder = FolderFiles{ .io = std.testing.io, .dir = tmp.dir };
     const root = try made.create(folder.files(), &world, scene_zig.registryAccess(Registry), .init("one.scene.zon"), null);
     try std.testing.expect(firstChild(&world, root) != null);

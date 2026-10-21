@@ -1,11 +1,10 @@
 //! Package an Eggy runtime as an installable, test-signed Android APK.
 const std = @import("std");
 const resources = @import("resources.zig");
-const manifest = @import("../core/assets/manifest.zig");
 
 /// Build `libmain.so`, SDL's Android backend and Java activity, with packaged game assets.
 /// Requires the SDK environment prepared by sdk_setup; never builds the desktop editor.
-pub fn addApp(b: *std.Build, engine: *std.Build, comptime android: type, root: *std.Build.Module, name: []const u8, files: []const manifest.Entry) void {
+pub fn addApp(b: *std.Build, engine: *std.Build, comptime android: type, root: *std.Build.Module, name: []const u8, data: std.Build.LazyPath) void {
     const target = root.resolved_target.?;
     root.linkSystemLibrary("log", .{});
     const sdk = android.Sdk.create(b, .{});
@@ -33,7 +32,7 @@ pub fn addApp(b: *std.Build, engine: *std.Build, comptime android: type, root: *
         .x86_64 => .x86_64,
         else => @panic("Android APK exports support aarch64 and x86_64"),
     }, .{ .cwd_relative = b.getInstallPath(.{ .custom = "android" }, "libSDL3.so") });
-    apk.addAssetDirectory(resources.bundledDirectory(b, engine, root.optimize orelse .Debug, files));
+    apk.addAssetDirectory(resources.bundledDirectory(b, data));
     apk.addArtifact(app);
     const install = apk.addInstallApk();
     if (sdl.run) |run| run.addFileArg(app.libc_file.?);

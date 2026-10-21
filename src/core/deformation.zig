@@ -83,12 +83,17 @@ pub const Deformation = struct {
         }
     }
 
+    /// This frame's buffer index; the modulo is below `frames_in_flight`, so it fits `usize` on 32-bit targets.
+    fn bufferSlot(self: *const Deformation) usize {
+        return @intCast(self.prepared % frames_in_flight);
+    }
+
     /// The vertex buffer holding `drawable`'s posed corners for this frame; null when it is
     /// drawn at rest (`deformed` is 0, or posing it failed).
     pub fn vertices(self: *const Deformation, drawable: mesh.Drawable) ?vit.Buffer {
         if (drawable.deformed == 0) return null;
         const entry = self.entries.get(key(drawable)) orelse return null;
-        return entry.buffers[self.prepared % frames_in_flight];
+        return entry.buffers[self.bufferSlot()];
     }
 
     fn pose(self: *Deformation, drawable: *mesh.Drawable, model: *const assets.Model, path: []const u8, animator: Animator, clips: ?*ClipCache) !void {
@@ -100,9 +105,9 @@ pub const Deformation = struct {
         const fading = animator.isBlending();
         const weight = animator.blendWeight();
         if (fading) {
-            self.layer(&current, model, path, clips, animator.previous_model_clip.path(), animator.previous_clip.path(), animator.previous_time_s, animator.repeat, 1);
+            self.layer(&current, model, path, clips, animator.previous_model_clip.key(), animator.previous_clip.key(), animator.previous_time_s, animator.repeat, 1);
         }
-        self.layer(&current, model, path, clips, animator.model_clip.path(), animator.clip.path(), animator.time_s, animator.repeat, if (fading) weight else 1);
+        self.layer(&current, model, path, clips, animator.model_clip.key(), animator.clip.key(), animator.time_s, animator.repeat, if (fading) weight else 1);
 
         // Every part's corners as the pose places them, and the box round them.
         const corners = try arena.alloc(Vertex, model.vertices.len);
@@ -119,13 +124,17 @@ pub const Deformation = struct {
         drawable.bounds_max = box.max;
     }
 
-    /// Lay one model clip and one authored clip over `pose`, `weight` of the way.
-    fn layer(self: *Deformation, pose_: *assets.rig.Pose, model: *const assets.Model, path: []const u8, clips: ?*ClipCache, model_clip: []const u8, authored: []const u8, time_s: f32, repeat: animation.Repeat, weight: f32) void {
-        if (model_clip.len > 0) if (model.rig.clip(model_clip)) |found| {
-            pose_.apply(model.*, found.*, animation.clipTime(time_s, found.duration_s, repeat), weight);
-        } else self.reportOnce(model_clip, "{s} has no clip named {s}", .{ path, model_clip });
+    /// Lay one imported clip and one authored clip over `pose`, `weight` of the way. `path` is
+    /// the model's key, the hex of its id, which an imported clip must have been made for.
+    fn layer(self: *Deformation, pose_: *assets.rig.Pose, model: *const assets.Model, path: []const u8, clips: ?*ClipCache, imported: []const u8, authored: []const u8, time_s: f32, repeat: animation.Repeat, weight: f32) void {
+        if (imported.len > 0) if (clips) |cache| {
+            const model_id = assets.id.parse(path) catch 0;
+            if (cache.importedFor(imported, model_id, model.*)) |found| {
+                pose_.apply(model.*, found.*, animation.clipTime(time_s, found.duration_s, repeat), weight);
+            }
+        };
         if (authored.len == 0) return;
-        const clip = (clips orelse return).get(authored) orelse return;
+        const clip = (clips orelse return).authored(authored) orelse return;
         const at = animation.clipTime(time_s, clip.duration_s, repeat);
         for (clip.tracks) |track| {
             const target = switch (track.where()) {
@@ -173,7 +182,7 @@ pub const Deformation = struct {
             };
             entry.size = bytes.len;
         }
-        const slot = self.prepared % frames_in_flight;
+        const slot = self.bufferSlot();
         const buffer = entry.buffers[slot] orelse made: {
             const created = try vit.Buffer.init(self.device, .{ .label = "animated vertices", .size = bytes.len, .usage = .{ .vertex = true }, .memory = .upload });
             entry.buffers[slot] = created;

@@ -8,6 +8,10 @@
 //! editor's mutable copy. Every change builds a whole new snapshot, writes it to disk atomically
 //! and only then swaps it in, so a failed write leaves memory and disk as they were.
 //!
+//! The running editor and `zig build` both write the catalog, so every change holds an exclusive
+//! lock on `.eggy/assets.lock` and starts from the file as it is on disk, not from memory: one
+//! process's new ids are never overwritten by another's.
+//!
 //! The trash (`.eggy/trash/`) is catalogued too: deleting an asset is a move there, and undoing
 //! it a move back, so the id survives.
 //!
@@ -27,6 +31,8 @@ pub const ModelImport = descriptor.ModelImport;
 
 /// Where the catalog lives, relative to the project.
 pub const file_path = ".eggy/assets.zon";
+/// Locked while a process changes the catalog. Separate from it, as writes replace the catalog file.
+pub const lock_path = ".eggy/assets.lock";
 /// The layout this build reads and writes; a file of another version is refused.
 pub const format_version: u32 = 1;
 pub const resources_prefix = "resources/";
@@ -212,6 +218,11 @@ pub const Catalog = struct {
     /// const changes = try catalog.sync(io, project);
     /// ```
     pub fn sync(self: *Catalog, io: std.Io, project: std.Io.Dir) !Changes {
+        const lock = try lockCatalog(io, project);
+        defer unlockCatalog(io, lock);
+        var before = try self.rebase(io, project);
+        defer if (before) |*old| old.deinit();
+
         var scratch = std.heap.ArenaAllocator.init(self.gpa);
         defer scratch.deinit();
         const a = scratch.allocator();
@@ -220,12 +231,14 @@ pub const Catalog = struct {
         var found: std.StringArrayHashMapUnmanaged(bool) = .empty;
         var sidecars: std.ArrayList([]const u8) = .empty;
         try listResources(a, io, project, &found, &sidecars);
-        std.mem.sort([]const u8, found.keys(), {}, struct {
-            fn less(_: void, x: []const u8, y: []const u8) bool {
-                return std.mem.lessThan(u8, x, y);
+        // Sorted with its values (whether each is a folder), which sorting the keys alone would shuffle.
+        const Order = struct {
+            keys: []const []const u8,
+            pub fn lessThan(order: @This(), x: usize, y: usize) bool {
+                return std.mem.lessThan(u8, order.keys[x], order.keys[y]);
             }
-        }.less);
-        found.reIndex(a) catch return error.OutOfMemory;
+        };
+        found.sort(Order{ .keys = found.keys() });
 
         var changes: Changes = .{};
         var next: std.ArrayList(Entry) = .empty;
@@ -291,9 +304,22 @@ pub const Catalog = struct {
     /// Record that `from` (a file or a folder with everything in it) now lives at `to`: the ids
     /// stay. Call it after the files moved. `error.NotCatalogued` without `from`,
     /// `error.PathAlreadyExists` if `to` is taken, `error.InvalidPath` for a `to` inside `from`.
+    /// If another process synced between the files moving and this call (dropping `from`, giving
+    /// `to` fresh ids), the ids this catalog knew under `from` are put back under `to`.
     pub fn move(self: *Catalog, io: std.Io, project: std.Io.Dir, from: []const u8, to: []const u8) !void {
+        const lock = try lockCatalog(io, project);
+        defer unlockCatalog(io, lock);
+        var before = try self.rebase(io, project);
+        defer if (before) |*old| old.deinit();
+
         var scratch = std.heap.ArenaAllocator.init(self.gpa);
         defer scratch.deinit();
+        if (self.current.findPath(from) == null) if (before) |*old| if (old.findPath(from) != null) {
+            const next = try reclaimed(scratch.allocator(), old, &self.current, from, to);
+            var built = try Snapshot.build(self.gpa, next);
+            errdefer built.deinit();
+            return self.commit(io, project, &built);
+        };
         const next = try self.rewritten(scratch.allocator(), from, to, .keep);
         var built = try Snapshot.build(self.gpa, next);
         errdefer built.deinit();
@@ -303,6 +329,11 @@ pub const Catalog = struct {
     /// Record that `from` was copied to `to`: every copy gets a new id (a copy is a different
     /// asset). Same errors as `move`.
     pub fn copy(self: *Catalog, io: std.Io, project: std.Io.Dir, from: []const u8, to: []const u8) !void {
+        const lock = try lockCatalog(io, project);
+        defer unlockCatalog(io, lock);
+        var before = try self.rebase(io, project);
+        defer if (before) |*old| old.deinit();
+
         var scratch = std.heap.ArenaAllocator.init(self.gpa);
         defer scratch.deinit();
         const a = scratch.allocator();
@@ -317,6 +348,11 @@ pub const Catalog = struct {
     /// Forget `path` and everything inside it, after its files were erased (a deletion the
     /// editor can undo is a `move` into the trash instead). `error.NotCatalogued` without it.
     pub fn remove(self: *Catalog, io: std.Io, project: std.Io.Dir, path: []const u8) !void {
+        const lock = try lockCatalog(io, project);
+        defer unlockCatalog(io, lock);
+        var before = try self.rebase(io, project);
+        defer if (before) |*old| old.deinit();
+
         if (self.current.findPath(path) == null) return error.NotCatalogued;
         var scratch = std.heap.ArenaAllocator.init(self.gpa);
         defer scratch.deinit();
@@ -329,6 +365,11 @@ pub const Catalog = struct {
 
     /// Change how the model at `path` is imported. `error.NotCatalogued` if it isn't a model.
     pub fn setModelImport(self: *Catalog, io: std.Io, project: std.Io.Dir, path: []const u8, settings: ModelImport) !void {
+        const lock = try lockCatalog(io, project);
+        defer unlockCatalog(io, lock);
+        var before = try self.rebase(io, project);
+        defer if (before) |*old| old.deinit();
+
         const at = self.current.findPath(path) orelse return error.NotCatalogued;
         if (at.kind != .model) return error.NotCatalogued;
         var scratch = std.heap.ArenaAllocator.init(self.gpa);
@@ -376,6 +417,19 @@ pub const Catalog = struct {
         return next.items;
     }
 
+    /// Catch up with the catalog on disk, which another process may have changed since this one
+    /// last read or wrote it. Returns the replaced snapshot (the caller frees it), or null when
+    /// the disk has none yet and memory stays. Call with the catalog locked.
+    fn rebase(self: *Catalog, io: std.Io, project: std.Io.Dir) !?Snapshot {
+        const fresh = Snapshot.read(self.gpa, io, project) catch |err| switch (err) {
+            error.FileNotFound => return null,
+            else => return err,
+        };
+        const before = self.current;
+        self.current = fresh;
+        return before;
+    }
+
     /// Write `built` to disk, then make it the catalog (it is taken over; the old one freed).
     fn commit(self: *Catalog, io: std.Io, project: std.Io.Dir, built: *Snapshot) !void {
         try write(self.gpa, io, project, built.entries);
@@ -393,6 +447,43 @@ fn freshId(io: std.Io, used: *const std.AutoHashMapUnmanaged(Id, void)) !Id {
         return id;
     }
     return error.AssetIdsExhausted;
+}
+
+/// `fresh` with the entries under `to` given the ids `old` had for them under `from`: a move whose
+/// files another process catalogued afresh before this one recorded it. Entries `old` had no id
+/// for keep theirs; the ids reclaimed are dropped from wherever `fresh` had moved them.
+fn reclaimed(a: std.mem.Allocator, old: *const Snapshot, fresh: *const Snapshot, from: []const u8, to: []const u8) ![]const Entry {
+    var reclaimed_ids: std.AutoHashMapUnmanaged(Id, void) = .empty;
+    var next: std.ArrayList(Entry) = .empty;
+    for (fresh.entries) |entry| {
+        var kept = entry;
+        if (isUnder(entry.path, to)) {
+            const was = try std.mem.concat(a, u8, &.{ from, entry.path[to.len..] });
+            if (old.findPath(was)) |known| {
+                kept.id = known.id;
+                kept.model_import = known.model_import;
+                try reclaimed_ids.put(a, known.id, {});
+            }
+        }
+        try next.append(a, kept);
+    }
+    // An id now under `to` can't stay elsewhere too.
+    var unique: std.ArrayList(Entry) = .empty;
+    for (next.items) |entry| {
+        if (!isUnder(entry.path, to) and reclaimed_ids.contains(entry.id)) continue;
+        try unique.append(a, entry);
+    }
+    return unique.items;
+}
+
+/// Wait for, then hold, the lock every process takes to change `project`'s catalog.
+fn lockCatalog(io: std.Io, project: std.Io.Dir) !std.Io.File {
+    try project.createDirPath(io, ".eggy");
+    return project.createFile(io, lock_path, .{ .truncate = false, .lock = .exclusive });
+}
+
+fn unlockCatalog(io: std.Io, lock: std.Io.File) void {
+    lock.close(io);
 }
 
 fn readLegacy(a: std.mem.Allocator, io: std.Io, project: std.Io.Dir, path: []const u8) ?descriptor.Descriptor {
@@ -448,6 +539,43 @@ fn write(gpa: std.mem.Allocator, io: std.Io, project: std.Io.Dir, entries: []con
 fn expectFile(project: std.Io.Dir, io: std.Io, path: []const u8, exists: bool) !void {
     project.access(io, path, .{}) catch return try std.testing.expect(!exists);
     try std.testing.expect(exists);
+}
+
+test "sync corrects a folder a legacy catalog called any, keeping its id" {
+    const gpa = std.testing.allocator;
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const project = tmp.dir;
+    try project.createDirPath(io, "resources/scene");
+    try project.createDirPath(io, "resources/models");
+    try project.writeFile(io, .{ .sub_path = "resources/scene/a.scene.zon", .data = "x" });
+    try project.writeFile(io, .{ .sub_path = "resources/models/ship.glb", .data = "x" });
+    try project.writeFile(io, .{ .sub_path = "resources/b.png", .data = "x" });
+    try project.createDirPath(io, ".eggy");
+    try project.writeFile(io, .{ .sub_path = file_path, .data =
+        \\.{ .version = 1, .assets = .{
+        \\    .{ .id = 11, .path = "resources/scene", .kind = .any },
+        \\    .{ .id = 12, .path = "resources/models", .kind = .any },
+        \\    .{ .id = 13, .path = "resources/models/ship.glb", .kind = .any, .model_import = .{ .scale = 0.5 } },
+        \\} }
+    });
+    var catalog = try Catalog.open(gpa, io, project);
+    defer catalog.deinit();
+    _ = try catalog.sync(io, project);
+    const view = catalog.view();
+    try std.testing.expectEqual(Kind.folder, view.findPath("resources/scene").?.kind);
+    try std.testing.expectEqual(@as(Id, 11), view.findPath("resources/scene").?.id);
+    try std.testing.expectEqual(Kind.folder, view.findPath("resources/models").?.kind);
+    try std.testing.expectEqual(Kind.model, view.findPath("resources/models/ship.glb").?.kind);
+    try std.testing.expectEqual(@as(f32, 0.5), view.findPath("resources/models/ship.glb").?.model_import.scale);
+    try std.testing.expectEqual(Kind.scene, view.findPath("resources/scene/a.scene.zon").?.kind);
+    try std.testing.expectEqual(Kind.image, view.findPath("resources/b.png").?.kind);
+
+    // The correction is on disk.
+    var reread = try Snapshot.read(gpa, io, project);
+    defer reread.deinit();
+    try std.testing.expectEqual(Kind.folder, reread.findPath("resources/scene").?.kind);
 }
 
 test "sync catalogues files and folders once, with stable ids, and drops what is gone" {
@@ -550,6 +678,67 @@ test "moves keep ids, copies get new ones, and the trash round trip returns the 
     try catalog.remove(io, project, "resources/more");
     try std.testing.expect(catalog.view().findPath("resources/more/a.png") == null);
     try std.testing.expectError(error.NotCatalogued, catalog.setModelImport(io, project, "resources/pictures/a.png", .{ .scale = 2 }));
+}
+
+test "two processes' catalogs agree on new ids instead of the last writer winning" {
+    const gpa = std.testing.allocator;
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const project = tmp.dir;
+    try project.createDirPath(io, "resources");
+
+    // The editor and a build each open the catalog before either has seen the new files.
+    var editor = try Catalog.open(gpa, io, project);
+    defer editor.deinit();
+    var build = try Catalog.open(gpa, io, project);
+    defer build.deinit();
+    try project.writeFile(io, .{ .sub_path = "resources/ship.glb", .data = "x" });
+    try project.writeFile(io, .{ .sub_path = "resources/rock.png", .data = "x" });
+
+    _ = try build.sync(io, project);
+    const ship = build.view().findPath("resources/ship.glb").?.id;
+    // The editor's stale copy takes the build's ids rather than inventing its own.
+    try std.testing.expectEqual(@as(usize, 0), (try editor.sync(io, project)).made);
+    try std.testing.expectEqual(ship, editor.view().findPath("resources/ship.glb").?.id);
+
+    // A change in one is kept by the other's next change.
+    try editor.setModelImport(io, project, "resources/ship.glb", .{ .scale = 0.25 });
+    try project.rename("resources/rock.png", project, "resources/stone.png", io);
+    try build.move(io, project, "resources/rock.png", "resources/stone.png");
+    var disk = try Snapshot.read(gpa, io, project);
+    defer disk.deinit();
+    try std.testing.expectEqual(@as(f32, 0.25), disk.findPath("resources/ship.glb").?.model_import.scale);
+    try std.testing.expect(disk.findPath("resources/stone.png") != null);
+}
+
+test "a move another process synced first gets its old ids back" {
+    const gpa = std.testing.allocator;
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const project = tmp.dir;
+    try project.createDirPath(io, "resources/models");
+    try project.writeFile(io, .{ .sub_path = "resources/models/ship.glb", .data = "x" });
+    var editor = try Catalog.open(gpa, io, project);
+    defer editor.deinit();
+    _ = try editor.sync(io, project);
+    const folder = editor.view().findPath("resources/models").?.id;
+    const ship = editor.view().findPath("resources/models/ship.glb").?.id;
+
+    // The editor renames the folder; a build syncs before the editor records the move.
+    try project.rename("resources/models", project, "resources/meshes", io);
+    var build = try Catalog.open(gpa, io, project);
+    defer build.deinit();
+    _ = try build.sync(io, project);
+    try std.testing.expect(build.view().findId(ship) == null);
+    try editor.move(io, project, "resources/models", "resources/meshes");
+
+    try std.testing.expectEqual(folder, editor.view().findPath("resources/meshes").?.id);
+    try std.testing.expectEqual(ship, editor.view().findPath("resources/meshes/ship.glb").?.id);
+    var disk = try Snapshot.read(gpa, io, project);
+    defer disk.deinit();
+    try std.testing.expectEqual(ship, disk.findPath("resources/meshes/ship.glb").?.id);
 }
 
 test "an untrustworthy catalog file is refused, not replaced" {

@@ -7,7 +7,7 @@ const std = @import("std");
 const eggy = @import("eggy");
 
 /// Bumped whenever these types change, so an editor refuses a library built for another.
-pub const version: u32 = 32;
+pub const version: u32 = 34;
 
 /// The library's one exported function: `fn () callconv(.c) *const Game`.
 pub const entry_symbol = "eggy_game";
@@ -224,8 +224,8 @@ pub const Game = extern struct {
     /// and its descendants, so `animation_preview_end` can put them back. Ends a preview already
     /// under way; false (logged) if the entity isn't alive or memory ran out.
     animation_preview_begin: *const fn (state: *anyopaque, world: *anyopaque, entity: Entity) callconv(.c) bool,
-    /// Pose the previewed entity: its authored clip (`clip`, a project path, may be empty) and
-    /// model clip (`model_clip`, a name, may be empty) at `time_s`. `clips` is the host's
+    /// Pose the previewed entity: an authored clip (`clip`) and/or an imported one
+    /// (`model_clip`), each an animation asset key (`AssetRef.key()`, may be empty), at `time_s`. `clips` is the host's
     /// `*eggy.ClipCache`. False without a preview or for a clip the entity can't hold.
     animation_preview_show: *const fn (state: *anyopaque, world: *anyopaque, clips: *anyopaque, clip: [*:0]const u8, model_clip: [*:0]const u8, time_s: f32) callconv(.c) bool,
     /// Put the previewed entity back as it was. Does nothing without a preview.
@@ -236,10 +236,11 @@ pub const Game = extern struct {
     /// The position, rotation (degrees) and scale of the child of `entity` at `path` (empty: the
     /// entity itself) into `out`; false when there is none.
     animation_transform: *const fn (world: *anyopaque, entity: Entity, path: [*]const u8, path_len: usize, out: *[9]f32) callconv(.c) bool,
-    /// The model `entity` draws (its `Mesh`) into `buffer`, returning its length; -1 if it
+    /// The key of the model `entity` draws (its `Mesh`) into `buffer`, returning its length; -1 if it
     /// doesn't draw one, or more than `capacity` when cut off.
     animation_model: *const fn (world: *anyopaque, entity: Entity, buffer: [*]u8, capacity: usize) callconv(.c) isize,
-    /// Give `entity` an `Animator` playing the authored clip at `clip` (adding the component if
-    /// needed); false if the entity isn't alive or the path isn't an animation's.
-    animation_assign: *const fn (world: *anyopaque, entity: Entity, clip: [*:0]const u8) callconv(.c) bool,
+    /// Give `entity` an `Animator` playing the animation asset with key `clip` (adding the
+    /// component if needed), as its imported clip when `imported` and as its authored one
+    /// otherwise; false if the entity isn't alive or the key isn't an animation's.
+    animation_assign: *const fn (world: *anyopaque, entity: Entity, clip: [*:0]const u8, imported: bool) callconv(.c) bool,
 };

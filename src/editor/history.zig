@@ -52,6 +52,8 @@ pub const Step = union(enum) {
     input_bindings: Texts,
     /// The complete defaults in one `.inmap.zon` asset.
     input_map: struct { path: []u8, text: Texts },
+    /// An authored animation clip file went from `text.before` to `text.after`.
+    animation_clip: struct { path: []u8, text: Texts },
     /// The dock's panels were rearranged from `before` to `after` (layout snapshots).
     layout: Texts,
     /// Another scene was opened, or a new one made (`created`; undone, its file waits in
@@ -105,6 +107,11 @@ pub const Step = union(enum) {
                 gpa.free(step.text.before);
                 gpa.free(step.text.after);
             },
+            .animation_clip => |step| {
+                gpa.free(step.path);
+                gpa.free(step.text.before);
+                gpa.free(step.text.after);
+            },
             .layout, .project_settings, .input_bindings => |step| {
                 gpa.free(step.before);
                 gpa.free(step.after);
@@ -144,6 +151,7 @@ pub const Step = union(enum) {
             .project_settings => "a project setting",
             .input_bindings => "input mappings",
             .input_map => "an input map",
+            .animation_clip => "an animation edit",
             .open_scene => |step| if (step.created) "a new scene" else "opening a scene",
             .plugin => |step| if (step.on) "turning a plugin on" else "turning a plugin off",
         };

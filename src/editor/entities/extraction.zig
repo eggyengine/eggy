@@ -3,23 +3,28 @@ const std = @import("std");
 const eggy = @import("eggy");
 const ecs = eggy.ecs;
 const file_ops = @import("../assets/file_ops.zig");
-const descriptor = eggy.assets.descriptor;
+const ProjectAssets = @import("../assets/project_assets.zig").ProjectAssets;
 
 /// A saved scene and prepared instance; the original remains alive until the host commits.
 pub const Prepared = struct {
     path: []u8,
     instance: ecs.EntityId,
+    assets: *ProjectAssets,
 
     /// Roll back an uncommitted extraction, retaining the original entity tree.
     pub fn rollback(self: Prepared, io: std.Io, project: std.Io.Dir, world: *ecs.World) void {
         world.despawnRecursive(self.instance);
-        removeFiles(io, project, self.path);
+        project.deleteFile(io, self.path) catch |err| if (err != error.FileNotFound) {
+            std.log.err("cannot remove extracted scene {s}: {t}", .{ self.path, err });
+        };
+        _ = self.assets.sync() catch |err| std.log.err("cannot forget the extracted scene's id: {t}", .{err});
     }
 };
 
-/// Save to the Assets panel's unique-name convention, with a descriptor and no overwrites.
+/// Save to the Assets panel's unique-name convention, catalogued and with no overwrites; the
+/// instance refers to the file by its asset id.
 /// On failure, remove the staged instance and files; never destroy the source tree.
-pub fn prepare(gpa: std.mem.Allocator, io: std.Io, project: std.Io.Dir, world: *ecs.World, access: eggy.scene.Access, source: ecs.EntityId, folder: []const u8) !Prepared {
+pub fn prepare(gpa: std.mem.Allocator, io: std.Io, project: std.Io.Dir, world: *ecs.World, access: eggy.scene.Access, source: ecs.EntityId, folder: []const u8, assets: *ProjectAssets) !Prepared {
     if (!world.isAlive(source)) return error.DeadEntity;
     var scene = try @import("snapshot.zig").capture(gpa, world, access, &.{source});
     defer scene.deinit();
@@ -44,19 +49,18 @@ pub fn prepare(gpa: std.mem.Allocator, io: std.Io, project: std.Io.Dir, world: *
     });
     errdefer gpa.free(path);
     errdefer project.deleteFile(io, path) catch |err| std.log.err("cannot remove extracted scene {s}: {t}", .{ path, err });
-    var descriptor_buffer: [eggy.refs.max_path_len + descriptor.extension.len]u8 = undefined;
-    const sidecar = try std.fmt.bufPrint(&descriptor_buffer, "{s}{s}", .{ path, descriptor.extension });
-    var reserved = try project.createFile(io, sidecar, .{ .exclusive = true });
-    reserved.close(io);
-    errdefer project.deleteFile(io, sidecar) catch |err| std.log.err("cannot remove extraction descriptor {s}: {t}", .{ sidecar, err });
-    try descriptor.write(io, project, path, descriptor.new(io, path));
+    // The new file is given its id before the instance can name it.
+    _ = try assets.sync();
+    errdefer _ = assets.sync() catch |err| std.log.err("cannot forget the extracted scene's id: {t}", .{err});
+    var key_buffer: [eggy.assets.id.key_len]u8 = undefined;
+    const key = assets.keyOf(&key_buffer, path) orelse return error.NotCatalogued;
     const field = for (access.types()[scene_type].fields, 0..) |info, index| {
         if (std.mem.eql(u8, info.name, "scene")) break index;
     } else return error.NoSceneField;
-    const value = try std.fmt.allocPrintSentinel(gpa, "\"{f}\"", .{std.zig.fmtString(path)}, 0);
+    const value = try std.fmt.allocPrintSentinel(gpa, "\"{s}\"", .{key}, 0);
     defer gpa.free(value);
     if (!access.writeField(world, instance, scene_type, field, value)) return error.CannotSetScene;
-    return .{ .path = path, .instance = instance };
+    return .{ .path = path, .instance = instance, .assets = assets };
 }
 
 /// Move the saved root's local transform onto the wrapper, leaving an identity scene root.
@@ -103,17 +107,6 @@ fn validateReferences(gpa: std.mem.Allocator, world: *ecs.World, access: eggy.sc
 fn contains(tree: []const ecs.EntityId, entity: ecs.EntityId) bool {
     for (tree) |member| if (member.eql(entity)) return true;
     return false;
-}
-
-fn removeFiles(io: std.Io, project: std.Io.Dir, path: []const u8) void {
-    var buffer: [eggy.refs.max_path_len + descriptor.extension.len]u8 = undefined;
-    const sidecar = std.fmt.bufPrint(&buffer, "{s}{s}", .{ path, descriptor.extension }) catch unreachable;
-    project.deleteFile(io, sidecar) catch |err| if (err != error.FileNotFound) {
-        std.log.err("cannot remove extraction descriptor {s}: {t}", .{ sidecar, err });
-    };
-    project.deleteFile(io, path) catch |err| if (err != error.FileNotFound) {
-        std.log.err("cannot remove extracted scene {s}: {t}", .{ path, err });
-    };
 }
 
 test "extraction moves local placement to the instance without applying it twice" {
@@ -167,7 +160,7 @@ test "extraction rejects incoming nested entity references outside the extracted
     try std.testing.expectEqual(root, world.get(outside, Nested).?.value.target.entity.?);
 }
 
-test "extraction saves a unique scene and descriptor before replacing anything" {
+test "extraction saves a unique, catalogued scene before replacing anything" {
     const gpa = std.testing.allocator;
     const io = std.testing.io;
     var fixture_buffer: [96]u8 = undefined;
@@ -184,10 +177,12 @@ test "extraction saves a unique scene and descriptor before replacing anything" 
     defer world.deinit();
     const root = try world.spawn(.{eggy.Transform{ .position = .{ 7, 8, 9 } }});
     access.setName(&world, root, "Ship");
-    const first = try prepare(gpa, io, project, &world, access, root, "resources/scene");
+    var assets = try ProjectAssets.init(gpa, io, fixture_path);
+    defer assets.deinit();
+    const first = try prepare(gpa, io, project, &world, access, root, "resources/scene", &assets);
     defer gpa.free(first.path);
     defer first.rollback(io, project, &world);
-    const second = try prepare(gpa, io, project, &world, access, root, "resources/scene");
+    const second = try prepare(gpa, io, project, &world, access, root, "resources/scene", &assets);
     defer gpa.free(second.path);
     second.rollback(io, project, &world);
     try std.testing.expectEqualStrings("resources/scene/Ship.scene.zon", first.path);
@@ -195,21 +190,15 @@ test "extraction saves a unique scene and descriptor before replacing anything" 
     try std.testing.expect(world.isAlive(root));
     var arena = std.heap.ArenaAllocator.init(gpa);
     defer arena.deinit();
-    const sidecar = (try descriptor.read(arena.allocator(), io, project, first.path)).?;
-    try std.testing.expectEqual(eggy.assets.Kind.scene, sidecar.kind);
+    const entry = assets.catalog.view().findPath(first.path).?;
+    try std.testing.expectEqual(eggy.assets.Kind.scene, entry.kind);
+    var key_buffer: [eggy.assets.id.key_len]u8 = undefined;
+    const value = try access.readFieldAlloc(arena.allocator(), &world, first.instance, eggy.scene_instance.typeIndex(access.types()).?, 0);
+    try std.testing.expectEqualStrings(try std.fmt.allocPrint(arena.allocator(), "\"{s}\"", .{eggy.assets.id.key(&key_buffer, entry.id)}), value);
+    try std.testing.expect(assets.catalog.view().findPath(second.path) == null);
     const text = try project.readFileAllocOptions(io, first.path, gpa, .limited(1024 * 1024), .of(u8), 0);
     defer gpa.free(text);
     var saved = try eggy.scene.Scene.parse(gpa, text);
     defer saved.deinit();
     try std.testing.expectEqualStrings("Ship", saved.entities[0].name);
-
-    // An orphan descriptor belongs to the user, not the failed extraction's cleanup.
-    try project.writeFile(io, .{ .sub_path = "resources/scene/Ship 2.scene.zon.eggy", .data = "keep this" });
-    try std.testing.expectError(error.PathAlreadyExists, prepare(gpa, io, project, &world, access, root, "resources/scene"));
-    try std.testing.expect(world.isAlive(root));
-    try std.testing.expectEqual(@as(usize, 2), world.entityCount());
-    const orphan = try project.readFileAlloc(io, "resources/scene/Ship 2.scene.zon.eggy", gpa, .limited(128));
-    defer gpa.free(orphan);
-    try std.testing.expectEqualStrings("keep this", orphan);
-    try std.testing.expectError(error.FileNotFound, project.openFile(io, "resources/scene/Ship 2.scene.zon", .{}));
 }

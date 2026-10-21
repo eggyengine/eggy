@@ -57,7 +57,7 @@ test "material files validate parameters and own texture references" {
         \\ .roughness = 0.3, .texture = "resources/metal.png" }
     );
     try std.testing.expectEqual(@as(f32, 0.7), material.metallic);
-    try std.testing.expectEqualStrings("resources/metal.png", material.texture.path());
+    try std.testing.expectEqual(refs.AssetRef(.image).init("resources/metal.png").id(), material.texture.id());
     try std.testing.expectError(error.InvalidMaterial, parse(std.testing.allocator, ".{ .roughness = -1 }"));
     try std.testing.expectError(error.InvalidPath, parse(std.testing.allocator, ".{ .texture = \"../outside.png\" }"));
 }
@@ -97,6 +97,6 @@ test "authored materials and lights survive scene serialization" {
     const made = try parsed.instantiate(std.testing.allocator, &other, scene.registryAccess(Registry), null);
     defer std.testing.allocator.free(made.entities);
     try std.testing.expectEqual(@as(usize, 0), made.skipped);
-    try std.testing.expectEqualStrings("resources/gold.material.zon", other.get(made.entities[0], Material).?.file.path());
+    try std.testing.expectEqual(refs.AssetRef(.material).init("resources/gold.material.zon").id(), other.get(made.entities[0], Material).?.file.id());
     try std.testing.expectEqual(@as(f32, 4), other.get(made.entities[0], lighting.SceneLight).?.range_m);
 }

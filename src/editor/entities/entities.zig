@@ -15,6 +15,9 @@ const RootOrder = @import("root_order.zig").RootOrder;
 const Clipboard = @import("clipboard.zig").Clipboard;
 const ViewState = @import("view_state.zig").ViewState;
 const Dragged = @import("../dragged.zig").Dragged;
+const project_assets = @import("../assets/project_assets.zig");
+const ProjectAssets = project_assets.ProjectAssets;
+const Reference = project_assets.Reference;
 pub const SceneInstances = eggy.SceneInstances;
 const log = std.log.scoped(.entities);
 
@@ -32,6 +35,8 @@ pub const EntityEditor = struct {
     pending_extract: ?ecs.EntityId = null,
     pending_visibility: ?ecs.EntityId = null,
     view_state: ViewState,
+    /// Names the assets fields hold (their ids are not paths); the host sets it when a project opens.
+    assets: ?*ProjectAssets = null,
 
     /// Create editor-only hierarchy, inspector and root-order state using `gpa`.
     /// Does not create a world; pair with `deinit`.
@@ -157,8 +162,9 @@ pub const EntityEditor = struct {
             context.muted("The game's library didn't load, so this entity's components can't be shown.");
             return true;
         };
-        var details = collectDetails(arena, app, loaded, entity, off) catch return true;
+        var details = collectDetails(arena, app, loaded, entity, off, self.assets) catch return true;
         details.dragging = dragging;
+        details.assets = self.assets;
         if (self.inspector.build(context, details)) |action| switch (action) {
             .rename => |name| loaded.writeName(app, entity, name),
             .set_field => |change| {
@@ -355,13 +361,12 @@ pub const EntityEditor = struct {
     /// and a late failure can leave a partially configured entity.
     ///
     /// ```zig
-    /// // Given entities and App/optional HotGame pointers:
-    /// const made = entities.spawnFrom(app, game, "resources/ship.glb", .{ 0, 0, 0 }, null);
+    /// // Given entities, App/optional HotGame pointers and a model's reference:
+    /// const made = entities.spawnFrom(app, game, Reference.of(id, .model, "ship.glb"), .{ 0, 0, 0 }, null);
     /// ```
-    pub fn spawnFrom(self: *EntityEditor, app: *eggy.App, game: ?*const HotGame, path: []const u8, position: [3]f32, parent: ?ecs.EntityId) bool {
+    pub fn spawnFrom(self: *EntityEditor, app: *eggy.App, game: ?*const HotGame, asset: Reference, position: [3]f32, parent: ?ecs.EntityId) bool {
         const loaded = game orelse return false;
-        const kind = eggy.assets.Kind.of(path);
-        const component = loaded.builtinComponent(switch (kind) {
+        const component = loaded.builtinComponent(switch (asset.kind) {
             .model => "Mesh",
             .scene => "SceneInstance",
             else => return false,
@@ -369,22 +374,21 @@ pub const EntityEditor = struct {
         const transform = loaded.builtinComponent("Transform") orelse return false;
 
         const entity = app.world.spawn(.{}) catch |err| {
-            log.err("cannot add an entity for {s}: {t}", .{ path, err });
+            log.err("cannot add an entity for {s}: {t}", .{ asset.name, err });
             return false;
         };
         if (parent) |under| if (app.world.isAlive(under)) app.world.setParent(entity, under) catch {};
-        const base = std.fs.path.basename(path);
-        const suffix = if (kind == .scene) ".scene.zon" else std.fs.path.extension(base);
-        loaded.writeName(app, entity, base[0 .. base.len - suffix.len]);
+        const suffix = if (asset.kind == .scene) ".scene.zon" else std.fs.path.extension(asset.name);
+        loaded.writeName(app, entity, asset.name[0 .. asset.name.len - suffix.len]);
 
-        // Its file (a model as the Mesh's shape), then where it goes; adding it adds Transform.
-        var buffer: [eggy.refs.max_path_len + 32]u8 = undefined;
-        const field_text = if (kind == .model)
-            std.fmt.bufPrintZ(&buffer, ".{{ .model = \"{f}\" }}", .{std.zig.fmtString(path)})
+        // Its identity (a model as the Mesh's shape), then where it goes; adding it adds Transform.
+        var buffer: [eggy.assets.id.key_len + 32]u8 = undefined;
+        const field_text = if (asset.kind == .model)
+            std.fmt.bufPrintZ(&buffer, ".{{ .model = \"{s}\" }}", .{asset.key()})
         else
-            std.fmt.bufPrintZ(&buffer, "\"{f}\"", .{std.zig.fmtString(path)});
+            std.fmt.bufPrintZ(&buffer, "\"{s}\"", .{asset.key()});
         const field = for (loaded.component_types[component].fields, 0..) |info, i| {
-            if (std.mem.eql(u8, info.name, if (kind == .model) "shape" else "scene")) break i;
+            if (std.mem.eql(u8, info.name, if (asset.kind == .model) "shape" else "scene")) break i;
         } else 0;
         _ = loaded.addComponent(app, entity, component);
         _ = loaded.writeField(app, entity, component, field, field_text catch return false);
@@ -394,24 +398,24 @@ pub const EntityEditor = struct {
         return true;
     }
 
-    /// Paint `entity`'s `Mesh` with the image at `path` (relative to the project), and select
-    /// it. Returns false, changing nothing, when it has no `Mesh` or there's no game library.
-    /// Editor-only: writes the texture reference through the game's field ABI; an oversized
-    /// path or rejected write also returns false. Selection changes only after success.
+    /// Paint `entity`'s `Mesh` with the image `asset`, and select it. Returns false, changing
+    /// nothing, when it has no `Mesh` or there's no game library.
+    /// Editor-only: writes the texture reference through the game's field ABI; a rejected write
+    /// also returns false. Selection changes only after success.
     ///
     /// ```zig
     /// // Given entities, App/game pointers and a live entity with Mesh:
-    /// const painted = entities.paint(app, game, entity, "resources/ship.png");
+    /// const painted = entities.paint(app, game, entity, Reference.of(id, .image, "ship.png"));
     /// ```
-    pub fn paint(self: *EntityEditor, app: *eggy.App, game: ?*const HotGame, entity: ecs.EntityId, path: []const u8) bool {
+    pub fn paint(self: *EntityEditor, app: *eggy.App, game: ?*const HotGame, entity: ecs.EntityId, asset: Reference) bool {
         const loaded = game orelse return false;
         const component = loaded.builtinComponent("Mesh") orelse return false;
         if (!loaded.hasComponent(app, entity, component)) return false;
         const field = for (loaded.component_types[component].fields, 0..) |info, i| {
             if (std.mem.eql(u8, info.name, "texture")) break i;
         } else return false;
-        var buffer: [eggy.refs.max_path_len + 8]u8 = undefined;
-        const text = std.fmt.bufPrintZ(&buffer, "\"{f}\"", .{std.zig.fmtString(path)}) catch return false;
+        var buffer: [eggy.assets.id.key_len + 8]u8 = undefined;
+        const text = std.fmt.bufPrintZ(&buffer, "\"{s}\"", .{asset.key()}) catch return false;
         if (!loaded.writeField(app, entity, component, field, text)) return false;
         self.selected = entity;
         return true;
@@ -492,7 +496,7 @@ pub const EntityEditor = struct {
 
 /// What the Inspector shows of `entity`, read through `game`, in `arena`. Components of the
 /// plugins keyed in `off` are disabled, and not offered to add.
-fn collectDetails(arena: std.mem.Allocator, app: *eggy.App, game: *const HotGame, entity: ecs.EntityId, off: []const []const u8) !inspector_zig.Details {
+fn collectDetails(arena: std.mem.Allocator, app: *eggy.App, game: *const HotGame, entity: ecs.EntityId, off: []const []const u8, assets: ?*ProjectAssets) !inspector_zig.Details {
     var name_buffer: [eggy.Name.max_len]u8 = undefined;
     const name = if (game.readName(app, entity, &name_buffer)) |text| try arena.dupe(u8, text) else "";
     var list: std.ArrayList(inspector_zig.Details.Component) = .empty;
@@ -508,7 +512,7 @@ fn collectDetails(arena: std.mem.Allocator, app: *eggy.App, game: *const HotGame
         for (values, shown, info.fields, 0..) |*value, *label, field_info, field| {
             var buffer: [4096]u8 = undefined;
             value.* = if (game.readField(app, entity, index, field, &buffer)) |text| try arena.dupe(u8, text) else null;
-            label.* = try referenceLabel(arena, app, game, field_info.kind, value.* orelse "");
+            label.* = try referenceLabel(arena, app, game, assets, field_info.kind, value.* orelse "");
         }
         var needs: std.ArrayList([]const u8) = .empty;
         for (info.dependencies) |dependency| if (dependency < game.component_types.len) try needs.append(arena, game.component_types[dependency].name);
@@ -547,9 +551,9 @@ pub fn isOff(off: []const []const u8, owner: []const u8) bool {
     return false;
 }
 
-/// A reference field's value (`zon`) as people read it: the entity's name, or the file's;
+/// A reference field's value (`zon`) as people read it: the entity's name, or the asset's path;
 /// empty when unset; null for other kinds of field.
-fn referenceLabel(arena: std.mem.Allocator, app: *eggy.App, game: *const HotGame, kind: eggy.components.Kind, zon: []const u8) !?[]const u8 {
+fn referenceLabel(arena: std.mem.Allocator, app: *eggy.App, game: *const HotGame, assets: ?*ProjectAssets, kind: eggy.components.Kind, zon: []const u8) !?[]const u8 {
     // Parsing builds a syntax tree, so it takes the arena rather than a small fixed buffer.
     const source = try arena.dupeZ(u8, zon);
     switch (kind) {
@@ -560,7 +564,10 @@ fn referenceLabel(arena: std.mem.Allocator, app: *eggy.App, game: *const HotGame
             if (game.readName(app, target, &name_buffer)) |name| if (name.len > 0) return try arena.dupe(u8, name);
             return try std.fmt.allocPrint(arena, "Entity {d}", .{target.id});
         },
-        .asset => return std.zon.parse.fromSliceAlloc([]const u8, arena, source, null, .{}) catch "",
+        .asset => {
+            const key = std.zon.parse.fromSliceAlloc([]const u8, arena, source, null, .{}) catch return "";
+            return if (assets) |known| known.label(arena, key) else key;
+        },
         else => return null,
     }
 }

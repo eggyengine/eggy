@@ -12,8 +12,8 @@ const Transform = @import("transform.zig").Transform;
 
 pub const Error = error{ InvalidEntity, InvalidClip, OutOfMemory };
 
-/// What to show: the authored clip at `clip` (a project path, empty for none) and/or the entity's
-/// model clip named `model_clip`, `time_s` seconds in.
+/// What to show, by asset key (`AssetRef.key()`, empty for none): an authored clip and/or an
+/// imported clip of the entity's model, `time_s` seconds in.
 pub const Pose = struct {
     clip: []const u8 = "",
     model_clip: []const u8 = "",
@@ -55,12 +55,12 @@ pub const Preview = struct {
     /// Show `pose` on the root: its clips are given a paused `Animator` at that time, and the
     /// authored clip's entity tracks are written into the transforms. A clip that isn't in
     /// `clips` shows nothing (and is logged by the cache).
-    /// `error.InvalidClip` for a path or name the `Animator` can't hold.
+    /// `error.InvalidClip` for a key that isn't an asset identity.
     pub fn show(self: Preview, world: *ecs.World, clips: *ClipCache, pose: Pose) Error!void {
         if (!world.isAlive(self.root)) return error.InvalidEntity;
         const shown = Animator{
             .clip = refs.AssetRef(.animation).parse(pose.clip) catch return error.InvalidClip,
-            .model_clip = refs.AssetRef(.any).parse(pose.model_clip) catch return error.InvalidClip,
+            .model_clip = refs.AssetRef(.animation).parse(pose.model_clip) catch return error.InvalidClip,
             .time_s = pose.time_s,
             .playing = false,
             .repeat = .once,
@@ -129,11 +129,14 @@ pub fn transformAt(world: *ecs.World, root: ecs.EntityId, path: []const u8) ?[9]
     return transform.position ++ transform.rotation_deg ++ transform.scale;
 }
 
+const walk_key = refs.AssetRef(.animation).fromId(0x31).key();
+const run_key = refs.AssetRef(.animation).fromId(0x32).key();
+
 test "a preview poses an entity and its child by a clip, then restores both and the animator" {
     const gpa = std.testing.allocator;
     var cache = ClipCache{ .gpa = gpa };
     defer cache.deinit();
-    try cache.replace("walk.clip.zon", .{ .duration_s = 2, .tracks = &.{
+    try cache.replace(walk_key, .{ .duration_s = 2, .tracks = &.{
         .{ .target = "", .property = .position, .keys = &.{ .{ .time_s = 0, .value = .{ 0, 0, 0 } }, .{ .time_s = 2, .value = .{ 4, 0, 0 } } } },
         .{ .target = "Hand", .property = .rotation_deg, .keys = &.{ .{ .time_s = 0, .value = .{ 0, 0, 0 } }, .{ .time_s = 2, .value = .{ 0, 90, 0 } } } },
     } });
@@ -144,13 +147,13 @@ test "a preview poses an entity and its child by a clip, then restores both and 
     try world.setParent(hand, root);
 
     var preview = try Preview.begin(gpa, &world, root);
-    try preview.show(&world, &cache, .{ .clip = "walk.clip.zon", .time_s = 1 });
+    try preview.show(&world, &cache, .{ .clip = walk_key, .time_s = 1 });
     try std.testing.expectEqual(@as(f32, 2), world.get(root, Transform).?.position[0]);
     try std.testing.expectEqual(@as(f32, 45), world.get(hand, Transform).?.rotation_deg[1]);
     try std.testing.expect(world.get(root, Animator) != null);
 
     // Scrubbing back shows the earlier pose; ending restores the untouched scene.
-    try preview.show(&world, &cache, .{ .clip = "walk.clip.zon", .time_s = 0 });
+    try preview.show(&world, &cache, .{ .clip = walk_key, .time_s = 0 });
     try std.testing.expectEqual(@as(f32, 0), world.get(root, Transform).?.position[0]);
     preview.end(&world);
     try std.testing.expectEqual([3]f32{ 9, 9, 9 }, world.get(root, Transform).?.position);
@@ -167,9 +170,9 @@ test "ending a preview puts back the animator the entity had" {
     const root = try world.spawn(.{ Name.init("Root"), Transform{}, Animator{ .speed = 3, .playing = true } });
 
     var preview = try Preview.begin(gpa, &world, root);
-    try preview.show(&world, &cache, .{ .model_clip = "run", .time_s = 0.5 });
+    try preview.show(&world, &cache, .{ .model_clip = run_key, .time_s = 0.5 });
     try std.testing.expect(!world.get(root, Animator).?.playing);
-    try std.testing.expectEqualStrings("run", world.get(root, Animator).?.model_clip.path());
+    try std.testing.expectEqualStrings(run_key, world.get(root, Animator).?.model_clip.key());
     preview.end(&world);
     try std.testing.expectEqual(@as(f32, 3), world.get(root, Animator).?.speed);
     try std.testing.expect(world.get(root, Animator).?.playing);

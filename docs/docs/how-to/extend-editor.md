@@ -113,8 +113,8 @@ not to a stored function pointer from its previous library.
 ## Use host workflows for files and project changes {#scenes-files-and-project-settings}
 
 When a tool changes files, use `createFolder`, `renameFile`, `duplicateFile`, `moveFile`,
-`copyFile`, `importFile`, or `deleteFile`. These services preserve asset descriptors
-and record undo history. Deletion moves files into the project's trash. Move and copy
+`copyFile`, `importFile`, or `deleteFile`. These services keep asset IDs in the
+asset catalog and record undo history. Deletion moves files into the project's trash. Move and copy
 do not depend on keyboard modifiers. Pass project-relative paths, except for the source
 passed to `importFile`.
 

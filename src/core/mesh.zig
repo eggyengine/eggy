@@ -58,11 +58,11 @@ pub const Drawable = extern struct {
     shape: Shape,
     entity_id: u32,
     entity_generation: u32,
-    /// The model file it is drawn as (its path in the project), when not a built-in shape. It
+    /// The model's canonical identity key, when not a built-in shape. It
     /// points into the world's `Mesh`, so it lasts only until the world next changes.
     model_file_len: u32 = 0,
     model_file: ?[*]const u8 = null,
-    /// The image it is painted with (its path in the project), if any; it points into the
+    /// The image's canonical identity key, if any; it points into the
     /// world's `Mesh` as `model_file` does.
     texture_file_len: u32 = 0,
     texture_file: ?[*]const u8 = null,
@@ -75,13 +75,16 @@ pub const Drawable = extern struct {
     material_file_len: u32 = 0,
     material_failed: bool = false,
     /// What plays on the entity's model, if it has an `Animator`; borrowed from the world like the
-    /// paths above. `MeshRenderer.prepare` poses the model from it.
+    /// keys above. `MeshRenderer.prepare` poses the model from it.
     animator: ?*const Animator = null,
     /// Set by `MeshRenderer.prepare`: whether this entity's corners are posed (so it is drawn
     /// from its own vertex buffer, on its own), and the box round them in model space.
     deformed: u32 = 0,
     bounds_min: [3]f32 = @splat(0),
     bounds_max: [3]f32 = @splat(0),
+    /// Zero for what only the editor draws (its stand-ins for lights and cameras), which mustn't
+    /// throw shadows over the scene.
+    casts_shadow: u32 = 1,
 
     /// Reconstruct the source entity ID by value, without checking that it is still alive.
     /// Resolve it only against the world from which this drawable was gathered.
@@ -93,22 +96,22 @@ pub const Drawable = extern struct {
         return .init(self.entity_id, self.entity_generation);
     }
 
-    /// The model file's path, or null for a built-in shape.
+    /// The model's identity key, or null for a built-in shape.
     /// Borrows the originating Mesh's inline buffer; world storage changes invalidate it.
     ///
     /// ```zig
-    /// const model_path = drawable.modelFile() orelse return;
+    /// const model_key = drawable.modelFile() orelse return;
     /// ```
     pub fn modelFile(self: Drawable) ?[]const u8 {
         const file = self.model_file orelse return null;
         return file[0..self.model_file_len];
     }
 
-    /// The image's path, or null without one.
+    /// The image's identity key, or null without one.
     /// Borrows the originating Mesh's inline buffer; world storage changes invalidate it.
     ///
     /// ```zig
-    /// const texture_path = drawable.textureFile() orelse return;
+    /// const texture_key = drawable.textureFile() orelse return;
     /// ```
     pub fn textureFile(self: Drawable) ?[]const u8 {
         const file = self.texture_file orelse return null;
@@ -120,7 +123,7 @@ pub const Drawable = extern struct {
         return file[0..self.material_file_len];
     }
 
-    /// Copy inline GPU factors, borrowing only the material's optional texture path.
+    /// Copy inline GPU factors, borrowing only the material's optional texture identity.
     pub fn applyMaterial(self: *Drawable, material: *const Material) void {
         self.surface_color = material.color;
         self.material_params = .{ material.metallic, material.roughness, if (material.unlit) 1 else 0, 1 };
@@ -134,7 +137,7 @@ pub const Drawable = extern struct {
 
 /// Every entity of `world` with a `Mesh` and a `Transform`, placed through its parents'
 /// transforms, into `out`. Returns how many were written; any past `out.len` are left out.
-/// Skips model sources with unset paths. The caller owns `out`, but file paths inside
+/// Skips model sources with unset identities. The caller owns `out`, but identity keys inside
 /// results borrow Mesh storage and must not survive world changes.
 ///
 /// ```zig
@@ -154,9 +157,9 @@ pub fn gather(world: *ecs.World, out: []Drawable) usize {
 }
 
 /// Gather every drawable without truncation; free the result with `gpa.free`.
-/// File paths still borrow the world's Mesh components, as in `gather`.
+/// Identity keys still borrow the world's Mesh components, as in `gather`.
 /// Skips unset model sources and propagates allocation failure; freeing the returned
-/// slice does not free any component-owned paths.
+/// slice does not free any component-owned keys.
 ///
 /// ```zig
 /// const drawables = try gatherAlloc(gpa, world);
@@ -355,7 +358,7 @@ test "every shape has triangles, each pointing at a real vertex" {
     for (geometry.indices) |index| try std.testing.expect(index < geometry.vertices.len);
 }
 
-test "allocated gathering includes every drawable and preserves borrowed model paths" {
+test "allocated gathering includes every drawable and preserves borrowed asset identities" {
     const Check = struct {
         fn run(gpa: std.mem.Allocator) !void {
             var world = ecs.World.init(std.testing.allocator);
@@ -372,8 +375,8 @@ test "allocated gathering includes every drawable and preserves borrowed model p
             const drawn_cube, const drawn_model = if (all[0].entity().eql(cube)) .{ all[0], all[1] } else .{ all[1], all[0] };
             try std.testing.expect(drawn_cube.entity().eql(cube));
             try std.testing.expect(drawn_model.entity().eql(model));
-            try std.testing.expectEqualStrings("ship.glb", drawn_model.modelFile().?);
-            try std.testing.expectEqualStrings("ship.png", drawn_model.textureFile().?);
+            try std.testing.expectEqualStrings(AssetRef(.model).init("ship.glb").key(), drawn_model.modelFile().?);
+            try std.testing.expectEqualStrings(AssetRef(.image).init("ship.png").key(), drawn_model.textureFile().?);
             var buffer: [1]Drawable = undefined;
             try std.testing.expectEqual(@as(usize, 1), gather(&world, &buffer));
             try std.testing.expectEqualDeep(buffer[0], all[0]);
@@ -407,9 +410,9 @@ test "a model's mesh is drawn as its file, and one with no file isn't drawn" {
     try std.testing.expectEqual(@as(usize, 2), gather(&world, &drawn));
     // In whatever order the world keeps them.
     const model, const cone = if (drawn[0].modelFile() != null) .{ drawn[0], drawn[1] } else .{ drawn[1], drawn[0] };
-    try std.testing.expectEqualStrings("ships/fighter.glb", model.modelFile().?);
+    try std.testing.expectEqualStrings(AssetRef(.model).init("ships/fighter.glb").key(), model.modelFile().?);
     try std.testing.expectEqual(Shape.cone, cone.shape);
     try std.testing.expect(cone.modelFile() == null);
-    try std.testing.expectEqualStrings("art/wood.png", cone.textureFile().?);
+    try std.testing.expectEqualStrings(AssetRef(.image).init("art/wood.png").key(), cone.textureFile().?);
     try std.testing.expect(model.textureFile() == null);
 }

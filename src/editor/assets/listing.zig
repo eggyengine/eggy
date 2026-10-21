@@ -13,7 +13,10 @@ pub const Kind = enum {
     file,
     input_map,
     material,
+    /// An authored animation clip (`.clip.zon`), or an imported clip inside a model.
     animation,
+    /// A model file, which opens into its geometry and clips (`eggy.assets.subassets`).
+    model,
 
     /// What a file is, by its name.
     /// This editor classification inspects suffixes only; it never opens the file.
@@ -26,6 +29,7 @@ pub const Kind = enum {
         if (std.mem.endsWith(u8, name, ".inmap.zon")) return .input_map;
         if (std.mem.endsWith(u8, name, ".material.zon")) return .material;
         if (std.mem.endsWith(u8, name, ".clip.zon")) return .animation;
+        if (eggy.assets.Kind.of(name) == .model) return .model;
         const extension = std.fs.path.extension(name);
         const kinds = [_]struct { []const []const u8, Kind }{
             .{ &.{".zig"}, .code },
@@ -45,6 +49,9 @@ pub const Entry = struct {
     path: []const u8,
     name: []const u8,
     kind: Kind,
+    /// Inside a model file, with no file of its own: its path names it only for display, and it
+    /// can't be renamed, moved, copied or deleted.
+    virtual: bool = false,
 };
 
 /// Folders the panel leaves out wherever they are: build output and caches.
@@ -123,10 +130,22 @@ pub fn parentOf(path: []const u8) []const u8 {
     return path[0 .. std.mem.lastIndexOfScalar(u8, path, '/') orelse 0];
 }
 
+/// The project folder holding `entry`'s file: for something inside a model, the folder of the
+/// model file.
+///
+/// ```zig
+/// const folder = folderOf(.{ .path = "art/ship.glb/Walk", .name = "Walk", .kind = .animation, .virtual = true }); // "art"
+/// ```
+pub fn folderOf(entry: Entry) []const u8 {
+    const parent = parentOf(entry.path);
+    return if (entry.virtual) parentOf(parent) else parent;
+}
+
 test "files are told apart by their names" {
     try std.testing.expectEqual(Kind.scene, Kind.ofFile("main.scene.zon"));
     try std.testing.expectEqual(Kind.input_map, Kind.ofFile("player.inmap.zon"));
     try std.testing.expectEqual(Kind.animation, Kind.ofFile("walk.clip.zon"));
+    try std.testing.expectEqual(Kind.model, Kind.ofFile("Ship.GLB"));
     try std.testing.expectEqual(Kind.text, Kind.ofFile("build.zig.zon"));
     try std.testing.expectEqual(Kind.code, Kind.ofFile("root.zig"));
     try std.testing.expectEqual(Kind.image, Kind.ofFile("Icon.PNG"));

@@ -4,7 +4,8 @@
 //! turns and resizes the selected one (`gizmo.zig`), which edits its `Transform` through the
 //! game's library. It can look through the game's camera instead (`game_camera.zig`), and while
 //! editing, its controls then move that camera; with none to look through it says so. A camera
-//! selected shows what it sees in a corner. W, E, R and T pick Move, Rotate, Scale and Universal while the pointer is over
+//! selected shows what it sees in a corner. Lights and cameras are drawn as stand-ins
+//! (`stand_ins.zig`). W, E, R and T pick Move, Rotate, Scale and Universal while the pointer is over
 //! the panel; Ctrl turns snapping round while dragging.
 const std = @import("std");
 const eggy = @import("eggy");
@@ -16,6 +17,8 @@ const gizmo = @import("gizmo.zig");
 const picking = @import("picking.zig");
 const orientation = @import("orientation.zig");
 const game_camera = @import("game_camera.zig");
+const light_direction = @import("light_direction.zig");
+pub const stand_ins = @import("stand_ins.zig");
 pub const toolbar = @import("toolbar.zig");
 pub const SceneCamera = @import("scene_camera.zig").SceneCamera;
 
@@ -27,6 +30,10 @@ pub const Overlay = struct {
     hot: ?gizmo.Handle = null,
     drag: ?gizmo.Drag = null,
     hot_end: ?orientation.End = null,
+    /// Which way the selected directional or spot light shines.
+    light_arrow: ?light_direction.Arrow = null,
+    /// The directional lights' badges; borrowed from the `SceneView` until its next `update`.
+    suns: []const stand_ins.Sun = &.{},
     pointer: ui.Vec2 = .{ .x = 0, .y = 0 },
     /// The drag's feedback beside the pointer.
     feedback: []const u8 = "",
@@ -64,6 +71,18 @@ pub fn overlayElements(b: L.Builder, overlay: Overlay, scene: ui.Rect) ![]*L.Ele
     drawn.overlay = .{ .point = .init(scene.x, scene.y) };
     drawn.accessibility.role = .ignored;
     try parts.append(b.allocator, drawn);
+    if (overlay.suns.len > 0) {
+        const badges = try b.node(0, .{ .width = scene.w, .height = scene.h, .z_index = 10 }, stand_ins.paint(b.allocator, overlay.suns), &.{});
+        badges.overlay = .{ .point = .init(scene.x, scene.y) };
+        badges.accessibility.role = .ignored;
+        try parts.append(b.allocator, badges);
+    }
+    if (overlay.light_arrow) |arrow| {
+        const shine = try b.node(0, .{ .width = scene.w, .height = scene.h, .z_index = 11 }, light_direction.paint(b.allocator, arrow), &.{});
+        shine.overlay = .{ .point = .init(scene.x, scene.y) };
+        shine.accessibility.role = .ignored;
+        try parts.append(b.allocator, shine);
+    }
     if (overlay.gizmo) |layout| {
         const handles = try b.node(0, .{ .width = scene.w, .height = scene.h, .z_index = 11 }, gizmo.paint(b.allocator, layout, overlay.hot, overlay.drag, overlay.pointer, overlay.feedback), &.{});
         handles.overlay = .{ .point = .init(scene.x, scene.y) };
@@ -126,6 +145,10 @@ pub const SceneView = struct {
     drawn: []const eggy.mesh.Drawable = &.{},
     scene: ?ui.Rect = null,
     gizmo: ?gizmo.Layout = null,
+    light_arrow: ?light_direction.Arrow = null,
+    /// The directional lights' badges this frame, seen through the panel's own camera.
+    suns: [eggy.lighting.max_lights]stand_ins.Sun = undefined,
+    sun_count: usize = 0,
     feedback_buffer: [32]u8 = undefined,
     /// Whether it looks through the game's camera this frame, and there is none.
     no_camera: bool = false,
@@ -153,7 +176,7 @@ pub const SceneView = struct {
     pub fn overlay(self: *SceneView) Overlay {
         const feedback = if (self.drag) |drag| drag.feedback(self.pointer, self.snapping(), &self.feedback_buffer) else "";
         const inset = if (self.preview != null) if (self.scene) |area| previewRect(area) else null else null;
-        return .{ .tools = self.tools, .view = self.view, .gizmo = self.gizmo, .hot = self.hot, .drag = self.drag, .hot_end = self.hot_end, .pointer = self.pointer, .feedback = feedback, .no_camera = self.no_camera, .preview = inset, .playing = self.playing };
+        return .{ .tools = self.tools, .view = self.view, .gizmo = self.gizmo, .hot = self.hot, .drag = self.drag, .hot_end = self.hot_end, .light_arrow = self.light_arrow, .suns = self.suns[0..self.sun_count], .pointer = self.pointer, .feedback = feedback, .no_camera = self.no_camera, .preview = inset, .playing = self.playing };
     }
 
     /// Before each frame: what the panel at `scene` is seen from, as `look` says, the selected
@@ -172,6 +195,8 @@ pub const SceneView = struct {
         self.camera.projection = .perspective;
         self.view = self.camera.view();
         self.gizmo = null;
+        self.light_arrow = null;
+        self.sun_count = 0;
         self.scene = scene;
         self.no_camera = false;
         self.looking_through_game = false;
@@ -183,6 +208,10 @@ pub const SceneView = struct {
         };
         self.lookThroughGame(working, look);
         if (self.playing) return;
+        // Directional lights' badges, from the lights the panel last drew; the game's camera sees only the game.
+        if (scene) |area| if (!self.looking_through_game) {
+            self.sun_count = stand_ins.suns(&working.app.graphics.lights, self.view, area, &self.suns);
+        };
         if (working.selection_hidden) {
             self.drag = null;
             self.hot = null;
@@ -198,6 +227,19 @@ pub const SceneView = struct {
         if (!working.game.hasComponent(working.app, entity, component)) return;
         const placed = working.game.worldMatrix(working.app, entity) orelse return;
         self.gizmo = gizmo.layout(self.tools.tool, self.tools.space, placed, self.view, area);
+        if (self.gizmo) |handles| if (shinesAlong(working, entity)) {
+            self.light_arrow = light_direction.arrow(handles, placed);
+        };
+    }
+
+    /// Whether `entity` is a directional or spot light, which shine along their local -Z.
+    fn shinesAlong(target: Target, entity: eggy.ecs.EntityId) bool {
+        const component = target.game.builtinComponent("SceneLight") orelse return false;
+        if (!target.game.hasComponent(target.app, entity, component)) return false;
+        var buffer: [64]u8 = undefined;
+        // `kind` is the light's first field.
+        const kind = target.game.readField(target.app, entity, component, 0, &buffer) orelse return false;
+        return light_direction.shinesAlongDirection(kind);
     }
 
     /// Look through the game's camera when playing, or when the toolbar says so; while
@@ -334,6 +376,10 @@ pub const SceneView = struct {
                     self.drag = startDrag(target, layout, handle, at);
                     return true;
                 };
+                if (stand_ins.sunAt(self.suns[0..self.sun_count], at)) |light| {
+                    target.selected.* = instanceRoot(target, light);
+                    return true;
+                }
                 target.selected.* = instanceRoot(target, picking.pick(self.drawn, &target.app.graphics.models, self.view, area, at));
                 return true;
             },
@@ -472,6 +518,8 @@ fn instanceRoot(target: Target, entity: ?eggy.ecs.EntityId) ?eggy.ecs.EntityId {
 test {
     _ = game_camera;
     _ = gizmo;
+    _ = light_direction;
+    _ = stand_ins;
     _ = picking;
     _ = toolbar;
     _ = orientation;

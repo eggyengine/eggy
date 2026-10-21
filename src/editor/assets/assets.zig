@@ -6,6 +6,10 @@
 //! duplicate, delete, copy path, show in the file manager, and new folders and scenes); F2
 //! renames and Delete deletes the selected entry.
 //!
+//! A model file opens, in the list or (double-clicked) in the grid, into what it holds: its
+//! geometry and one entry for each animation clip. Those have no files of their own, so they
+//! can be selected and dragged onto reference fields, but not renamed, moved or deleted.
+//!
 //! Dragging an entry works as in the Hierarchy: onto a folder it moves there (the editor copies
 //! it instead with Ctrl held), and onto the zone below the files it moves up, to the project (or
 //! in the grid, to the shown folder's parent). The target is outlined, the entry dims, and a chip
@@ -23,6 +27,8 @@ const Icons = icons_zig.Icons;
 const Icon = icons_zig.Icon;
 const page_style = @import("../page_style.zig");
 const creation = @import("creation.zig");
+const ProjectAssets = @import("project_assets.zig").ProjectAssets;
+const fixtures = @import("project_fixtures.zig");
 
 /// What the user asked for. Paths are relative to the project, with `/` between parts.
 pub const Action = union(enum) {
@@ -91,8 +97,11 @@ pub const AssetsPanel = struct {
     folder: std.ArrayList(u8) = .empty,
     /// The list's open folders.
     expanded: std.StringHashMapUnmanaged(void) = .empty,
-    /// The entry picked last.
+    /// The entry picked last, and whether it is inside a model (and so has no file).
     selected: std.ArrayList(u8) = .empty,
+    selected_virtual: bool = false,
+    /// Whether the grid's folder is a model file, which lists what it holds.
+    folder_is_model: bool = false,
     /// What is shown, read from disk at most every `refresh_ms` or when what is shown changes.
     shown: []const Shown = &.{},
     shown_arena: std.heap.ArenaAllocator,
@@ -109,7 +118,7 @@ pub const AssetsPanel = struct {
     renaming: ?struct { path: []u8, edit: NameEdit, started: bool = false, field_id: u32 = 0 } = null,
     /// A press on an entry, which becomes a drag once it moves: the entry's path (owned), and
     /// where it would go if let go now.
-    drag: ?struct { path: []u8, from: ui.Vec2, moving: bool = false, target: Target = .none } = null,
+    drag: ?struct { path: []u8, from: ui.Vec2, moving: bool = false, target: Target = .none, virtual: bool = false } = null,
     /// What the listing was read for, to tell when to read it again.
     read_for: struct { view: View = .list, filter: std.ArrayList(u8) = .empty, folder: std.ArrayList(u8) = .empty, expanded: usize = 0 } = .{},
 
@@ -167,8 +176,9 @@ pub const AssetsPanel = struct {
     /// const folder = panel.importFolder(context, at);
     /// ```
     pub fn importFolder(self: *const AssetsPanel, context: *const ui.Context, at: ui.Vec2) []const u8 {
-        if (self.itemAt(context, at)) |item| return if (item.entry.kind == .folder) item.entry.path else listing.parentOf(item.entry.path);
-        return if (self.view == .grid) self.folder.items else "";
+        if (self.itemAt(context, at)) |item| return if (item.entry.kind == .folder) item.entry.path else listing.folderOf(item.entry);
+        if (self.view != .grid) return "";
+        return if (self.folder_is_model) listing.parentOf(self.folder.items) else self.folder.items;
     }
 
     /// The chip that follows the pointer while dragging: the entry's name, or why letting go
@@ -192,6 +202,8 @@ pub const AssetsPanel = struct {
     /// Where a drag of `path` would go with the pointer at `at`: the folder there, or the zone's
     /// folder, unless that is `path` itself, inside it, or where it already is.
     fn targetAt(self: *const AssetsPanel, context: *const ui.Context, at: ui.Vec2, path: []const u8) Target {
+        // What lives inside a model can't be moved out of it.
+        if (self.drag) |drag| if (drag.virtual) return .none;
         const over_zone = if (context.last_bounds.get(up_zone_id)) |zone| zone.rect.contains(at.x, at.y) else false;
         const folder = if (over_zone) self.upFolder() else blk: {
             const item = self.itemAt(context, at) orelse return .none;
@@ -232,7 +244,7 @@ pub const AssetsPanel = struct {
     /// panel.renameSelected(); // Existing AssetsPanel with keyboard focus.
     /// ```
     pub fn renameSelected(self: *AssetsPanel) void {
-        if (self.selected.items.len == 0) return;
+        if (self.selected.items.len == 0 or self.selected_virtual) return;
         self.startRename(self.selected.items);
     }
 
@@ -256,7 +268,7 @@ pub const AssetsPanel = struct {
                 self.endDrag();
                 return .{ .used = any };
             },
-            .delete => if (self.renaming == null and self.selected.items.len > 0) return .{ .used = true, .action = .{ .delete = self.selected.items } },
+            .delete => if (self.renaming == null and self.selected.items.len > 0 and !self.selected_virtual) return .{ .used = true, .action = .{ .delete = self.selected.items } },
             else => {},
         }
         return .{ .used = false };
@@ -292,12 +304,14 @@ pub const AssetsPanel = struct {
     /// Editor-only: call during the UI build with live icons and game file-type metadata.
     /// Returned paths borrow panel/frame storage; handle the action before the next build.
     ///
+    /// `project_assets` names what model files hold; without it they don't open.
+    ///
     /// ```zig
-    /// // Given panel, context, optional project/scene paths and loaded icons:
-    /// const action = panel.build(context, project_dir, &icons, open_scene);
+    /// // Given panel, context, optional project/scene paths, the project's assets and loaded icons:
+    /// const action = panel.build(context, project_dir, project_assets, &icons, open_scene);
     /// _ = action; // Dispatch any requested file operation in the editor host.
     /// ```
-    pub fn build(self: *AssetsPanel, context: *ui.Context, project_dir: ?[]const u8, icons: *const Icons, open_scene: ?[]const u8) ?Action {
+    pub fn build(self: *AssetsPanel, context: *ui.Context, project_dir: ?[]const u8, project_assets: ?*ProjectAssets, icons: *const Icons, open_scene: ?[]const u8) ?Action {
         const dir = project_dir orelse {
             context.muted("Open a project to see its files.");
             page_style.smallText(context, 13);
@@ -314,7 +328,7 @@ pub const AssetsPanel = struct {
         context.end();
         page_style.restyle(context, .{ .direction = .row, .gap = 4, .align_items = .center });
 
-        self.refresh(dir, context.time_ms);
+        self.refresh(dir, project_assets, context.time_ms);
         // Where a drag would go, again: its folder points into the listing just read.
         if (self.drag) |*drag| if (drag.moving) {
             drag.target = self.targetAt(context, context.pointer, drag.path);
@@ -345,8 +359,8 @@ pub const AssetsPanel = struct {
 
         // A press picks an entry; in the list, a folder opens or closes too.
         for (self.shown, 0..) |item, i| if (context.activated(item_id_base + @as(u32, @intCast(i)))) {
-            self.select(item.entry.path);
-            if (self.view == .list and !searching and item.entry.kind == .folder) self.toggle(item.entry.path);
+            self.select(item.entry.path, item.entry.virtual);
+            if (self.view == .list and !searching and opensInList(item.entry)) self.toggle(item.entry.path);
         };
         if (self.menuElement(context)) |menu_action| action = menu_action;
         return action;
@@ -402,7 +416,9 @@ pub const AssetsPanel = struct {
             const item = self.itemAt(context, down.position);
             var entry: ?listing.Entry = null;
             if (item) |found| {
-                self.select(found.entry.path);
+                self.select(found.entry.path, found.entry.virtual);
+                // Nothing can be done to what is inside a model, from here.
+                if (found.entry.virtual) return .{ .used = true };
                 const arena = self.menu_arena.allocator();
                 entry = .{ .path = arena.dupe(u8, found.entry.path) catch return .{ .used = true }, .name = "", .kind = found.entry.kind };
             }
@@ -412,14 +428,19 @@ pub const AssetsPanel = struct {
         if (down.button == .left and down.clicks < 2) if (self.itemAt(context, down.position)) |pressed| {
             self.endDrag();
             if (self.gpa.dupe(u8, pressed.entry.path)) |path| {
-                self.drag = .{ .path = path, .from = down.position };
+                self.drag = .{ .path = path, .from = down.position, .virtual = pressed.entry.virtual };
             } else |_| {}
         };
         if (down.button != .left or down.clicks < 2) return .{ .used = false };
         self.endDrag();
         const item = self.itemAt(context, down.position) orelse return .{ .used = false };
         const entry = item.entry;
+        if (entry.virtual) return .{ .used = true };
         return switch (entry.kind) {
+            .model => blk: {
+                if (self.view == .grid and self.filter.text().len == 0) self.enter(entry.path);
+                break :blk .{ .used = true };
+            },
             .scene => .{ .used = true, .action = .{ .open_scene = entry.path } },
             .input_map => .{ .used = true, .action = .{ .open_input_map = entry.path } },
             .folder => blk: {
@@ -448,7 +469,7 @@ pub const AssetsPanel = struct {
         const name_room = width - (left + 4) - 6 - 12 - 16 - 3 * 6 - context.font.measure(note_text, 11);
         const name = page_style.fitText(arena, context.font, item.entry.name, 12, @max(0, name_room));
 
-        const chevron = if (item.entry.kind == .folder and !searching)
+        const chevron = if (opensInList(item.entry) and !searching)
             b.node(0, .{ .width = 12, .height = 12 }, .{ .icon = if (item.open) .chevron_down else .chevron_right }, &.{}) catch return
         else
             b.node(0, .{ .width = 12, .height = 12 }, .none, &.{}) catch return;
@@ -653,9 +674,9 @@ pub const AssetsPanel = struct {
     /// The folder new files go into: the grid's, or in the list the selected folder (or the
     /// selected file's), else `scenes`.
     fn newFilesFolder(self: *const AssetsPanel) []const u8 {
-        if (self.view == .grid) return self.folder.items;
+        if (self.view == .grid) return if (self.folder_is_model) listing.parentOf(self.folder.items) else self.folder.items;
         for (self.shown) |item| if (self.isSelected(item.entry.path)) {
-            return if (item.entry.kind == .folder) item.entry.path else listing.parentOf(item.entry.path);
+            return if (item.entry.kind == .folder) item.entry.path else listing.folderOf(item.entry);
         };
         return eggy.project.scenes_dir;
     }
@@ -691,7 +712,7 @@ pub const AssetsPanel = struct {
 
     /// Read what is shown again when it may have changed: a second has passed, or the view,
     /// filter, grid folder or open folders changed.
-    fn refresh(self: *AssetsPanel, project_dir: []const u8, now_ms: u64) void {
+    fn refresh(self: *AssetsPanel, project_dir: []const u8, project_assets: ?*ProjectAssets, now_ms: u64) void {
         const same = self.read_for.view == self.view and
             std.mem.eql(u8, self.read_for.filter.items, self.filter.text()) and
             std.mem.eql(u8, self.read_for.folder.items, self.folder.items) and
@@ -711,8 +732,13 @@ pub const AssetsPanel = struct {
         if (self.filter.text().len > 0) {
             self.search(arena, io, project, &shown) catch {};
         } else if (self.view == .grid) {
-            for (listing.list(arena, io, project, self.folder.items) catch &.{}) |entry| shown.append(arena, .{ .entry = entry, .depth = 0 }) catch break;
-        } else self.tree(arena, io, project, "", 0, &shown) catch {};
+            // A model file shown as a folder lists what it holds.
+            const inside = if (project_assets) |assets| assets.children(arena, self.folder.items) catch &.{} else &.{};
+            self.folder_is_model = inside.len > 0;
+            if (self.folder_is_model) {
+                for (inside) |child| shown.append(arena, .{ .entry = virtualEntry(child), .depth = 0 }) catch break;
+            } else for (listing.list(arena, io, project, self.folder.items) catch &.{}) |entry| shown.append(arena, .{ .entry = entry, .depth = 0 }) catch break;
+        } else self.tree(arena, io, project, project_assets, "", 0, &shown) catch {};
         self.shown = shown.items;
 
         self.read_at_ms = now_ms;
@@ -725,11 +751,16 @@ pub const AssetsPanel = struct {
     }
 
     /// The list: `folder`'s entries, each open folder followed by its own.
-    fn tree(self: *const AssetsPanel, arena: std.mem.Allocator, io: std.Io, project: std.Io.Dir, folder: []const u8, depth: usize, out: *std.ArrayList(Shown)) !void {
+    fn tree(self: *const AssetsPanel, arena: std.mem.Allocator, io: std.Io, project: std.Io.Dir, project_assets: ?*ProjectAssets, folder: []const u8, depth: usize, out: *std.ArrayList(Shown)) !void {
         for (try listing.list(arena, io, project, folder)) |entry| {
-            const open = entry.kind == .folder and self.expanded.contains(entry.path);
+            const open = opensInList(entry) and self.expanded.contains(entry.path);
             try out.append(arena, .{ .entry = entry, .depth = depth, .open = open });
-            if (open) try self.tree(arena, io, project, entry.path, depth + 1, out);
+            if (!open) continue;
+            if (entry.kind == .folder) {
+                try self.tree(arena, io, project, project_assets, entry.path, depth + 1, out);
+            } else if (project_assets) |assets| {
+                for (try assets.children(arena, entry.path)) |child| try out.append(arena, .{ .entry = virtualEntry(child), .depth = depth + 1 });
+            }
         }
     }
 
@@ -746,7 +777,8 @@ pub const AssetsPanel = struct {
         }
     }
 
-    fn select(self: *AssetsPanel, path: []const u8) void {
+    fn select(self: *AssetsPanel, path: []const u8, virtual: bool) void {
+        self.selected_virtual = virtual;
         self.selected.clearRetainingCapacity();
         self.selected.appendSlice(self.gpa, path) catch {};
     }
@@ -755,7 +787,18 @@ pub const AssetsPanel = struct {
         return std.mem.eql(u8, self.selected.items, path);
     }
 
-    /// Open or close folder `path` in the list.
+    /// The path of the entry picked last, and whether it is inside a model (and so is an asset
+    /// with no file); null with none. Borrows the panel until the next pick.
+    ///
+    /// ```zig
+    /// if (panel.selection()) |picked| std.log.info("{s}", .{picked.path});
+    /// ```
+    pub fn selection(self: *const AssetsPanel) ?struct { path: []const u8, virtual: bool } {
+        if (self.selected.items.len == 0) return null;
+        return .{ .path = self.selected.items, .virtual = self.selected_virtual };
+    }
+
+    /// Open or close folder (or model) `path` in the list.
     fn toggle(self: *AssetsPanel, path: []const u8) void {
         if (self.expanded.fetchRemove(path)) |removed| return self.gpa.free(removed.key);
         const owned = self.gpa.dupe(u8, path) catch return;
@@ -786,7 +829,7 @@ pub const AssetsPanel = struct {
     /// while it would.
     fn upZone(self: *const AssetsPanel, context: *ui.Context) void {
         const drag = self.drag orelse return;
-        if (!drag.moving) return;
+        if (!drag.moving or drag.virtual) return;
         const up = self.upFolder();
         if (std.mem.eql(u8, listing.parentOf(drag.path), up)) return;
         const b = context.builder();
@@ -807,6 +850,16 @@ pub const AssetsPanel = struct {
         return null;
     }
 };
+
+/// Whether the list opens `entry` in place: a folder into its files, a model into what it holds.
+fn opensInList(entry: listing.Entry) bool {
+    return !entry.virtual and (entry.kind == .folder or entry.kind == .model);
+}
+
+/// A model's child as the panel lists it: geometry or a clip, named by the last part of its path.
+fn virtualEntry(child: eggy.assets.subassets.Child) listing.Entry {
+    return .{ .path = child.path, .name = std.fs.path.basename(child.path), .kind = if (child.kind == .model) .model else .animation, .virtual = true };
+}
 
 /// Where a drag would go if let go now: into a folder, or nowhere and why.
 const Target = union(enum) {
@@ -899,7 +952,7 @@ test "the panel fits a narrow dock, as a list and as a grid" {
         panel.read_at_ms = null;
         const viewport = ui.Rect{ .x = 0, .y = 0, .w = width, .h = 600 };
         context.newFrame(viewport);
-        _ = panel.build(&context, dir, &icons, "scenes/main.scene.zon");
+        _ = panel.build(&context, dir, null, &icons, "scenes/main.scene.zon");
         _ = try context.render();
         try ui_checks.expectFits(context.last_root.?, context.font, viewport);
     };
@@ -912,7 +965,7 @@ test "the panel fits a narrow dock, as a list and as a grid" {
         panel.read_at_ms = null;
         const viewport = ui.Rect{ .x = 0, .y = 0, .w = width, .h = 600 };
         context.newFrame(viewport);
-        _ = panel.build(&context, dir, &icons, null);
+        _ = panel.build(&context, dir, null, &icons, null);
         _ = try context.render();
         try ui_checks.expectFits(context.last_root.?, context.font, viewport);
     }
@@ -921,9 +974,52 @@ test "the panel fits a narrow dock, as a list and as a grid" {
     // The list showed the open folder's contents under it.
     panel.view = .list;
     panel.read_at_ms = null;
-    panel.refresh(dir, 0);
+    panel.refresh(dir, null, 0);
     try std.testing.expectEqualStrings("scenes/main.scene.zon", panel.shown[2].entry.path);
     try std.testing.expectEqual(@as(usize, 1), panel.shown[2].depth);
+}
+
+test "a model opens in the list and the grid into entries that have no file" {
+    const gpa = std.testing.allocator;
+    const io = std.testing.io;
+    var fixture = try fixtures.Fixture.open(gpa, io);
+    defer fixture.close(gpa, io);
+    try fixture.dir.createDirPath(io, "resources");
+    try fixture.dir.writeFile(io, .{ .sub_path = "resources/face.gltf", .data = fixtures.smiling_triangle });
+    var project = try ProjectAssets.init(gpa, io, fixture.path);
+    defer project.deinit();
+    var panel = AssetsPanel.init(gpa);
+    defer panel.deinit();
+
+    // Closed, the model is one entry; open, its Skeleton and clip follow it, one level in.
+    panel.view = .list;
+    panel.toggle("resources");
+    panel.refresh(fixture.path, &project, 0);
+    try std.testing.expectEqual(@as(usize, 2), panel.shown.len);
+    try std.testing.expectEqual(listing.Kind.model, panel.shown[1].entry.kind);
+    panel.toggle("resources/face.gltf");
+    panel.read_at_ms = null;
+    panel.refresh(fixture.path, &project, 0);
+    try std.testing.expectEqual(@as(usize, 4), panel.shown.len);
+    try std.testing.expectEqualStrings("Skeleton", panel.shown[2].entry.name);
+    try std.testing.expect(panel.shown[2].entry.virtual and panel.shown[2].depth == 2);
+    try std.testing.expectEqual(listing.Kind.animation, panel.shown[3].entry.kind);
+    try std.testing.expectEqualStrings("resources", listing.folderOf(panel.shown[3].entry));
+
+    // Something inside a model can be picked but not renamed.
+    panel.select(panel.shown[3].entry.path, true);
+    panel.renameSelected();
+    try std.testing.expect(panel.renaming == null);
+    try std.testing.expect(panel.selection().?.virtual);
+
+    // The grid shows a model entered as a folder: the same two entries.
+    panel.view = .grid;
+    try panel.folder.appendSlice(gpa, "resources/face.gltf");
+    panel.read_at_ms = null;
+    panel.refresh(fixture.path, &project, 0);
+    try std.testing.expect(panel.folder_is_model);
+    try std.testing.expectEqual(@as(usize, 2), panel.shown.len);
+    try std.testing.expect(panel.shown[0].entry.virtual);
 }
 
 test "dragging a file onto a folder asks to move it there, but not a folder into itself" {
@@ -943,7 +1039,7 @@ test "dragging a file onto a folder asks to move it there, but not a folder into
     var panel = AssetsPanel.init(gpa);
     defer panel.deinit();
     context.newFrame(.{ .x = 0, .y = 0, .w = 300, .h = 400 });
-    _ = panel.build(&context, dir, &icons, null);
+    _ = panel.build(&context, dir, null, &icons, null);
     _ = try context.render();
     const folder = context.last_bounds.get(item_id_base + 0).?.rect.center(); // "art", folders first
     const file = context.last_bounds.get(item_id_base + 1).?.rect.center(); // "ship.png"
@@ -980,7 +1076,7 @@ test "double-clicking a code file asks to open it in the code editor" {
     var panel = AssetsPanel.init(gpa);
     defer panel.deinit();
     context.newFrame(.{ .x = 0, .y = 0, .w = 300, .h = 400 });
-    _ = panel.build(&context, dir, &icons, null);
+    _ = panel.build(&context, dir, null, &icons, null);
     _ = try context.render();
     const file = context.last_bounds.get(item_id_base + 0).?.rect.center();
     const opened = panel.pointer(&context, .{ .pointer_down = .{ .position = file, .button = .left, .clicks = 2 } });
@@ -1003,7 +1099,7 @@ test "input maps open their own editor and New menus work inside empty narrow fo
     var panel = AssetsPanel.init(gpa);
     defer panel.deinit();
     context.newFrame(.{ .x = 0, .y = 0, .w = 300, .h = 600 });
-    _ = panel.build(&context, dir, &icons, null);
+    _ = panel.build(&context, dir, null, &icons, null);
     _ = try context.render();
     const file = context.last_bounds.get(item_id_base + 1).?.rect.center();
     const opened = panel.pointer(&context, .{ .pointer_down = .{ .position = file, .button = .left, .clicks = 2 } });
@@ -1017,7 +1113,7 @@ test "input maps open their own editor and New menus work inside empty narrow fo
         panel.menu = .{ .at = .{ .x = 190, .y = 590 }, .entry = null, .new_only = new_only, .new_open = true };
         const viewport = ui.Rect{ .x = 0, .y = 0, .w = 200, .h = 600 };
         context.newFrame(viewport);
-        _ = panel.build(&context, dir, &icons, null);
+        _ = panel.build(&context, dir, null, &icons, null);
         _ = try context.render();
         try ui_checks.expectFits(context.last_root.?, context.font, viewport);
         const create_at = context.last_bounds.get(creation_id_base + @as(u32, @intCast(creation_index))).?.rect.center();
@@ -1027,7 +1123,7 @@ test "input maps open their own editor and New menus work inside empty narrow fo
         context.handle(press);
         context.handle(.{ .pointer_up = .{ .position = create_at, .button = .left } });
         context.newFrame(viewport);
-        const action = panel.build(&context, dir, &icons, null).?;
+        const action = panel.build(&context, dir, null, &icons, null).?;
         try std.testing.expectEqualStrings("resources/input", action.create_file.folder);
         try std.testing.expectEqualStrings(creation.at(creation_index, panel.file_types).?.file.extension, action.create_file.file_type.extension);
         try std.testing.expectEqualStrings(creation.at(creation_index, panel.file_types).?.file.contents, action.create_file.file_type.contents);

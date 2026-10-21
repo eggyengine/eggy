@@ -21,13 +21,14 @@ pub const support: api.Support = .available;
 /// What an animated entity plays, as a component. The editor's Inspector shows it and scenes
 /// save it; `app.animation()` is the way to drive it from code.
 ///
-/// Two kinds of clip can play together: an authored clip (`clip`, a `.clip.zon` that moves
-/// entities and model nodes) and one of the entity's model (`model_clip`, by name: bones, blend
-/// shapes or baked frames). `previous_*` is the clip being faded out by `blendTo`.
+/// Two kinds of clip can play together, both `AssetRef(.animation)`: an authored clip (`clip`,
+/// a `.clip.zon` that moves entities and model nodes) and an imported one (`model_clip`, made
+/// from a model file: bones, blend shapes or baked frames, for that model only). `previous_*`
+/// is the clip being faded out by `blendTo`.
 pub const Animator = struct {
     clip: AssetRef(.animation) = .{},
-    /// The name of a clip in the entity's model; empty for none. Names can't contain `:` or `\`.
-    model_clip: AssetRef(.any) = .{},
+    /// An imported clip of the entity's model; unset for none.
+    model_clip: AssetRef(.animation) = .{},
     /// Where the clips are now, in seconds. It keeps counting past the end: a looping clip
     /// wraps, a `once` clip holds its last pose.
     time_s: f32 = 0,
@@ -36,7 +37,7 @@ pub const Animator = struct {
     playing: bool = true,
     repeat: Repeat = .loop,
     previous_clip: AssetRef(.animation) = .{},
-    previous_model_clip: AssetRef(.any) = .{},
+    previous_model_clip: AssetRef(.animation) = .{},
     previous_time_s: f32 = 0,
     /// How long the fade from the previous clips lasts, and how far along it is; both zero when
     /// nothing is fading.
@@ -57,12 +58,11 @@ pub const Animator = struct {
 
 pub const Repeat = enum { once, loop };
 
-/// A clip to play on an entity: an authored clip file, a clip of its model by name, or both.
+/// A clip to play on an entity: an authored clip file, an imported clip of its model, or both.
 /// `model` need not be set; when it is, it must be the model the entity draws.
-/// The name is borrowed for the duration of the call.
 pub const Clip = struct {
     model: AssetRef(.model) = .{},
-    name: []const u8 = "",
+    imported: AssetRef(.animation) = .{},
     asset: AssetRef(.animation) = .{},
 };
 
@@ -82,17 +82,16 @@ pub const Animation = struct {
 
     /// Start `clip` on `entity` now, replacing what was playing and adding an `Animator` if it
     /// has none.
-    /// `error.InvalidClip` when the clip names neither a file nor a model clip, or the name
-    /// can't be kept (see `Animator.model_clip`); `error.ModelMismatch` when `clip.model` isn't
-    /// the model `entity` draws. A model clip that doesn't exist is logged by the renderer and
-    /// plays nothing.
+    /// `error.InvalidClip` when `clip` sets neither an authored nor an imported clip;
+    /// `error.ModelMismatch` when `clip.model` isn't the model `entity` draws. An imported clip
+    /// made for another model is logged by the renderer and plays nothing.
     ///
     /// ```zig
-    /// try app.animation().play(entity, .{ .name = "walk" }, .{ .repeat = .loop });
+    /// try app.animation().play(entity, .{ .imported = .init("resources/hero.glb/walk") }, .{ .repeat = .loop });
     /// ```
     pub fn play(self: Animation, entity: ecs.EntityId, clip: Clip, options: PlayOptions) Error!void {
         const target = try self.prepare(entity, clip, options);
-        target.* = .{ .clip = clip.asset, .model_clip = try modelClip(clip), .time_s = options.start_s, .speed = options.speed, .repeat = options.repeat };
+        target.* = .{ .clip = clip.asset, .model_clip = clip.imported, .time_s = options.start_s, .speed = options.speed, .repeat = options.repeat };
         self.world.markChanged(entity, Animator);
     }
 
@@ -101,17 +100,16 @@ pub const Animation = struct {
     /// from, or to, the pose they had. `error.InvalidTime` unless `duration_s` is positive.
     ///
     /// ```zig
-    /// try app.animation().blendTo(entity, .{ .name = "idle" }, 0.2, .{ .repeat = .loop });
+    /// try app.animation().blendTo(entity, .{ .imported = .init("resources/hero.glb/idle") }, 0.2, .{ .repeat = .loop });
     /// ```
     pub fn blendTo(self: Animation, entity: ecs.EntityId, clip: Clip, duration_s: f32, options: PlayOptions) Error!void {
         if (!(duration_s > 0) or !std.math.isFinite(duration_s)) return error.InvalidTime;
         const target = try self.prepare(entity, clip, options);
-        const next_model = try modelClip(clip);
         const old = target.*;
         const fading = old.clip.len > 0 or old.model_clip.len > 0;
         target.* = .{
             .clip = clip.asset,
-            .model_clip = next_model,
+            .model_clip = clip.imported,
             .time_s = options.start_s,
             .speed = options.speed,
             .repeat = options.repeat,
@@ -175,25 +173,20 @@ pub const Animation = struct {
     /// The entity's animator, added when missing, after checking `clip` and `options`.
     fn prepare(self: Animation, entity: ecs.EntityId, clip: Clip, options: PlayOptions) Error!*Animator {
         if (!self.world.isAlive(entity)) return error.InvalidEntity;
-        if (clip.asset.len == 0 and clip.name.len == 0) return error.InvalidClip;
+        if (clip.asset.len == 0 and clip.imported.len == 0) return error.InvalidClip;
         if (!std.math.isFinite(options.start_s)) return error.InvalidTime;
         if (!std.math.isFinite(options.speed)) return error.InvalidSpeed;
         if (clip.model.len > 0) {
             const mesh = self.world.get(entity, Mesh) orelse return error.ModelMismatch;
             switch (mesh.shape) {
-                .model => |drawn| if (!std.mem.eql(u8, drawn.path(), clip.model.path())) return error.ModelMismatch,
+                .model => |drawn| if (!std.mem.eql(u8, drawn.key(), clip.model.key())) return error.ModelMismatch,
                 else => return error.ModelMismatch,
             }
         }
-        _ = try modelClip(clip);
         if (self.world.get(entity, Animator) == null) self.world.addComponent(entity, Animator{}) catch return error.InvalidEntity;
         return self.world.get(entity, Animator).?;
     }
 };
-
-fn modelClip(clip: Clip) Error!AssetRef(.any) {
-    return AssetRef(.any).parse(clip.name) catch error.InvalidClip;
-}
 
 fn withoutFade(animator: Animator) Animator {
     var result = animator;
@@ -240,8 +233,8 @@ fn advance(animator: *Animator, delta_s: f32) void {
 
 /// Write the entity-targeted tracks of the animator's clips into transforms, blended while fading.
 pub fn applyTracks(world: *ecs.World, entity: ecs.EntityId, animator: Animator, clips: *ClipCache) void {
-    const current: ?*const assets.clip.Clip = if (animator.clip.len > 0) clips.get(animator.clip.path()) else null;
-    const previous: ?*const assets.clip.Clip = if (animator.isBlending() and animator.previous_clip.len > 0) clips.get(animator.previous_clip.path()) else null;
+    const current: ?*const assets.clip.Clip = if (animator.clip.len > 0) clips.authored(animator.clip.key()) else null;
+    const previous: ?*const assets.clip.Clip = if (animator.isBlending() and animator.previous_clip.len > 0) clips.authored(animator.previous_clip.key()) else null;
     const weight: f32 = if (animator.isBlending()) animator.blendWeight() else 1;
     if (current) |clip| for (clip.tracks) |track| {
         const target = entityTarget(world, entity, track) orelse continue;
@@ -315,6 +308,11 @@ fn write(world: *ecs.World, entity: ecs.EntityId, property: assets.clip.Property
     world.markChanged(entity, Transform);
 }
 
+const walk_id: assets.Id = 0x11;
+const still_id: assets.Id = 0x12;
+const walk_key = AssetRef(.animation).fromId(walk_id).key();
+const still_key = AssetRef(.animation).fromId(still_id).key();
+
 const test_tracks = [_]assets.clip.Track{
     .{ .target = "", .property = .position, .keys = &.{ .{ .time_s = 0, .value = .{ 0, 0, 0 } }, .{ .time_s = 2, .value = .{ 4, 0, 0 } } } },
     .{ .target = "Hand", .property = .rotation_deg, .keys = &.{ .{ .time_s = 0, .value = .{ 0, 0, 0 } }, .{ .time_s = 2, .value = .{ 0, 90, 0 } } } },
@@ -325,7 +323,7 @@ const TestScene = struct { world: ecs.World, root: ecs.EntityId, hand: ecs.Entit
 fn testScene(gpa: std.mem.Allocator, cache: *ClipCache) !TestScene {
     var world = ecs.World.init(gpa);
     errdefer world.deinit();
-    try cache.replace("walk.clip.zon", .{ .duration_s = 2, .tracks = &test_tracks });
+    try cache.replace(walk_key, .{ .duration_s = 2, .tracks = &test_tracks });
     const root = try world.spawn(.{ Name.init("Root"), Transform{} });
     const hand = try world.spawn(.{ Name.init("Hand"), Transform{} });
     try world.setParent(hand, root);
@@ -339,7 +337,7 @@ test "a clip moves the entity and a named child by the game's time, and holds wh
     var scene = try testScene(gpa, &cache);
     defer scene.world.deinit();
     const animation = Animation{ .world = &scene.world };
-    try animation.play(scene.root, .{ .asset = .init("walk.clip.zon") }, .{ .repeat = .loop });
+    try animation.play(scene.root, .{ .asset = .fromId(walk_id) }, .{ .repeat = .loop });
 
     // A half second and then another: a quarter of the way along each time, 1 and 2 metres.
     step(&scene.world, &cache, 0.5);
@@ -372,7 +370,7 @@ test "a once clip holds its last pose, and speed scales the clock" {
     var scene = try testScene(gpa, &cache);
     defer scene.world.deinit();
     const animation = Animation{ .world = &scene.world };
-    try animation.play(scene.root, .{ .asset = .init("walk.clip.zon") }, .{ .speed = 2 });
+    try animation.play(scene.root, .{ .asset = .fromId(walk_id) }, .{ .speed = 2 });
     step(&scene.world, &cache, 0.5);
     try std.testing.expectEqual(@as(f32, 2), scene.world.get(scene.root, Transform).?.position[0]);
     step(&scene.world, &cache, 5);
@@ -386,14 +384,14 @@ test "blending fades from the previous clip, then ends the fade" {
     var scene = try testScene(gpa, &cache);
     defer scene.world.deinit();
     const still = [_]assets.clip.Track{.{ .target = "", .property = .position, .keys = &.{.{ .time_s = 0, .value = .{ 10, 0, 0 } }} }};
-    try cache.replace("still.clip.zon", .{ .duration_s = 1, .tracks = &still });
+    try cache.replace(still_key, .{ .duration_s = 1, .tracks = &still });
     const animation = Animation{ .world = &scene.world };
-    try animation.play(scene.root, .{ .asset = .init("walk.clip.zon") }, .{});
+    try animation.play(scene.root, .{ .asset = .fromId(walk_id) }, .{});
     step(&scene.world, &cache, 1);
     try std.testing.expectEqual(@as(f32, 2), scene.world.get(scene.root, Transform).?.position[0]);
 
     // Halfway through a one second fade: walk is at 1.5 s (3 m), still is at 10 m, so 6.5 m.
-    try animation.blendTo(scene.root, .{ .asset = .init("still.clip.zon") }, 1, .{});
+    try animation.blendTo(scene.root, .{ .asset = .fromId(still_id) }, 1, .{});
     step(&scene.world, &cache, 0.5);
     try std.testing.expectEqual(@as(f32, 6.5), scene.world.get(scene.root, Transform).?.position[0]);
     step(&scene.world, &cache, 0.5);
@@ -409,13 +407,15 @@ test "controls refuse what they can't do and change nothing" {
     const entity = try world.spawn(.{Transform{}});
     try std.testing.expectError(error.NoAnimator, animation.pause(entity));
     try std.testing.expectError(error.InvalidClip, animation.play(entity, .{}, .{}));
-    try std.testing.expectError(error.InvalidClip, animation.play(entity, .{ .name = "a:b" }, .{}));
-    try std.testing.expectError(error.InvalidSpeed, animation.play(entity, .{ .name = "run" }, .{ .speed = std.math.inf(f32) }));
-    try std.testing.expectError(error.ModelMismatch, animation.play(entity, .{ .model = .init("rat.glb"), .name = "run" }, .{}));
+    const run: Clip = .{ .imported = .fromId(0x21) };
+    try std.testing.expectError(error.InvalidSpeed, animation.play(entity, run, .{ .speed = std.math.inf(f32) }));
+    var other = run;
+    other.model = .fromId(0x22);
+    try std.testing.expectError(error.ModelMismatch, animation.play(entity, other, .{}));
     try std.testing.expect(world.get(entity, Animator) == null);
-    try animation.play(entity, .{ .name = "run" }, .{ .start_s = 0.25 });
-    try std.testing.expectError(error.InvalidTime, animation.blendTo(entity, .{ .name = "idle" }, 0, .{}));
+    try animation.play(entity, run, .{ .start_s = 0.25 });
+    try std.testing.expectError(error.InvalidTime, animation.blendTo(entity, .{ .imported = .fromId(0x23) }, 0, .{}));
     try std.testing.expectError(error.InvalidTime, animation.seek(entity, std.math.nan(f32)));
-    try std.testing.expectEqualStrings("run", world.get(entity, Animator).?.model_clip.path());
+    try std.testing.expectEqual(@as(u64, 0x21), world.get(entity, Animator).?.model_clip.id());
     try std.testing.expectEqual(@as(f32, 0.25), world.get(entity, Animator).?.time_s);
 }

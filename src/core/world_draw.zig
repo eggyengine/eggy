@@ -111,7 +111,7 @@ pub const Renderer = struct {
                 try self.appendText(source.labels.items[item.index], right, up);
             } else {
                 const sprite = source.sprites.items[item.index].value;
-                const paint = textures.get(sprite.image.path()) orelse return error.SpriteTextureUnavailable;
+                const paint = textures.get(sprite.image.key()) orelse return error.SpriteTextureUnavailable;
                 const angle = sprite.rotation_deg * std.math.rad_per_deg;
                 const x_axis: [3]f32 = if (sprite.billboard) right else .{ 1, 0, 0 };
                 const y_axis: [3]f32 = if (sprite.billboard) up else .{ 0, 1, 0 };

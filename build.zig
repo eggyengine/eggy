@@ -183,11 +183,14 @@ fn addProject(b: *std.Build, engine: *std.Build, emscripten: Emscripten, target:
     // Missing until Eggy's lazy dependencies are fetched; Zig then runs the build again.
     const eggy = engine.modules.get("eggy") orelse return null;
     const runtime = engine.modules.get("eggy_runtime").?;
+    const own = b == engine;
+    const files = if (own) &.{} else game_resources.entries(b);
+    const prepared = models.prepare(b, engine, target, optimize, files) orelse return null;
 
     // The project module: the game's name and its plugin types, the game first.
     options.game.addImport("eggy", eggy);
     var source: std.ArrayList(u8) = .empty;
-    source.print(b.allocator, "pub const name = \"{f}\";\npub const plugins = .{{ @import(\"game\").Game", .{std.zig.fmtString(options.name)}) catch @panic("OOM");
+    source.print(b.allocator, "pub const name = \"{f}\";\npub const asset_ids = @import(\"eggy_asset_ids\");\npub const plugins = .{{ @import(\"game\").Game", .{std.zig.fmtString(options.name)}) catch @panic("OOM");
     for (options.plugins, 0..) |plugin, i| {
         plugin.addImport("eggy", eggy);
         source.print(b.allocator, ", @import(\"plugin_{d}\").Plugin", .{i}) catch @panic("OOM");
@@ -200,22 +203,23 @@ fn addProject(b: *std.Build, engine: *std.Build, emscripten: Emscripten, target:
     source.appendSlice(b.allocator, " };\n") catch @panic("OOM");
     const project = b.createModule(.{ .root_source_file = b.addWriteFiles().add("eggy_project.zig", source.items), .target = target, .optimize = optimize });
     project.addImport("game", options.game);
+    project.addImport("eggy_asset_ids", prepared.ids);
     for (options.plugins, 0..) |plugin, i| project.addImport(b.fmt("plugin_{d}", .{i}), plugin);
 
     // The runtime's project module also carries the project's preferences (`.eggy/plugins`),
     // baked in. The editor's game library doesn't, so changing them doesn't rebuild it.
     // It starts in the project's main scene (none for Eggy's own executables, whose resources
     // are the editor's).
-    const own = b == engine;
     const scene_option = b.option([]const u8, "scene", "The scene the game starts in (default: eggy.zon's .default_scene); export needs one");
-    const main_scene = if (own) null else game_resources.mainScene(b, scene_option, false);
-    if (main_scene) |path| source.print(b.allocator, "pub const main_scene: ?[]const u8 = \"{f}\";\n", .{std.zig.fmtString(path)}) catch @panic("OOM");
+    const main_scene = if (own) null else game_resources.mainScene(b, files, scene_option, false);
+    if (main_scene) |path| source.print(b.allocator, "pub const main_scene: ?[]const u8 = \"{s}\";\n", .{game_resources.sceneKey(b, files, path)}) catch @panic("OOM");
     // And what its executable says about itself, which it keeps in a section of its own.
     const metadata = if (own) &.{} else game_metadata.read(b);
     if (metadata.len > 0) source.print(b.allocator, "pub const metadata_text = \"{f}\".*;\n", .{std.zig.fmtString(game_metadata.text(b, metadata))}) catch @panic("OOM");
     @import("src/build/render_settings.zig").appendDefaults(b, &source, own);
     const runtime_project = b.createModule(.{ .root_source_file = addPreferenceFiles(b, source.items), .target = target, .optimize = optimize });
     runtime_project.addImport("game", options.game);
+    runtime_project.addImport("eggy_asset_ids", prepared.ids);
     for (options.plugins, 0..) |plugin, i| runtime_project.addImport(b.fmt("plugin_{d}", .{i}), plugin);
 
     // The runtime, on every platform.
@@ -232,10 +236,13 @@ fn addProject(b: *std.Build, engine: *std.Build, emscripten: Emscripten, target:
         },
     });
     const all_step = b.step("all", "Build every executable for this target");
-    game_export.addExport(b, engine, target, runtime_name, if (own) null else game_resources.mainScene(b, scene_option, true));
+    game_export.addExport(b, engine, target, runtime_name, if (own) null else game_resources.mainScene(b, files, scene_option, true));
     build_runner.record(b);
     if (target.result.os.tag == .emscripten) {
-        const app = web_build.addApp(b, engine, emscripten, runtime_module, runtime_name, if (own) &.{} else game_resources.entries(b));
+        const data: ?std.Build.LazyPath = for (files) |file| {
+            if (file.kind != .folder) break prepared.directory;
+        } else null;
+        const app = web_build.addApp(b, engine, emscripten, runtime_module, runtime_name, data);
         b.step("runtime", "Build the game for the browser").dependOn(&app.install.step);
         b.step("run", "Open the game in a browser").dependOn(&app.run.step);
         all_step.dependOn(&app.install.step);
@@ -243,7 +250,7 @@ fn addProject(b: *std.Build, engine: *std.Build, emscripten: Emscripten, target:
     }
     if (target.result.abi.isAndroid()) {
         const android = engine.lazyImport(@This(), "android") orelse return null;
-        android_build.addApp(b, engine, android, runtime_module, runtime_name, if (own) &.{} else game_resources.entries(b));
+        android_build.addApp(b, engine, android, runtime_module, runtime_name, prepared.directory);
         return null;
     }
     const runtime_app = addDesktopApp(b, target, runtime_module, runtime_name);
@@ -253,13 +260,12 @@ fn addProject(b: *std.Build, engine: *std.Build, emscripten: Emscripten, target:
     const runtime_libraries = installRuntimeLibraries(b, engine);
     runtime_step.dependOn(runtime_libraries);
     all_step.dependOn(runtime_libraries);
-    // Its resources: models and textures converted, everything else copied, all into data/.
-    const files = if (own) &.{} else game_resources.entries(b);
-    for ([_]?*std.Build.Step{ models.addPackaging(b, engine, optimize, files), game_resources.addData(b, files) }) |found| if (found) |packaged| {
-        runtime_step.dependOn(packaged);
-        runtime_app.run.step.dependOn(packaged);
-        b.getInstallStep().dependOn(packaged);
-    };
+    // The same prepared payloads back native installation and mobile/browser bundling.
+    const packaged = &b.addInstallDirectory(.{ .source_dir = prepared.directory, .install_dir = .prefix, .install_subdir = "data" }).step;
+    runtime_step.dependOn(packaged);
+    runtime_app.run.step.dependOn(packaged);
+    b.getInstallStep().dependOn(packaged);
+    all_step.dependOn(packaged);
     b.step("run-runtime", "Run the game").dependOn(&runtime_app.run.step);
     all_step.dependOn(&runtime_app.install.step);
 
@@ -269,11 +275,12 @@ fn addProject(b: *std.Build, engine: *std.Build, emscripten: Emscripten, target:
     const library_options = b.addOptions();
     library_options.addOption([]const u8, "file_name", game_library.out_filename);
     const editor_project = b.createModule(.{
-        .root_source_file = b.addWriteFiles().add("eggy_editor_project.zig", b.fmt("pub const name = \"{f}\";\npub const game_library = @import(\"game_library\");\n", .{std.zig.fmtString(options.name)})),
+        .root_source_file = b.addWriteFiles().add("eggy_editor_project.zig", b.fmt("pub const name = \"{f}\";\npub const asset_ids = @import(\"eggy_asset_ids\");\npub const game_library = @import(\"game_library\");\n", .{std.zig.fmtString(options.name)})),
         .target = target,
         .optimize = optimize,
     });
     editor_project.addOptions("game_library", library_options);
+    editor_project.addImport("eggy_asset_ids", prepared.ids);
     const editor_module = b.createModule(.{
         .root_source_file = engine.path("src/editor/main.zig"),
         .target = target,

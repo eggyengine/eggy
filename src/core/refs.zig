@@ -10,6 +10,7 @@
 //!     };
 const std = @import("std");
 const ecs = @import("clutch");
+const asset_id = @import("eggy_assets").id;
 /// What kind of file an `AssetRef` takes (see `eggy.assets.Kind`).
 pub const AssetKind = @import("eggy_assets").Kind;
 
@@ -58,9 +59,8 @@ pub fn EntityRef(comptime With: type) type {
     };
 }
 
-/// A file of the project, if set, of kind `kind`: its path relative to the project, with `/`
-/// between parts. Kept in a fixed buffer, like `Name`, so it holds no pointers.
-/// `kind` controls filename validation, not file existence or decoding.
+/// An opaque asset identity, if set, of kind `kind`. Authoring paths passed to `init`
+/// resolve at compile time; stored references never retain those paths.
 ///
 /// ```zig
 /// const Image = AssetRef(.image);
@@ -68,51 +68,79 @@ pub fn EntityRef(comptime With: type) type {
 /// ```
 pub fn AssetRef(comptime kind: AssetKind) type {
     return struct {
-        buffer: [max_path_len]u8 = undefined,
-        len: u16 = 0,
+        buffer: [asset_id.key_len]u8 = undefined,
+        len: u8 = 0,
 
         pub const eggy_ref: RefKind = .asset;
         pub const accepts = kind;
 
-        /// A checked path known at compile time. Use `parse` for paths received at runtime.
-        /// Invalid paths fail compilation; the returned value owns an inline copy.
+        /// Resolve a project or virtual asset path at compile time, or accept its identity.
+        /// Missing assets and kind mismatches fail compilation, not the first rendered frame.
         ///
         /// ```zig
         /// const image = AssetRef(.image).init("resources/portrait.png");
         /// ```
         pub fn init(comptime project_path: []const u8) @This() {
-            return comptime parse(project_path) catch |err| @compileError("invalid asset path: " ++ @errorName(err));
+            return comptime block: {
+                @setEvalBranchQuota(1_000_000);
+                break :block parse(project_path) catch |err| @compileError("cannot resolve asset `" ++ project_path ++ "`: " ++ @errorName(err));
+            };
         }
 
-        /// Keep a relative project path by value. Empty means unset. Reject overlong paths,
-        /// traversal, platform separators and files of the wrong kind without clearing a value.
-        /// Does not check whether the file exists; copies into the returned inline buffer.
-        ///
-        /// ```zig
-        /// const image = try AssetRef(.image).parse(selected_project_path);
-        /// ```
-        pub fn parse(project_path: []const u8) error{ PathTooLong, InvalidPath, WrongAssetKind }!@This() {
-            try validatePath(project_path);
-            if (project_path.len != 0 and !kind.takes(project_path)) return error.WrongAssetKind;
-            var self = @This(){ .len = @intCast(project_path.len) };
-            @memcpy(self.buffer[0..project_path.len], project_path);
+        /// Construct an identity received from the editor catalog or another validated source.
+        /// Zero is unset; the caller must ensure the identity has the declared asset kind.
+        pub fn fromId(value: asset_id.Id) @This() {
+            if (value == 0) return .{};
+            var self = @This(){ .len = asset_id.key_len };
+            _ = asset_id.key(&self.buffer, value);
             return self;
         }
 
-        /// The path; empty when unset.
+        /// Parse an identity. Legacy serialized paths resolve through the compiled project
+        /// catalog and are immediately converted; the next save writes only the identity.
+        pub fn parse(project_path: []const u8) error{ PathTooLong, InvalidPath, WrongAssetKind, InvalidAssetId, UnknownAsset }!@This() {
+            if (project_path.len == 0) return .{};
+            if (project_path.len == asset_id.key_len) {
+                const hex = for (project_path) |byte| {
+                    if (!std.ascii.isHex(byte)) break false;
+                } else true;
+                if (hex) return fromId(try asset_id.parse(project_path));
+            }
+            const root = @import("root");
+            if (comptime @hasDecl(root, "eggy_asset_ids")) {
+                if (root.eggy_asset_ids.find(project_path)) |entry| {
+                    if (kind != .any and entry.kind != @intFromEnum(kind)) return error.WrongAssetKind;
+                    return fromId(entry.id);
+                }
+            }
+            try validatePath(project_path);
+            if (comptime @import("builtin").is_test) {
+                // Unit fixtures need identities without a project directory or imported files.
+                if (!kind.takes(project_path)) return error.WrongAssetKind;
+                return fromId(std.hash.Wyhash.hash(0x6567_6779, project_path));
+            }
+            return error.UnknownAsset;
+        }
+
+        /// The canonical identity key; empty when unset.
         /// Returns a borrowed, non-sentinel slice valid until this reference moves or changes.
         ///
         /// ```zig
         /// const image = AssetRef(.image).init("resources/portrait.png");
-        /// const project_path = image.path();
+        /// const key = image.key();
         /// ```
-        pub fn path(self: *const @This()) []const u8 {
+        pub fn key(self: *const @This()) []const u8 {
             return self.buffer[0..self.len];
+        }
+
+        /// The numeric identity, or zero when unset.
+        pub fn id(self: *const @This()) asset_id.Id {
+            return if (self.len == 0) 0 else asset_id.parse(self.key()) catch unreachable;
         }
     };
 }
 
-/// The longest path an `AssetRef` holds.
+/// The longest project path accepted during authoring or legacy-reference migration.
 pub const max_path_len = 256;
 
 pub const RefKind = enum { entity, asset };
@@ -145,15 +173,18 @@ pub fn refKind(comptime T: type) ?RefKind {
     return T.eggy_ref;
 }
 
-test "an asset reference keeps its path" {
-    try std.testing.expectEqualStrings("art/ship.png", AssetRef(.image).init("art/ship.png").path());
+test "asset references retain identities instead of their authoring paths" {
+    const image = AssetRef(.image).init("art/ship.png");
+    try std.testing.expectEqual(@as(usize, asset_id.key_len), image.key().len);
+    try std.testing.expectEqual(image.id(), (try AssetRef(.image).parse(image.key())).id());
+    try std.testing.expectEqualStrings("000000000000002a", AssetRef(.image).fromId(42).key());
     try std.testing.expectError(error.PathTooLong, AssetRef(.any).parse("x" ** (max_path_len + 1)));
-    try std.testing.expectEqual(@as(usize, max_path_len), (try AssetRef(.any).parse("x" ** max_path_len)).path().len);
+    try std.testing.expectEqual(@as(usize, asset_id.key_len), (try AssetRef(.any).parse("x" ** max_path_len)).key().len);
     for ([_][]const u8{ "/ship.png", "../ship.png", "art/../ship.png", "art\\ship.png", "C:/ship.png", "art//ship.png" }) |path| {
         try std.testing.expectError(error.InvalidPath, AssetRef(.image).parse(path));
     }
     try std.testing.expectError(error.WrongAssetKind, AssetRef(.audio).parse("ship.png"));
-    try std.testing.expectEqual(@as(usize, 0), (try AssetRef(.image).parse("")).path().len);
+    try std.testing.expectEqual(@as(usize, 0), (try AssetRef(.image).parse("")).key().len);
 }
 
 test "entity references check generations and required components" {

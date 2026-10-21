@@ -15,6 +15,7 @@ pub const Panel = enum(u32) {
     inspector,
     assets,
     console,
+    animation,
 
     /// Return a static, sentinel-terminated display title for a built-in editor panel.
     ///
@@ -29,6 +30,7 @@ pub const Panel = enum(u32) {
             .inspector => "Inspector",
             .assets => "Assets",
             .console => "Console",
+            .animation => "Animation",
         };
     }
 };
@@ -49,13 +51,15 @@ pub fn pluginId(panel: EditorPanel, index: usize) u32 {
     return 128 + @as(u32, @intCast(std.hash.Wyhash.hash(0, panel.key) % (ui.dock.max_panel - 128)));
 }
 /// Pages: the Inspector (`inspector_page`), the Console (`console_page`), the Hierarchy
-/// (`hierarchy_page`), Assets (`assets_page`), then the plugin panels (`first_plugin_page + i`).
+/// (`hierarchy_page`), Assets (`assets_page`), Animation (`animation_page`), then the plugin panels
+/// (`first_plugin_page + i`).
 pub const max_pages = 32;
 pub const inspector_page = 0;
 pub const console_page = 1;
 pub const hierarchy_page = 2;
 pub const assets_page = 3;
-pub const first_plugin_page = 4;
+pub const animation_page = 4;
+pub const first_plugin_page = 5;
 
 /// Page index of dock panel `id`, if it is a page.
 /// Borrows the current plugin declarations; Scene and unknown IDs return null.
@@ -69,6 +73,7 @@ pub fn pageOf(id: u32, plugin_panels: []const EditorPanel) ?usize {
     if (id == @intFromEnum(Panel.console)) return console_page;
     if (id == @intFromEnum(Panel.hierarchy)) return hierarchy_page;
     if (id == @intFromEnum(Panel.assets)) return assets_page;
+    if (id == @intFromEnum(Panel.animation)) return animation_page;
     for (plugin_panels, 0..) |panel, index| if (pluginId(panel, index) == id) return first_plugin_page + index;
     return null;
 }
@@ -145,7 +150,7 @@ pub const Provider = struct {
                 scene.accessibility = .{ .role = .image, .label = "Scene view" };
                 break :blk scene;
             },
-            .inspector, .console, .hierarchy, .assets => unreachable, // pages
+            .inspector, .console, .hierarchy, .assets, .animation => unreachable, // pages
         };
     }
 };
@@ -166,13 +171,14 @@ fn placeholder(b: L.Builder, message: []const u8) !*L.Element {
     });
 }
 
-test "pages are the Inspector, the Console, the Hierarchy, Assets and the plugin panels, in that order" {
+test "pages are the Inspector, the Console, the Hierarchy, Assets, Animation and the plugin panels, in that order" {
     const plugin_panels = [_]EditorPanel{ .{ .title = "Stats" }, .{ .title = "Level" } };
     try std.testing.expectEqual(@as(?usize, 0), pageOf(@intFromEnum(Panel.inspector), &plugin_panels));
     try std.testing.expectEqual(@as(?usize, 1), pageOf(@intFromEnum(Panel.console), &plugin_panels));
     try std.testing.expectEqual(@as(?usize, 2), pageOf(@intFromEnum(Panel.hierarchy), &plugin_panels));
     try std.testing.expectEqual(@as(?usize, 3), pageOf(@intFromEnum(Panel.assets), &plugin_panels));
-    try std.testing.expectEqual(@as(?usize, 5), pageOf(plugin_first + 1, &plugin_panels));
+    try std.testing.expectEqual(@as(?usize, 4), pageOf(@intFromEnum(Panel.animation), &plugin_panels));
+    try std.testing.expectEqual(@as(?usize, 6), pageOf(plugin_first + 1, &plugin_panels));
     try std.testing.expectEqual(@as(?usize, null), pageOf(@intFromEnum(Panel.scene), &plugin_panels));
     try std.testing.expectEqualStrings("Level", panelTitle(plugin_first + 1, &plugin_panels));
     try std.testing.expectEqualStrings("Console", panelTitle(@intFromEnum(Panel.console), &plugin_panels));

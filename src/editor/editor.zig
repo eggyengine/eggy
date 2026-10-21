@@ -53,13 +53,17 @@ const hit_test = eggy.ui_hit_test;
 const scene_view = @import("scene_view/scene_view.zig");
 const assets = @import("assets/assets.zig");
 const AssetIcons = @import("assets/icons.zig").Icons;
-const descriptors = @import("assets/descriptors.zig");
-const ProjectAssets = @import("assets/project_assets.zig").ProjectAssets;
+const project_assets_zig = @import("assets/project_assets.zig");
+const legacy_refs = @import("assets/legacy_refs.zig");
+const clipboard = @import("clipboard.zig");
+const ProjectAssets = project_assets_zig.ProjectAssets;
+const Reference = project_assets_zig.Reference;
 const extensions = @import("extensions/extensions.zig");
 const GameInput = @import("game_input.zig").State;
 const ViewportMouse = @import("viewport_mouse.zig").State;
 const InputSettings = @import("input_settings.zig").InputSettings;
 const input_map_asset = @import("input_map_asset/input_map_asset.zig");
+const animation_dock = @import("animation_dock/animation_dock.zig");
 /// The Preferences section File > Project Settings opens.
 const project_section = "Project";
 
@@ -143,6 +147,9 @@ pub fn Editor(comptime project: type) type {
         /// The Assets panel's UI (drawing with `ui`'s font), state, and icons.
         assets_ui: ui.Context,
         assets_panel: assets.AssetsPanel,
+        /// The Animation panel's UI (drawing with `ui`'s font) and state.
+        animation_ui: ui.Context,
+        animation: animation_dock.Dock = .{},
         asset_icons: AssetIcons,
         console: Console,
         /// A UI of its own for each plugin panel there can be, drawing with `ui`'s font.
@@ -272,6 +279,8 @@ pub fn Editor(comptime project: type) type {
             errdefer hierarchy_ui.deinit();
             var assets_ui = ui.Context.initWithFont(gpa, context.font);
             errdefer assets_ui.deinit();
+            var animation_ui = ui.Context.initWithFont(gpa, context.font);
+            errdefer animation_ui.deinit();
             var asset_icons = AssetIcons.load(gpa, context.font);
             errdefer asset_icons.deinit(gpa);
             var console = Console.init(gpa, mono);
@@ -328,6 +337,26 @@ pub fn Editor(comptime project: type) type {
                 workspace.setPluginBars(.{ .menus = loaded.menus, .status_items = loaded.status_items });
                 preferences.writeRegistry(gpa, preference_folders, loaded.plugin_keys, loaded.preference_manifests, plugin_switches.off()) catch |err| std.log.warn("cannot update .eggy/plugins.zon: {t}", .{err});
             }
+            // Model and image files, imported from the project as the scene first shows each.
+            const project_assets: ?*ProjectAssets = if (opened_project) |opened| blk: {
+                const loaders = try gpa.create(ProjectAssets);
+                errdefer gpa.destroy(loaders);
+                loaders.* = try ProjectAssets.init(gpa, process_init.io, opened.dir);
+                errdefer loaders.deinit();
+                app.graphics.models.loader = loaders.models();
+                app.graphics.textures.loader = loaders.textures();
+                app.resource_provider = loaders.resources();
+                break :blk loaders;
+            } else null;
+            errdefer if (project_assets) |loaders| {
+                loaders.deinit();
+                gpa.destroy(loaders);
+            };
+            // Scenes and materials from before asset ids hold paths and bare clip names; make them
+            // ids before one is opened, since a clip name only means something beside its model.
+            if (game) |*loaded| if (project_assets) |loaders| {
+                legacy_refs.normalizeOnOpen(gpa, process_init.io, opened_project.?.dir, loaders, loaded.sceneAccess().types());
+            };
             // The project's scene first, so the game's plugins start among its entities.
             if (game) |*loaded| {
                 if (opened_project) |opened| {
@@ -336,23 +365,13 @@ pub fn Editor(comptime project: type) type {
                 }
             }
             const upgrades = Upgrades.init(gpa, if (opened_project) |opened| opened.dir else null, @import("build_options").source_dir);
-            // Model and image files, imported from the project as the scene first shows each.
-            const project_assets: ?*ProjectAssets = if (opened_project) |opened| blk: {
-                const loaders = try gpa.create(ProjectAssets);
-                loaders.* = .{ .project_dir = opened.dir };
-                app.graphics.models.loader = loaders.models();
-                app.graphics.textures.loader = loaders.textures();
-                app.resource_provider = loaders.resources();
-                break :blk loaders;
-            } else null;
-            errdefer if (project_assets) |loaders| gpa.destroy(loaders);
             const input_settings = if (opened_project) |opened| try InputSettings.open(gpa, &app.input_backend.?.state, opened.dir) else null;
             errdefer if (input_settings) |settings| settings.close();
             if (game) |*loaded| loaded.start(&app, plugin_switches.off(), .discard);
-            var self = Self{ .gpa = gpa, .game = game, .game_modified = modifiedAt(library_path), .app = app, .ui = context, .mono = mono, .console_ui = console_ui, .hierarchy_ui = hierarchy_ui, .assets_ui = assets_ui, .assets_panel = .init(gpa), .asset_icons = asset_icons, .entity_editor = .init(gpa), .console = console, .plugin_pages = plugin_pages, .workspace = workspace, .frame = frame, .scene = scene, .camera_preview = camera_preview, .drawables = drawables, .overlay = overlay, .project = opened_project, .editor_modified = if (opened_project) |opened| editorModified(gpa, opened) else null, .upgrades = upgrades, .preference_folders = preference_folders, .open_scene = open_scene, .history = .{ .gpa = gpa }, .plugin_switches = plugin_switches, .project_assets = project_assets };
+            var self = Self{ .gpa = gpa, .game = game, .game_modified = modifiedAt(library_path), .app = app, .ui = context, .mono = mono, .console_ui = console_ui, .hierarchy_ui = hierarchy_ui, .assets_ui = assets_ui, .assets_panel = .init(gpa), .animation_ui = animation_ui, .asset_icons = asset_icons, .entity_editor = .init(gpa), .console = console, .plugin_pages = plugin_pages, .workspace = workspace, .frame = frame, .scene = scene, .camera_preview = camera_preview, .drawables = drawables, .overlay = overlay, .project = opened_project, .editor_modified = if (opened_project) |opened| editorModified(gpa, opened) else null, .upgrades = upgrades, .preference_folders = preference_folders, .open_scene = open_scene, .history = .{ .gpa = gpa }, .plugin_switches = plugin_switches, .project_assets = project_assets };
             self.input_settings = input_settings;
+            self.entity_editor.assets = project_assets;
             self.built_sources = self.sourcesNow();
-            self.syncDescriptors();
             return self;
         }
 
@@ -391,7 +410,12 @@ pub fn Editor(comptime project: type) type {
             if (self.rebuild) |job| job.deinit();
             if (self.picked_project.swap(null, .acq_rel)) |path| std.heap.c_allocator.free(std.mem.span(path));
             if (self.project) |opened| freeProject(self.gpa, opened);
-            if (self.project_assets) |loaders| self.gpa.destroy(loaders);
+            if (self.project_assets) |loaders| {
+                // Resource jobs read through these loaders: cancel and join them first.
+                if (self.app.resource_jobs) |jobs| jobs.clear();
+                loaders.deinit();
+                self.gpa.destroy(loaders);
+            }
             self.upgrades.deinit();
             for (&self.popouts) |*popout| if (popout.*) |*open| {
                 open.close(&self.app.graphics);
@@ -409,6 +433,7 @@ pub fn Editor(comptime project: type) type {
             self.console_ui.deinit();
             self.hierarchy_ui.deinit();
             self.assets_ui.deinit();
+            self.animation_ui.deinit();
             self.assets_panel.deinit();
             self.asset_icons.deinit(self.gpa);
             self.entity_editor.deinit();
@@ -507,7 +532,8 @@ pub fn Editor(comptime project: type) type {
             self.workspace.scene_name = if (self.open_scene) |*scene| scene.name() else null;
             // A few times a second (not while playing: Stop puts the scene back), compare the world
             // with the saved scene, for the status bar's `*`, and with the last undo step.
-            if (self.workspace.time_ms -| self.unsaved_checked_ms >= 300 and !self.play_mode.playing()) {
+            // Nor while the Animation panel poses the scene: the pose is not an edit.
+            if (self.workspace.time_ms -| self.unsaved_checked_ms >= 300 and !self.play_mode.playing() and !self.animation.isPosed()) {
                 self.unsaved_checked_ms = self.workspace.time_ms;
                 if (self.sceneText()) |text| {
                     const hash = std.hash.Wyhash.hash(0, text);
@@ -539,6 +565,9 @@ pub fn Editor(comptime project: type) type {
             }
             self.frame.* = self.workspace.titlebarFrame();
 
+            // The Animation panel's pose follows its clock and the selection, before it is drawn.
+            if (self.animationEnv()) |env| self.animation.tick(env, self.workspace.placed.pages[panels.animation_page] != null);
+
             // Build each page's UI into its panel, wherever that is.
             var pages_buffer: [panels.max_pages][]const ui.Vertex = @splat(&.{});
             const pages = pages_buffer[0..self.pageCount()];
@@ -565,9 +594,10 @@ pub fn Editor(comptime project: type) type {
                         const view_before: assets.View = @enumFromInt(@intFromEnum(preferences.editor(&self.app.preference_values).assets_view));
                         self.assets_panel.view = view_before;
                         self.assets_panel.file_types = if (self.game) |game| game.file_types else &.{};
-                        if (self.assets_panel.build(page_ui, if (self.project) |opened| opened.dir else null, &self.asset_icons, self.openScenePath())) |action| self.applyAssetAction(action);
+                        if (self.assets_panel.build(page_ui, if (self.project) |opened| opened.dir else null, self.project_assets, &self.asset_icons, self.openScenePath())) |action| self.applyAssetAction(action);
                         if (self.assets_panel.view != view_before) self.rememberAssetsView();
                     },
+                    panels.animation_page => if (self.animationEnv()) |env| self.animation.build(page_ui, env) else page_ui.muted("Open a project to animate."),
                     else => if (self.game) |*game| {
                         var editor_context = extensions.context(self);
                         game.editorPanelUi(index - panels.first_plugin_page, &editor_context, page_ui);
@@ -578,7 +608,7 @@ pub fn Editor(comptime project: type) type {
                     page_style.dragChip(page_ui, self.dragLabel(frame_arena.allocator(), dragged, index));
                 };
                 vertices.* = try page_ui.render();
-                syncClipboard(page_ui);
+                clipboard.sync(page_ui);
             }
             // Draw each window.
             try self.present(main_slot, &self.app.graphics.surface, &self.overlay, viewport, pages);
@@ -1034,7 +1064,7 @@ pub fn Editor(comptime project: type) type {
         /// Internal host/extension bridge: `project_dir` is the current project's folder;
         /// action paths are project-relative and borrowed only for this call. Supports only
         /// create_folder/create_file/rename/duplicate/delete/move_into; other tags are unreachable.
-        /// Ctrl during move_into copies instead. Mutates files/descriptors and records undo;
+        /// Ctrl during move_into copies instead. Mutates files and the asset catalog and records undo;
         /// refresh/remake is scheduled even on errors. I/O/allocation/document errors propagate
         /// and can occur after mutation, so this is not an atomic batch operation.
         ///
@@ -1048,7 +1078,7 @@ pub fn Editor(comptime project: type) type {
             defer files.close(io);
             defer {
                 self.assets_panel.refreshSoon();
-                self.syncDescriptors();
+                self.syncAssets();
                 // Input-map defaults load on the next start, without rebuilding live scene instances.
                 if (action != .create_file or !std.mem.endsWith(u8, action.create_file.file_type.extension, eggy.input.asset.extension))
                     self.app.sceneInstances().remakeAll();
@@ -1066,24 +1096,36 @@ pub fn Editor(comptime project: type) type {
                     }
                 },
                 .rename => |change| {
+                    try self.keepRefsValid(io, files);
                     const renamed = try file_ops.rename(self.gpa, io, files, change.path, change.name);
+                    self.assetsMoved(change.path, renamed);
                     if (self.open_scene) |*scene| scene.moved(change.path, renamed);
                     self.history.record(.{ .rename = .{ .from = try self.gpa.dupe(u8, change.path), .to = renamed } });
                     if (self.input_map_window) |window| try window.moved(change.path, renamed);
                 },
-                .duplicate => |path| self.history.record(.{ .create = .{ .path = try file_ops.duplicate(self.gpa, io, files, path) } }),
+                .duplicate => |path| {
+                    const copy = try file_ops.duplicate(self.gpa, io, files, path);
+                    self.assetsCopied(path, copy);
+                    self.history.record(.{ .create = .{ .path = copy } });
+                },
                 // Dragged onto a folder: moved, or copied with Ctrl held.
                 .move_into => |change| if (sdl3.keyboard.getModState().controlDown()) {
-                    self.history.record(.{ .create = .{ .path = try file_ops.copyInto(self.gpa, io, files, change.path, change.folder) } });
+                    const copy = try file_ops.copyInto(self.gpa, io, files, change.path, change.folder);
+                    self.assetsCopied(change.path, copy);
+                    self.history.record(.{ .create = .{ .path = copy } });
                 } else {
+                    try self.keepRefsValid(io, files);
                     const moved = try file_ops.moveInto(self.gpa, io, files, change.path, change.folder);
+                    self.assetsMoved(change.path, moved);
                     if (self.open_scene) |*scene| scene.moved(change.path, moved);
                     self.history.record(.{ .rename = .{ .from = try self.gpa.dupe(u8, change.path), .to = moved } });
                     if (self.input_map_window) |window| try window.moved(change.path, moved);
                 },
                 .delete => |path| {
                     try self.beforeAssetRemoval(path);
+                    try self.keepRefsValid(io, files);
                     const trashed = try file_ops.trash(self.gpa, io, files, path);
+                    self.assetsMoved(path, trashed);
                     if (self.open_scene) |*scene| scene.deleted(path);
                     self.history.record(.{ .delete = .{ .path = try self.gpa.dupe(u8, path), .trashed = trashed } });
                     var message: [96]u8 = undefined;
@@ -1096,9 +1138,28 @@ pub fn Editor(comptime project: type) type {
         /// The world as a scene file's text (caller-owned); null without a game library.
         fn sceneText(self: *Self) ?[]u8 {
             if (self.game == null) return null;
+            // A pose from the Animation panel is not part of the scene: lift it while capturing.
+            const env = self.animationEnv();
+            const was_posed = if (env) |found| self.animation.liftPose(found) else false;
+            defer if (env) |found| self.animation.restorePose(found, was_posed);
             return extensions.snapshot(self) catch |err| {
                 std.log.err("cannot capture the editor scene: {t}", .{err});
                 return null;
+            };
+        }
+
+        /// What the Animation panel works on; null without a project or the game's library.
+        fn animationEnv(self: *Self) ?animation_dock.Env {
+            const opened = self.project orelse return null;
+            return .{
+                .game = self.gamePtr() orelse return null,
+                .app = &self.app,
+                .assets = self.project_assets orelse return null,
+                .project_dir = opened.dir,
+                .history = &self.history,
+                .selected = self.entity_editor.selected,
+                .playing = self.play_mode.playing(),
+                .now_ms = self.workspace.time_ms,
             };
         }
 
@@ -1193,7 +1254,7 @@ pub fn Editor(comptime project: type) type {
             const io = threaded.io();
             var files = try std.Io.Dir.cwd().openDir(io, opened.dir, .{});
             defer files.close(io);
-            const prepared = try extraction.prepare(self.gpa, io, files, &self.app.world, game.sceneAccess(), entity, eggy.project.scenes_dir);
+            const prepared = try extraction.prepare(self.gpa, io, files, &self.app.world, game.sceneAccess(), entity, eggy.project.scenes_dir, self.project_assets orelse return error.NoProject);
             errdefer {
                 prepared.rollback(io, files, &self.app.world);
                 self.gpa.free(prepared.path);
@@ -1263,7 +1324,7 @@ pub fn Editor(comptime project: type) type {
             const io = threaded.io();
             var files = try std.Io.Dir.cwd().openDir(io, opened.dir, .{});
             defer files.close(io);
-            defer if (step.* == .input_map) self.assets_panel.refreshSoon() else if (step.* != .entity_visibility) self.filesChanged();
+            defer if (step.* == .input_map or step.* == .animation_clip) self.assets_panel.refreshSoon() else if (step.* != .entity_visibility) self.filesChanged();
             switch (step.*) {
                 .group => unreachable,
                 .entity_visibility => |change| {
@@ -1295,14 +1356,17 @@ pub fn Editor(comptime project: type) type {
                     const from = if (back) change.to else change.from;
                     const to = if (back) change.from else change.to;
                     try file_ops.move(io, files, from, to);
+                    self.assetsMoved(from, to);
                     if (self.open_scene) |*scene| scene.moved(from, to);
                     if (self.input_map_window) |window| try window.moved(from, to);
                 },
                 .delete => |*change| if (back) {
                     try file_ops.restore(io, files, change.trashed, change.path);
+                    self.assetsMoved(change.trashed, change.path);
                 } else {
                     try self.beforeAssetRemoval(change.path);
                     const trashed = try file_ops.trash(self.gpa, io, files, change.path);
+                    self.assetsMoved(change.path, trashed);
                     self.gpa.free(change.trashed);
                     change.trashed = trashed;
                     if (self.open_scene) |*scene| scene.deleted(change.path);
@@ -1310,10 +1374,12 @@ pub fn Editor(comptime project: type) type {
                 .create => |*change| if (back) {
                     try self.beforeAssetRemoval(change.path);
                     const trashed = try file_ops.trash(self.gpa, io, files, change.path);
+                    self.assetsMoved(change.path, trashed);
                     if (change.trashed) |old| self.gpa.free(old);
                     change.trashed = trashed;
                 } else if (change.trashed) |trashed| {
                     try file_ops.restore(io, files, trashed, change.path);
+                    self.assetsMoved(trashed, change.path);
                     self.gpa.free(trashed);
                     change.trashed = null;
                 },
@@ -1342,6 +1408,10 @@ pub fn Editor(comptime project: type) type {
                     var restored = try input_map_asset.restoreFile(self.gpa, io, files, change.path, expected, change.text.value(direction));
                     restored.deinit();
                 },
+                .animation_clip => |change| {
+                    const env = self.animationEnv() orelse return error.NoGame;
+                    try self.animation.restore(env, io, files, change.path, change.text.value(direction));
+                },
                 .layout => |change| {
                     const text = change.value(direction);
                     if (!layout_file.restore(self.gpa, text, &self.workspace.dock)) return error.ParseZon;
@@ -1357,8 +1427,10 @@ pub fn Editor(comptime project: type) type {
                         if (change.trashed) |old| self.gpa.free(old);
                         change.trashed = null;
                         change.trashed = try file_ops.trash(self.gpa, io, files, change.to);
+                        self.assetsMoved(change.to, change.trashed.?);
                     } else if (change.trashed) |trashed| {
                         try file_ops.restore(io, files, trashed, change.to);
+                        self.assetsMoved(trashed, change.to);
                         self.gpa.free(trashed);
                         change.trashed = null;
                     };
@@ -1515,9 +1587,15 @@ pub fn Editor(comptime project: type) type {
                 if (!self.play_mode.playing()) self.entity_editor.view_state.visibleLights(&self.app.world, &self.app.graphics.lights);
                 const visible = if (self.play_mode.playing()) gathered else self.entity_editor.view_state.visibleMeshes(&self.app.world, gathered);
                 const meshes = if (self.scene_view.no_camera) visible[0..0] else visible;
-                self.scene_view.drawn = meshes;
+                // Lights and cameras get stand-ins after the game's meshes, only through the panel's own camera.
+                const shown = if (self.game) |*game| if (!self.scene_view.throughGameCamera()) block: {
+                    const count = scene_view.stand_ins.append(game, &self.app, &self.app.graphics.lights, self.drawables, meshes.len);
+                    const stand_ins = self.entity_editor.view_state.visibleMeshes(&self.app.world, self.drawables[meshes.len..count]);
+                    break :block self.drawables[0 .. meshes.len + stand_ins.len];
+                } else meshes else meshes;
+                self.scene_view.drawn = shown;
                 // The ground grid only through the panel's own camera, not the game's.
-                try self.scene.render(&self.app.graphics, frame.cmd, pixelSize(rect), meshes, self.scene_view.view, self.entity_editor.selected, !self.scene_view.throughGameCamera());
+                try self.scene.render(&self.app.graphics, frame.cmd, pixelSize(rect), shown, self.scene_view.view, self.entity_editor.selected, !self.scene_view.throughGameCamera());
                 const game_overlay = self.build_window == null and self.play_mode.playing() and !self.workspace.simulating;
                 const has_game_overlay = game_overlay and if (self.game) |*game| game.hasDraw() or game.hasGameUi() else false;
                 if (has_game_overlay or self.app.debug_draw.line_count != 0 or self.app.debug_draw.label_count != 0) {
@@ -1812,7 +1890,7 @@ pub fn Editor(comptime project: type) type {
                 // Another editor may have unpacked a newer Eggy meanwhile.
                 self.upgrades.refresh();
                 if (self.input_settings) |settings| settings.reload() catch |err| std.log.err("cannot reload controls.zon: {t}; keeping active mappings", .{err});
-                // Files may have changed outside: models and images import again, and descriptors catch up.
+                // Files may have changed outside: models and images import again, and the catalog catches up.
                 self.app.graphics.forgetAssets();
                 self.filesChanged();
                 try self.rebuildOnFocus();
@@ -2263,7 +2341,11 @@ pub fn Editor(comptime project: type) type {
 
         /// What is being dragged between panels, if anything. In `arena`.
         fn dragging(self: *Self, arena: std.mem.Allocator) ?Dragged {
-            if (self.assets_panel.dragged()) |path| return .{ .asset = path };
+            // Only an asset a field can hold is dragged out: folders and what has no identity stay.
+            if (self.assets_panel.dragged()) |path| {
+                const reference = (self.project_assets orelse return null).referenceAt(path) orelse return null;
+                return .{ .asset = reference };
+            }
             return self.entity_editor.dragged(arena, &self.app, self.gamePtr());
         }
 
@@ -2292,37 +2374,38 @@ pub fn Editor(comptime project: type) type {
         /// a model or scene becomes an entity, on the ground under the pointer in the Scene
         /// panel, or under the row it is let go on in the Hierarchy (at the top level off them);
         /// an image paints the mesh it is let go on, in either.
-        fn spawnDropped(self: *Self, slot: Slot, at: ui.Vec2, path: []const u8, over: ?usize) void {
+        fn spawnDropped(self: *Self, slot: Slot, at: ui.Vec2, dropped: Reference, over: ?usize) void {
             const game = self.gamePtr();
-            if (eggy.assets.Kind.isTexture(path)) {
+            if (dropped.kind == .image and eggy.assets.Kind.isTexture(dropped.name)) {
                 const scene = self.sceneRect(slot);
                 const target = if (scene != null and scene.?.contains(at.x, at.y) and over == null)
                     self.scene_view.entityAt(&self.app.graphics.models, scene.?, at)
                 else if (over == panels.hierarchy_page) self.entity_editor.hierarchy.entityAt(&self.hierarchy_ui, at) else null;
                 const entity = target orelse return;
-                if (!self.entity_editor.paint(&self.app, game, entity, path)) self.workspace.toast("Only an entity with a Mesh can be painted");
+                if (!self.entity_editor.paint(&self.app, game, entity, dropped)) self.workspace.toast("Only an entity with a Mesh can be painted");
                 return;
             }
-            const kind = eggy.assets.Kind.of(path);
-            if (kind != .model and kind != .scene) return;
+            if (dropped.kind != .model and dropped.kind != .scene) return;
             if (self.sceneRect(slot)) |scene| if (scene.contains(at.x, at.y) and over == null) {
-                _ = self.entity_editor.spawnFrom(&self.app, game, path, self.scene_view.dropPoint(scene, at), null);
+                _ = self.entity_editor.spawnFrom(&self.app, game, dropped, self.scene_view.dropPoint(scene, at), null);
                 return;
             };
-            if (over == panels.hierarchy_page) _ = self.entity_editor.spawnFrom(&self.app, game, path, .{ 0, 0, 0 }, self.entity_editor.hierarchy.entityAt(&self.hierarchy_ui, at));
+            if (over == panels.hierarchy_page) _ = self.entity_editor.spawnFrom(&self.app, game, dropped, .{ 0, 0, 0 }, self.entity_editor.hierarchy.entityAt(&self.hierarchy_ui, at));
         }
 
         /// Bring each scene instance's entities up to date with its file (see `SceneInstances`).
         fn syncSceneInstances(self: *Self) void {
             const provider = self.project_assets orelse return;
             const game = if (self.game) |*loaded| loaded else return;
-            self.app.sceneInstances().sync(provider.files(), &self.app.world, game.sceneAccess(), self.openScenePath());
+            var key_buffer: [eggy.assets.id.key_len]u8 = undefined;
+            const open_key = if (self.openScenePath()) |path| provider.keyOf(&key_buffer, path) else null;
+            self.app.sceneInstances().sync(provider.files(), &self.app.world, game.sceneAccess(), open_key);
         }
 
-        /// The project's files changed: the Assets panel lists them again, descriptors keep up,
+        /// The project's files changed: the Assets panel lists them again, the catalog keeps up,
         /// and scene instances are made again from their files.
         /// Internal host notification after external/extension asset mutations. May create
-        /// or remove descriptors and invalidate GPU asset caches; failures log rather than
+        /// or remove catalog entries and invalidate GPU asset caches; failures log rather than
         /// propagate. Instance rebuilding is deferred to subsequent synchronization.
         ///
         /// ```zig
@@ -2331,22 +2414,44 @@ pub fn Editor(comptime project: type) type {
         /// ```
         pub fn filesChanged(self: *Self) void {
             self.assets_panel.refreshSoon();
-            self.syncDescriptors();
+            self.syncAssets();
             self.app.sceneInstances().remakeAll();
         }
 
-        /// Give every file in the project's `resources/` a descriptor, and drop those whose file
-        /// has gone. A model's descriptor may have changed with it, so models import again.
-        fn syncDescriptors(self: *Self) void {
-            const opened = self.project orelse return;
-            var threaded: std.Io.Threaded = .init_single_threaded;
-            const io = threaded.io();
-            var files = std.Io.Dir.cwd().openDir(io, opened.dir, .{}) catch return;
-            defer files.close(io);
-            const changes = descriptors.sync(self.gpa, io, files) catch |err| return std.log.warn("cannot update the resources' descriptors: {t}", .{err});
+        /// Make the asset catalog match the project's `resources/` (new files get ids, gone files
+        /// lose theirs). A model's settings or file may have changed with it, so the GPU's models
+        /// and textures load again.
+        fn syncAssets(self: *Self) void {
+            const assets_of = self.project_assets orelse return;
+            const changes = assets_of.sync() catch |err| return std.log.warn("cannot update the asset catalog: {t}", .{err});
             if (!changes.any()) return;
-            std.log.debug("descriptors: {d} made, {d} removed", .{ changes.made, changes.removed });
             self.app.graphics.forgetAssets();
+        }
+
+        /// Before files move or go: turn the path references of scenes and materials that were
+        /// never opened into ids, so they still find their assets. Fails, with the reason in a
+        /// toast, if one can't be, and then nothing has been written or moved.
+        fn keepRefsValid(self: *Self, io: std.Io, project_folder: std.Io.Dir) !void {
+            const provider = self.project_assets orelse return;
+            var arena_state = std.heap.ArenaAllocator.init(self.gpa);
+            defer arena_state.deinit();
+            const types: []const eggy.components.Info = if (self.game) |game| game.sceneAccess().types() else &.{};
+            const problem = try legacy_refs.normalize(self.gpa, arena_state.allocator(), io, project_folder, provider, types);
+            if (problem) |why| {
+                std.log.err("not moving: {s}", .{why});
+                self.workspace.toast("Not moved: a scene or material holds a reference that can't be kept: see the Console");
+                return error.UnmigratableReference;
+            }
+        }
+
+        /// Tell the catalog that `from` now lives at `to`, keeping its asset ids.
+        fn assetsMoved(self: *Self, from: []const u8, to: []const u8) void {
+            if (self.project_assets) |assets_of| assets_of.moved(from, to);
+        }
+
+        /// Tell the catalog that `to` is a copy of `from`, so it gets ids of its own.
+        fn assetsCopied(self: *Self, from: []const u8, to: []const u8) void {
+            if (self.project_assets) |assets_of| assets_of.copied(from, to);
         }
 
         /// The chip beside the pointer while `dragged` is over page `index`: its name, or why
@@ -2354,7 +2459,7 @@ pub fn Editor(comptime project: type) type {
         fn dragLabel(self: *Self, arena: std.mem.Allocator, dragged: Dragged, index: usize) []const u8 {
             const name = switch (dragged) {
                 .entity => |entity| entity.name,
-                .asset => |path| std.fs.path.basename(path),
+                .asset => |reference| reference.name,
             };
             switch (index) {
                 panels.hierarchy_page => if (self.entity_editor.hierarchy.dragLabel(arena)) |label| return label,
@@ -2467,21 +2572,6 @@ pub fn Editor(comptime project: type) type {
             }
         }
 
-        /// Put what a page's field cut or copied on the system clipboard, and answer its paste.
-        fn syncClipboard(page_ui: *ui.Context) void {
-            if (page_ui.copied) |text| {
-                var buffer: [4096]u8 = undefined;
-                if (std.fmt.bufPrintZ(&buffer, "{s}", .{text})) |copy| sdl3.clipboard.setText(copy) catch {} else |_| {}
-            }
-            if (page_ui.paste_requested) {
-                page_ui.paste_requested = false;
-                if (!sdl3.clipboard.hasText()) return;
-                const text = sdl3.clipboard.getText() catch return;
-                defer sdl3.free(text);
-                page_ui.handle(.{ .text = text });
-            }
-        }
-
         /// The OS window for `slot`, if it is open.
         fn windowOf(self: *Self, slot: Slot) ?sdl3.video.Window {
             if (slot == main_slot) return self.app.window.window;
@@ -2500,6 +2590,7 @@ pub fn Editor(comptime project: type) type {
             if (index == panels.console_page) return &self.console_ui;
             if (index == panels.hierarchy_page) return &self.hierarchy_ui;
             if (index == panels.assets_page) return &self.assets_ui;
+            if (index == panels.animation_page) return &self.animation_ui;
             return &self.plugin_pages[index - panels.first_plugin_page];
         }
 
@@ -2675,6 +2766,7 @@ test {
     _ = cli;
     _ = @import("input_mappings.zig");
     _ = @import("input_map_asset/input_map_asset.zig");
+    _ = @import("animation_dock/animation_dock.zig");
     _ = @import("assets/creation.zig");
     _ = @import("input_settings.zig");
     _ = @import("game_input.zig");
@@ -2687,6 +2779,8 @@ test {
     _ = @import("projects/template.zig");
     _ = @import("projects/job.zig");
     _ = @import("projects/build_output.zig");
+    _ = @import("projects/build_steps.zig");
+    _ = @import("terminal_steps.zig");
     _ = @import("projects/discovery.zig");
     _ = @import("projects/wizard.zig");
     _ = @import("projects/flow.zig");
@@ -2714,8 +2808,8 @@ test {
     _ = @import("assets/listing.zig");
     _ = @import("assets/icons.zig");
     _ = @import("assets/file_ops.zig");
-    _ = @import("assets/descriptors.zig");
     _ = @import("assets/project_assets.zig");
+    _ = @import("assets/legacy_refs.zig");
     _ = @import("window_placement.zig");
     _ = @import("hot_reload/hot_reload.zig");
     _ = @import("preferences/preferences.zig");

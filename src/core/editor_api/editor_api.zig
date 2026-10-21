@@ -169,8 +169,8 @@ pub const Context = struct {
     pub fn createFolder(self: *Context, parent: []const u8) !void {
         try self.textRequest(.create_folder, parent, "");
     }
-    /// Rename a project-relative file/folder to the path-free leaf `name`, with its descriptor
-    /// and undo history. Requires editing mode; invalid names and filesystem failures are errors.
+    /// Rename a project-relative file/folder to the path-free leaf `name`, keeping its asset ids
+    /// and recording undo history. Requires editing mode; invalid names and filesystem failures are errors.
     ///
     /// ```zig
     /// try editor.renameFile("resources/old.txt", "story.txt");
@@ -196,8 +196,8 @@ pub const Context = struct {
     pub fn duplicateFile(self: *Context, path: []const u8) !void {
         try self.textRequest(.duplicate_file, path, "");
     }
-    /// Move a project-relative file/folder into project-relative `folder`, preserving its
-    /// descriptor and recording undo. Requires editing mode; destination conflicts are errors.
+    /// Move a project-relative file/folder into project-relative `folder`, keeping its
+    /// asset ids and recording undo. Requires editing mode; destination conflicts are errors.
     ///
     /// ```zig
     /// try editor.moveFile("resources/story.txt", "resources/dialogue");

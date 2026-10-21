@@ -237,6 +237,101 @@ fn rgbSum(pixels: []const u8) u64 {
     return total;
 }
 
+test "GPU imported skeletal morph and vertex clips pose each instance independently" {
+    if (comptime builtin.os.tag == .emscripten) return error.SkipZigTest;
+    if ((try sdl.getEnvironment()).getVariable("EGGY_GPU_TEST") == null) return error.SkipZigTest;
+    const gpa = std.testing.allocator;
+    const flags = sdl.InitFlags{ .video = true };
+    try sdl.init(flags);
+    defer sdl.quit(flags);
+    const window = adapter.Sdl3Window.init(try sdl.video.Window.init("Eggy imported animation", 320, 240, .{ .vulkan = true }));
+    defer window.window.deinit();
+    var graphics = try Graphics.initWithSettings(gpa, window, .{ .backend = .vulkan, .anti_aliasing = .off, .width = 320, .height = 240 });
+    defer graphics.deinit();
+    var scene = try SceneTexture.init(&graphics);
+    defer scene.deinit();
+    defer graphics.queue.waitIdle() catch @panic("animation GPU work did not finish");
+    var context: u8 = 0;
+    graphics.models.loader = .{ .context = &context, .load = animatedTriangle };
+    graphics.clips.resources = @import("resources/resources.zig").Resources.from(&context, importedAnimation, animatedTriangle, checker);
+    var animators = [_]@import("animation.zig").Animator{
+        .{ .playing = false }, .{ .playing = false },
+    };
+    const model_key = "000000000000002a";
+    var drawables = [_]mesh.Drawable{
+        .{ .model = .{ .{ 0.5, 0, 0, 0 }, .{ 0, 0.5, 0, 0 }, .{ 0, 0, 0.5, 0 }, .{ -1.25, 0, 0, 1 } }, .color = .{ 1, 0.1, 0.1, 1 }, .shape = .cube, .entity_id = 0, .entity_generation = 0, .model_file = model_key, .model_file_len = model_key.len, .animator = &animators[0] },
+        .{ .model = .{ .{ 0.5, 0, 0, 0 }, .{ 0, 0.5, 0, 0 }, .{ 0, 0, 0.5, 0 }, .{ 1.25, 0, 0, 1 } }, .color = .{ 1, 0.1, 0.1, 1 }, .shape = .cube, .entity_id = 1, .entity_generation = 0, .model_file = model_key, .model_file_len = model_key.len, .animator = &animators[1] },
+    };
+    const view = camera.View.lookingAt(.{ 0, 0, 4 }, .{ 0, 0, 0 }, .{});
+    for ([_]u64{ 43, 44, 45 }) |clip_id| {
+        animators[0].model_clip = .fromId(clip_id);
+        animators[0].time_s = 0;
+        animators[1] = animators[0];
+        drawables[0].model[3][0] = -1.25;
+        const rest = try scenePixels(gpa, &graphics, &scene, &drawables, view);
+        defer gpa.free(rest);
+        animators[0].time_s = 0.5;
+        const posed = try scenePixels(gpa, &graphics, &scene, &drawables, view);
+        defer gpa.free(posed);
+        try std.testing.expect(!std.mem.eql(u8, rest, posed));
+        for (0..128) |row| {
+            const right = row * 128 * 4 + 64 * 4;
+            try std.testing.expectEqualSlices(u8, rest[right..][0 .. 64 * 4], posed[right..][0 .. 64 * 4]);
+        }
+
+        // Moving the joint, morph, or baked vertices must match the same rigid world-space move.
+        animators[0].model_clip = .{};
+        drawables[0].model[3][0] += 0.5;
+        const translated = try scenePixels(gpa, &graphics, &scene, &drawables, view);
+        defer gpa.free(translated);
+        try std.testing.expectEqualSlices(u8, translated, posed);
+    }
+}
+
+fn animatedTriangle(raw: *anyopaque, gpa: std.mem.Allocator, key: []const u8) !assets.Model {
+    var model = try triangle(raw, gpa, key);
+    errdefer model.deinit(gpa);
+    model.parts[0].vertex_count = 3;
+    model.parts[0].node = 0;
+    model.parts[0].skin = 0;
+    model.parts[0].morph_count = 1;
+    model.rig.nodes = try gpa.dupe(assets.model.Node, &.{.{ .name = &.{} }});
+    model.rig.nodes[0].name = try gpa.dupe(u8, "root");
+    model.rig.influences = try gpa.dupe(assets.model.Influence, &([_]assets.model.Influence{.{ .weights = .{ 1, 0, 0, 0 } }} ** 3));
+    model.rig.skins = try gpa.dupe(assets.model.Skin, &.{.{ .joints = &.{}, .inverse_bind = &.{} }});
+    model.rig.skins[0].joints = try gpa.dupe(u32, &.{0});
+    model.rig.skins[0].inverse_bind = try gpa.dupe([4][4]f32, &.{.{ .{ 1, 0, 0, 0 }, .{ 0, 1, 0, 0 }, .{ 0, 0, 1, 0 }, .{ 0, 0, 0, 1 } }});
+    model.rig.morph_targets = try gpa.dupe(assets.model.MorphTarget, &.{.{ .name = &.{}, .deltas = &.{} }});
+    model.rig.morph_targets[0].name = try gpa.dupe(u8, "slide");
+    model.rig.morph_targets[0].deltas = try gpa.dupe(assets.model.MorphDelta, &.{
+        .{ .vertex = 0, .position = .{ 2, 0, 0 } },
+        .{ .vertex = 1, .position = .{ 2, 0, 0 } },
+        .{ .vertex = 2, .position = .{ 2, 0, 0 } },
+    });
+    if (!model.isWhole()) return error.InvalidAnimationFixture;
+    return model;
+}
+
+fn importedAnimation(_: *anyopaque, gpa: std.mem.Allocator, key: []const u8) ![:0]u8 {
+    var times = [_]f32{ 0, 1 };
+    var translation = [_]f32{ 0, 0, 0, 2, 0, 0 };
+    var weights = [_]f32{ 0, 1 };
+    var vertices = [_]f32{ -1, -1, 0, 1, -1, 0, 0, 1, 0, 1, -1, 0, 3, -1, 0, 2, 1, 0 };
+    var tracks = [_]assets.model.Track{switch (try assets.id.parse(key)) {
+        43 => .{ .channel = .translation, .target = 0, .stride = 3, .times = &times, .values = &translation },
+        44 => .{ .channel = .morph_weights, .target = 0, .stride = 1, .times = &times, .values = &weights },
+        45 => .{ .channel = .vertex_cache, .target = 0, .stride = 9, .times = &times, .values = &vertices },
+        else => return error.FileNotFound,
+    }};
+    var bytes = std.Io.Writer.Allocating.init(gpa);
+    defer bytes.deinit();
+    try assets.imported_clip.write(&bytes.writer, .{
+        .source_model = 42,
+        .clip = .{ .name = "slide", .duration_s = 1, .tracks = &tracks },
+    });
+    return gpa.dupeZ(u8, bytes.written());
+}
+
 fn scenePixels(gpa: std.mem.Allocator, graphics: *Graphics, scene: *SceneTexture, drawables: []mesh.Drawable, view: camera.View) ![]u8 {
     const size = 128;
     const length = size * size * 4;

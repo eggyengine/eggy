@@ -1,4 +1,4 @@
-//! Reusable material assets cached by project-relative path for the renderer.
+//! Reusable material assets cached by canonical identity for the renderer.
 const std = @import("std");
 const Material = @import("material.zig").Material;
 const materials = @import("materials.zig");

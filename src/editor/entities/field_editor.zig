@@ -14,6 +14,7 @@ const Part = eggy.components.Part;
 const page_style = @import("../page_style.zig");
 const restyle = page_style.restyle;
 const Dragged = @import("../dragged.zig").Dragged;
+const ProjectAssets = @import("../assets/project_assets.zig").ProjectAssets;
 const field_value = @import("field_value.zig");
 const ColorPopup = @import("color_popup.zig").ColorPopup;
 const Value = field_value.Value;
@@ -260,6 +261,8 @@ pub const FieldEditor = struct {
         shown: ?[]const u8,
         control_width: f32,
         dragging: ?Dragged,
+        /// Names the assets a nested reference holds; their keys are shown as they are without.
+        assets: ?*ProjectAssets = null,
     }) ?[]const u8 {
         const arena = context.builder().allocator;
         const value = Value.parse(arena, request.text) orelse {
@@ -280,6 +283,7 @@ pub const FieldEditor = struct {
             .control_width = request.control_width,
             .dragging = request.dragging,
             .shown = request.shown orelse "",
+            .assets = request.assets,
         };
         const seed = std.hash.Wyhash.hash(request.component, std.mem.asBytes(&request.field));
         draw.part(0, .root, request.label, seed, 0);
@@ -299,6 +303,7 @@ const Draw = struct {
     dragging: ?Dragged,
     /// What the field's reference points at, as people read it (top-level references only).
     shown: []const u8,
+    assets: ?*ProjectAssets,
     /// The field's new text, once a control changed it.
     changed: ?[]const u8 = null,
 
@@ -701,10 +706,10 @@ const Draw = struct {
         }) catch {};
     }
 
-    /// A nested reference's value as people read it: a file's path, or the entity's number.
+    /// A nested reference's value as people read it: an asset's path, or the entity's number.
     fn referenceText(self: *Draw, node: Node) []const u8 {
         return switch (self.value.get(node)) {
-            .string_literal => |path| path,
+            .string_literal => |key| if (self.assets) |assets| assets.label(self.scratch(), key) else key,
             .null => "",
             else => self.value.text(node),
         };

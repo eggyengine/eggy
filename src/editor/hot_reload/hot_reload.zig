@@ -704,9 +704,9 @@ pub const HotGame = struct {
         return self.game.animation_preview_begin(state, &app.world, entityOf(entity));
     }
 
-    /// Pose the previewed entity in the authored clip `clip` (a project path, may be empty) and
-    /// model clip `model_clip` (may be empty) at `time_s`, using `app.graphics.clips`.
-    /// False without a preview, or for paths the entity can't hold.
+    /// Pose the previewed entity in the authored clip `clip` and/or the imported clip
+    /// `model_clip` (animation asset keys, either may be empty) at `time_s`, using
+    /// `app.graphics.clips`. False without a preview, or for keys the entity can't hold.
     pub fn showAnimationPreview(self: *const HotGame, app: *eggy.App, clip: []const u8, model_clip: []const u8, time_s: f32) bool {
         const state = self.state orelse return false;
         var clip_z: [eggy.refs.max_path_len + 1:0]u8 = undefined;
@@ -745,8 +745,8 @@ pub const HotGame = struct {
         return if (self.game.animation_transform(&app.world, entityOf(entity), path.ptr, path.len, &out)) out else null;
     }
 
-    /// The model `entity` draws, copied into `buffer`; null when it draws none or the path is
-    /// longer than `buffer`.
+    /// The key of the model `entity` draws, copied into `buffer`; null when it draws none or the
+    /// key is longer than `buffer`.
     pub fn animationModel(self: *const HotGame, app: *eggy.App, entity: eggy.ecs.EntityId, buffer: []u8) ?[]const u8 {
         if (self.library == null) return null;
         const len = self.game.animation_model(&app.world, entityOf(entity), buffer.ptr, buffer.len);
@@ -754,15 +754,16 @@ pub const HotGame = struct {
         return buffer[0..@intCast(len)];
     }
 
-    /// Give `entity` an `Animator` playing the authored clip at `clip`, adding the component
-    /// if needed. A scene change, so undo covers it. False when it can't be done.
-    pub fn assignAnimation(self: *const HotGame, app: *eggy.App, entity: eggy.ecs.EntityId, clip: []const u8) bool {
+    /// Give `entity` an `Animator` playing the animation asset with key `clip` (its imported
+    /// clip when `imported`, else its authored one), adding the component if needed. A scene
+    /// change, so undo covers it. False when it can't be done.
+    pub fn assignAnimation(self: *const HotGame, app: *eggy.App, entity: eggy.ecs.EntityId, clip: []const u8, imported: bool) bool {
         if (self.library == null) return false;
         var clip_z: [eggy.refs.max_path_len + 1:0]u8 = undefined;
         if (clip.len > eggy.refs.max_path_len) return false;
         @memcpy(clip_z[0..clip.len], clip);
         clip_z[clip.len] = 0;
-        return self.game.animation_assign(&app.world, entityOf(entity), &clip_z);
+        return self.game.animation_assign(&app.world, entityOf(entity), &clip_z, imported);
     }
 
     /// The typed steps scenes need, through the library (see `eggy.scene.Access`).

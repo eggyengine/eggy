@@ -693,7 +693,9 @@ test "a scene instance is saved without the entities made from its file" {
     defer scene.deinit();
     try std.testing.expectEqual(@as(usize, 1), scene.entities.len);
     try std.testing.expectEqualStrings("SceneInstance", scene.entities[0].components[0].type);
-    try std.testing.expectEqualStrings("\"resources/scene/rat.scene.zon\"", scene.entities[0].components[0].fields[0].value);
+    const scene_ref = @import("refs.zig").AssetRef(.scene).init("resources/scene/rat.scene.zon");
+    var expected: [18]u8 = undefined;
+    try std.testing.expectEqualStrings(try std.fmt.bufPrint(&expected, "\"{s}\"", .{scene_ref.key()}), scene.entities[0].components[0].fields[0].value);
 }
 
 test "references to the scene's own entities point at their copies" {

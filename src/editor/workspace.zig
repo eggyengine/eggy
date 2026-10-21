@@ -349,7 +349,7 @@ pub const Workspace = struct {
     }
 
     /// The default arrangement: hierarchy left, inspector right (plugin panels as tabs beside it),
-    /// console and assets below the scene.
+    /// console, assets and animation below the scene.
     fn resetLayout(self: *Workspace) !void {
         self.dock = dock.DockSpace.init();
         self.dock.buttons = self.buttons;
@@ -361,6 +361,7 @@ pub const Workspace = struct {
         try self.dock.add(@intFromEnum(Panel.console), @intFromEnum(Panel.scene), .bottom);
         self.splitRatio(.console, 0.7);
         try self.dock.add(@intFromEnum(Panel.assets), @intFromEnum(Panel.console), .center);
+        try self.dock.add(@intFromEnum(Panel.animation), @intFromEnum(Panel.console), .center);
         for (self.plugin_panels, 0..) |panel, i| try self.dock.add(panels.pluginId(panel, i), @intFromEnum(Panel.inspector), .center);
         // The Inspector's and the Console's tabs in front.
         _ = self.dock.activate(dock.first_id + @intFromEnum(Panel.inspector));
