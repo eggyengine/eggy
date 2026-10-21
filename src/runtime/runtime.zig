@@ -29,6 +29,8 @@ pub fn Runtime(comptime project: type) type {
         /// What packaging put beside or inside the game (null when data cannot be read), and the
         /// entities each scene instance made from it.
         data: ?*packaged_assets.Data,
+        /// How many invalid lights were last reported (`eggy.lighting.reportInvalid`).
+        invalid_lights_reported: u32 = 0,
 
         const Self = @This();
 
@@ -46,7 +48,7 @@ pub fn Runtime(comptime project: type) type {
         }
 
         /// Host startup: open the App, install packaged providers/preferences, start enabled
-        /// plugins and world schedules. `args` is currently ignored.
+        /// plugins and world schedules. `args` gives the log its `--log-level`.
         /// `process_init` must outlive the result; pair success with `deinit` on the main thread.
         /// Core setup failures propagate; unavailable packaged data/scenes are logged and skipped.
         ///
@@ -56,7 +58,7 @@ pub fn Runtime(comptime project: type) type {
         /// defer runtime.deinit();
         /// ```
         pub fn init(process_init: *const std.process.Init, args: []const [*:0]const u8) !Self {
-            _ = args;
+            eggy.log.start(process_init.io, .game, project.name, args);
             const gpa = process_init.gpa;
             // Used, so a release build's linker keeps the metadata's section.
             if (@hasDecl(project, "metadata_text")) std.mem.doNotOptimizeAway(&project.metadata_text);
@@ -168,6 +170,7 @@ pub fn Runtime(comptime project: type) type {
             try self.app.updateWorld();
             self.app.input.endFrame();
             self.app.graphics.lights = try eggy.lighting.gather(&self.app.world);
+            eggy.lighting.reportInvalid(self.app.graphics.lights, &self.invalid_lights_reported);
             const frame = try self.app.graphics.beginFrame();
             // Through the game's camera; without one, there is nothing to see it from.
             if (eggy.camera.find(&self.app.world)) |view| {

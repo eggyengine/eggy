@@ -13,6 +13,8 @@ pub const Light = union(enum) {
 
 /// Ambient illumination and photographic exposure shared by all views of the current world.
 pub const Environment = struct {
+    /// Marks it in the editor (nf-md-earth).
+    pub const icon = "\u{f01e7}";
     ambient_color: [3]f32 = @splat(1),
     ambient_intensity: f32 = 0.03,
     exposure_ev: f32 = 0,
@@ -28,6 +30,8 @@ pub const Environment = struct {
 
 /// Editable light component. Directional and spot lights shine along local -Z.
 pub const SceneLight = struct {
+    /// Marks it in the editor (nf-md-lightbulb_on_outline).
+    pub const icon = "\u{f06e9}";
     pub const dependencies = .{transform.Transform};
     kind: enum { directional, point, spot } = .directional,
     color: [3]f32 = @splat(1),
@@ -71,6 +75,8 @@ pub const Frame = extern struct {
     /// Parallel source identities for host visibility filtering; never uploaded as uniforms.
     entities: [max_lights]LightEntity = @splat(.{}),
     count: u32 = 0,
+    /// Lights left out because their values don't validate (see `SceneLight.validate`).
+    invalid: u32 = 0,
     ambient: [4]f32 = .{ 1, 1, 1, 0.03 },
     /// x: exposure multiplier, y: default-light enabled, z: shadow-light index (-1 for none).
     options: [4]f32 = .{ 1, 1, -1, 0 },
@@ -143,7 +149,9 @@ pub fn aimNewLight(world: *ecs.World, entity: ecs.EntityId) void {
     world.markChanged(entity, transform.Transform);
 }
 
-/// Gather up to sixteen validated lights; invalid values and overflow are explicit errors.
+/// Gather up to sixteen validated lights. A light whose values don't validate is left out and
+/// counted in `invalid`, so one bad light doesn't stop the rest; overflow, a second shadow caster
+/// and a second environment are explicit errors.
 pub fn gather(world: *ecs.World) !Frame {
     var result = Frame{};
     var environment = if (world.getResource(Environment)) |value| value.* else Environment{};
@@ -158,7 +166,10 @@ pub fn gather(world: *ecs.World) !Frame {
     var lights = world.query(.{ *const SceneLight, *const transform.Transform });
     while (lights.next()) |view| {
         const light = view.get(*const SceneLight).*;
-        try light.validate();
+        light.validate() catch {
+            result.invalid += 1;
+            continue;
+        };
         if (result.count == max_lights) return error.TooManyLights;
         const matrix = transform.worldMatrix(world, view.entity).data;
         for (matrix) |column| {
@@ -274,4 +285,32 @@ test "multiple authored environments or shadow casters are explicit errors" {
     _ = try world.spawn(.{ transform.Transform{}, SceneLight{ .casts_shadows = true } });
     _ = try world.spawn(.{ transform.Transform{}, SceneLight{ .casts_shadows = true } });
     try std.testing.expectError(error.TooManyShadowLights, gather(&world));
+}
+
+/// Warn when the number of lights `frame` left out as invalid changes to one or more; `reported`
+/// keeps the number last reported between frames.
+pub fn reportInvalid(frame: Frame, reported: *u32) void {
+    if (frame.invalid == reported.*) return;
+    reported.* = frame.invalid;
+    if (frame.invalid > 0) std.log.warn("{d} scene light(s) left out: check their values (only directional lights cast shadows)", .{frame.invalid});
+}
+
+test "an invalid light is left out, and the others still gathered" {
+    var world = ecs.World.init(std.testing.allocator);
+    defer world.deinit();
+    _ = try world.spawn(.{ transform.Transform{}, SceneLight{ .kind = .directional } });
+    _ = try world.spawn(.{ transform.Transform{}, SceneLight{ .kind = .point, .casts_shadows = true } });
+    const frame = try gather(&world);
+    try std.testing.expectEqual(@as(u32, 1), frame.count);
+    try std.testing.expectEqual(@as(u32, 1), frame.invalid);
+}
+
+test "a light taken off an entity that stays is no longer gathered" {
+    var world = ecs.World.init(std.testing.allocator);
+    defer world.deinit();
+    const entity = try world.spawn(.{ transform.Transform{}, SceneLight{ .kind = .directional } });
+    try std.testing.expectEqual(@as(u32, 1), (try gather(&world)).count);
+    world.remove(entity, SceneLight);
+    try std.testing.expect(world.isAlive(entity));
+    try std.testing.expectEqual(@as(u32, 0), (try gather(&world)).count);
 }
