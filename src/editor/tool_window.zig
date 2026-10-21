@@ -7,6 +7,7 @@ const ui = eggy.ui;
 const weeoui_sdl3 = @import("weeoui_sdl3");
 const PopOut = @import("popout.zig").PopOut;
 const icon = @import("icon.zig");
+const clipboard = @import("clipboard.zig");
 
 pub const ToolWindow = struct {
     popout: PopOut,
@@ -98,6 +99,7 @@ pub const ToolWindow = struct {
         self.ui.newFrame(viewport);
         page.build(&self.ui);
         const vertices = try self.ui.render();
+        clipboard.sync(&self.ui);
 
         // Text fields need SDL's text input while focused.
         if (self.ui.wants_text != self.text_input) {

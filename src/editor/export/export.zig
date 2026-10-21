@@ -12,6 +12,7 @@ const ui = eggy.ui;
 const weeoui_sdl3 = @import("weeoui_sdl3");
 const ToolWindow = @import("../tool_window.zig").ToolWindow;
 const job_zig = @import("../projects/job.zig");
+const sdk_location = @import("sdk_location.zig");
 const Job = job_zig.Job;
 const terminal_view = @import("../terminal_view.zig");
 const TerminalView = terminal_view.TerminalView;
@@ -108,6 +109,9 @@ pub const ExportWindow = struct {
             .scenes_arena = .init(gpa),
         };
         self.findScenes();
+        // The macOS SDK this computer was last given, in any project.
+        var sdk_buffer: [512]u8 = undefined;
+        if (sdk_location.load(&sdk_buffer)) |path| self.settings[@intFromEnum(platforms.Platform.macos)].sdk.set(path) catch {};
         return self;
     }
 
@@ -119,6 +123,7 @@ pub const ExportWindow = struct {
     /// export_ui.close(graphics); // Do not use the pointer afterward.
     /// ```
     pub fn close(self: *ExportWindow, graphics: *eggy.Graphics) void {
+        self.rememberSdk();
         if (self.job) |job| job.deinit();
         if (self.change) |change| {
             self.gpa.free(change.before);
@@ -435,6 +440,7 @@ pub const ExportWindow = struct {
         if (context.buttonVariant(if (self.show_output) "Hide output" else "Show output", .link)) self.show_output = !self.show_output;
         if (self.show_output) {
             // The output only grows, so its length tells when it changed.
+            self.terminal.showSteps(status.steps, sdl3.timer.getMillisecondsSinceInit());
             self.terminal.add(context, status.log, status.log.len, @max(120, context.viewport.h - 280));
         }
 
@@ -471,6 +477,7 @@ pub const ExportWindow = struct {
                         self.problem = "Set the macOS SDK to a MacOSX.sdk folder first.";
                         return;
                     }
+                    self.rememberSdk();
                 }
                 break :blk platforms.exportArgs(arena, platform, settings, scene, sdk) catch return self.fail(error.OutOfMemory);
             },
@@ -592,12 +599,19 @@ pub const ExportWindow = struct {
         const chosen = std.mem.span(path);
         defer std.heap.c_allocator.free(chosen);
         self.settings[@intFromEnum(platforms.Platform.macos)].sdk.set(chosen[0..@min(chosen.len, 512)]) catch {};
+        self.rememberSdk();
+    }
+
+    /// Keep the macOS SDK field's path for the next Export window; an empty field forgets it.
+    fn rememberSdk(self: *ExportWindow) void {
+        if (!platforms.needs_macos_sdk) return;
+        sdk_location.save(std.mem.trim(u8, self.settings[@intFromEnum(platforms.Platform.macos)].sdk.text(), " "));
     }
 
     /// The macOS SDK to build with: the one typed, else `~/SDKs`.
     fn macSdk(self: *ExportWindow, arena: std.mem.Allocator) ?[]const u8 {
         const typed = std.mem.trim(u8, self.settings[@intFromEnum(platforms.Platform.macos)].sdk.text(), " ");
-        return if (typed.len > 0) typed else platforms.defaultMacSdk(arena);
+        return if (typed.len > 0) sdk_location.expandHome(arena, typed) else platforms.defaultMacSdk(arena);
     }
 
     fn sdkExists(_: *ExportWindow, path: ?[]const u8) bool {
@@ -666,4 +680,5 @@ test "scenes are named inside resources, without their extension" {
 test {
     _ = platforms;
     _ = @import("icons.zig");
+    _ = sdk_location;
 }
