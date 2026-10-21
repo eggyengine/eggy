@@ -11,6 +11,7 @@ const template = @import("template.zig");
 const engine = @import("engine.zig");
 const log = std.log.scoped(.projects);
 const build_output = @import("build_output.zig");
+const build_steps = @import("build_steps.zig");
 const export_process = @import("export_process.zig");
 /// The progress window's raw-output limit; Console diagnostics stream independently.
 const max_output = 1 << 20;
@@ -113,6 +114,8 @@ pub const Status = struct {
     /// The job's output so far: what it did, then the build's own output. The job's own, valid
     /// until the next `status` or `deinit`.
     log: []const u8,
+    /// Every step the build has shown, in the order they started; in the `status` arena.
+    steps: []const build_steps.Step = &.{},
 };
 
 pub const Job = struct {
@@ -135,6 +138,7 @@ pub const Job = struct {
     stage: Stage = .reading_project,
     /// The build's own progress, 0 to 1.
     build_fraction: f32 = 0,
+    steps: build_steps.Steps = .{},
     detail: std.ArrayList(u8) = .empty,
     /// Only grows (up to `max_output`), so `shown` catches up by copying what is new.
     output: std.ArrayList(u8) = .empty,
@@ -262,6 +266,7 @@ pub const Job = struct {
             .fraction = fraction,
             .detail = try arena.dupe(u8, self.detail.items),
             .log = self.shown.items,
+            .steps = try arena.dupe(build_steps.Step, self.steps.items()),
         };
     }
 
@@ -314,6 +319,7 @@ pub const Job = struct {
             self.mutex.lockUncancelable(self.io());
             defer self.mutex.unlock(self.io());
             self.stage = .failed;
+            self.steps.end(false);
             self.detail.clearRetainingCapacity();
             self.detail.print(self.gpa, "{s}", .{describe(err)}) catch {};
         };
@@ -351,6 +357,11 @@ pub const Job = struct {
         } else {
             self.setStage(.building, "Starting zig build");
             try self.build(&.{"editor"});
+        }
+        {
+            self.mutex.lockUncancelable(self.io());
+            defer self.mutex.unlock(self.io());
+            self.steps.end(true);
         }
         self.setStage(.done, "");
     }
@@ -648,9 +659,10 @@ pub const Job = struct {
             const count = reader.interface.takeByte() catch return;
             reader.interface.readSliceAll(std.mem.sliceAsBytes(nodes[0..count])) catch return;
             reader.interface.readSliceAll(parents[0..count]) catch return;
-            const summary = summarize(nodes[0..count], parents[0..count]) orelse continue;
             self.mutex.lockUncancelable(io_);
             defer self.mutex.unlock(io_);
+            self.steps.observe(nodes[0..count], parents[0..count]);
+            const summary = summarize(nodes[0..count], parents[0..count]) orelse continue;
             // Never back: steps after a nested build are counted as less than it was.
             self.build_fraction = @max(self.build_fraction, summary.fraction);
             self.detail.clearRetainingCapacity();
@@ -659,17 +671,7 @@ pub const Job = struct {
     }
 };
 
-/// One node of a `std.Progress` snapshot as Zig sends it (little endian; see `std.Progress`).
-const ProgressNode = extern struct {
-    completed_count: u32,
-    /// 0 when unknown; maxInt marks a node standing in for a child process.
-    estimated_total_count: u32,
-    name: [120]u8 align(@alignOf(usize)),
-
-    fn nameText(node: *const ProgressNode) []const u8 {
-        return std.mem.sliceTo(&node.name, 0);
-    }
-};
+const ProgressNode = build_steps.ProgressNode;
 
 const Summary = struct { fraction: f32, step: []const u8, done: u32, total: u32 };
 
@@ -737,16 +739,7 @@ fn nearestCounter(nodes: []const ProgressNode, parents: []const u8) ?usize {
     return best;
 }
 
-/// How many parents node `index` has; a broken chain counts as deep.
-fn depthOf(parents: []const u8, index: usize) usize {
-    var depth: usize = 0;
-    var at = index;
-    while (parents[at] < parents.len) : (depth += 1) {
-        if (depth == parents.len) return depth;
-        at = parents[at];
-    }
-    return depth;
-}
+const depthOf = build_steps.depthOf;
 
 /// The editor's own environment, for the job's I/O and the build it runs.
 fn processEnviron() std.process.Environ {

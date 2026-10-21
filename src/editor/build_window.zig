@@ -1,6 +1,6 @@
 //! The Build progress window: while the open project's editor is rebuilt (on refocus, or to
-//! upgrade or link its Eggy), what is being built and the build's output, over the editor, which
-//! is frozen until it closes.
+//! upgrade or link its Eggy), what is being built and the build's output with each step's progress
+//! pinned under it, over the editor, which is frozen until it closes.
 const std = @import("std");
 const eggy = @import("eggy");
 const sdl3 = eggy.sdl_adapter.sdl;
@@ -119,12 +119,12 @@ pub const BuildWindow = struct {
             else => {
                 context.label("{s}...", .{status.stage.label()});
                 context.progress(status.fraction);
-                context.muted(if (status.detail.len > 0) status.detail else " ");
             },
         }
         // The window's height less the heading, status lines and buttons.
         // The build's output only grows, so its length tells when it changed.
-        self.terminal.add(context, status.log, status.log.len, @max(120, context.viewport.h - 200));
+        self.terminal.showSteps(status.steps, sdl3.timer.getMillisecondsSinceInit());
+        self.terminal.add(context, status.log, status.log.len, @max(120, context.viewport.h - 180));
 
         context.begin(.row);
         defer context.end();

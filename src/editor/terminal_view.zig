@@ -1,11 +1,14 @@
 //! A terminal-looking view of text output, in JetBrains Mono: light text on near-black (commands,
 //! log levels and source locations coloured), wrapped to its width, following the end unless scrolled back. Like a terminal it can scroll (wheel, Page
 //! Up/Down, Home/End), select (drag, double-click a word, triple-click a line, Ctrl+A) and copy
-//! (Ctrl+C or Ctrl+Shift+C, or a right-click).
+//! (Ctrl+C or Ctrl+Shift+C, or a right-click). While a build runs, its steps can be pinned under
+//! the output (`showSteps`, drawn by `terminal_steps.zig`).
 const std = @import("std");
 const eggy = @import("eggy");
 const sdl3 = eggy.sdl_adapter.sdl;
 const ui = eggy.ui;
+const terminal_steps = @import("terminal_steps.zig");
+const Step = @import("projects/build_steps.zig").Step;
 
 const background = ui.Color{ 0.07, 0.07, 0.08 };
 const foreground = ui.Color{ 0.82, 0.82, 0.8 };
@@ -121,6 +124,10 @@ pub const TerminalView = struct {
     focused: bool = false,
     /// Where it was drawn last, in its window's coordinates.
     area: ?ui.Rect = null,
+    /// The build steps pinned under the output, once `showSteps` is called, and how tall they
+    /// were drawn last.
+    live: ?terminal_steps.Live = null,
+    live_height: f32 = 0,
 
     const Row = struct { start: usize, end: usize };
 
@@ -145,6 +152,20 @@ pub const TerminalView = struct {
     pub fn deinit(self: *TerminalView) void {
         self.text.deinit(self.gpa);
         self.rows.deinit(self.gpa);
+        if (self.live) |*live| live.deinit();
+    }
+
+    /// Pin `steps` under the output for this frame, animated at `time_ms`: a row each, opened by
+    /// clicking it. `steps` is borrowed until the frame is drawn; call before `add` each frame.
+    ///
+    /// ```zig
+    /// terminal.showSteps(status.steps, sdl3.timer.getMillisecondsSinceInit());
+    /// terminal.add(context, status.log, status.log.len, height);
+    /// ```
+    pub fn showSteps(self: *TerminalView, steps: []const Step, time_ms: u64) void {
+        if (self.live == null) self.live = .{ .gpa = self.gpa, .line_height = line_height };
+        self.live.?.steps = steps;
+        self.live.?.time_ms = time_ms;
     }
 
     /// Show `output` in a `height` tall view on `context`'s page. `version` changes whenever
@@ -212,6 +233,11 @@ pub const TerminalView = struct {
                 const inside = area.contains(down.position.x, down.position.y);
                 self.focused = inside;
                 if (!inside) return false;
+                // A press on the pinned steps opens or closes one, rather than selecting.
+                if (self.live) |*live| if (live.area) |steps_area| if (down.button == .left and steps_area.contains(down.position.x, down.position.y)) {
+                    _ = live.click(down.position.y);
+                    return true;
+                };
                 switch (down.button) {
                     // A right-click copies, as Windows Terminal does.
                     .right => copyToClipboard(self.selectedText() orelse return true),
@@ -312,7 +338,7 @@ pub const TerminalView = struct {
 
     fn visibleRows(self: *const TerminalView) usize {
         const area = self.area orelse return 1;
-        return @max(1, @as(usize, @intFromFloat(@max(0, area.h - 2 * padding) / line_height)));
+        return @max(1, @as(usize, @intFromFloat(@max(0, area.h - 2 * padding - self.live_height) / line_height)));
     }
 
     /// The first row on screen, given the scroll.
@@ -376,6 +402,20 @@ pub const TerminalView = struct {
         }
 
         const char_width = self.charWidth();
+
+        // The build's steps take the bottom, up to half the view; the output scrolls above them.
+        self.live_height = 0;
+        if (self.live) |*live| {
+            live.area = null;
+            const all_rows: usize = @intFromFloat(@max(0, inner.h) / line_height);
+            const lines = if (live.steps.len == 0) 0 else live.layout(@max(3, all_rows / 2));
+            if (lines > 0) {
+                const steps_h = @as(f32, @floatFromInt(lines)) * line_height;
+                self.live_height = steps_h + line_height * 0.75;
+                try live.draw(c, .{ .x = inner.x, .y = inner.y + inner.h - steps_h, .w = inner.w, .h = steps_h }, char_width, text_size);
+            }
+        }
+
         try self.wrap(@max(1, @as(usize, @intFromFloat(inner.w / char_width))));
         const first = self.firstRow();
         const last = @min(self.rows.items.len, first + self.visibleRows());
@@ -401,7 +441,7 @@ pub const TerminalView = struct {
         const total = self.rows.items.len;
         const visible = self.visibleRows();
         if (total > visible) {
-            const track = ui.Rect{ .x = r.x + r.w - 5, .y = inner.y, .w = 3, .h = inner.h };
+            const track = ui.Rect{ .x = r.x + r.w - 5, .y = inner.y, .w = 3, .h = inner.h - self.live_height };
             const thumb_h = @max(12, track.h * @as(f32, @floatFromInt(visible)) / @as(f32, @floatFromInt(total)));
             const thumb_y = track.y + (track.h - thumb_h) * @as(f32, @floatFromInt(first)) / @as(f32, @floatFromInt(total - visible));
             c.clip = previous_clip;
