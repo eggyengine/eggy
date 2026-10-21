@@ -1,11 +1,6 @@
 # eggy
 
-_eggy_ is a game engine written in Zig. it's built from a handful of in-house libraries, each living in its own repo:
-
-- **[vitellus](https://github.com/eggyengine/vitellus)**: the rendering hardware interface (vulkan, dx12, webgpu)
-- **[weeoui](https://github.com/eggyengine/weeoui)**: the immediate-mode UI, with docking panels and screen-reader support
-- **[humpty](https://github.com/eggyengine/humpty)**: physics
-- **[clutch](https://github.com/eggyengine/clutch)**: the entity component system, inspired by `bevy_ecs`; your game reaches it as `eggy.ecs` and `app.world`
+_eggy_ is a game engine written in Zig. more info at [eggyengine.github.io](https://eggyengine.github.io). 
 
 eggy itself comes in three parts:
 
@@ -20,7 +15,7 @@ requires zig `0.16.0`
 
 The eggy engine uses the editor to initialise the project, so all of these steps are done automatically.
 
-Future documentation will document how to create a project manually, and other features. 
+Documentation is also available at [eggyengine.github.io/eggy](https://eggyengine.github.io/eggy)
 <!-- 
 an eggy package works like a zig one: `src/main.zig` is a **game** (`pub const Game`), and `src/root.zig` is a **plugin** or library (`pub const Plugin`) that other packages can use. keep both, or delete the one you don't need.
 
