@@ -10,6 +10,8 @@ const transform_zig = @import("transform.zig");
 pub const Projection = enum(u32) { perspective, orthographic };
 
 pub const Camera = struct {
+    /// Marks it in the editor (nf-md-video_vintage).
+    pub const icon = "\u{f0a1c}";
     /// It looks from where its `Transform` puts it.
     pub const dependencies = .{transform_zig.Transform};
 

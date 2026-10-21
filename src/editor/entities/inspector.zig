@@ -51,7 +51,12 @@ pub const Details = struct {
         needs: []const u8 = "",
         needed_by: []const u8 = "",
     };
-    pub const Addable = struct { index: usize, label: []const u8 };
+    pub const Addable = struct {
+        index: usize,
+        label: []const u8,
+        /// The component's icon (`eggy.components.Info.icon`), drawn before its label.
+        icon: []const u8 = eggy.components.default_icon,
+    };
 };
 
 pub const Action = union(enum) {
@@ -316,8 +321,10 @@ pub const EntityInspector = struct {
             if (listed == max_listed) break;
             const id = pick_id_base + @as(u32, @intCast(listed));
             if (context.activated(id) or (enter and listed == 0)) picked = choice.index;
-            const label = page_style.fitText(arena, context.font, choice.label, 13, width - 40);
-            const row = b.node(id, .{ .height = 24 }, .{ .menu_item = .{ .label = label } }, &.{}) catch return null;
+            // The icon, then the name, fitted to the room the icon leaves.
+            const label = page_style.fitText(arena, context.font, choice.label, 13, width - 64);
+            const iconed = std.fmt.allocPrint(arena, "{s}  {s}", .{ choice.icon, label }) catch return null;
+            const row = b.node(id, .{ .height = 24 }, .{ .menu_item = .{ .label = iconed } }, &.{}) catch return null;
             row.cursor = .pointer;
             row.accessibility = .{ .role = .menu_item, .label = choice.label };
             context.element(row);
@@ -474,8 +481,9 @@ test "the component search lists only the types that match, ignoring case" {
     var labels: std.ArrayList([]const u8) = .empty;
     defer labels.deinit(std.testing.allocator);
     try collectMenuItems(context.last_root.?, &labels);
+    // One row, the component's icon (the default here) before its name.
     try std.testing.expectEqual(@as(usize, 1), labels.items.len);
-    try std.testing.expectEqualStrings("Orbit", labels.items[0]);
+    try std.testing.expectEqualStrings(eggy.components.default_icon ++ "  Orbit", labels.items[0]);
 }
 
 fn collectMenuItems(element: *const ui.Layout.Element, labels: *std.ArrayList([]const u8)) !void {

@@ -26,6 +26,8 @@ pub const support: api.Support = .available;
 /// from a model file: bones, blend shapes or baked frames, for that model only). `previous_*`
 /// is the clip being faded out by `blendTo`.
 pub const Animator = struct {
+    /// Marks it in the editor (nf-md-animation_play).
+    pub const icon = "\u{f093a}";
     clip: AssetRef(.animation) = .{},
     /// An imported clip of the entity's model; unset for none.
     model_clip: AssetRef(.animation) = .{},

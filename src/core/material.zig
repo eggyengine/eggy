@@ -5,6 +5,8 @@ const AssetRef = @import("refs.zig").AssetRef;
 /// Surface properties on a Mesh entity. An optional asset replaces all inline properties.
 /// Alpha is cut out below `alpha_cutoff`; translucent blending is not supported.
 pub const Material = struct {
+    /// Marks it in the editor (nf-md-palette).
+    pub const icon = "\u{f03d8}";
     file: AssetRef(.material) = .{},
     color: [4]f32 = @splat(1),
     texture: AssetRef(.image) = .{},

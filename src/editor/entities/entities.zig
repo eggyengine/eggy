@@ -504,7 +504,7 @@ fn collectDetails(arena: std.mem.Allocator, app: *eggy.App, game: *const HotGame
     for (game.component_types, 0..) |info, index| {
         const disabled = isOff(off, info.owner);
         if (!game.hasComponent(app, entity, index)) {
-            if (info.addable and !disabled) try addable.append(arena, .{ .index = index, .label = try std.fmt.allocPrint(arena, "{s} ({s})", .{ info.name, info.owner }) });
+            if (info.addable and !disabled) try addable.append(arena, .{ .index = index, .label = try std.fmt.allocPrint(arena, "{s} ({s})", .{ info.name, info.owner }), .icon = info.icon });
             continue;
         }
         const values = try arena.alloc(?[]const u8, info.fields.len);

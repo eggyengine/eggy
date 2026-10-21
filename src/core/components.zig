@@ -9,10 +9,12 @@
 //!     };
 //!
 //! A component can depend on others, listed in its `dependencies`: adding it adds them, and the
-//! editor won't remove one while another needs it.
+//! editor won't remove one while another needs it. Its `icon`, a Nerd Font character, marks it
+//! in the editor (`default_icon` otherwise).
 //!
 //!     pub const Spin = struct {
 //!         pub const dependencies = .{eggy.Transform};
+//!         pub const icon = "\u{f0464}"; // nf-md-rotate_3d_variant
 //!         speed: f32 = 1,
 //!     };
 const std = @import("std");
@@ -122,6 +124,9 @@ pub const Part = extern struct {
     }
 };
 
+/// The icon of a component that doesn't declare one: a puzzle piece (nf-md-puzzle_outline).
+pub const default_icon = "\u{f0a66}";
+
 pub const Info = struct {
     /// The type's own name: `Spin` for `my_game.Spin`.
     name: [:0]const u8,
@@ -130,6 +135,8 @@ pub const Info = struct {
     fields: []const Field,
     /// Whether the editor can add it to an entity: every field has a default.
     addable: bool,
+    /// Its `icon`: a Nerd Font character, as UTF-8.
+    icon: [:0]const u8 = default_icon,
     /// The components it depends on (its `dependencies`), as indices among the same types.
     dependencies: []const usize = &.{},
 };
@@ -297,7 +304,8 @@ fn infoOf(comptime T: type, comptime owner: [:0]const u8) Info {
         }
     }
     const frozen = fields;
-    return .{ .name = shortName(T), .owner = owner, .fields = &frozen, .addable = addable };
+    const icon: [:0]const u8 = if (@hasDecl(T, "icon")) T.icon ++ "" else default_icon;
+    return .{ .name = shortName(T), .owner = owner, .fields = &frozen, .addable = addable, .icon = icon };
 }
 
 fn kindOf(comptime T: type) Kind {

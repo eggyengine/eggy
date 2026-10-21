@@ -38,6 +38,8 @@ pub const Source = union(enum) {
 };
 
 pub const Mesh = struct {
+    /// Marks it in the editor (nf-md-cube_outline).
+    pub const icon = "\u{f01a7}";
     /// Drawn where its `Transform` puts it.
     pub const dependencies = .{Transform};
 

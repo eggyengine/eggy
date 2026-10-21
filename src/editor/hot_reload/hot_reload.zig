@@ -898,7 +898,7 @@ fn copyComponentTypes(arena: std.mem.Allocator, types: []const api.ComponentType
                 .parts = try copyParts(arena, field_source.parts[0..field_source.part_count]),
             };
         }
-        info.* = .{ .name = try arena.dupeZ(u8, std.mem.span(source.name)), .owner = try arena.dupeZ(u8, std.mem.span(source.owner)), .fields = fields, .addable = source.addable, .dependencies = try arena.dupe(usize, source.dependencies[0..source.dependency_count]) };
+        info.* = .{ .name = try arena.dupeZ(u8, std.mem.span(source.name)), .owner = try arena.dupeZ(u8, std.mem.span(source.owner)), .fields = fields, .addable = source.addable, .dependencies = try arena.dupe(usize, source.dependencies[0..source.dependency_count]), .icon = try arena.dupeZ(u8, std.mem.span(source.icon)) };
     }
     return infos;
 }

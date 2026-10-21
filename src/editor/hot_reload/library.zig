@@ -11,8 +11,8 @@ pub const eggy_asset_ids = project.asset_ids;
 
 const Plugins = eggy.plugins.Set(project.plugins, &project.plugin_keys);
 
-/// The library's own log goes to the editor's Console.
-pub const std_options: std.Options = .{ .logFn = logThroughEditor };
+/// The library's own log goes to the editor, which chooses what is shown (so every level is compiled in).
+pub const std_options: std.Options = .{ .log_level = .debug, .logFn = logThroughEditor };
 
 /// The editor's side, from `start`; null before it.
 var host: ?*const api.Host = null;
@@ -118,7 +118,7 @@ const component_types = blk: {
             field.* = .{ .name = source.name.ptr, .kind = @intFromEnum(source.kind), .options = &frozen_options, .option_count = frozen_options.len, .editable = source.editable, .requires = source.requires.ptr, .accepts = @intFromEnum(source.accepts), .parts = source.parts.ptr, .part_count = source.parts.len };
         }
         const frozen_fields = fields;
-        component_type.* = .{ .name = info.name.ptr, .owner = info.owner.ptr, .fields = &frozen_fields, .field_count = frozen_fields.len, .addable = info.addable, .dependencies = info.dependencies.ptr, .dependency_count = info.dependencies.len };
+        component_type.* = .{ .name = info.name.ptr, .owner = info.owner.ptr, .fields = &frozen_fields, .field_count = frozen_fields.len, .addable = info.addable, .dependencies = info.dependencies.ptr, .dependency_count = info.dependencies.len, .icon = info.icon.ptr };
     }
     break :blk types;
 };
@@ -460,8 +460,12 @@ fn gatherLights(world: *anyopaque, out: *eggy.lighting.Frame) callconv(.c) bool 
     };
     out.* = frame;
     recovered(.scene_lights);
+    eggy.lighting.reportInvalid(frame, &invalid_lights_reported);
     return true;
 }
+
+/// How many invalid lights were last reported, so the warning comes once per change.
+var invalid_lights_reported: u32 = 0;
 
 fn worldMatrix(world: *anyopaque, entity: api.Entity, out: *[4][4]f32) callconv(.c) bool {
     const id = entityOf(entity);

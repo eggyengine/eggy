@@ -643,6 +643,9 @@ fn addEngine(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.buil
         build_options.addOption([]const u8, "source_dir", source_dir);
         editor.addOptions("build_options", build_options);
         editor.addAnonymousImport("mono_font", .{ .root_source_file = b.path("resources/fonts/JetBrainsMono-Regular.ttf") });
+        // Icons for private-use characters (Nerd Font glyphs) the UI and monospace faces lack
+        // (MIT; see resources/fonts/SymbolsNerdFont-LICENSE.txt).
+        editor.addAnonymousImport("symbols_font", .{ .root_source_file = b.path("resources/fonts/SymbolsNerdFontMono-Regular.ttf") });
         // The plugins inside Eggy, as its Plugins window lists them.
         editor.addImport("eggy_builtin_plugins", builtin_plugins.embedded(b));
         // Model files, imported through assimp in a library of its own, installed beside the editor.
