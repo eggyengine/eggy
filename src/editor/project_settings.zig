@@ -230,7 +230,11 @@ pub const ProjectSettings = struct {
             self.graphics.report(err);
             graphics = self.saved_graphics;
         };
+        // What the form doesn't edit (installed plugins, a plugin manifest) stays as the file has it.
+        const kept = try eggy.project.parse(arena, try arena.dupeZ(u8, self.written));
         const config = eggy.project.Config{
+            .plugins = kept.plugins,
+            .plugin = kept.plugin,
             .name = self.name,
             .title = self.title.text(),
             .version = self.version.text(),
@@ -356,6 +360,23 @@ test "the Project section lays out every eggy.zon field in cards and writes a ch
     defer gpa.free(change.after);
     try std.testing.expect(std.mem.indexOf(u8, change.after, "Sewer Rats") != null);
     try std.testing.expect(try settings.save() == null);
+}
+
+test "saving the Project section keeps the installed plugins" {
+    const gpa = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = eggy.project.file_name, .data = ".{ .name = \"rats\", .title = \"Rats\", .plugins = .{ .{ .module = \"eggy_git\" }, .{ .module = \"eggy_frame_stats\" } } }\n" });
+    const dir = try tmp.dir.realPathFileAlloc(std.testing.io, ".", gpa);
+    defer gpa.free(dir);
+    const settings = try ProjectSettings.open(gpa, dir, .{});
+    defer settings.close();
+    try settings.title.set("Sewer Rats");
+    const change = (try settings.save()).?;
+    defer gpa.free(change.before);
+    defer gpa.free(change.after);
+    try std.testing.expect(std.mem.indexOf(u8, change.after, "eggy_git") != null);
+    try std.testing.expect(std.mem.indexOf(u8, change.after, "eggy_frame_stats") != null);
 }
 
 test "graphics are saved in eggy.zon, kept by other edits, and read back after undo" {
