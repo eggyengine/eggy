@@ -1,6 +1,7 @@
 //! The live block a terminal view pins under its output while a build runs: a row per build step
 //! with a bar of character-sized cells, as if the terminal printed it, and, for a row clicked
-//! open, the work inside that step, each with its own thinner bar.
+//! open, the work inside that step, each with its own thinner bar. When they don't all fit, the
+//! block scrolls on its own, under the output.
 const std = @import("std");
 const eggy = @import("eggy");
 const ui = eggy.ui;
@@ -16,8 +17,9 @@ const rule = ui.Color{ 0.2, 0.2, 0.23 };
 const name_color = ui.Color{ 0.82, 0.82, 0.8 };
 const dim = ui.Color{ 0.52, 0.52, 0.5 };
 
-/// Lines the block can hold, however tall the view.
-const max_lines = 48;
+/// Lines the block can hold: every step a build keeps, each opened to all its work, and the
+/// folded line.
+const max_lines = 1 + build_steps.Steps.max * (1 + Step.max_work);
 
 /// What one line of the block shows.
 const Line = union(enum) {
@@ -35,11 +37,17 @@ pub const Live = struct {
     time_ms: u64 = 0,
     /// Steps opened to show their work, by their name's hash; kept across frames.
     opened: std.AutoHashMapUnmanaged(u64, void) = .empty,
-    /// The lines as last laid out, and where they were drawn, for clicking.
+    /// The lines as last laid out (`line_count` of them, `visible` drawn from `first`), and
+    /// where they were drawn, for clicking.
     lines: [max_lines]Line = undefined,
     /// Each line's step, by its name's hash (0 for the folded line), which is all a click needs.
     line_keys: [max_lines]u64 = undefined,
     line_count: usize = 0,
+    /// The first line drawn, scrolled down to; kept across frames.
+    first: usize = 0,
+    visible: usize = 0,
+    /// A step just opened, whose work the next layout scrolls into view.
+    reveal: ?u64 = null,
     area: ?ui.Rect = null,
     line_height: f32 = 18,
 
@@ -47,10 +55,10 @@ pub const Live = struct {
         self.opened.deinit(self.gpa);
     }
 
-    /// Lay the block out in at most `budget` lines: every step, the work of those opened, and
-    /// when that's too many, the oldest finished steps folded into one line. Returns the count.
-    pub fn layout(self: *Live, budget_lines: usize) usize {
-        const budget = @min(budget_lines, max_lines);
+    /// Lay the block out to show in `budget` lines: every step, the work of those opened, and
+    /// when that's too many, the oldest finished steps folded into one line; what still doesn't
+    /// fit scrolls. Returns how many lines are shown.
+    pub fn layout(self: *Live, budget: usize) usize {
         var foldable: usize = 0;
         for (self.steps) |*step| {
             if (step.state == .done and !self.isOpen(step)) foldable += 1;
@@ -72,8 +80,26 @@ pub const Live = struct {
             if (self.line_count <= budget or folded == foldable) break;
             folded += 1;
         }
-        self.line_count = @min(self.line_count, budget);
-        return self.line_count;
+        self.visible = @min(self.line_count, budget);
+
+        // A step just opened scrolls down to show its work, keeping its own row on screen.
+        if (self.reveal) |key| {
+            self.reveal = null;
+            if (std.mem.indexOfScalar(u64, self.line_keys[0..self.line_count], key)) |row| {
+                const last = std.mem.lastIndexOfScalar(u64, self.line_keys[0..self.line_count], key).?;
+                self.first = @max(self.first, (last + 1) -| self.visible);
+                self.first = @min(self.first, row);
+            }
+        }
+        self.first = @min(self.first, self.line_count - self.visible);
+        return self.visible;
+    }
+
+    /// Scroll the block `lines` lines back up (down, when negative), within its lines.
+    pub fn scrollBy(self: *Live, lines: isize) void {
+        const most = self.line_count - self.visible;
+        const scrolled = @as(isize, @intCast(self.first)) - lines;
+        self.first = @intCast(std.math.clamp(scrolled, 0, @as(isize, @intCast(most))));
     }
 
     fn push(self: *Live, line: Line) void {
@@ -99,11 +125,14 @@ pub const Live = struct {
     pub fn click(self: *Live, y: f32) bool {
         const area = self.area orelse return false;
         const row = @floor((y - area.y) / self.line_height);
-        if (row < 0 or row >= @as(f32, @floatFromInt(self.line_count))) return false;
-        const line: usize = @intFromFloat(row);
+        if (row < 0 or row >= @as(f32, @floatFromInt(self.visible))) return false;
+        const line = self.first + @as(usize, @intFromFloat(row));
         if (self.lines[line] == .folded) return true;
         const key = self.line_keys[line];
-        if (self.opened.fetchRemove(key) == null) self.opened.put(self.gpa, key, {}) catch {};
+        if (self.opened.fetchRemove(key) == null) {
+            self.opened.put(self.gpa, key, {}) catch {};
+            self.reveal = key;
+        }
         return true;
     }
 
@@ -112,13 +141,15 @@ pub const Live = struct {
     pub fn draw(self: *Live, c: *ui.Canvas, r: ui.Rect, char_width: f32, text_size: f32) !void {
         try c.rect(.{ .x = r.x, .y = r.y - self.line_height * 0.35, .w = r.w, .h = 1 }, rule);
         self.area = r;
-        const columns: usize = @intFromFloat(@max(1, r.w / char_width));
+        // A column at the right is the scrollbar's when there are more lines than fit.
+        const scrolls = self.line_count > self.visible;
+        const columns: usize = @intFromFloat(@max(1, r.w / char_width - @as(f32, if (scrolls) 1 else 0)));
         const bar_cells: usize = if (columns >= 72) 24 else if (columns >= 48) 14 else 8;
         const tail_columns: usize = 5;
         // Caret, state, then the name; the bar and its percentage keep to the right.
         const bar_x = r.x + @as(f32, @floatFromInt(columns -| (bar_cells + tail_columns + 1))) * char_width;
         const name_x = r.x + 4 * char_width;
-        for (self.lines[0..self.line_count], 0..) |line, i| {
+        for (self.lines[self.first..][0..self.visible], 0..) |line, i| {
             const y = r.y + @as(f32, @floatFromInt(i)) * self.line_height;
             const row = ui.Rect{ .x = r.x, .y = y, .w = r.w, .h = self.line_height };
             const middle = y + self.line_height / 2;
@@ -151,6 +182,12 @@ pub const Live = struct {
                     try bar(c, bar_x, y, bar_cells, char_width, self.line_height, fraction, .running, self.time_ms +% @as(u64, at.work) * 211, true);
                 },
             }
+        }
+
+        if (scrolls) {
+            const thumb_h = @max(12, r.h * @as(f32, @floatFromInt(self.visible)) / @as(f32, @floatFromInt(self.line_count)));
+            const thumb_y = r.y + (r.h - thumb_h) * @as(f32, @floatFromInt(self.first)) / @as(f32, @floatFromInt(self.line_count - self.visible));
+            try c.roundRect(.{ .x = r.x + r.w - 3, .y = thumb_y, .w = 3, .h = thumb_h }, c.theme.muted_foreground, 1.5);
         }
         self.steps = &.{};
     }
@@ -298,4 +335,33 @@ test "a clicked step opens to its work, and finished steps fold away when there'
     try std.testing.expect(live.click(2.5 * live.line_height));
     live.steps = &steps;
     try std.testing.expectEqual(@as(usize, 3), live.layout(5));
+}
+
+test "steps opened past the room scroll, and opening one scrolls its work into view" {
+    var live = Live{ .gpa = std.testing.allocator };
+    defer live.deinit();
+    const steps = [_]Step{ testStep("a", .running, 4), testStep("b", .running, 4), testStep("c", .running, 4) };
+    live.steps = &steps;
+    try std.testing.expectEqual(@as(usize, 3), live.layout(5));
+
+    // Opening the last step scrolls down so all four of its pieces of work show, with it.
+    live.area = .{ .x = 0, .y = 0, .w = 400, .h = 200 };
+    live.steps = &.{};
+    try std.testing.expect(live.click(2.5 * live.line_height));
+    live.steps = &steps;
+    try std.testing.expectEqual(@as(usize, 5), live.layout(5));
+    try std.testing.expectEqual(@as(usize, 2), live.first);
+    try std.testing.expectEqual(@as(usize, 3), live.lines[live.first + 4].work.work);
+
+    // Back at the top, opening the first step too: the wheel reaches the last line, no further.
+    live.scrollBy(10);
+    try std.testing.expectEqual(@as(usize, 0), live.first);
+    live.steps = &.{};
+    try std.testing.expect(live.click(0.5 * live.line_height));
+    live.steps = &steps;
+    _ = live.layout(5);
+    try std.testing.expectEqual(@as(usize, 0), live.first);
+    try std.testing.expectEqual(@as(usize, 11), live.line_count);
+    live.scrollBy(-100);
+    try std.testing.expectEqual(@as(usize, 6), live.first);
 }

@@ -89,8 +89,15 @@ const MessageLine = struct {
         const char_width = self.mono.measure("M", text_size);
         var start: usize = 0;
         var y = r.y;
-        while (start < self.text.len) {
+        const shown = c.clip.?;
+        while (start < self.text.len and y < shown.y + shown.h) {
             const end = advanceColumns(self.text, start, self.text.len, count);
+            // Rows scrolled out of view are only counted past.
+            if (y + line_height < shown.y) {
+                start = end;
+                y += line_height;
+                continue;
+            }
             try drawLineRow(c, self.text, start, end, .{ .x = r.x + padding, .y = y, .w = @max(0, r.w - 2 * padding), .h = line_height }, char_width);
             start = end;
             y += line_height;
@@ -129,7 +136,8 @@ pub const TerminalView = struct {
     live: ?terminal_steps.Live = null,
     live_height: f32 = 0,
 
-    const Row = struct { start: usize, end: usize };
+    /// A row's bytes, and the bytes of the line it was cut from (for colouring it).
+    const Row = struct { start: usize, end: usize, line_start: usize, line_end: usize };
 
     /// Create a lazy editor output view borrowing a loaded monospaced companion font.
     /// `mono` must outlive `deinit`; keep the view at a stable address while frame paint
@@ -266,6 +274,11 @@ pub const TerminalView = struct {
             },
             .wheel => |wheel| {
                 if (!area.contains(wheel.position.x, wheel.position.y)) return false;
+                // Over the pinned steps, the wheel scrolls them rather than the output.
+                if (self.live) |*live| if (live.area) |steps_area| if (steps_area.contains(wheel.position.x, wheel.position.y)) {
+                    live.scrollBy(@intFromFloat(@round(wheel.delta.y * 3)));
+                    return true;
+                };
                 self.scrollBy(@intFromFloat(@round(wheel.delta.y * 3)));
                 return true;
             },
@@ -323,7 +336,7 @@ pub const TerminalView = struct {
             var row_start = start;
             while (true) {
                 const row_end = advanceColumns(text, row_start, line_end, columns);
-                try self.rows.append(self.gpa, .{ .start = row_start, .end = row_end });
+                try self.rows.append(self.gpa, .{ .start = row_start, .end = row_end, .line_start = start, .line_end = line_end });
                 if (row_end >= line_end) break;
                 row_start = row_end;
             }
@@ -432,9 +445,7 @@ pub const TerminalView = struct {
                 try c.rectAlpha(.{ .x = x0, .y = y, .w = x1 - x0, .h = line_height }, c.theme.primary, 0.35);
             }
             // The row's text, a coloured span at a time (see `lineSpans`).
-            const line_start = lineStart(self.text.items, row.start);
-            const line_end = std.mem.indexOfScalarPos(u8, self.text.items, line_start, '\n') orelse self.text.items.len;
-            try drawLineRow(c, self.text.items[line_start..line_end], row.start - line_start, row.end - line_start, .{ .x = inner.x, .y = y, .w = inner.w, .h = line_height }, char_width);
+            try drawLineRow(c, self.text.items[row.line_start..row.line_end], row.start - row.line_start, row.end - row.line_start, .{ .x = inner.x, .y = y, .w = inner.w, .h = line_height }, char_width);
         }
 
         // A thin scrollbar when there's more than fits.
@@ -452,7 +463,7 @@ pub const TerminalView = struct {
 
 fn drawLineRow(c: *ui.Canvas, line: []const u8, start: usize, end: usize, r: ui.Rect, char_width: f32) !void {
     var spans_buffer: [max_spans]Span = undefined;
-    for (lineSpans(line, c.theme, &spans_buffer)) |span| {
+    for (lineSpans(line, start, end, c.theme, &spans_buffer)) |span| {
         const from = @max(start, span.start);
         const to = @min(end, span.end);
         if (to <= from) continue;
@@ -463,7 +474,10 @@ fn drawLineRow(c: *ui.Canvas, line: []const u8, start: usize, end: usize, r: ui.
 
 /// A run of a line drawn in one colour: bytes `start..end` of the line.
 const Span = struct { start: usize, end: usize, color: ui.Color };
-const max_spans = 24;
+const max_spans = 64;
+/// How far back from a row a highlight it starts inside may begin, and how far into a line its
+/// level and scope may run.
+const max_lookback = 256;
 
 const red = ui.Color{ 0.94, 0.42, 0.42 };
 const soft_red = ui.Color{ 0.96, 0.7, 0.68 };
@@ -477,8 +491,9 @@ const grey = ui.Color{ 0.5, 0.5, 0.5 };
 /// `line` cut into coloured spans, as a terminal would show it: a command (`$ ...`) in the
 /// theme's primary colour; a log line's level by severity, its `(scope)` in violet and its
 /// message tinted by severity; and in messages, `file.zig:12:5` locations in cyan and `error:`,
-/// `warning:` and `note:` in their colours. Uses `buffer` for the result.
-fn lineSpans(line: []const u8, theme: ui.Theme, buffer: *[max_spans]Span) []const Span {
+/// `warning:` and `note:` in their colours. Covers at least bytes `from..to` (a row of it), looking
+/// no further, so a huge line costs only the rows drawn. Uses `buffer` for the result.
+fn lineSpans(line: []const u8, from: usize, to: usize, theme: ui.Theme, buffer: *[max_spans]Span) []const Span {
     var spans: std.ArrayList(Span) = .initBuffer(buffer);
     if (std.mem.startsWith(u8, line, "$ ")) {
         spans.appendAssumeCapacity(.{ .start = 0, .end = line.len, .color = theme.primary });
@@ -497,7 +512,7 @@ fn lineSpans(line: []const u8, theme: ui.Theme, buffer: *[max_spans]Span) []cons
     var message_color = foreground;
     for (levels) |level| {
         if (!std.mem.startsWith(u8, line, level.word)) continue;
-        const colon = std.mem.indexOfPos(u8, line, level.word.len, ": ") orelse break;
+        const colon = std.mem.indexOfPos(u8, line[0..@min(line.len, max_lookback)], level.word.len, ": ") orelse break;
         const scope = line[level.word.len..colon];
         if (scope.len > 0 and !(scope[0] == '(' and scope[scope.len - 1] == ')')) break;
         spans.appendAssumeCapacity(.{ .start = 0, .end = level.word.len, .color = level.color });
@@ -507,10 +522,17 @@ fn lineSpans(line: []const u8, theme: ui.Theme, buffer: *[max_spans]Span) []cons
         break;
     }
 
-    // The message, with locations and diagnostics picked out.
-    var at = message_start;
+    // The message, with locations and diagnostics picked out, from the start of the word the
+    // row starts in (a highlight may begin there).
+    var at = @max(message_start, from);
+    while (at > message_start and from - at < max_lookback and !wordStartsAt(line, at)) at -= 1;
     var plain_from = message_start;
-    while (at < line.len and spans.items.len + 2 < max_spans) {
+    while (at < @min(line.len, to) and spans.items.len + 2 < max_spans) {
+        // Only at the start of a word.
+        if (!wordStartsAt(line, at)) {
+            at += 1;
+            continue;
+        }
         const highlight: ?struct { len: usize, color: ui.Color } = if (locationLength(line[at..])) |len|
             .{ .len = len, .color = cyan }
         else if (std.mem.startsWith(u8, line[at..], "error:"))
@@ -521,9 +543,7 @@ fn lineSpans(line: []const u8, theme: ui.Theme, buffer: *[max_spans]Span) []cons
             .{ .len = "note:".len, .color = cyan }
         else
             null;
-        // Only at the start of a word.
-        const word_start = at == 0 or line[at - 1] == ' ' or line[at - 1] == '(';
-        if (highlight == null or !word_start) {
+        if (highlight == null) {
             at += 1;
             continue;
         }
@@ -534,6 +554,10 @@ fn lineSpans(line: []const u8, theme: ui.Theme, buffer: *[max_spans]Span) []cons
     }
     if (line.len > plain_from) spans.appendAssumeCapacity(.{ .start = plain_from, .end = line.len, .color = message_color });
     return spans.items;
+}
+
+fn wordStartsAt(line: []const u8, at: usize) bool {
+    return at == 0 or line[at - 1] == ' ' or line[at - 1] == '(';
 }
 
 /// How long the source location (`path.zig:12` or `path.zig:12:5`) starting `text` is, if one does.
@@ -581,11 +605,6 @@ fn columnsIn(text: []const u8) usize {
     return std.unicode.utf8CountCodepoints(text) catch text.len;
 }
 
-/// Where the line holding `at` starts.
-fn lineStart(text: []const u8, at: usize) usize {
-    return if (std.mem.lastIndexOfScalar(u8, text[0..at], '\n')) |newline| newline + 1 else 0;
-}
-
 test "output wraps into rows of whole characters, a row per empty line too" {
     var view = TerminalView.init(std.testing.allocator, undefined);
     defer view.deinit();
@@ -616,7 +635,7 @@ test "a growing output keeps the selection; a different one drops it" {
 test "a log line is coloured by level, scope and the locations in it" {
     var buffer: [max_spans]Span = undefined;
     const line = "error(zig_build): src/main.zig:12:5: error: expected ';'";
-    const spans = lineSpans(line, .{}, &buffer);
+    const spans = lineSpans(line, 0, line.len, .{}, &buffer);
     try std.testing.expectEqualStrings("error", line[spans[0].start..spans[0].end]);
     try std.testing.expectEqualStrings("(zig_build)", line[spans[1].start..spans[1].end]);
     try std.testing.expectEqual(cyan, spans[3].color);
@@ -642,4 +661,21 @@ test "output added a bit at a time wraps as it would all at once" {
     try whole.setText(output);
     try whole.wrap(7);
     try std.testing.expectEqualSlices(TerminalView.Row, whole.rows.items, growing.rows.items);
+}
+
+test "a huge line colours only the rows drawn, and its later locations too" {
+    const gpa = std.testing.allocator;
+    var line: std.ArrayList(u8) = .empty;
+    defer line.deinit(gpa);
+    // Thousands of locations, no spaces: once quadratic in the line's length, every row.
+    for (0..4000) |i| try line.print(gpa, "(pkg/src/file.zig:{d}:5", .{i});
+    var buffer: [max_spans]Span = undefined;
+    const from = line.items.len - 120;
+    const spans = lineSpans(line.items, from, line.items.len, .{}, &buffer);
+    // The row's last location is still picked out.
+    const last = spans[spans.len - 1];
+    try std.testing.expectEqual(cyan, last.color);
+    try std.testing.expectEqualStrings("pkg/src/file.zig:3999:5", line.items[last.start..last.end]);
+    // Nothing before the row's first word was looked at.
+    try std.testing.expect(spans[1].start + max_lookback >= from);
 }
