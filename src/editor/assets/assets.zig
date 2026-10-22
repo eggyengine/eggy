@@ -2,7 +2,7 @@
 //! of the whole project, folders opening in place; as a grid it is one folder's tiles, with a
 //! path to climb back up. A filter searches every folder by name. A scene (`.scene.zon`) opens
 //! with a double-click, a code or text file opens in the code editor chosen in Preferences, and
-//! any other file shows in the system's file manager. A right-click opens a menu (open, rename,
+//! any other file (or a model's part) shows in the Asset Preview, in a window of its own. A right-click opens a menu (open, rename,
 //! duplicate, delete, copy path, show in the file manager, and new folders and scenes); F2
 //! renames and Delete deletes the selected entry.
 //!
@@ -52,6 +52,8 @@ pub const Action = union(enum) {
     reveal: []const u8,
     /// Open this code or text file in the code editor people chose.
     open_code: []const u8,
+    /// Show the selected entry (`path`) in the Asset Preview, popped out into a window.
+    preview: []const u8,
     /// Move (or copy) `path` into `folder` ("" for the project).
     move_into: struct { path: []const u8, folder: []const u8 },
 };
@@ -437,11 +439,11 @@ pub const AssetsPanel = struct {
         self.endDrag();
         const item = self.itemAt(context, down.position) orelse return .{ .used = false };
         const entry = item.entry;
-        if (entry.virtual) return .{ .used = true };
+        if (entry.virtual) return .{ .used = true, .action = .{ .preview = entry.path } };
         return switch (entry.kind) {
             .model => blk: {
                 if (self.view == .grid and self.filter.text().len == 0) self.enter(entry.path);
-                break :blk .{ .used = true };
+                break :blk .{ .used = true, .action = .{ .preview = entry.path } };
             },
             .scene => .{ .used = true, .action = .{ .open_scene = entry.path } },
             .input_map => .{ .used = true, .action = .{ .open_input_map = entry.path } },
@@ -454,7 +456,7 @@ pub const AssetsPanel = struct {
                 break :blk .{ .used = false }; // the list opens folders with one press
             },
             .code, .text, .material, .animation => .{ .used = true, .action = .{ .open_code = entry.path } },
-            else => .{ .used = true, .action = .{ .reveal = entry.path } },
+            else => .{ .used = true, .action = .{ .preview = entry.path } },
         };
     }
 

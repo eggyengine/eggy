@@ -1047,6 +1047,10 @@ pub fn Editor(comptime project: type) type {
                     defer self.gpa.free(folder);
                     file_manager.showFolder(self.gpa, folder) catch |err| std.log.err("cannot show {s}: {t}", .{ path, err });
                 },
+                .preview => |path| self.workspace.previewInWindow() catch |err| {
+                    std.log.err("cannot preview {s} in a window: {t}", .{ path, err });
+                    self.workspace.toast("Couldn't open the preview window: see the Console");
+                },
                 .copy_path => |path| {
                     @import("terminal_view.zig").copyToClipboard(path);
                     self.workspace.toast("Copied the path");

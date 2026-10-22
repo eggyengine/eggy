@@ -937,6 +937,15 @@ pub const Workspace = struct {
         _ = self.dock.activate(ui.dock.first_id + id);
     }
 
+    /// Show the Asset Preview in an OS window of its own, popping it out of wherever it is
+    /// docked (opening it first if it was closed). Closing the window docks it back home.
+    pub fn previewInWindow(self: *Workspace) !void {
+        const id = @intFromEnum(Panel.asset_preview);
+        if (self.dock.nodeOf(id)) |stack| if (std.meta.activeTag(self.dock.hostOf(stack)) == .window and self.dock.nodes[stack].count == 1) return;
+        if (self.dock.nodeOf(id) == null) try self.showPanel(.asset_preview);
+        try self.dock.detach(id);
+    }
+
     /// Show the UI Designer's tab, opening it with the tree, the preview and the properties
     /// side by side when it isn't open.
     pub fn showUiDesigner(self: *Workspace) !void {
@@ -1160,6 +1169,18 @@ test "the UI Designer's panels open together in a UI tab, and the 2D Scene in a 
     // Asking for the 3D tab goes back to the Scene panel's.
     _ = workspace.run(.{ .command = .new_tab_3d });
     try std.testing.expectEqual(@as(u8, 0), workspace.tabs.active);
+}
+
+test "previewing an asset pops the Asset Preview out into a window, once" {
+    var workspace = try testWorkspace();
+    defer workspace.deinit();
+    workspace.dock.os_windows = true;
+    const id = @intFromEnum(Panel.asset_preview);
+    try workspace.previewInWindow();
+    const host = workspace.dock.hostOf(workspace.dock.nodeOf(id).?);
+    try std.testing.expect(std.meta.activeTag(host) == .window);
+    try workspace.previewInWindow();
+    try std.testing.expect(std.meta.eql(host, workspace.dock.hostOf(workspace.dock.nodeOf(id).?)));
 }
 
 test "the Window menu closes and reopens a panel" {
