@@ -1,5 +1,5 @@
-//! The Preferences window's Project section: the open project's `eggy.zon`: its title and
-//! version, the scene the built game starts in (the default scene, which exports start in unless
+//! The Preferences window's Project section: the open project's `eggy.zon`: its title, version
+//! and icon (shown, and as the editor's badged egg), the scene the built game starts in (the default scene, which exports start in unless
 //! told otherwise), and what the game's executable says about itself (company, description,
 //! copyright and any more of the project's own, by name), and the graphics the game starts with
 //! (which players can change in the game). Every change is written as it is made, and handed back
@@ -8,6 +8,7 @@ const std = @import("std");
 const eggy = @import("eggy");
 const ui = eggy.ui;
 const listing = @import("assets/listing.zig");
+const icon = @import("icon.zig");
 const page_style = @import("page_style.zig");
 const restyle = page_style.restyle;
 const smallText = page_style.smallText;
@@ -16,6 +17,9 @@ const SettingRows = setting_rows.SettingRows;
 
 const render_settings = eggy.render_settings;
 const ShortEdit = ui.TextEdit(64);
+const ImageFrame = @typeInfo(@FieldType(ui.Image, "frames")).pointer.child;
+/// How big the icon previews are drawn.
+const preview_px: f32 = 56;
 const LongEdit = ui.TextEdit(256);
 /// The most entries of the project's own it holds.
 const max_extra = 32;
@@ -44,6 +48,15 @@ pub const ProjectSettings = struct {
     scenes: []const []const u8 = &.{},
     scenes_arena: std.heap.ArenaAllocator,
     scene: usize = 0,
+    /// The project's images, "None" first (in `scenes_arena`), and which is the icon.
+    icons: []const []const u8 = &.{},
+    icon: usize = 0,
+    /// The chosen icon and the editor's egg badged with it, as last loaded (for `preview_for`,
+    /// an index into `icons`) into the window's font; null where it didn't load.
+    preview_for: ?usize = null,
+    preview: ?ui.Image = null,
+    badge_frame: [1]ImageFrame = undefined,
+    badge_preview: ?ui.Image = null,
     /// The graphics the game starts with, as the form edits them; `saved_graphics` is what the
     /// file has (the last valid choice, while a number field is half typed).
     graphics: eggy.graphics_settings.Form = .{},
@@ -84,6 +97,7 @@ pub const ProjectSettings = struct {
     /// settings.close(); // Editor preferences window is no longer using its fields.
     /// ```
     pub fn close(self: *ProjectSettings) void {
+        if (self.preview) |*image| image.deinit(self.gpa);
         self.gpa.free(self.project_dir);
         self.gpa.free(self.written);
         self.extra.deinit(self.gpa);
@@ -134,6 +148,22 @@ pub const ProjectSettings = struct {
         if (config.default_scene) |default| for (self.scenes, 0..) |scene, i| {
             if (std.mem.eql(u8, scene, default)) self.scene = i;
         };
+
+        // The images to pick the icon from; an icon that isn't among them is kept as it is.
+        var images: std.ArrayList([]const u8) = .empty;
+        try images.append(self.scenes_arena.allocator(), "None");
+        try images.appendSlice(self.scenes_arena.allocator(), try listing.images(self.scenes_arena.allocator(), io, project, eggy.project.resources_dir));
+        self.icon = 0;
+        if (config.icon) |chosen| {
+            self.icon = for (images.items, 0..) |image, i| {
+                if (std.mem.eql(u8, image, chosen)) break i;
+            } else blk: {
+                try images.append(self.scenes_arena.allocator(), try self.scenes_arena.allocator().dupe(u8, chosen));
+                break :blk images.items.len - 1;
+            };
+        }
+        self.icons = images.items;
+        self.preview_for = null;
     }
 
     /// The section's settings, in groups of rows (`eggy.setting_rows`): the game, its starting
@@ -158,6 +188,10 @@ pub const ProjectSettings = struct {
         general.begin(context, "Default scene", "Where the built game starts, and exports unless you pick another.");
         _ = context.select("##default scene", self.scenes, &self.scene);
         general.end(context);
+        general.begin(context, "Icon", "An image of the project's. The editor's egg wears it in its corner.");
+        _ = context.select("##icon", self.icons, &self.icon);
+        general.end(context);
+        if (self.icon != 0) self.iconPreviews(context);
         setting_rows.endGroup(context);
 
         groupHeading(context, "Graphics", "What the game starts with. Players can change these in the game.");
@@ -203,6 +237,44 @@ pub const ProjectSettings = struct {
         }
     }
 
+    /// The chosen icon beside the editor's egg wearing it, loaded again when the choice changed.
+    fn iconPreviews(self: *ProjectSettings, context: *ui.Context) void {
+        if (self.preview_for != self.icon) self.loadPreviews(context.font);
+        context.begin(.row);
+        previewTile(context, if (self.preview) |*image| image else null, "Icon");
+        previewTile(context, if (self.badge_preview) |*image| image else null, "Editor");
+        context.end();
+        restyle(context, .{ .direction = .row, .gap = 16, .padding = .{ .top = 4, .bottom = 8 } });
+    }
+
+    /// Decode the chosen icon and the badged egg into `font`'s color atlas; a file that won't
+    /// decode leaves its preview empty, which the tile says.
+    fn loadPreviews(self: *ProjectSettings, font: *ui.Font) void {
+        if (self.preview) |*image| image.deinit(self.gpa);
+        self.preview = null;
+        self.badge_preview = null;
+        self.preview_for = self.icon;
+        const path = self.icons[self.icon];
+
+        var threaded: std.Io.Threaded = .init_single_threaded;
+        const io = threaded.io();
+        if (std.Io.Dir.cwd().openDir(io, self.project_dir, .{})) |dir| {
+            var project = dir;
+            defer project.close(io);
+            if (project.readFileAlloc(io, path, self.gpa, .limited(32 << 20))) |bytes| {
+                defer self.gpa.free(bytes);
+                self.preview = ui.Image.load(self.gpa, font, bytes) catch null;
+            } else |_| {}
+        } else |_| {}
+
+        const badged = self.gpa.create(icon.Badged) catch return;
+        defer self.gpa.destroy(badged);
+        icon.decodeBadge(self.gpa, self.project_dir, path, badged) catch return;
+        const sprite = font.addSprite(badged, icon.badged_size, icon.badged_size) catch return;
+        self.badge_frame = .{.{ .sprite = sprite, .delay_ms = 0 }};
+        self.badge_preview = .{ .width = icon.badged_size, .height = icon.badged_size, .frames = &self.badge_frame, .duration_ms = 0 };
+    }
+
     /// Write `eggy.zon` from the fields if they changed it; what changed, caller-owned.
     /// Null means identical serialized settings. Returned before/after buffers use `self.gpa`;
     /// transfer them to matching-allocator history or free both. Serialization/I/O/allocation
@@ -239,6 +311,7 @@ pub const ProjectSettings = struct {
             .title = self.title.text(),
             .version = self.version.text(),
             .default_scene = if (self.scene == 0) null else self.scenes[self.scene],
+            .icon = if (self.icon == 0) null else self.icons[self.icon],
             .graphics = graphics,
             .metadata = .{ .company = self.company.text(), .description = self.description.text(), .copyright = self.copyright.text(), .extra = extra.items },
         };
@@ -282,6 +355,19 @@ pub fn loadGraphics(gpa: std.mem.Allocator, project_dir: []const u8) !render_set
     var arena_state = std.heap.ArenaAllocator.init(gpa);
     defer arena_state.deinit();
     return (try eggy.project.load(arena_state.allocator(), io, project)).graphics;
+}
+
+/// One icon preview with its caption under it, or a note where it didn't load.
+fn previewTile(context: *ui.Context, image: ?*const ui.Image, caption: []const u8) void {
+    context.begin(.column);
+    if (image) |shown| context.image(shown, preview_px) else {
+        context.muted("Can't read this image");
+        smallText(context, 12);
+    }
+    context.muted(caption);
+    smallText(context, 12);
+    context.end();
+    restyle(context, .{ .gap = 4, .align_items = .center });
 }
 
 /// A heading over a group of rows, with a line on what the group is.
@@ -360,6 +446,28 @@ test "the Project section lays out every eggy.zon field in cards and writes a ch
     defer gpa.free(change.after);
     try std.testing.expect(std.mem.indexOf(u8, change.after, "Sewer Rats") != null);
     try std.testing.expect(try settings.save() == null);
+}
+
+test "the project's icon is picked from its images and written to eggy.zon" {
+    const gpa = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = eggy.project.file_name, .data = ".{ .name = \"rats\", .title = \"Rats\" }\n" });
+    try tmp.dir.createDirPath(std.testing.io, "resources/art");
+    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "resources/art/rat.png", .data = "not really a png" });
+    const dir = try tmp.dir.realPathFileAlloc(std.testing.io, ".", gpa);
+    defer gpa.free(dir);
+    const settings = try ProjectSettings.open(gpa, dir, .{});
+    defer settings.close();
+    try std.testing.expectEqualStrings("None", settings.icons[0]);
+    try std.testing.expectEqualStrings("resources/art/rat.png", settings.icons[1]);
+    settings.icon = 1;
+    const change = (try settings.save()).?;
+    defer gpa.free(change.before);
+    defer gpa.free(change.after);
+    try std.testing.expect(std.mem.indexOf(u8, change.after, ".icon = \"resources/art/rat.png\"") != null);
+    try settings.reload();
+    try std.testing.expectEqual(@as(usize, 1), settings.icon);
 }
 
 test "saving the Project section keeps the installed plugins" {

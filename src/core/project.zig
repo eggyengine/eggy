@@ -34,6 +34,9 @@ pub const Config = struct {
     /// told otherwise, and `zig build runtime` too (which, without it, takes the scene the
     /// editor has open, else the first in `resources_dir`: see `src/build/resources.zig`).
     default_scene: ?[]const u8 = null,
+    /// The project's icon: an image file, relative to the project. The editor wears it in the
+    /// corner of its egg.
+    icon: ?[]const u8 = null,
     /// What the built game says about itself, in its executable.
     metadata: Metadata = .{},
     /// Shipped graphics defaults; a user's graphics preferences override them.
@@ -70,6 +73,7 @@ pub fn write(writer: *std.Io.Writer, config: Config) std.Io.Writer.Error!void {
     try writer.writeAll(".{\n    // The package name, as build.zig's addGame uses it: the editor opens `<name>_editor`.\n");
     try writer.print("    .name = \"{f}\",\n    .title = \"{f}\",\n    .version = \"{f}\",\n", .{ std.zig.fmtString(config.name), std.zig.fmtString(config.title), std.zig.fmtString(config.version) });
     if (config.default_scene) |scene| try writer.print("    // The scene the built game starts in.\n    .default_scene = \"{f}\",\n", .{std.zig.fmtString(scene)});
+    if (config.icon) |icon| try writer.print("    // The project's icon.\n    .icon = \"{f}\",\n", .{std.zig.fmtString(icon)});
     try writer.writeAll("    .graphics = ");
     try std.zon.stringify.serialize(config.graphics, .{}, writer);
     try writer.writeAll(",\n");
@@ -184,6 +188,7 @@ test "eggy.zon written reads back the same, its metadata included" {
         .name = "space_game",
         .title = "Space \"Game\"",
         .default_scene = "resources/scene/start.scene.zon",
+        .icon = "resources/icon.png",
         .metadata = .{ .company = "Rat Co", .extra = &.{.{ .name = "Website", .value = "rats.example" }} },
         .graphics = .{ .anti_aliasing = .fxaa, .mipmaps = false, .frame_limit = 120 },
         .plugins = &.{ .{ .module = "eggy_git", .version = "0.1.0", .dev = true }, .{ .module = "stats", .dependency = "stat_pack", .version = "1.0.0", .repository = "https://github.com/rat/stat_pack", .fingerprint = 0x1234 } },
@@ -194,6 +199,7 @@ test "eggy.zon written reads back the same, its metadata included" {
     const read = try parse(arena.allocator(), try arena.allocator().dupeZ(u8, text.written()));
     try std.testing.expectEqualStrings(config.title, read.title);
     try std.testing.expectEqualStrings(config.default_scene.?, read.default_scene.?);
+    try std.testing.expectEqualStrings(config.icon.?, read.icon.?);
     try std.testing.expectEqualStrings("Rat Co", read.metadata.company);
     try std.testing.expectEqualStrings("rats.example", read.metadata.extra[0].value);
     try std.testing.expectEqual(@as(usize, 0), read.metadata.copyright.len);
