@@ -1,5 +1,5 @@
 //! The editor's dock panels and what each shows. Scene marks where the editor draws the scene
-//! texture, with its gizmo and buttons floating over it; the "pages" (Inspector, Console, Hierarchy, Assets, Animation, the UI Designer's three, the Asset Preview and each plugin's `editor_panels`) mark
+//! texture, with its gizmo and buttons floating over it; the "pages" (Inspector, Console, Hierarchy, Assets, Animation, the UI Designer's three, the Asset Preview, the 2D Scene and each plugin's `editor_panels`) mark
 //! where it draws a `ui.Context` of their own.
 const std = @import("std");
 const eggy = @import("eggy");
@@ -22,6 +22,8 @@ pub const Panel = enum(u32) {
     ui_properties,
     /// The file selected in Assets, shown as itself.
     asset_preview,
+    /// The world seen flat, through an orthographic camera, for 2D games.
+    scene_2d,
 
     /// Return a static, sentinel-terminated display title for a built-in editor panel.
     ///
@@ -41,6 +43,7 @@ pub const Panel = enum(u32) {
             .ui_tree => "UI Tree",
             .ui_properties => "UI Properties",
             .asset_preview => "Asset Preview",
+            .scene_2d => "2D Scene",
         };
     }
 };
@@ -63,7 +66,8 @@ pub fn pluginId(panel: EditorPanel, index: usize) u32 {
 /// Pages: the Inspector (`inspector_page`), the Console (`console_page`), the Hierarchy
 /// (`hierarchy_page`), Assets (`assets_page`), Animation (`animation_page`), the UI Designer
 /// (`ui_designer_page`), its tree (`ui_tree_page`) and properties (`ui_properties_page`), the Asset
-/// Preview (`asset_preview_page`), then the plugin panels (`first_plugin_page + i`).
+/// Preview (`asset_preview_page`), the 2D Scene (`scene_2d_page`), then the plugin panels
+/// (`first_plugin_page + i`).
 pub const max_pages = 32;
 pub const inspector_page = 0;
 pub const console_page = 1;
@@ -74,7 +78,8 @@ pub const ui_designer_page = 5;
 pub const ui_tree_page = 6;
 pub const ui_properties_page = 7;
 pub const asset_preview_page = 8;
-pub const first_plugin_page = 9;
+pub const scene_2d_page = 9;
+pub const first_plugin_page = 10;
 
 /// Page index of dock panel `id`, if it is a page.
 /// Borrows the current plugin declarations; Scene and unknown IDs return null.
@@ -93,6 +98,7 @@ pub fn pageOf(id: u32, plugin_panels: []const EditorPanel) ?usize {
     if (id == @intFromEnum(Panel.ui_tree)) return ui_tree_page;
     if (id == @intFromEnum(Panel.ui_properties)) return ui_properties_page;
     if (id == @intFromEnum(Panel.asset_preview)) return asset_preview_page;
+    if (id == @intFromEnum(Panel.scene_2d)) return scene_2d_page;
     for (plugin_panels, 0..) |panel, index| if (pluginId(panel, index) == id) return first_plugin_page + index;
     return null;
 }
@@ -169,7 +175,7 @@ pub const Provider = struct {
                 scene.accessibility = .{ .role = .image, .label = "Scene view" };
                 break :blk scene;
             },
-            .inspector, .console, .hierarchy, .assets, .animation, .ui_designer, .ui_tree, .ui_properties, .asset_preview => unreachable, // pages
+            .inspector, .console, .hierarchy, .assets, .animation, .ui_designer, .ui_tree, .ui_properties, .asset_preview, .scene_2d => unreachable, // pages
         };
     }
 };
@@ -190,7 +196,7 @@ fn placeholder(b: L.Builder, message: []const u8) !*L.Element {
     });
 }
 
-test "pages are the Inspector, the Console, the Hierarchy, Assets, Animation, the UI Designer's three, the Asset Preview and the plugin panels, in that order" {
+test "pages are the Inspector, the Console, the Hierarchy, Assets, Animation, the UI Designer's three, the Asset Preview, the 2D Scene and the plugin panels, in that order" {
     const plugin_panels = [_]EditorPanel{ .{ .title = "Stats" }, .{ .title = "Level" } };
     try std.testing.expectEqual(@as(?usize, 0), pageOf(@intFromEnum(Panel.inspector), &plugin_panels));
     try std.testing.expectEqual(@as(?usize, 1), pageOf(@intFromEnum(Panel.console), &plugin_panels));
@@ -200,7 +206,8 @@ test "pages are the Inspector, the Console, the Hierarchy, Assets, Animation, th
     try std.testing.expectEqual(@as(?usize, 5), pageOf(@intFromEnum(Panel.ui_designer), &plugin_panels));
     try std.testing.expectEqual(@as(?usize, 7), pageOf(@intFromEnum(Panel.ui_properties), &plugin_panels));
     try std.testing.expectEqual(@as(?usize, 8), pageOf(@intFromEnum(Panel.asset_preview), &plugin_panels));
-    try std.testing.expectEqual(@as(?usize, 10), pageOf(plugin_first + 1, &plugin_panels));
+    try std.testing.expectEqual(@as(?usize, 9), pageOf(@intFromEnum(Panel.scene_2d), &plugin_panels));
+    try std.testing.expectEqual(@as(?usize, 11), pageOf(plugin_first + 1, &plugin_panels));
     try std.testing.expectEqual(@as(?usize, null), pageOf(@intFromEnum(Panel.scene), &plugin_panels));
     try std.testing.expectEqualStrings("Level", panelTitle(plugin_first + 1, &plugin_panels));
     try std.testing.expectEqualStrings("Console", panelTitle(@intFromEnum(Panel.console), &plugin_panels));

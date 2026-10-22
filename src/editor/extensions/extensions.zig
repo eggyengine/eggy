@@ -78,7 +78,7 @@ pub fn processRequest(host: anytype, request: workspace.Outcome) !bool {
         },
         .new_project => {
             if (!host.mayLeave(.new_project)) return false;
-            layout_file.save(host.gpa, host.preference_folders.global, &host.workspace.dock, host.workspace.seen_plugin_panels.items);
+            layout_file.save(host.gpa, host.preference_folders.global, &host.workspace.dock, &host.workspace.tabs, host.workspace.seen_plugin_panels.items);
             host.project_flow = try ProjectFlow.create(host.gpa, &host.app.graphics, host.ui.font, host.mono);
         },
         .open_project => if (host.mayLeave(.open_project)) {

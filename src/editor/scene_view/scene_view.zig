@@ -14,7 +14,7 @@ const L = ui.Layout;
 const sdl3 = eggy.sdl_adapter.sdl;
 const HotGame = @import("../hot_reload/hot_reload.zig").HotGame;
 const gizmo = @import("gizmo.zig");
-const picking = @import("picking.zig");
+pub const picking = @import("picking.zig");
 const orientation = @import("orientation.zig");
 const game_camera = @import("game_camera.zig");
 const light_direction = @import("light_direction.zig");
@@ -489,7 +489,7 @@ fn startDrag(target: Target, layout: gizmo.Layout, handle: gizmo.Handle, at: ui.
 }
 
 /// Three numbers, `.{ x, y, z }` in ZON; null when `text` isn't that.
-fn parseVector(text: []const u8) ?[3]f32 {
+pub fn parseVector(text: []const u8) ?[3]f32 {
     var source: [160]u8 = undefined;
     const terminated = std.fmt.bufPrintZ(&source, "{s}", .{text}) catch return null;
     // ZON's parser needs room for its syntax tree, as the Inspector's does.
@@ -505,7 +505,7 @@ fn transformIndex(game: *const HotGame) ?usize {
 
 /// What a click on `entity` selects: the outermost scene instance it was made under, as its
 /// entities come from the instance's file and edits to them aren't kept; else itself.
-fn instanceRoot(target: Target, entity: ?eggy.ecs.EntityId) ?eggy.ecs.EntityId {
+pub fn instanceRoot(target: Target, entity: ?eggy.ecs.EntityId) ?eggy.ecs.EntityId {
     var picked = entity orelse return null;
     const component = target.game.builtinComponent("SceneInstance") orelse return picked;
     var above = target.app.world.getParent(picked);

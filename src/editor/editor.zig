@@ -67,6 +67,7 @@ const input_map_asset = @import("input_map_asset/input_map_asset.zig");
 const animation_dock = @import("animation_dock/animation_dock.zig");
 const ui_designer = @import("ui_designer/ui_designer.zig");
 const AssetPreview = @import("asset_preview.zig").AssetPreview;
+const Scene2d = @import("scene_2d.zig").Scene2d;
 /// The Preferences section File > Project Settings opens.
 const project_section = "Project";
 
@@ -159,6 +160,9 @@ pub fn Editor(comptime project: type) type {
         ui_designer: ui_designer.Designer = .{},
         asset_preview_ui: ui.Context,
         asset_preview: AssetPreview,
+        scene_2d_ui: ui.Context,
+        /// The 2D Scene panel: its camera, grid and dragging.
+        scene_2d: Scene2d = .{},
         animation: animation_dock.Dock = .{},
         asset_icons: AssetIcons,
         console: Console,
@@ -176,6 +180,10 @@ pub fn Editor(comptime project: type) type {
         camera_preview: eggy.SceneTexture,
         /// The model the Asset Preview panel shows, made the first time one is shown.
         model_view: ?eggy.SceneTexture = null,
+        /// The world seen flat in the 2D Scene panel, made the first time it is shown, and the
+        /// meshes it draws.
+        scene_2d_view: ?eggy.SceneTexture = null,
+        drawables_2d: []eggy.mesh.Drawable,
         /// The meshes the scene draws, gathered from the world through the game's library.
         drawables: []eggy.mesh.Drawable,
         /// This frame's billboards (UI scenes in the world), which graphics borrows while drawing.
@@ -308,6 +316,8 @@ pub fn Editor(comptime project: type) type {
             errdefer ui_properties_ui.deinit();
             var asset_preview_ui = ui.Context.initWithFont(gpa, context.font);
             errdefer asset_preview_ui.deinit();
+            var scene_2d_ui = ui.Context.initWithFont(gpa, context.font);
+            errdefer scene_2d_ui.deinit();
             var asset_icons = AssetIcons.load(gpa, context.font);
             errdefer asset_icons.deinit(gpa);
             var console = Console.init(gpa, mono);
@@ -323,6 +333,8 @@ pub fn Editor(comptime project: type) type {
             errdefer camera_preview.deinit();
             const drawables = try gpa.alloc(eggy.mesh.Drawable, eggy.max_drawables);
             errdefer gpa.free(drawables);
+            const drawables_2d = try gpa.alloc(eggy.mesh.Drawable, eggy.max_drawables);
+            errdefer gpa.free(drawables_2d);
 
             // Draw the title bar ourselves, with the menus on it, laid out like the desktop's.
             var threaded: std.Io.Threaded = .init_single_threaded;
@@ -341,7 +353,7 @@ pub fn Editor(comptime project: type) type {
             const preference_folders = try preferences.Folders.init(gpa, if (opened_project) |opened| opened.dir else null);
             errdefer preference_folders.deinit(gpa);
             // The layout this user left the dock in last, in any project.
-            _ = layout_file.load(gpa, preference_folders.global, &workspace.dock, &workspace.seen_plugin_panels);
+            _ = layout_file.load(gpa, preference_folders.global, &workspace.dock, &workspace.tabs, &workspace.seen_plugin_panels);
             preferences.load(gpa, &app.preference_values, preference_folders);
             console.levels[@intFromEnum(std.log.Level.debug)] = preferences.editor(&app.preference_values).show_debug_logs;
 
@@ -395,7 +407,7 @@ pub fn Editor(comptime project: type) type {
             const input_settings = if (opened_project) |opened| try InputSettings.open(gpa, &app.input_backend.?.state, opened.dir) else null;
             errdefer if (input_settings) |settings| settings.close();
             if (game) |*loaded| loaded.start(&app, plugin_switches.off(), .discard);
-            var self = Self{ .gpa = gpa, .game = game, .game_modified = modifiedAt(library_path), .app = app, .ui = context, .mono = mono, .console_ui = console_ui, .hierarchy_ui = hierarchy_ui, .assets_ui = assets_ui, .assets_panel = .init(gpa), .animation_ui = animation_ui, .ui_designer_ui = ui_designer_ui, .ui_tree_ui = ui_tree_ui, .ui_properties_ui = ui_properties_ui, .asset_preview_ui = asset_preview_ui, .asset_preview = .init(gpa, mono), .asset_icons = asset_icons, .entity_editor = .init(gpa), .console = console, .plugin_pages = plugin_pages, .workspace = workspace, .frame = frame, .scene = scene, .camera_preview = camera_preview, .drawables = drawables, .overlay = overlay, .project = opened_project, .editor_modified = if (opened_project) |opened| editorModified(gpa, opened) else null, .upgrades = upgrades, .preference_folders = preference_folders, .open_scene = open_scene, .history = .{ .gpa = gpa }, .plugin_switches = plugin_switches, .project_assets = project_assets };
+            var self = Self{ .gpa = gpa, .game = game, .game_modified = modifiedAt(library_path), .app = app, .ui = context, .mono = mono, .console_ui = console_ui, .hierarchy_ui = hierarchy_ui, .assets_ui = assets_ui, .assets_panel = .init(gpa), .animation_ui = animation_ui, .ui_designer_ui = ui_designer_ui, .ui_tree_ui = ui_tree_ui, .ui_properties_ui = ui_properties_ui, .asset_preview_ui = asset_preview_ui, .asset_preview = .init(gpa, mono), .scene_2d_ui = scene_2d_ui, .asset_icons = asset_icons, .entity_editor = .init(gpa), .console = console, .plugin_pages = plugin_pages, .workspace = workspace, .frame = frame, .scene = scene, .camera_preview = camera_preview, .drawables = drawables, .drawables_2d = drawables_2d, .overlay = overlay, .project = opened_project, .editor_modified = if (opened_project) |opened| editorModified(gpa, opened) else null, .upgrades = upgrades, .preference_folders = preference_folders, .open_scene = open_scene, .history = .{ .gpa = gpa }, .plugin_switches = plugin_switches, .project_assets = project_assets };
             self.input_settings = input_settings;
             self.entity_editor.assets = project_assets;
             self.built_sources = self.sourcesNow();
@@ -428,7 +440,7 @@ pub fn Editor(comptime project: type) type {
             if (self.project_settings) |settings| settings.close();
             if (self.save_prompt) |prompt| prompt.close(&self.app.graphics);
             // The dock as this user left it, for the next editor.
-            layout_file.save(self.gpa, self.preference_folders.global, &self.workspace.dock, self.workspace.seen_plugin_panels.items);
+            layout_file.save(self.gpa, self.preference_folders.global, &self.workspace.dock, &self.workspace.tabs, self.workspace.seen_plugin_panels.items);
             self.preference_folders.deinit(self.gpa);
             if (self.open_scene) |*scene| scene.deinit();
             self.play_mode.deinit();
@@ -454,7 +466,9 @@ pub fn Editor(comptime project: type) type {
             self.scene.deinit();
             self.camera_preview.deinit();
             if (self.model_view) |*view| view.deinit();
+            if (self.scene_2d_view) |*view| view.deinit();
             self.gpa.free(self.drawables);
+            self.gpa.free(self.drawables_2d);
             self.overlay.deinit();
             self.workspace.deinit();
             for (&self.plugin_pages) |*page_ui| page_ui.deinit();
@@ -468,6 +482,7 @@ pub fn Editor(comptime project: type) type {
             self.ui_properties_ui.deinit();
             self.asset_preview_ui.deinit();
             self.asset_preview.deinit();
+            self.scene_2d_ui.deinit();
             self.animation_ui.deinit();
             self.assets_panel.deinit();
             self.asset_icons.deinit(self.gpa);
@@ -575,7 +590,7 @@ pub fn Editor(comptime project: type) type {
                     const hash = std.hash.Wyhash.hash(0, text);
                     self.workspace.scene_unsaved = if (self.open_scene) |*scene| scene.unsavedHash(hash, &self.app.world) else false;
                     // A gizmo drag, or a number dragged in the Inspector, becomes one step once let go.
-                    if (!self.scene_view.steeringNow() and !self.entity_editor.inspector.scrubbing()) self.history.watch(text, self.workspace.time_ms, self.typing()) else self.gpa.free(text);
+                    if (!self.scene_view.steeringNow() and !self.scene_2d.isMoving() and !self.entity_editor.inspector.scrubbing()) self.history.watch(text, self.workspace.time_ms, self.typing()) else self.gpa.free(text);
                 }
                 self.watchLayout();
                 self.workspace.play_warning = self.playWarning();
@@ -647,6 +662,7 @@ pub fn Editor(comptime project: type) type {
                         });
                     } else page_ui.muted("Open a project to preview its files.") else page_ui.muted("Open a project to preview its files."),
                     panels.ui_properties_page => if (self.uiDesignerEnv()) |env| self.ui_designer.buildProperties(page_ui, env, self.dragging(page_ui.builder().allocator)) else page_ui.muted("Open a project to design UI."),
+                    panels.scene_2d_page => self.scene_2d.build(page_ui),
                     else => if (self.game) |*game| {
                         var editor_context = extensions.context(self);
                         game.editorPanelUi(index - panels.first_plugin_page, &editor_context, page_ui);
@@ -675,7 +691,7 @@ pub fn Editor(comptime project: type) type {
                 const action: job_zig.Action = if (self.picking_to_link) .{ .link = self.upgrades.developer_dir orelse "" } else .open;
                 const confirmed = action == .open or self.upgrades.confirmLink(self.app.window.window, std.fs.path.basename(dir));
                 // The layout first, for the editor the project opens in.
-                if (self.project_flow == null and confirmed) layout_file.save(self.gpa, self.preference_folders.global, &self.workspace.dock, self.workspace.seen_plugin_panels.items);
+                if (self.project_flow == null and confirmed) layout_file.save(self.gpa, self.preference_folders.global, &self.workspace.dock, &self.workspace.tabs, self.workspace.seen_plugin_panels.items);
                 if (self.project_flow == null and confirmed) self.project_flow = try ProjectFlow.open(self.gpa, &self.app.graphics, self.ui.font, self.mono, dir, action);
             }
             // File > New/Open Project's window, if open.
@@ -899,7 +915,7 @@ pub fn Editor(comptime project: type) type {
         fn launchEditorFrom(self: *Self, job: *Job) !void {
             var buffer: [64]u8 = undefined;
             // The layout first: the new editor reads it as it starts, before this one has closed.
-            layout_file.save(self.gpa, self.preference_folders.global, &self.workspace.dock, self.workspace.seen_plugin_panels.items);
+            layout_file.save(self.gpa, self.preference_folders.global, &self.workspace.dock, &self.workspace.tabs, self.workspace.seen_plugin_panels.items);
             const placement = window_placement.Placement.of(self.app.window.window) orelse return job.launchEditor(&.{});
             try job.launchEditor(&.{ window_placement.flag, try placement.format(&buffer) });
         }
@@ -1115,9 +1131,9 @@ pub fn Editor(comptime project: type) type {
         /// Record a step when the dock's panels were rearranged (once let go, not mid-drag).
         fn watchLayout(self: *Self) void {
             if (self.workspace.dock.drag != .none) return;
-            const now = layout_file.arrangement(&self.workspace.dock);
+            const now = layout_file.arrangement(&self.workspace.dock, &self.workspace.tabs);
             if (self.layout_step != null and now == self.layout_step_arrangement) return;
-            const after = layout_file.snapshot(self.gpa, &self.workspace.dock) catch return;
+            const after = layout_file.snapshot(self.gpa, &self.workspace.dock, &self.workspace.tabs) catch return;
             if (self.layout_step) |before| self.history.record(.{ .layout = .{ .before = before, .after = self.gpa.dupe(u8, after) catch {
                 self.gpa.free(before);
                 self.layout_step = null;
@@ -1289,6 +1305,7 @@ pub fn Editor(comptime project: type) type {
             self.history.record(.{ .entity_visibility = .{ .place = place, .before = before, .after = !before } });
             // Invalidate last frame's pick/gizmo geometry before another input event can use it.
             self.scene_view.drawn = &.{};
+            self.scene_2d.drawn = &.{};
             self.scene_view.gizmo = null;
             self.scene_view.drag = null;
             self.scene_view.hot = null;
@@ -1419,6 +1436,7 @@ pub fn Editor(comptime project: type) type {
                     if (change.place >= captured.sources.len) return error.EntityNotSaved;
                     try self.entity_editor.view_state.setHidden(captured.sources[change.place], if (back) change.before else change.after);
                     self.scene_view.drawn = &.{};
+                    self.scene_2d.drawn = &.{};
                     self.scene_view.gizmo = null;
                 },
                 .scene => |change| {
@@ -1518,10 +1536,10 @@ pub fn Editor(comptime project: type) type {
                 },
                 .layout => |change| {
                     const text = change.value(direction);
-                    if (!layout_file.restore(self.gpa, text, &self.workspace.dock)) return error.ParseZon;
+                    if (!layout_file.restore(self.gpa, text, &self.workspace.dock, &self.workspace.tabs)) return error.ParseZon;
                     if (self.layout_step) |old| self.gpa.free(old);
                     self.layout_step = try self.gpa.dupe(u8, text);
-                    self.layout_step_arrangement = layout_file.arrangement(&self.workspace.dock);
+                    self.layout_step_arrangement = layout_file.arrangement(&self.workspace.dock, &self.workspace.tabs);
                 },
                 .open_scene => |*change| {
                     const game = if (self.game) |*loaded| loaded else return error.NoGame;
@@ -1745,23 +1763,48 @@ pub fn Editor(comptime project: type) type {
             }
 
             const model_px = if (drawn.asset_preview_at != null) try self.renderModelPreview(frame.cmd, viewport, frame.extent) else null;
+            const flat_px = if (drawn.page_starts[panels.scene_2d_page] != null) try self.renderScene2d(frame.cmd, viewport, frame.extent, scene_px != null) else null;
 
-            // The UI, with the scene texture drawn in after what is under the Scene panel and
-            // the model after the Asset Preview's page, so whatever covers them stays on top.
+            // The UI, with each texture drawn in where its panel was painted (the scene after
+            // what is under the Scene panel, the model after the Asset Preview's page, the 2D
+            // view under its grid), so whatever covers them stays on top.
             try overlay.upload(frame.cmd, self.ui.font, drawn.vertices, viewport);
             try frame.cmd.beginRenderPass(.{ .label = "editor ui", .color_attachments = &.{.{ .view = frame.target, .load_op = .load, .store_op = .store }} });
-            const model_at = if (model_px != null) drawn.asset_preview_at.? else drawn.vertices.len;
-            const first = @min(drawn.scene_at, model_at);
-            const second = @max(drawn.scene_at, model_at);
-            overlay.draw(frame.cmd, frame.extent, 0, first);
-            for ([2]bool{ drawn.scene_at <= model_at, drawn.scene_at > model_at }, [2]usize{ first, second }, 0..) |scene_now, from, i| {
-                if (scene_now) {
-                    if (scene_px) |rect| self.scene.draw(frame.cmd, rect, frame.extent);
-                    if (preview_px) |inset| self.camera_preview.draw(frame.cmd, inset, frame.extent);
-                } else if (model_px) |rect| self.model_view.?.draw(frame.cmd, rect, frame.extent);
-                const to = if (i == 0) second else drawn.vertices.len;
-                overlay.draw(frame.cmd, frame.extent, from, to - from);
+            const Insert = struct { at: usize, texture: enum { scene, model, flat } };
+            var inserts: [3]Insert = undefined;
+            var insert_count: usize = 0;
+            if (scene_px != null) {
+                inserts[insert_count] = .{ .at = drawn.scene_at, .texture = .scene };
+                insert_count += 1;
             }
+            if (model_px != null) {
+                inserts[insert_count] = .{ .at = drawn.asset_preview_at.?, .texture = .model };
+                insert_count += 1;
+            }
+            if (flat_px != null) {
+                inserts[insert_count] = .{ .at = drawn.page_starts[panels.scene_2d_page].? + self.scene_2d.mark.?, .texture = .flat };
+                insert_count += 1;
+            }
+            std.mem.sort(Insert, inserts[0..insert_count], {}, struct {
+                fn before(_: void, a: Insert, b: Insert) bool {
+                    return a.at < b.at;
+                }
+            }.before);
+            var from: usize = 0;
+            for (inserts[0..insert_count]) |insert| {
+                const at = @min(insert.at, drawn.vertices.len);
+                overlay.draw(frame.cmd, frame.extent, from, at - from);
+                switch (insert.texture) {
+                    .scene => {
+                        self.scene.draw(frame.cmd, scene_px.?, frame.extent);
+                        if (preview_px) |inset| self.camera_preview.draw(frame.cmd, inset, frame.extent);
+                    },
+                    .model => self.model_view.?.draw(frame.cmd, model_px.?, frame.extent),
+                    .flat => self.scene_2d_view.?.draw(frame.cmd, flat_px.?, frame.extent),
+                }
+                from = at;
+            }
+            overlay.draw(frame.cmd, frame.extent, from, drawn.vertices.len - from);
             frame.cmd.endRenderPass();
             try surface.endFrame(self.app.graphics.queue, frame);
         }
@@ -1786,6 +1829,25 @@ pub fn Editor(comptime project: type) type {
             graphics.ui_billboards = null;
             graphics.world_draw = null;
             try self.model_view.?.render(graphics, cmd, pixelSize(rect), @as(*[1]eggy.mesh.Drawable, shot.drawable), shot.view, null, false);
+            return rect;
+        }
+
+        /// Render the world flat for the 2D Scene panel, the selection outlined; returns where
+        /// in the window's pixels it goes. `scene_lit` says the Scene panel gathered the lights
+        /// and billboards this frame; without it the 2D view gathers the lights and shows none.
+        fn renderScene2d(self: *Self, cmd: eggy.vit.CommandBuffer, viewport: ui.Rect, extent: eggy.vit.Extent2D, scene_lit: bool) !?ui.Rect {
+            const shot = self.scene_2d.shot() orelse return null;
+            const game = if (self.game) |*loaded| loaded else return null;
+            const rect = eggy.game_ui.pixelRect(shot.rect, viewport, extent);
+            if (self.scene_2d_view == null) self.scene_2d_view = try eggy.SceneTexture.init(&self.app.graphics);
+            if (!scene_lit) {
+                game.gatherLights(&self.app, &self.app.graphics.lights);
+                self.app.graphics.ui_billboards = null;
+            }
+            const gathered = game.gatherMeshes(&self.app, self.drawables_2d);
+            const shown = if (self.play_mode.playing()) gathered else self.entity_editor.view_state.visibleMeshes(&self.app.world, gathered);
+            self.scene_2d.drawn = shown;
+            try self.scene_2d_view.?.render(&self.app.graphics, cmd, pixelSize(rect), shown, shot.view, self.entity_editor.selected, false);
             return rect;
         }
 
@@ -1982,7 +2044,7 @@ pub fn Editor(comptime project: type) type {
 
             // A pop-out window's close button docks its panels back into the main window.
             if (slot != main_slot and curr_event == .window_close_requested) {
-                self.workspace.dock.redock(.{ .window = @intCast(slot - 1) });
+                self.workspace.closeWindow(slot - 1);
                 return .run;
             }
 
@@ -2020,7 +2082,7 @@ pub fn Editor(comptime project: type) type {
                     self.app.input.cancel();
                 },
                 .new_project => if (self.project_flow == null and self.mayLeave(.new_project)) {
-                    layout_file.save(self.gpa, self.preference_folders.global, &self.workspace.dock, self.workspace.seen_plugin_panels.items);
+                    layout_file.save(self.gpa, self.preference_folders.global, &self.workspace.dock, &self.workspace.tabs, self.workspace.seen_plugin_panels.items);
                     self.project_flow = try ProjectFlow.create(self.gpa, &self.app.graphics, self.ui.font, self.mono);
                 },
                 .reload => if (try self.forceReload()) return .success,
@@ -2500,7 +2562,7 @@ pub fn Editor(comptime project: type) type {
             const now = sdl3.timer.getMillisecondsSinceInit();
             if (now -| self.layout_checked_ms < 500) return;
             self.layout_checked_ms = now;
-            const current = layout_file.fingerprint(&self.workspace.dock, self.workspace.seen_plugin_panels.items);
+            const current = layout_file.fingerprint(&self.workspace.dock, &self.workspace.tabs, self.workspace.seen_plugin_panels.items);
             if (current == self.layout_saved) {
                 self.layout_changed_ms = null;
                 return;
@@ -2508,7 +2570,7 @@ pub fn Editor(comptime project: type) type {
             const since = self.layout_changed_ms orelse now;
             self.layout_changed_ms = since;
             if (now -| since < 1000) return;
-            layout_file.save(self.gpa, self.preference_folders.global, &self.workspace.dock, self.workspace.seen_plugin_panels.items);
+            layout_file.save(self.gpa, self.preference_folders.global, &self.workspace.dock, &self.workspace.tabs, self.workspace.seen_plugin_panels.items);
             self.layout_saved = current;
             self.layout_changed_ms = null;
         }
@@ -2745,6 +2807,7 @@ pub fn Editor(comptime project: type) type {
                 // ponytail: only the Inspector is exposed to screen readers; give plugin pages AccessKit too once one adapter can serve several contexts.
                 if (index == panels.console_page and self.console.terminal.handle(input)) continue;
                 if (index == panels.asset_preview_page and self.asset_preview.handle(input)) continue;
+                if (index == panels.scene_2d_page and self.scene_2d.handle(curr_event, self.sceneTarget())) continue;
                 // Assets' right-clicks, double-clicks and keys, before its UI.
                 if (index == panels.assets_page) {
                     const result = switch (input) {
@@ -2822,6 +2885,7 @@ pub fn Editor(comptime project: type) type {
             if (index == panels.ui_tree_page) return &self.ui_tree_ui;
             if (index == panels.ui_properties_page) return &self.ui_properties_ui;
             if (index == panels.asset_preview_page) return &self.asset_preview_ui;
+            if (index == panels.scene_2d_page) return &self.scene_2d_ui;
             return &self.plugin_pages[index - panels.first_plugin_page];
         }
 
@@ -3001,6 +3065,9 @@ test {
     _ = @import("ui_designer/ui_designer.zig");
     _ = @import("asset_preview.zig");
     _ = @import("model_preview.zig");
+    _ = @import("scene_2d.zig");
+    _ = @import("tab_bar.zig");
+    _ = @import("workspace_tabs.zig");
     _ = @import("assets/creation.zig");
     _ = @import("input_settings.zig");
     _ = @import("game_input.zig");
