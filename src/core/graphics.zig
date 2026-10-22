@@ -37,6 +37,8 @@ pub const Graphics = struct {
     lights: @import("lighting.zig").Frame = .{},
     stats: @import("mesh_renderer.zig").Stats = .{},
     world_draw: ?*const @import("draw2d.zig").Draw2d = null,
+    /// This frame's billboards' UI scenes, set by the host before drawing; null for none.
+    ui_billboards: ?*const @import("ui_scenes/billboards.zig").Frame = null,
     render_settings: render.Settings = .{},
     settings_revision: u64 = 0,
     cached_caps: render.Capabilities = .{},
@@ -198,7 +200,7 @@ pub const Graphics = struct {
     /// const asset_sources = graphics.sources();
     /// ```
     pub fn sources(self: *Graphics) Sources {
-        return .{ .models = &self.models, .textures = &self.textures, .materials = &self.materials, .clips = &self.clips, .lights = &self.lights, .stats = &self.stats, .world_draw = self.world_draw };
+        return .{ .models = &self.models, .textures = &self.textures, .materials = &self.materials, .clips = &self.clips, .lights = &self.lights, .stats = &self.stats, .world_draw = self.world_draw, .ui_billboards = self.ui_billboards };
     }
 
     /// Forget every model file and image, so each loads again when next drawn: their files may

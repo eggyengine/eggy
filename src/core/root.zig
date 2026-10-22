@@ -79,6 +79,9 @@ pub const DrawContext = game_ui.DrawContext;
 pub const graphics_settings = @import("game_ui/graphics_settings.zig");
 pub const setting_rows = @import("game_ui/setting_rows.zig");
 pub const ui_hit_test = @import("ui_hit_test.zig");
+pub const ui_scenes = @import("ui_scenes/ui_scenes.zig");
+pub const UiScreen = ui_scenes.UiScreen;
+pub const UiBillboard = ui_scenes.UiBillboard;
 
 test {
     _ = @import("log/log.zig");
@@ -137,4 +140,5 @@ test {
     _ = materials;
     _ = lighting;
     _ = @import("weeoui");
+    _ = ui_scenes;
 }

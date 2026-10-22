@@ -17,6 +17,7 @@ const Overlay = @import("game_ui/game_ui.zig").Overlay;
 const render = @import("render_settings.zig");
 const graphics_control = @import("graphics_control.zig");
 const GraphicsSettingsUi = @import("game_ui/graphics_settings.zig").GraphicsSettingsUi;
+const ui_scenes = @import("ui_scenes/ui_scenes.zig");
 
 const web = builtin.os.tag == .emscripten;
 const width = 900;
@@ -53,6 +54,8 @@ pub const App = struct {
     graphics_settings_ui: GraphicsSettingsUi = .{},
     audio: @import("audio.zig").Audio = .{},
     draw2d: @import("draw2d.zig").Draw2d = .{},
+    /// UI scenes' caches, what code changed about them and their presses (see `uiScenes`).
+    ui_scenes: ui_scenes.State = .{},
     particles: @import("particles.zig").Particles = .{},
     network: @import("network.zig").Network = .{},
     navigation: @import("navigation.zig").Navigation = .{},
@@ -157,6 +160,8 @@ pub const App = struct {
         self.clearGameUi();
         self.debug_draw.deinit(self.world.allocator);
         self.draw2d.deinit();
+        self.graphics.ui_billboards = null;
+        self.ui_scenes.deinit();
         self.scene_transition.deinit();
         if (self.instances) |*instances| instances.deinit();
         self.world.deinit();
@@ -213,6 +218,17 @@ pub const App = struct {
         return .{ .world = &self.world };
     }
 
+    /// Borrow UI scene controls: change what entities' `UiScreen`s and `UiBillboard`s show, and
+    /// ask which of their buttons were pressed. Do not retain across reset/reload.
+    ///
+    /// ```zig
+    /// try app.uiScenes().setText(hud, "score", "Score: 3");
+    /// if (app.uiScenes().clicked(hud, "quit")) quitting = true;
+    /// ```
+    pub fn uiScenes(self: *App) ui_scenes.UiScenes {
+        return .{ .state = &self.ui_scenes };
+    }
+
     /// Borrow active-camera controls; selection changes apply to the next scene draw.
     pub fn cameras(self: *App) @import("camera.zig").Cameras {
         return .{ .world = &self.world };
@@ -265,6 +281,7 @@ pub const App = struct {
 
     fn clearGameUi(self: *App) void {
         if (self.ui_layer) |layer| {
+            self.ui_scenes.fontGone();
             layer.deinit();
             self.world.allocator.destroy(layer);
             self.ui_layer = null;
@@ -293,6 +310,8 @@ pub const App = struct {
         self.draw2d.deinit();
         self.draw2d = .{ .gpa = self.world.allocator };
         self.graphics.world_draw = null;
+        self.graphics.ui_billboards = null;
+        self.ui_scenes.clearEntities();
         self.profiling = .{};
         self.graphics.lights = .{};
         self.scene_transition.deinit();
@@ -341,6 +360,7 @@ pub const App = struct {
         errdefer self.profiling.end(sample) catch |err| std.log.err("cannot finish ECS timing: {t}", .{err});
         try self.world.insertResource(self.input);
         try self.world.insertResource(self.time);
+        try ui_scenes.publish(&self.world, &self.ui_scenes);
         inline for (.{ .PreUpdate, .Update, .PostUpdate }) |stage| try self.world.runStage(stage);
         // Clips play after the game's systems, by the game's (scaled, pause-held) time.
         @import("animation.zig").step(&self.world, &self.graphics.clips, self.time.delta_s);

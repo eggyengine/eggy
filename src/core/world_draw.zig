@@ -1,4 +1,4 @@
-//! Depth-tested unlit sprite and billboard glyph geometry for one scene viewport.
+//! Depth-tested unlit sprite, billboard glyph and UI panel geometry for one scene viewport.
 const std = @import("std");
 const vit = @import("vitellus");
 const ui = @import("weeoui");
@@ -7,10 +7,22 @@ const camera = @import("camera.zig");
 const requests = @import("draw2d.zig");
 const texture = @import("texture_cache.zig");
 const slots = @import("weeoui_vitellus").frames_in_flight;
-const Vertex = extern struct { position: [3]f32, uv: [2]f32, tint: [4]f32 };
+/// `premultiplied` is 1 for panels, whose texture's colours are already multiplied by alpha.
+const Vertex = extern struct { position: [3]f32, uv: [2]f32, tint: [4]f32, premultiplied: f32 = 0 };
 const Uniforms = extern struct { matrix: [4][4]f32, options: [4]f32 };
 const Batch = struct { first: u32, group: ?vit.BindGroup };
-const Item = struct { index: usize, text: bool, layer: i32, distance2: f32, order: usize };
+const Item = struct { index: usize, kind: enum { sprite, text, panel }, layer: i32, distance2: f32, order: usize };
+
+/// A rectangle in the world painted from part of a texture whose colours are premultiplied by
+/// alpha, such as a billboard's UI scene. `origin` is its bottom-left corner; `uv_rect` is
+/// {left, top, right, bottom}. Panels sort with sprites and text, back to front.
+pub const Panel = struct {
+    origin: [3]f32,
+    across: [3]f32,
+    upward: [3]f32,
+    uv_rect: [4]f32,
+    group: vit.BindGroup,
+};
 
 pub const Renderer = struct {
     gpa: std.mem.Allocator = std.heap.c_allocator,
@@ -46,6 +58,7 @@ pub const Renderer = struct {
                 .{ .location = 0, .format = .float32x3, .offset = @offsetOf(Vertex, "position") },
                 .{ .location = 1, .format = .float32x2, .offset = @offsetOf(Vertex, "uv") },
                 .{ .location = 2, .format = .float32x4, .offset = @offsetOf(Vertex, "tint") },
+                .{ .location = 3, .format = .float32, .offset = @offsetOf(Vertex, "premultiplied") },
             } }},
             .color_targets = &.{.{ .format = format, .blend = .{
                 .color = .{ .source = .src_alpha, .destination = .one_minus_src_alpha },
@@ -90,26 +103,36 @@ pub const Renderer = struct {
         self.layout.deinit();
     }
 
-    /// Build geometry and upload textures/buffers outside a render pass.
-    pub fn prepare(self: *Renderer, requests_for_frame: ?*const requests.Draw2d, textures: *texture.TextureCache, view: camera.View, aspect: f32, srgb: bool) !void {
+    /// Build geometry and upload textures/buffers outside a render pass. `panels` borrow their
+    /// bind groups until `draw`.
+    pub fn prepare(self: *Renderer, requests_for_frame: ?*const requests.Draw2d, panels: []const Panel, textures: *texture.TextureCache, view: camera.View, aspect: f32, srgb: bool) !void {
         self.vertices.clearRetainingCapacity();
         self.batches.clearRetainingCapacity();
         self.items.clearRetainingCapacity();
-        const source = requests_for_frame orelse return;
+        const empty = requests.Draw2d{};
+        const source = requests_for_frame orelse &empty;
         for (source.sprites.items, 0..) |request, i| {
             const sprite = request.value;
-            try self.items.append(self.gpa, .{ .index = i, .text = false, .layer = sprite.layer, .distance2 = distance2(view.eye, .{ sprite.position[0], sprite.position[1], sprite.depth_m }), .order = request.order });
+            try self.items.append(self.gpa, .{ .index = i, .kind = .sprite, .layer = sprite.layer, .distance2 = distance2(view.eye, .{ sprite.position[0], sprite.position[1], sprite.depth_m }), .order = request.order });
         }
         for (source.labels.items, 0..) |label, i| {
-            try self.items.append(self.gpa, .{ .index = i, .text = true, .layer = 0, .distance2 = distance2(view.eye, label.position_m), .order = label.order });
+            try self.items.append(self.gpa, .{ .index = i, .kind = .text, .layer = 0, .distance2 = distance2(view.eye, label.position_m), .order = label.order });
+        }
+        for (panels, 0..) |panel, i| {
+            var centre: [3]f32 = undefined;
+            for (&centre, panel.origin, panel.across, panel.upward) |*c, o, a, u| c.* = o + (a + u) / 2;
+            try self.items.append(self.gpa, .{ .index = i, .kind = .panel, .layer = 0, .distance2 = distance2(view.eye, centre), .order = source.sprites.items.len + source.labels.items.len + i });
         }
         std.mem.sort(Item, self.items.items, {}, before);
         const right = camera.normalize(camera.cross(view.forward, view.up));
         const up = camera.normalize(camera.cross(right, view.forward));
-        for (self.items.items) |item| {
-            if (item.text) {
-                try self.appendText(source.labels.items[item.index], right, up);
-            } else {
+        for (self.items.items) |item| switch (item.kind) {
+            .text => try self.appendText(source.labels.items[item.index], right, up),
+            .panel => {
+                const panel = panels[item.index];
+                try self.quad(panel.origin, panel.across, panel.upward, panel.uv_rect, @splat(1), panel.group, 1);
+            },
+            .sprite => {
                 const sprite = source.sprites.items[item.index].value;
                 const paint = textures.get(sprite.image.key()) orelse return error.SpriteTextureUnavailable;
                 const angle = sprite.rotation_deg * std.math.rad_per_deg;
@@ -123,9 +146,9 @@ pub const Renderer = struct {
                 }
                 var origin = [3]f32{ sprite.position[0], sprite.position[1], sprite.depth_m };
                 for (&origin, across, upward) |*o, a, u| o.* -= (a + u) / 2;
-                try self.quad(origin, across, upward, sprite.uv_rect, sprite.tint, paint.group);
-            }
-        }
+                try self.quad(origin, across, upward, sprite.uv_rect, sprite.tint, paint.group, 0);
+            },
+        };
         if (self.vertices.items.len == 0) return;
         if (self.font) |font| if (self.font_revision == null or self.font_revision.? != font.version()) {
             const pixels = try self.gpa.alloc(u8, ui.atlas_width * ui.atlas_height * 4);
@@ -202,19 +225,19 @@ pub const Renderer = struct {
                     @as(f32, @floatFromInt(glyph.y)) / ui.atlas_height,
                     @as(f32, @floatFromInt(glyph.x + glyph.w)) / ui.atlas_width,
                     @as(f32, @floatFromInt(glyph.y + glyph.h)) / ui.atlas_height,
-                }, @splat(1), null);
+                }, @splat(1), null, 0);
             }
             x += glyph.advance * scale;
         }
     }
 
-    fn quad(self: *Renderer, origin: [3]f32, across: [3]f32, upward: [3]f32, uv: [4]f32, tint: [4]f32, group: ?vit.BindGroup) !void {
+    fn quad(self: *Renderer, origin: [3]f32, across: [3]f32, upward: [3]f32, uv: [4]f32, tint: [4]f32, group: ?vit.BindGroup, premultiplied: f32) !void {
         const first = std.math.cast(u32, self.vertices.items.len) orelse return error.TooManySpriteVertices;
         try self.batches.append(self.gpa, .{ .first = first, .group = group });
         for ([_][2]f32{ .{ 0, 0 }, .{ 1, 0 }, .{ 1, 1 }, .{ 1, 1 }, .{ 0, 1 }, .{ 0, 0 } }) |corner| {
             var point: [3]f32 = undefined;
             for (&point, origin, across, upward) |*p, o, a, u| p.* = o + a * corner[0] + u * corner[1];
-            try self.vertices.append(self.gpa, .{ .position = point, .uv = .{ uv[0] + (uv[2] - uv[0]) * corner[0], uv[3] + (uv[1] - uv[3]) * corner[1] }, .tint = tint });
+            try self.vertices.append(self.gpa, .{ .position = point, .uv = .{ uv[0] + (uv[2] - uv[0]) * corner[0], uv[3] + (uv[1] - uv[3]) * corner[1] }, .tint = tint, .premultiplied = premultiplied });
         }
     }
 };
@@ -238,6 +261,6 @@ fn before(_: void, a: Item, b: Item) bool {
 }
 
 test "world transparencies sort by layer, then back to front, then submission order" {
-    try std.testing.expect(before({}, .{ .index = 0, .text = false, .layer = -1, .distance2 = 1, .order = 2 }, .{ .index = 1, .text = false, .layer = 0, .distance2 = 100, .order = 0 }));
-    try std.testing.expect(before({}, .{ .index = 0, .text = false, .layer = 0, .distance2 = 100, .order = 2 }, .{ .index = 1, .text = false, .layer = 0, .distance2 = 1, .order = 0 }));
+    try std.testing.expect(before({}, .{ .index = 0, .kind = .sprite, .layer = -1, .distance2 = 1, .order = 2 }, .{ .index = 1, .kind = .sprite, .layer = 0, .distance2 = 100, .order = 0 }));
+    try std.testing.expect(before({}, .{ .index = 0, .kind = .sprite, .layer = 0, .distance2 = 100, .order = 2 }, .{ .index = 1, .kind = .panel, .layer = 0, .distance2 = 1, .order = 0 }));
 }

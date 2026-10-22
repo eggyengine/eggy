@@ -49,6 +49,7 @@ stages synchronous scene replacement for the end of the gameplay update.
 | Synchronous project/packaged resource and scene providers | Implemented | Packaged assets preloaded at startup |
 | [Game-save slots](../how-to/save-games.md) | Atomic versioned saves in project-specific user data | Persistent browser localStorage; quota/availability errors are explicit |
 | Weeoui game UI and custom draw hooks | Implemented | Shared runtime API; no editor import |
+| [UI scenes](../guides/ui-scenes.md): `UiScreen` HUDs and `UiBillboard` world panels | Implemented; UI Designer panel, animated GIFs, plugin widgets | Same runtime API |
 | Materials and directional/point scene lights | Implemented; Inspector components and reusable material assets | Shared renderer, up to sixteen lights |
 | [Debug drawing and CPU profiling](../how-to/debug-and-profile.md) | World-space overlays, named samples/counters; DevTools Game tab | Same frame-owned collectors and drawing |
 | [World sprites and text](../how-to/world-drawing.md) | Depth-tested atlas sprites and camera-facing glyphs | Same scene renderer |

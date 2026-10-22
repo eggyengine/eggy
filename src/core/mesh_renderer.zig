@@ -34,6 +34,8 @@ pub const Sources = struct {
     lights: *const lighting.Frame,
     stats: *Stats,
     world_draw: ?*const @import("draw2d.zig").Draw2d = null,
+    /// This frame's billboards' UI scenes; null for none.
+    ui_billboards: ?*const @import("ui_scenes/billboards.zig").Frame = null,
 };
 
 /// Scene passes accumulated by the host during this frame, including editor camera views.

@@ -7,7 +7,7 @@ const std = @import("std");
 const eggy = @import("eggy");
 
 /// Bumped whenever these types change, so an editor refuses a library built for another.
-pub const version: u32 = 37;
+pub const version: u32 = 38;
 
 /// The library's one exported function: `fn () callconv(.c) *const Game`.
 pub const entry_symbol = "eggy_game";
@@ -51,6 +51,8 @@ pub const StatusItem = extern struct {
     side: u8,
     item_count: usize,
 };
+
+pub const UiWidget = extern struct { key: [*:0]const u8, title: [*:0]const u8 };
 
 /// Which kind of entry `Game.bar_action` and `Game.bar_state` mean (`eggy.plugins.EditorBarTarget`).
 pub const BarKind = enum(u8) { menu_item, status, status_item };
@@ -217,6 +219,12 @@ pub const Game = extern struct {
     gather_meshes: *const fn (world: *anyopaque, out: [*]eggy.mesh.Drawable, capacity: usize) callconv(.c) usize,
     /// Gather authored lights using library-local component types; false on a logged error.
     gather_lights: *const fn (world: *anyopaque, out: *eggy.lighting.Frame) callconv(.c) bool,
+    /// Find this frame's UI screens and billboards in `app`'s world (an `*eggy.App`), into its
+    /// `ui_scenes`, drawing plugins' widgets through the library (`Set.gatherUiScenes`).
+    gather_ui_scenes: *const fn (state: *anyopaque, app: *anyopaque) callconv(.c) void,
+    /// The plugins' widgets for UI scenes (`eggy.plugins.UiWidget`), keys `<plugin>/<key>`.
+    ui_widgets: [*]const UiWidget,
+    ui_widget_count: usize,
     /// The entity's transform within the world (`eggy.transform.worldMatrix`), as columns, into
     /// `out`; false if it isn't alive.
     world_matrix: *const fn (world: *anyopaque, entity: Entity, out: *[4][4]f32) callconv(.c) bool,

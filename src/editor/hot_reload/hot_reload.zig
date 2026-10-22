@@ -28,6 +28,8 @@ pub const HotGame = struct {
     panels: []eggy.plugins.EditorPanel,
     commands: []const eggy.plugins.EditorCommand = &.{},
     file_types: []const eggy.plugins.EditorFileType = &.{},
+    /// The plugins' widgets for UI scenes, copied into `manifest_arena`.
+    ui_widgets: []const eggy.plugins.UiWidget = &.{},
     /// The plugins' top-bar menus and status bar entries, rebuilt from the library on every
     /// load and copied into `manifest_arena` (rows included): the editor keeps no callbacks.
     menus: []const eggy.plugins.EditorMenu = &.{},
@@ -443,6 +445,11 @@ pub const HotGame = struct {
             .extension = try arena.dupeZ(u8, std.mem.span(source.extension)),
             .contents = try arena.dupe(u8, source.contents[0..source.contents_len]),
         };
+        const ui_widgets = try arena.alloc(eggy.plugins.UiWidget, game.ui_widget_count);
+        for (ui_widgets, game.ui_widgets[0..game.ui_widget_count]) |*widget, source| widget.* = .{
+            .key = try arena.dupeZ(u8, std.mem.span(source.key)),
+            .title = try arena.dupeZ(u8, std.mem.span(source.title)),
+        };
         const menus = try copyMenus(arena, game);
         const status_items = try copyStatusItems(arena, game);
         const export_platforms = try arena.alloc(eggy.plugins.ExportPlatform, game.export_platform_count);
@@ -453,7 +460,7 @@ pub const HotGame = struct {
             .note = try arena.dupeZ(u8, std.mem.span(source.note)),
             .icon_png = try arena.dupe(u8, source.icon_png[0..source.icon_png_len]),
         };
-        self.* = .{ .gpa = gpa, .path = self.path, .copy_path = copy_path, .library = library, .game = game, .state = null, .panels = panels, .commands = commands, .file_types = file_types, .menus = menus, .status_items = status_items, .export_platforms = export_platforms, .loads = self.loads, .preference_manifests = manifests, .component_types = component_types, .plugin_keys = plugin_keys, .manifest_arena = self.manifest_arena };
+        self.* = .{ .gpa = gpa, .path = self.path, .copy_path = copy_path, .library = library, .game = game, .state = null, .panels = panels, .commands = commands, .file_types = file_types, .ui_widgets = ui_widgets, .menus = menus, .status_items = status_items, .export_platforms = export_platforms, .loads = self.loads, .preference_manifests = manifests, .component_types = component_types, .plugin_keys = plugin_keys, .manifest_arena = self.manifest_arena };
     }
 
     /// Copy the game's menus, with their rows, out of the library's memory.
@@ -517,6 +524,7 @@ pub const HotGame = struct {
         self.panels = &.{};
         self.commands = &.{};
         self.file_types = &.{};
+        self.ui_widgets = &.{};
         self.menus = &.{};
         self.status_items = &.{};
         self.export_platforms = &.{};
@@ -666,6 +674,16 @@ pub const HotGame = struct {
             return;
         }
         _ = self.game.gather_lights(&app.world, out);
+    }
+
+    /// Find this frame's UI screens and billboards into `app.ui_scenes`; none without a running
+    /// game.
+    pub fn gatherUiScenes(self: *const HotGame, app: *eggy.App) void {
+        const state = if (self.library != null) self.state else null;
+        if (state) |started| self.game.gather_ui_scenes(started, app) else {
+            app.ui_scenes.screen_count = 0;
+            app.ui_scenes.billboard_count = 0;
+        }
     }
 
     /// `entity`'s transform within `app`'s world, as columns; null if it isn't alive (or there

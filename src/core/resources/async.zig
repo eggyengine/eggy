@@ -136,7 +136,7 @@ pub const Queue = struct {
                 var reader: std.Io.Reader = .fixed(encoded.written());
                 break :block .{ .model = try assets.model.read(job.caller, &reader) };
             },
-            .image => |image| .{ .image = .{ .width = image.width, .height = image.height, .pixels = try job.caller.dupe(u8, image.pixels) } },
+            .image => |image| .{ .image = .{ .width = image.width, .height = image.height, .pixels = try job.caller.dupe(u8, image.pixels), .frame_delays_ms = if (image.frame_delays_ms.len == 0) &.{} else try job.caller.dupe(u32, image.frame_delays_ms) } },
         } };
     }
 
