@@ -84,7 +84,6 @@ pub fn exportGame(process: *const std.process.Init, prompt: *Prompt, options: Ex
         const defaults = platforms.Settings.defaults();
         for (defaults, 0..) |settings, i| {
             const platform: platforms.Platform = @enumFromInt(i);
-            if (platforms.unavailable(platform) != null) continue;
             try prompt.output.print("  {s}: {s}. {s}\n", .{ platforms.target(platform, settings), platforms.title(platform), platforms.note(platform) });
         }
     }
