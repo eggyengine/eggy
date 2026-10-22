@@ -66,19 +66,21 @@ fn packageFile(gpa: std.mem.Allocator, arena: std.mem.Allocator, io: std.Io, pro
                 return err;
             };
             defer model.deinit(gpa);
-            const children = try assets.subassets.list(arena, entry.id, entry.path, model.rig.clips);
+            const children = try assets.subassets.list(arena, entry.id, entry.path, model.rig.clips, model.textures.len);
             defer assets.subassets.free(arena, children);
             const geometry = children[0].id;
             for (children) |child| try aliases.claim(child.id);
             try aliases.add(.{ .path = entry.path, .id = geometry, .kind = .model, .converted = true });
             for (children) |child| {
-                try aliases.add(.{ .path = child.path, .id = child.id, .kind = child.kind, .converted = child.kind == .model });
+                try aliases.add(.{ .path = child.path, .id = child.id, .kind = child.kind, .converted = child.kind != .animation });
                 if (child.clip_index) |index| {
                     try writePayload(io, output, child.id, assets.imported_clip, assets.imported_clip.File{
                         .source_model = geometry,
                         .clip = model.rig.clips[index],
                     });
                 }
+                // A material's texture is an image of its own, as an image file would be.
+                if (child.texture_index) |index| try writePayload(io, output, child.id, assets.texture, model.textures[index]);
             }
 
             // Geometry keeps its rig and blend shapes; clips are independently addressable.

@@ -93,6 +93,17 @@ pub const AssetPreview = struct {
         if (selection.virtual) {
             context.muted(std.fmt.allocPrint(arena, "Part of {s}: drop it on a field to use it.", .{std.fs.path.dirname(path) orelse path}) catch "Part of a model.");
             page_style.smallText(context, 13);
+            // A material's texture shows as the image it is.
+            const reference = request.assets.referenceAt(path) orelse return;
+            if (reference.kind != .image) return;
+            if (!std.mem.eql(u8, self.path.items, path)) {
+                self.path.clearRetainingCapacity();
+                self.path.appendSlice(self.gpa, path) catch {};
+                self.images.forgetAll();
+            }
+            context.muted("Drag it onto a folder in Assets to save it as a PNG you can edit.");
+            page_style.smallText(context, 12);
+            self.image(context, request, arena.dupe(u8, reference.key()) catch return, @max(80, page_style.pageHeight(context) - 84));
             return;
         }
         self.refresh(request.project_dir, path);

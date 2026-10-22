@@ -23,6 +23,11 @@ pub fn model(source: Id) Id {
     return child(source, "model", "", 0);
 }
 
+/// A model's material textures are identified by their place among its textures.
+pub fn texture(source: Id, index: u32) Id {
+    return child(source, "texture", "", index);
+}
+
 /// Clip names identify imported animations; the ordinal disambiguates duplicate names.
 pub fn animation(source: Id, name: []const u8, occurrence: u32) Id {
     return child(source, "animation", name, occurrence);

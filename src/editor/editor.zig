@@ -49,6 +49,7 @@ const Dragged = @import("dragged.zig").Dragged;
 const save_prompt_zig = @import("save_prompt.zig");
 const page_style = @import("page_style.zig");
 const file_ops = @import("assets/file_ops.zig");
+const png_writer = @import("assets/png_writer.zig");
 const code_editor = @import("code_editor.zig");
 const hit_test = eggy.ui_hit_test;
 const scene_view = @import("scene_view/scene_view.zig");
@@ -1055,7 +1056,7 @@ pub fn Editor(comptime project: type) type {
                     @import("terminal_view.zig").copyToClipboard(path);
                     self.workspace.toast("Copied the path");
                 },
-                .create_folder, .create_file, .rename, .duplicate, .delete, .move_into => self.changeFiles(opened.dir, action) catch |err| {
+                .create_folder, .create_file, .rename, .duplicate, .delete, .move_into, .extract => self.changeFiles(opened.dir, action) catch |err| {
                     std.log.err("cannot change the files: {t}", .{err});
                     self.workspace.toast("Couldn't do that: see the Console");
                 },
@@ -1192,6 +1193,26 @@ pub fn Editor(comptime project: type) type {
                     self.ui_designer.moved(change.path, renamed);
                     self.history.record(.{ .rename = .{ .from = try self.gpa.dupe(u8, change.path), .to = renamed } });
                     if (self.input_map_window) |window| try window.moved(change.path, renamed);
+                },
+                // A model's material texture, saved beside other files as a PNG to edit outside.
+                .extract => |saved_out| {
+                    const project_assets = self.project_assets orelse return error.NoProject;
+                    const reference = project_assets.referenceAt(saved_out.path) orelse return error.FileNotFound;
+                    var texture = try project_assets.modelTexture(self.gpa, try eggy.assets.id.parse(reference.key()));
+                    defer texture.deinit(self.gpa);
+                    var png: std.Io.Writer.Allocating = .init(self.gpa);
+                    defer png.deinit();
+                    try png_writer.write(self.gpa, &png.writer, texture.width, texture.height, texture.frame(0));
+                    // Named after the model and the material: "kitten Material 1.png".
+                    const model_path = std.fs.path.dirname(saved_out.path) orelse return error.FileNotFound;
+                    const model_name = std.fs.path.stem(model_path);
+                    const file_title = try std.fmt.allocPrintSentinel(self.gpa, "{s} {s}", .{ model_name, std.fs.path.basename(saved_out.path) }, 0);
+                    defer self.gpa.free(file_title);
+                    try self.history.reserve();
+                    const path = try file_ops.createFile(self.gpa, io, files, saved_out.folder, .{ .key = "", .title = file_title, .extension = ".png", .contents = png.written() });
+                    self.history.record(.{ .create = .{ .path = path } });
+                    var message: [160]u8 = undefined;
+                    self.workspace.toast(std.fmt.bufPrint(&message, "Saved {s}", .{std.fs.path.basename(path)}) catch "Saved the texture");
                 },
                 .duplicate => |path| {
                     const copy = try file_ops.duplicate(self.gpa, io, files, path);
@@ -3070,6 +3091,7 @@ test {
     _ = @import("asset_preview.zig");
     _ = @import("model_preview.zig");
     _ = @import("scene_2d.zig");
+    _ = @import("assets/png_writer.zig");
     _ = @import("tab_bar.zig");
     _ = @import("workspace_tabs.zig");
     _ = @import("assets/creation.zig");

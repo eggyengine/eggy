@@ -17,10 +17,12 @@ in version control with the assets. Projects from older versions have `<file>.eg
 descriptors beside their resources: the editor moves them into the catalog when it opens the
 project, then deletes them.
 
-A model file opens in the Assets panel into its geometry (`Skeleton` when the model has
-animation clips, else `Static`) and one entry for each of its clips. Those entries have IDs
-of their own, so a reference field can name a single clip, but they are not files: they
-can't be renamed, moved, or deleted.
+A model file opens in the Assets panel into its geometry (`Skeletal` when the model has
+animation clips, else `Static`), one entry for each of its clips, and one image for each
+texture its materials use (`Material 1` and on). Those entries have IDs of their own, so a
+reference field can name a single clip or texture, but they are not files: they can't be
+renamed, moved, or deleted. Drag a material onto a folder (or right-click it and choose
+**Extract as PNG**) to save its texture there as a PNG you can edit in any image editor.
 
 The editor refreshes model and image imports after changes. Packaging converts models
 to `.eggmodel` and decoded images to `.eggtexture`, copies other resources unchanged,
