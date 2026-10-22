@@ -114,7 +114,8 @@ const ui_scenes = @import("ui_scenes/ui_scenes.zig");
 pub const builtin_components = .{ @import("transform.zig").Transform, @import("mesh.zig").Mesh, @import("camera.zig").Camera, @import("scene_instance.zig").SceneInstance, @import("material.zig").Material, @import("lighting.zig").SceneLight, @import("lighting.zig").Environment, @import("animation.zig").Animator, ui_scenes.UiScreen, ui_scenes.UiBillboard };
 
 /// Eggy's own platforms in File > Export, in the order it lists them.
-pub const BuiltinPlatform = enum(u8) { windows, macos, linux, web, android };
+/// Android comes from the Android plugin (`plugins/android/`), as a platform of its own.
+pub const BuiltinPlatform = enum(u8) { windows, macos, linux, web };
 
 /// A platform a plugin adds to File > Export (see `export_platforms` above). Its identity is
 /// scoped to the published plugin.
@@ -128,6 +129,9 @@ pub const ExportPlatform = struct {
     /// Its icon in the platform list: PNG bytes, 48 pixels square, drawn as they are. Empty for a
     /// generic package icon.
     icon_png: []const u8 = "",
+    /// Whether its export is a folder File > Export can also zip; false for one that is a single
+    /// file already, such as an installer or an APK.
+    zips: bool = true,
 };
 
 /// The platform File > Export shows or exports for, as `exportUi` and `exportArgs` see it.
@@ -145,6 +149,8 @@ pub const ExportTarget = struct {
 pub const ExportArgs = struct {
     arena: std.mem.Allocator,
     list: std.ArrayList([]const u8) = .empty,
+    /// The `-Dtarget` to build for instead of the platform's own, set by `buildFor`.
+    target: ?[]const u8 = null,
 
     /// Add a copy of `arg`. Allocation failure propagates.
     ///
@@ -153,6 +159,18 @@ pub const ExportArgs = struct {
     /// ```
     pub fn add(self: *ExportArgs, arg: []const u8) !void {
         try self.list.append(self.arena, try self.arena.dupe(u8, arg));
+    }
+
+    /// Build for `target` instead of the platform's own `target`: for a plugin's own platform
+    /// whose target depends on what `exportUi` offers (an architecture, an OS version). Only
+    /// the platform's own plugin should call it; the last call wins. Allocation failure
+    /// propagates.
+    ///
+    /// ```zig
+    /// try args.buildFor("aarch64-linux-android.33"); // Inside an exportArgs hook.
+    /// ```
+    pub fn buildFor(self: *ExportArgs, target: []const u8) !void {
+        self.target = try self.arena.dupe(u8, target);
     }
 };
 

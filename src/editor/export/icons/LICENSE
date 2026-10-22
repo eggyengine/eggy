@@ -1,6 +1,6 @@
 The platform icons come from two sets, rendered to 48-pixel PNGs:
 
-- macos (Apple), linux, web (HTML5) and android: Simple Icons (simpleicons.org), CC0 1.0.
+- macos (Apple), linux and web (HTML5): Simple Icons (simpleicons.org), CC0 1.0.
   The logos are their owners' trademarks, used here only to name the platform.
 - windows: four squares drawn for Eggy.
 - plugin (package): Lucide (lucide.dev), under the licence below.

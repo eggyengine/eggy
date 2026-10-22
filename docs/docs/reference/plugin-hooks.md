@@ -284,12 +284,18 @@ start scene, the chosen optimization and ZIP choice, and every enabled plugin's
 fails.
 
 `ExportTarget` says which platform the hook is for: `builtin` is Eggy's
-`windows`, `macos`, `linux`, `web` or `android`, else null. `own` is the index in this
+`windows`, `macos`, `linux` or `web`, else null. `own` is the index in this
 plugin's `export_platforms` when this plugin declared it. `target` is the `-Dtarget`
 with the architecture chosen, or `native` for Linux, which builds for this computer.
 `exportUi` runs every frame the window shows the platform. Keep its choices in the
 instance. A rebuild of the game's code restarts the instance and resets them, so keep
 lasting choices in `Preferences`.
+
+A platform whose target depends on its settings (an architecture or OS version picked in
+`exportUi`) calls `args.buildFor("aarch64-linux-android.33")` in `exportArgs` to build for
+that instead of its `target`. Set `.zips = false` on a platform whose export is a single
+file, such as an installer or an APK, to hide the ZIP choice. Eggy's Android plugin
+(`plugins/android/`) does both.
 
 `key` is scoped to the published plugin name and duplicate keys fail compilation.
 A disabled plugin's platforms stay listed but can't export.

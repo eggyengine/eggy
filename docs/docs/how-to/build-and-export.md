@@ -53,7 +53,7 @@ File > Export lists the platforms down the left, with the chosen one's settings 
 them and the scene the game starts in above. It asks for that scene first only when the
 project has no default scene; changing it there changes the default. Each platform offers:
 
-- **Architecture**: x86-64 or ARM64 for Windows, Linux and Android, Apple silicon or Intel
+- **Architecture**: x86-64 or ARM64 for Windows and Linux, Apple silicon or Intel
   for macOS.
 - **C library**, for Linux: glibc for most desktop distributions, or musl for Alpine and
   other small systems. A musl build has no screen reader support and can't compile shaders
@@ -93,7 +93,9 @@ selection. Web and Android exports set up missing SDKs automatically; see
 
 ### Export for Web or Android
 
-Choose **Web** or **Android** in File > Export, or use:
+Choose **Web** in File > Export. Android comes from the **Android** plugin, which ships
+with Eggy: install it in Edit > Plugins..., and **Android** joins the platforms in File >
+Export. Or use:
 
 ```sh
 zig build export -Dtarget=wasm32-emscripten
@@ -114,15 +116,22 @@ downloads and any error that stops it shown over the game. Serve the folder from
 server (any static host, such as GitHub Pages, works): browsers won't load the `.data`
 file from a page opened straight from disk.
 
+For Android, pick the **Android version**: the oldest Android the game runs on, from
+Android 13 (API 33) to Android 16 (API 36), Android 15 (API 35) unless you set another in
+Edit > Preferences under Android. The number after `android.` in `-Dtarget` is the same API
+level. Pick ARM64 for phones and tablets, or x86-64 for emulators.
+
 Android export currently requires a Linux x86-64 or macOS host, `sh`, and `patch`.
-It installs missing Android command-line tools, API 35, build-tools 36.0.0, NDK
-27.1.12297006 and, if no JDK is installed, Temurin JDK 17. **Starting an Android
+It installs missing Android command-line tools, the platform for the API level chosen,
+build-tools 36.0.0, an NDK (27.1.12297006, or 30.0.16248370 for API 36) and, if no JDK is
+installed, Temurin JDK 17. **Starting an Android
 export accepts Google's Android SDK licenses.** An existing `ANDROID_HOME` or
 `ANDROID_SDK_ROOT` is reused; `JAVA_HOME`, `JDK_HOME`, or `javac` on PATH selects
 an installed JDK. The setup may need several gigabytes of disk space.
 
 The Android result is `zig-out/export/<name>-aarch64-linux-android-test.apk`.
-Install it on an Android 15+ device with Vulkan 1.3, for example with
+Install it on a device running the Android version chosen or later, with Vulkan 1.3, for
+example with
 `adb install -r <file>.apk`. Its scene, converted models and textures are inside
 the APK. The runtime pauses rendering when backgrounded and recreates its surface
 when foregrounded.

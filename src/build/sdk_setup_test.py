@@ -85,6 +85,24 @@ class SdkSetupTests(unittest.TestCase):
             run.assert_not_called()
             fetch.assert_not_called()
 
+    def test_another_api_level_installs_its_platform_and_ndk(self):
+        for name in ("cmdline-tools/latest/bin/sdkmanager", "platforms/android-35/android.jar",
+                     "build-tools/36.0.0/apksigner", "ndk/27.1.12297006/source.properties"):
+            self.touch("android/" + name)
+        self.touch("jdk/bin/javac")
+
+        def install(argv, **_kwargs):
+            for name in ("platforms/android-36/android.jar", "ndk/30.0.16248370/source.properties"):
+                self.touch("android/" + name)
+
+        with patch.dict(sdk.os.environ, {"JAVA_HOME": str(self.root / "jdk")}, clear=True), \
+             patch.object(sdk.platform, "machine", return_value="x86_64"), \
+             patch.object(sdk.sys, "platform", "linux"), patch.object(sdk, "run", side_effect=install) as run, \
+             patch.object(sdk.subprocess, "run"):
+            sdk.android(self.root, str(self.root / "android"), 36, "30.0.16248370")
+            self.assertIn("platforms;android-36", run.call_args.args[0])
+            self.assertIn("ndk;30.0.16248370", run.call_args.args[0])
+
     def test_missing_dawn_port_is_prepared_before_compilation(self):
         self.touch("installed/upstream/emscripten/emcc")
         with patch.object(sdk, "run") as run:

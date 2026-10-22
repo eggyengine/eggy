@@ -1,5 +1,6 @@
 //! Prepare cross-platform export toolchains before dependencies inspect their SDK headers.
 const std = @import("std");
+const android_build = @import("android.zig");
 
 /// Reuse configured SDKs, otherwise install pinned official tools in Eggy's user cache.
 /// Output streams to the export log; setup failure stops configuration before compilation.
@@ -19,6 +20,11 @@ pub fn prepare(b: *std.Build, target: std.Build.ResolvedTarget, emsdk: ?[]const 
         result,
     }) catch @panic("OOM");
     if (if (web) emsdk else android_sdk) |root| args.appendSlice(b.allocator, &.{ "--root", root }) catch @panic("OOM");
+    // The Android platform and NDK for the API level asked for; out of range, the build says so.
+    if (android) {
+        const api = std.math.clamp(android_build.apiOf(target.result), android_build.min_api, android_build.max_api);
+        args.appendSlice(b.allocator, &.{ "--android-api", b.fmt("{d}", .{api}), "--ndk", android_build.ndkFor(api) }) catch @panic("OOM");
+    }
     var child = std.process.spawn(io, .{ .argv = args.items, .environ_map = &b.graph.environ_map }) catch |err|
         std.debug.panic("export SDK setup requires Python 3.12+: {t}", .{err});
     defer child.kill(io);

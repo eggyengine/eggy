@@ -137,7 +137,7 @@ See [Startup scene selection](project-configuration.md#startup-scene-selection).
 | `x86_64-windows-gnu` | Builds a Windows desktop runtime; keep its bundled DLLs |
 | `aarch64-macos` | Uses Xcode's SDK on a Mac; elsewhere requires a macOS SDK through `--sysroot` |
 | `wasm32-emscripten` | Automatic emsdk/WebGPU-port setup; packaged assets preload into the browser; no editor |
-| `aarch64-linux-android.35` | Test-signed APK; automatic Android SDK/NDK/JDK setup on Linux x86-64 and macOS hosts |
+| `aarch64-linux-android.35` | Test-signed APK for Android 15 and later; any API level from 33 to 36 works. Automatic Android SDK/NDK/JDK setup on Linux x86-64 and macOS hosts |
 
 Automatic Web/Android setup requires Python 3.12+. It reuses configured SDKs or caches
 pinned official distributions in `$XDG_CACHE_HOME/eggy/sdks` (default

@@ -61,7 +61,8 @@ to those unimplemented playback contracts.
 Browser builds preload packaged resources through Emscripten, then read them synchronously
 through SDL. Keep the generated `.data` file beside the WebAssembly, JavaScript and HTML.
 Android APKs contain the same packaged data and read it through SDL's AssetManager adapter;
-APK export currently targets Android 15+ devices with Vulkan 1.3.
+APK export targets Android 13 (API 33) through Android 16 (API 36) devices with Vulkan 1.3,
+through the Android plugin.
 
 ## Migrating existing code
 
