@@ -37,6 +37,10 @@
             .url = "git+https://github.com/tseli0s/nvdialog#721bf6ff623833cd507b42b63424c0e5e57e2525",
             .hash = "N-V-__8AAEuUDgBPfreH-NaCz_VkqQhUzodVDBJwMy7xG76s",
         },
+        .better_dynlib = .{
+            .url = "git+https://github.com/eggyengine/better-dynlib#8d45e065337f486d32ce7d63dd0a18fd4363e481",
+            .hash = "better_dynlib-0.1.0-_pGZeoIZAACBUt3s3UMPTXcMVplZO8XbzJOjrShycqFJ",
+        },
         .s2s = .{
             .url = "git+https://github.com/ziglibs/s2s#2ad1e7e4eb73f6ed90218d305472d8922b109d69",
             .hash = "s2s-0.0.1-qt8ajXF9AABu59Lb3VhU2fa84NnRRpLsds6qQUOwJcOx",

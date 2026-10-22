@@ -11,6 +11,7 @@ const sdk_setup = @import("src/build/sdk_setup.zig");
 const android_build = @import("src/build/android.zig");
 const web_build = @import("src/build/web.zig");
 const game_plugins = @import("src/build/game_plugins.zig");
+const mingw_fortify = @import("src/build/mingw_fortify.zig");
 const builtin_plugins = @import("src/build/builtin_plugins.zig");
 
 /// Configure Eggy's own runtime/editor, tests, package resources and API-reference steps.
@@ -96,6 +97,7 @@ pub fn build(b: *std.Build) void {
             .imports = &.{
                 .{ .name = "eggy", .module = engine.eggy },
                 .{ .name = "test_library", .module = library_options.createModule() },
+                .{ .name = "better_dynlib", .module = b.dependency("better_dynlib", .{ .target = target }).module("better_dynlib") },
             },
         }), .use_llvm = true })).step;
         editor_tests.dependOn(hot_reload_tests);
@@ -604,6 +606,7 @@ fn addEngine(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.buil
         },
     });
     engine.addImport("weeoui_sdl3", weeoui_sdl3);
+    mingw_fortify.disable(engine, target, optimize);
 
     // eggy_runtime: runs a game and its plugins, for every platform.
     _ = b.addModule("eggy_runtime", .{
@@ -627,6 +630,8 @@ fn addEngine(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.buil
                 .{ .name = "weeoui_sdl3", .module = weeoui_sdl3 },
                 .{ .name = "weeoui_vitellus", .module = weeoui_vitellus },
                 .{ .name = "cli", .module = cli.module("cli") },
+                // std.DynLib has no Windows support; the editor loads the game library through this.
+                .{ .name = "better_dynlib", .module = b.dependency("better_dynlib", .{ .target = target }).module("better_dynlib") },
             },
         });
         // The window icon: the original 256x256 pixel art (resources/icon.svg is the same egg as vector).

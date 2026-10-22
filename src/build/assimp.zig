@@ -42,6 +42,9 @@ pub fn build(b: *std.Build, source: *std.Build.Dependency, target: std.Build.Res
         module.addCMacro("_WIN32", "");
         module.addCMacro("OPENDDL_STATIC_LIBARY", "");
     }
+    // Its zlib takes Apple's TARGET_OS_MAC for classic Mac OS and defines `fdopen` away, breaking
+    // the SDK's declaration; defining it as itself keeps the real one.
+    if (target.result.os.tag.isDarwin()) module.addCMacro("fdopen", "fdopen");
 
     // Its headers: its own, the configuration made from `config.h.in`, and its bundled libraries'.
     const config = b.addConfigHeader(.{ .style = .{ .cmake = source.path("include/assimp/config.h.in") }, .include_path = "assimp/config.h" }, .{ .ASSIMP_DOUBLE_PRECISION = false });

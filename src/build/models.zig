@@ -2,6 +2,7 @@
 //! files and decodes images with, plus identity-addressed payloads and the compiled asset lookup.
 const std = @import("std");
 const assimp = @import("assimp.zig");
+const mingw_fortify = @import("mingw_fortify.zig");
 const package = @import("../core/assets/package.zig");
 const registry = @import("../core/assets/registry.zig");
 const asset_id = @import("../core/assets/id.zig");
@@ -70,6 +71,7 @@ pub fn addImporter(eggy: *std.Build, target: std.Build.ResolvedTarget, optimize:
     // stb_image, from assimp's copy, for images.
     library.root_module.addIncludePath(source.path("contrib"));
     library.root_module.addCSourceFile(.{ .file = eggy.path("src/model_import/stb_image.c"), .flags = &.{"-fno-sanitize=undefined"} });
+    mingw_fortify.disable(library.root_module, target, optimize);
 
     const module = eggy.createModule(.{
         .root_source_file = eggy.path("src/model_import/model_import.zig"),

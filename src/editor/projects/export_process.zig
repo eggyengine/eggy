@@ -20,7 +20,7 @@ pub const Process = struct {
         if (windows and grouped) {
             const job = kernel.CreateJobObjectW(null, null) orelse return error.ExportProcessGroupFailed;
             errdefer _ = kernel.CloseHandle(job);
-            if (kernel.AssignProcessToJobObject(job, child.id.?) == 0) return error.ExportProcessGroupFailed;
+            if (kernel.AssignProcessToJobObject(job, child.id.?) == .FALSE) return error.ExportProcessGroupFailed;
             if (kernel.ResumeThread(child.thread_handle) == std.math.maxInt(u32)) return error.ExportProcessGroupFailed;
             return .{ .child = child, .job = job, .grouped = true };
         }

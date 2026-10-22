@@ -6,6 +6,7 @@ const eggy = @import("eggy");
 const api = @import("game_api.zig");
 const log = std.log.scoped(.hot_reload);
 const game_log = std.log.scoped(.game);
+const DynLib = @import("better_dynlib").DynLib;
 
 /// Where the loaded copies of the library go, beside the library: a copy can be swapped out
 /// and deleted without the build ever finding the library locked (Windows) or a stale copy cached
@@ -18,7 +19,7 @@ pub const HotGame = struct {
     path: []u8,
     /// The copy loaded, and the game in it; null once a swap's library failed to load.
     copy_path: []u8,
-    library: ?std.DynLib,
+    library: ?DynLib,
     game: *const api.Game,
     /// The started game and plugins; null while they aren't running: they failed to start, or a
     /// hook failed, which pauses them until the next swap rather than closing the editor.
@@ -406,7 +407,7 @@ pub const HotGame = struct {
         errdefer std.Io.Dir.cwd().deleteFile(io, copy_path) catch {};
 
         // Its game, if it was built for this editor.
-        var library = try std.DynLib.open(copy_path);
+        var library = try DynLib.open(copy_path);
         errdefer library.close();
         const entry = library.lookup(api.Entry, api.entry_symbol) orelse return error.NotAGameLibrary;
         const game = entry();

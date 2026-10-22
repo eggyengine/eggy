@@ -199,7 +199,7 @@ const access = eggy.scene.registryAccess(Plugins.Components);
 /// every world containing library code before closing the library. No allocation or failure.
 ///
 /// ```zig
-/// // Host side, given an open std.DynLib named library and this boundary's api module:
+/// // Host side, given an open better_dynlib.DynLib named library and this boundary's api module:
 /// const entry = library.lookup(api.Entry, api.entry_symbol) orelse return error.NotAGameLibrary;
 /// const table = entry(); // C ABI function-pointer call, not a library-local invocation.
 /// if (table.version != api.version) return error.GameLibraryVersionMismatch;

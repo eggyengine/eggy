@@ -12,7 +12,7 @@ const std = @import("std");
 /// ```
 pub fn main(init: std.process.Init) !void {
     const io = init.io;
-    var args = init.minimal.args.iterate();
+    var args = try init.minimal.args.iterateAllocator(init.arena.allocator());
     _ = args.next();
     const output_path = args.next() orelse return error.MissingOutputPath;
 
