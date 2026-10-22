@@ -590,7 +590,7 @@ pub fn Editor(comptime project: type) type {
                 if (self.sceneText()) |text| {
                     const hash = std.hash.Wyhash.hash(0, text);
                     self.workspace.scene_unsaved = if (self.open_scene) |*scene| scene.unsavedHash(hash, &self.app.world) else false;
-                    // A gizmo drag, or a number dragged in the Inspector, becomes one step once let go.
+                    // A gizmo or 2D Scene drag, or a number dragged in the Inspector, becomes one step once let go.
                     if (!self.scene_view.steeringNow() and !self.scene_2d.isMoving() and !self.entity_editor.inspector.scrubbing()) self.history.watch(text, self.workspace.time_ms, self.typing()) else self.gpa.free(text);
                 }
                 self.watchLayout();
