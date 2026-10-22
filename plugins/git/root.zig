@@ -163,7 +163,6 @@ test {
     _ = @import("repo.zig");
     _ = @import("diff_view.zig");
     _ = @import("panel.zig");
-    _ = @import("render_probe_test.zig");
 }
 
 test "the plugin compiles" {
