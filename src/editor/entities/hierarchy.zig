@@ -11,7 +11,8 @@
 //! clicks on its text, in the same spot), as does Ctrl+R, and Delete deletes.
 //!
 //! The page doesn't change the world itself: `build`, `pointer` and `key` return the `Action` the
-//! user took, for the editor to carry out.
+//! user took, for the editor to carry out. The UI Designer's tree is the same page listing a UI
+//! scene's nodes (`subject`), each standing in as an entity numbered by its paint order.
 const std = @import("std");
 const eggy = @import("eggy");
 const ui = eggy.ui;
@@ -76,7 +77,21 @@ const Target = union(enum) {
     blocked,
 };
 
+/// What the rows stand for, which sets the page's wording and the menu's entity-only items.
+pub const Subject = enum {
+    entities,
+    ui_nodes,
+
+    fn words(self: Subject) struct { filter: []const u8, empty: []const u8, filtered_out: []const u8, top_level: []const u8, to_top: []const u8, add: []const u8, hide: []const u8, show: []const u8 } {
+        return switch (self) {
+            .entities => .{ .filter = "Filter by name or component", .empty = "No entities yet. Add one, or spawn them from your game's code.", .filtered_out = "No entity matches the filter.", .top_level = "Drop here to move to the top level", .to_top = "Move to top level", .add = "Add entity", .hide = "Hide in editor", .show = "Show in editor" },
+            .ui_nodes => .{ .filter = "Filter by name or kind", .empty = "", .filtered_out = "No node matches the filter.", .top_level = "Drop here to move into the root", .to_top = "Move into the root", .add = "Add node", .hide = "Hide", .show = "Show" },
+        };
+    }
+};
+
 pub const Hierarchy = struct {
+    subject: Subject = .entities,
     can_paste: bool = false,
     filter: FilterEdit = FilterEdit.init("") catch unreachable,
     /// The row being renamed, and its text.
@@ -145,14 +160,15 @@ pub const Hierarchy = struct {
 
         // The filter, and a button to add an entity at the top level.
         context.begin(.row);
-        _ = context.textInput("##filter", &self.filter, "Filter by name or component");
+        const words = self.subject.words();
+        _ = context.textInput("##filter", &self.filter, words.filter);
         page_style.restyle(context, .{ .grow = 1 });
         if (context.buttonVariant("Add", .outline)) action = .{ .spawn = null };
         context.end();
         page_style.restyle(context, .{ .direction = .row, .gap = 8, .align_items = .center });
 
         if (rows.len == 0) {
-            context.muted(if (self.filter.text().len > 0) "No entity matches the filter." else "No entities yet. Add one, or spawn them from your game's code.");
+            context.muted(if (self.filter.text().len > 0) words.filtered_out else words.empty);
             page_style.smallText(context, 13);
         }
 
@@ -170,7 +186,7 @@ pub const Hierarchy = struct {
         if (self.drag) |drag| if (drag.moving) {
             const over_top = drag.target == .place and drag.target.place == .top_level;
             const zone = b.node(top_level_id, .{ .height = 32, .padding = .{ .left = 10, .right = 10 }, .align_items = .center, .direction = .row }, .{ .surface = if (over_top) .card else .track }, &.{
-                b.node(0, .{ .grow = 1 }, .{ .text = .{ .value = "Drop here to move to the top level", .size = 11, .tone = if (over_top) .foreground else .muted, .wrap = true } }, &.{}) catch return action,
+                b.node(0, .{ .grow = 1 }, .{ .text = .{ .value = words.top_level, .size = 11, .tone = if (over_top) .foreground else .muted, .wrap = true } }, &.{}) catch return action,
             }) catch return action;
             context.element(zone);
         };
@@ -395,6 +411,7 @@ pub const Hierarchy = struct {
     /// The right-click menu, if open, and what was picked from it.
     fn menuElement(self: *Hierarchy, context: *ui.Context) ?Action {
         const menu = self.menu orelse return null;
+        const words = self.subject.words();
         var choices: std.ArrayList(ui.widgets.Choice) = .empty;
         const arena = context.builder().allocator;
         if (menu.entity != null) {
@@ -405,13 +422,13 @@ pub const Hierarchy = struct {
                 .{ .id = menuId(.copy), .label = "Copy tree" },
             }) catch return null;
             if (self.can_paste) choices.append(arena, .{ .id = menuId(.paste), .label = "Paste tree" }) catch return null;
-            choices.append(arena, .{ .id = menuId(.extract), .label = "Extract tree to scene" }) catch return null;
+            if (self.subject == .entities) choices.append(arena, .{ .id = menuId(.extract), .label = "Extract tree to scene" }) catch return null;
             if (menu.has_children) choices.append(arena, .{ .id = menuId(.collapse), .label = if (menu.collapsed) "Expand children" else "Collapse children" }) catch return null;
-            choices.append(arena, .{ .id = menuId(.visibility), .label = if (menu.self_hidden) "Show in editor" else "Hide in editor" }) catch return null;
-            if (menu.has_parent) choices.append(arena, .{ .id = menuId(.to_top), .label = "Move to top level" }) catch return null;
+            choices.append(arena, .{ .id = menuId(.visibility), .label = if (menu.self_hidden) words.show else words.hide }) catch return null;
+            if (menu.has_parent) choices.append(arena, .{ .id = menuId(.to_top), .label = words.to_top }) catch return null;
             choices.append(arena, .{ .id = menuId(.delete), .label = "Delete" }) catch return null;
         } else {
-            choices.append(arena, .{ .id = menuId(.add_entity), .label = "Add entity" }) catch return null;
+            choices.append(arena, .{ .id = menuId(.add_entity), .label = words.add }) catch return null;
             if (self.can_paste) choices.append(arena, .{ .id = menuId(.paste), .label = "Paste tree" }) catch return null;
         }
 

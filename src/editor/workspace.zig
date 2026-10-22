@@ -351,8 +351,10 @@ pub const Workspace = struct {
         return false;
     }
 
-    /// The default arrangement: hierarchy left, inspector right (plugin panels as tabs beside it),
-    /// console, assets and animation below the scene.
+    /// The default arrangement: hierarchy left, inspector right (the Asset Preview and plugin panels
+    /// as tabs beside it),
+    /// console, assets and animation below the scene. The UI Designer opens on its own
+    /// (`showUiDesigner`).
     fn resetLayout(self: *Workspace) !void {
         self.dock = dock.DockSpace.init();
         self.dock.buttons = self.buttons;
@@ -365,8 +367,10 @@ pub const Workspace = struct {
         self.splitRatio(.console, 0.7);
         try self.dock.add(@intFromEnum(Panel.assets), @intFromEnum(Panel.console), .center);
         try self.dock.add(@intFromEnum(Panel.animation), @intFromEnum(Panel.console), .center);
+        try self.dock.add(@intFromEnum(Panel.asset_preview), @intFromEnum(Panel.inspector), .center);
         for (self.plugin_panels, 0..) |panel, i| try self.dock.add(panels.pluginId(panel, i), @intFromEnum(Panel.inspector), .center);
-        // The Inspector's and the Console's tabs in front.
+        // The Scene's, the Inspector's and the Console's tabs in front.
+        _ = self.dock.activate(dock.first_id + @intFromEnum(Panel.scene));
         _ = self.dock.activate(dock.first_id + @intFromEnum(Panel.inspector));
         _ = self.dock.activate(dock.first_id + @intFromEnum(Panel.console));
     }
@@ -633,6 +637,9 @@ pub const Workspace = struct {
         /// Draw `vertices[0..scene_at]`, then the scene texture into the Scene panel, then the
         /// rest, so whatever covers the Scene panel (menus, floating panels) stays on top.
         scene_at: usize,
+        /// Just after the Asset Preview page's UI, where its model is drawn; null when that
+        /// page isn't in this window.
+        asset_preview_at: ?usize = null,
     };
 
     /// Paint window `slot`'s tree from the last `build`: its background, panels and popups, with
@@ -696,6 +703,7 @@ pub const Workspace = struct {
         self.vertices.clearRetainingCapacity();
         try self.vertices.ensureTotalCapacity(gpa, total);
         var scene_at: ?usize = null;
+        var asset_preview_at: ?usize = null;
         var from: usize = 0;
         for (splices[0..count]) |splice| {
             if (self.placed.scene_mark) |mark| if (scene_at == null and mark < splice.at) {
@@ -703,13 +711,14 @@ pub const Workspace = struct {
             };
             self.vertices.appendSliceAssumeCapacity(shell[from..splice.at]);
             self.vertices.appendSliceAssumeCapacity(pages[splice.page]);
+            if (splice.page == panels.asset_preview_page) asset_preview_at = self.vertices.items.len;
             from = splice.at;
         }
         if (self.placed.scene_mark) |mark| if (scene_at == null) {
             scene_at = self.vertices.items.len + (mark - from);
         };
         self.vertices.appendSliceAssumeCapacity(shell[from..]);
-        return .{ .vertices = self.vertices.items, .scene_at = scene_at orelse self.vertices.items.len };
+        return .{ .vertices = self.vertices.items, .scene_at = scene_at orelse self.vertices.items.len, .asset_preview_at = asset_preview_at };
     }
 
     /// Route an input event from window `slot`, in that window's coordinates.
@@ -852,8 +861,43 @@ pub const Workspace = struct {
         return error.NoSuchPanel;
     }
 
+    /// Open built-in `panel` and bring its tab forward, docking it beside the Scene if it was
+    /// closed.
+    pub fn showPanel(self: *Workspace, panel: Panel) !void {
+        const id = @intFromEnum(panel);
+        if (self.dock.nodeOf(id) == null) try self.dock.add(id, if (self.dock.nodeOf(@intFromEnum(Panel.scene)) != null) @intFromEnum(Panel.scene) else null, .center);
+        _ = self.dock.activate(ui.dock.first_id + id);
+    }
+
+    /// Open the UI Designer's panels as one group floating over the main window, away from the
+    /// Scene's: the tree, the preview and the properties side by side. Panels already open stay
+    /// where they are, and all three come forward.
+    pub fn showUiDesigner(self: *Workspace) !void {
+        const designer = @intFromEnum(Panel.ui_designer);
+        // A designer open without its tree and properties (an older layout's) joins them afresh.
+        if (self.dock.nodeOf(@intFromEnum(Panel.ui_tree)) == null and self.dock.nodeOf(@intFromEnum(Panel.ui_properties)) == null) self.dock.remove(designer);
+        if (self.dock.nodeOf(designer) == null) {
+            const area = self.dock.viewport;
+            try self.dock.float(designer, .{ .x = area.x + area.w * 0.05, .y = area.y + area.h * 0.06, .w = area.w * 0.9, .h = area.h * 0.88 });
+        }
+        if (self.dock.nodeOf(@intFromEnum(Panel.ui_tree)) == null) {
+            try self.dock.add(@intFromEnum(Panel.ui_tree), designer, .left);
+            self.splitRatio(.ui_tree, 0.22);
+        }
+        if (self.dock.nodeOf(@intFromEnum(Panel.ui_properties)) == null) {
+            try self.dock.add(@intFromEnum(Panel.ui_properties), designer, .right);
+            self.splitRatio(.ui_properties, 0.68);
+        }
+        for ([_]Panel{ .ui_tree, .ui_designer, .ui_properties }) |panel| _ = self.dock.activate(ui.dock.first_id + @intFromEnum(panel));
+    }
+
     fn togglePanel(self: *Workspace, panel: u32) void {
         if (self.dock.nodeOf(panel) != null) return self.dock.remove(panel);
+        // One of the UI Designer's opens beside the others, or with them when they are closed.
+        switch (std.enums.fromInt(Panel, panel) orelse .scene) {
+            .ui_designer, .ui_tree, .ui_properties => return self.showUiDesigner() catch |err| std.log.warn("cannot open the UI Designer: {t}", .{err}),
+            else => {},
+        }
         self.dock.add(panel, null, .center) catch |err| std.log.warn("cannot reopen panel {d}: {t}", .{ panel, err });
     }
 
@@ -905,10 +949,24 @@ fn testWorkspace() !Workspace {
     return Workspace.init(std.testing.allocator, titlebar.Layout.default(.linux), &test_plugin_panels);
 }
 
-test "the default layout docks every panel" {
+test "the default layout docks every panel but the UI Designer's" {
     var workspace = try testWorkspace();
     defer workspace.deinit();
-    for (std.enums.values(Panel)) |panel| try std.testing.expect(workspace.dock.nodeOf(@intFromEnum(panel)) != null);
+    for (std.enums.values(Panel)) |panel| {
+        const designer = panel == .ui_designer or panel == .ui_tree or panel == .ui_properties;
+        try std.testing.expectEqual(!designer, workspace.dock.nodeOf(@intFromEnum(panel)) != null);
+    }
+}
+
+test "the UI Designer's panels open together, floating apart from the Scene's" {
+    var workspace = try testWorkspace();
+    defer workspace.deinit();
+    _ = workspace.run(.{ .toggle_panel = @intFromEnum(Panel.ui_properties) });
+    const host = workspace.dock.hostOf(workspace.dock.nodeOf(@intFromEnum(Panel.ui_designer)).?);
+    try std.testing.expect(host == .floating);
+    for ([_]Panel{ .ui_tree, .ui_properties }) |panel| {
+        try std.testing.expect(std.meta.eql(host, workspace.dock.hostOf(workspace.dock.nodeOf(@intFromEnum(panel)).?)));
+    }
 }
 
 test "the Window menu closes and reopens a panel" {

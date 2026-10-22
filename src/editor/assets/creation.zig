@@ -44,6 +44,12 @@ const builtins = [_]Entry{
         .extension = ".clip.zon",
         .contents = ".{\n    .format_version = 1,\n    .duration_s = 1,\n    .tracks = .{},\n}\n",
     } },
+    .{ .file = .{
+        .key = "eggy/ui_scene",
+        .title = "UI Scene",
+        .extension = eggy.assets.ui_scene.extension,
+        .contents = eggy.assets.ui_scene.template,
+    } },
     .folder,
 };
 

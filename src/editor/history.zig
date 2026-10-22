@@ -57,6 +57,8 @@ pub const Step = union(enum) {
     input_map: struct { path: []u8, text: Texts },
     /// An authored animation clip file went from `text.before` to `text.after`.
     animation_clip: struct { path: []u8, text: Texts },
+    /// A UI scene (`.ui.zon`) was edited in the UI Designer: the file's text before and after.
+    ui_scene: struct { path: []u8, text: Texts },
     /// The dock's panels were rearranged from `before` to `after` (layout snapshots).
     layout: Texts,
     /// Another scene was opened, or a new one made (`created`; undone, its file waits in
@@ -114,7 +116,7 @@ pub const Step = union(enum) {
                 gpa.free(step.text.before);
                 gpa.free(step.text.after);
             },
-            .animation_clip => |step| {
+            inline .animation_clip, .ui_scene => |step| {
                 gpa.free(step.path);
                 gpa.free(step.text.before);
                 gpa.free(step.text.after);
@@ -160,6 +162,7 @@ pub const Step = union(enum) {
             .input_bindings => "input mappings",
             .input_map => "an input map",
             .animation_clip => "an animation edit",
+            .ui_scene => "a UI scene edit",
             .open_scene => |step| if (step.created) "a new scene" else "opening a scene",
             .plugin => |step| if (step.on) "turning a plugin on" else "turning a plugin off",
         };
@@ -436,6 +439,25 @@ pub const History = struct {
             }
         }
         self.record(.{ .project_settings = .{ .before = before, .after = after } });
+        self.preference_at_ms = now_ms;
+    }
+
+    /// Record that the UI scene at `path` went from `before` to `after` (all three owned now,
+    /// allocated with `self.gpa`). Typing edits it on every key, so a change to the same file
+    /// within `typing_pause_ms` of the last one, when that was one too, joins it.
+    pub fn recordUiScene(self: *History, path: []u8, before: []u8, after: []u8, now_ms: u64) void {
+        if (self.group == null and self.undo_steps.items.len > 0 and self.redo_steps.items.len == 0 and now_ms -| self.preference_at_ms < typing_pause_ms) {
+            const last = &self.undo_steps.items[self.undo_steps.items.len - 1];
+            if (last.* == .ui_scene and std.mem.eql(u8, last.ui_scene.path, path)) {
+                self.gpa.free(last.ui_scene.text.after);
+                last.ui_scene.text.after = after;
+                self.gpa.free(before);
+                self.gpa.free(path);
+                self.preference_at_ms = now_ms;
+                return;
+            }
+        }
+        self.record(.{ .ui_scene = .{ .path = path, .text = .{ .before = before, .after = after } } });
         self.preference_at_ms = now_ms;
     }
 

@@ -380,7 +380,7 @@ pub const SceneView = struct {
                     target.selected.* = instanceRoot(target, light);
                     return true;
                 }
-                target.selected.* = instanceRoot(target, picking.pick(self.drawn, &target.app.graphics.models, self.view, area, at));
+                target.selected.* = instanceRoot(target, picking.pick(self.drawn, &target.app.graphics.models, &target.app.ui_scenes, target.app.resources(), self.view, area, at));
                 return true;
             },
             .mouse_motion => |motion| {
@@ -414,18 +414,18 @@ pub const SceneView = struct {
         }
     }
 
-    /// The entity whose mesh is under `at` on the panel at `scene`, as last drawn; null over
+    /// The entity whose mesh or billboard is under `at` on the panel at `scene`, as last drawn; null over
     /// nothing.
     /// Editor-only: positive scene dimensions and matching UI coordinates are required;
     /// `drawn` must still refer to valid current-frame drawables. Returns the mesh id directly,
     /// without remapping instance roots or mutating selection; cache bounds are borrowed.
     ///
     /// ```zig
-    /// const entity = scene_view.entityAt(&graphics.models, scene, pointer);
-    /// // Updated SceneView and live Graphics/model cache.
+    /// const entity = scene_view.entityAt(app, scene, pointer);
+    /// // Updated SceneView and live App.
     /// ```
-    pub fn entityAt(self: *const SceneView, models: *const eggy.model_cache.ModelCache, scene: ui.Rect, at: ui.Vec2) ?eggy.ecs.EntityId {
-        return picking.pick(self.drawn, models, self.view, scene, at);
+    pub fn entityAt(self: *const SceneView, app: *eggy.App, scene: ui.Rect, at: ui.Vec2) ?eggy.ecs.EntityId {
+        return picking.pick(self.drawn, &app.graphics.models, &app.ui_scenes, app.resources(), self.view, scene, at);
     }
 
     /// Where something let go at `at` on the panel at `scene` goes: on the ground (y = 0) under

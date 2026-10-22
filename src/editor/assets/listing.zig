@@ -15,6 +15,8 @@ pub const Kind = enum {
     material,
     /// An authored animation clip (`.clip.zon`), or an imported clip inside a model.
     animation,
+    /// A UI scene (`.ui.zon`), which the UI Designer opens.
+    ui,
     /// A model file, which opens into its geometry and clips (`eggy.assets.subassets`).
     model,
 
@@ -29,6 +31,7 @@ pub const Kind = enum {
         if (std.mem.endsWith(u8, name, ".inmap.zon")) return .input_map;
         if (std.mem.endsWith(u8, name, ".material.zon")) return .material;
         if (std.mem.endsWith(u8, name, ".clip.zon")) return .animation;
+        if (std.mem.endsWith(u8, name, eggy.assets.ui_scene.extension)) return .ui;
         if (eggy.assets.Kind.of(name) == .model) return .model;
         const extension = std.fs.path.extension(name);
         const kinds = [_]struct { []const []const u8, Kind }{
@@ -108,16 +111,26 @@ fn before(_: void, a: Entry, b: Entry) bool {
 /// ```
 pub fn scenes(arena: std.mem.Allocator, io: std.Io, project: std.Io.Dir, folder: []const u8) ![]const []const u8 {
     var found: std.ArrayList([]const u8) = .empty;
-    try collectScenes(arena, io, project, folder, &found);
+    try collect(arena, io, project, folder, .scene, &found);
     return found.items;
 }
 
-fn collectScenes(arena: std.mem.Allocator, io: std.Io, project: std.Io.Dir, folder: []const u8, out: *std.ArrayList([]const u8)) !void {
-    for (list(arena, io, project, folder) catch return) |entry| switch (entry.kind) {
-        .folder => try collectScenes(arena, io, project, entry.path, out),
-        .scene => try out.append(arena, entry.path),
-        else => {},
-    };
+/// Every image file under `folder` that stb_image decodes (`eggy.assets.Kind.isTexture`), by
+/// path, in `arena`, as `scenes` lists scenes.
+pub fn images(arena: std.mem.Allocator, io: std.Io, project: std.Io.Dir, folder: []const u8) ![]const []const u8 {
+    var found: std.ArrayList([]const u8) = .empty;
+    try collect(arena, io, project, folder, .image, &found);
+    return found.items;
+}
+
+fn collect(arena: std.mem.Allocator, io: std.Io, project: std.Io.Dir, folder: []const u8, kind: Kind, out: *std.ArrayList([]const u8)) !void {
+    for (list(arena, io, project, folder) catch return) |entry| {
+        if (entry.kind == .folder) {
+            try collect(arena, io, project, entry.path, kind, out);
+        } else if (entry.kind == kind and !entry.virtual and (kind != .image or eggy.assets.Kind.isTexture(entry.path))) {
+            try out.append(arena, entry.path);
+        }
+    }
 }
 
 /// The folder holding `path`, empty for the project itself.

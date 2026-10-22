@@ -1,12 +1,13 @@
 //! Which entity is under a point of the Scene panel: a ray from the camera through it, tested
 //! against each mesh's shape (a model file's box round its vertices) in the mesh's own space,
-//! the nearest hit winning.
+//! and against each billboard's face, the nearest hit winning.
 const std = @import("std");
 const eggy = @import("eggy");
 const ui = eggy.ui;
 
-/// The entity whose mesh (of `drawn`) is nearest the camera under `pointer`, seen through `view`
-/// in `scene` (the Scene panel's rect), model files' boxes from `models`; null over nothing.
+/// The entity whose mesh (of `drawn`) or billboard (of `ui_scenes`, read through `resources`) is
+/// nearest the camera under `pointer`, seen through `view` in `scene` (the Scene panel's rect),
+/// model files' boxes from `models`; null over nothing.
 /// Editor-only: scene dimensions must be positive and pointer/rect use the same UI coordinates.
 /// Does not clip the pointer or load models; missing model bounds and singular transforms are
 /// skipped. Uses sphere hits or approximate bounding boxes, returning an id value without
@@ -14,10 +15,11 @@ const ui = eggy.ui;
 ///
 /// ```zig
 /// // Given current drawables, loaded model cache, camera view and Scene UI rect:
-/// const entity = pick(drawables, &graphics.models, view, scene, pointer);
+/// const entity = pick(drawables, &graphics.models, &app.ui_scenes, app.resources(), view, scene, pointer);
 /// ```
-pub fn pick(drawn: []const eggy.mesh.Drawable, models: *const eggy.model_cache.ModelCache, view: eggy.camera.View, scene: ui.Rect, pointer: ui.Vec2) ?eggy.ecs.EntityId {
+pub fn pick(drawn: []const eggy.mesh.Drawable, models: *const eggy.model_cache.ModelCache, ui_scenes: *eggy.ui_scenes.State, resources: eggy.resources.Resources, view: eggy.camera.View, scene: ui.Rect, pointer: ui.Vec2) ?eggy.ecs.EntityId {
     const ray = rayThrough(view, scene, pointer);
+    const billboard = eggy.ui_scenes.billboards.hit(ui_scenes, resources, view, ray);
 
     var nearest: ?eggy.ecs.EntityId = null;
     var nearest_t = std.math.inf(f32);
@@ -41,6 +43,7 @@ pub fn pick(drawn: []const eggy.mesh.Drawable, models: *const eggy.model_cache.M
             nearest = drawable.entity();
         }
     }
+    if (billboard) |sign| if (sign.distance < nearest_t) return sign.entity;
     return nearest;
 }
 
@@ -103,8 +106,9 @@ test "an orthographic pointer ray is parallel and starts beside the eye" {
     try std.testing.expectApproxEqAbs(@as(f32, -1), ray.direction[2], 0.001);
     const cube = eggy.mesh.Drawable{ .model = .{ .{ 1, 0, 0, 0 }, .{ 0, 1, 0, 0 }, .{ 0, 0, 1, 0 }, .{ 3.5, 0, -5, 1 } }, .color = .{ 1, 1, 1, 1 }, .shape = .cube, .entity_id = 9, .entity_generation = 0 };
     var models = eggy.model_cache.ModelCache.init(std.testing.allocator, undefined);
-    try std.testing.expectEqual(@as(u32, 9), pick(&.{cube}, &models, view, scene, .{ .x = 790, .y = 200 }).?.id);
-    try std.testing.expect(pick(&.{cube}, &models, view, scene, .{ .x = 400, .y = 200 }) == null);
+    var ui_scenes = eggy.ui_scenes.State{ .gpa = std.testing.allocator };
+    try std.testing.expectEqual(@as(u32, 9), pick(&.{cube}, &models, &ui_scenes, .{}, view, scene, .{ .x = 790, .y = 200 }).?.id);
+    try std.testing.expect(pick(&.{cube}, &models, &ui_scenes, .{}, view, scene, .{ .x = 400, .y = 200 }) == null);
 }
 
 test "the nearest mesh under the pointer is picked, and empty space picks nothing" {
@@ -117,8 +121,9 @@ test "the nearest mesh under the pointer is picked, and empty space picks nothin
     }.f;
     const drawn = [_]eggy.mesh.Drawable{ at(0, 1), at(3, 2) };
     var models = eggy.model_cache.ModelCache.init(std.testing.allocator, undefined);
-    try std.testing.expectEqual(@as(u32, 2), pick(&drawn, &models, view, scene, .{ .x = 400, .y = 300 }).?.id);
-    try std.testing.expect(pick(&drawn, &models, view, scene, .{ .x = 5, .y = 5 }) == null);
+    var ui_scenes = eggy.ui_scenes.State{ .gpa = std.testing.allocator };
+    try std.testing.expectEqual(@as(u32, 2), pick(&drawn, &models, &ui_scenes, .{}, view, scene, .{ .x = 400, .y = 300 }).?.id);
+    try std.testing.expect(pick(&drawn, &models, &ui_scenes, .{}, view, scene, .{ .x = 5, .y = 5 }) == null);
 
     // A model, picked by its box: four metres across, so it is hit well off its centre.
     var model = at(0, 3);
@@ -126,5 +131,5 @@ test "the nearest mesh under the pointer is picked, and empty space picks nothin
     model.model_file_len = 7;
     try models.entries.put(std.testing.allocator, "rat.glb", .{ .vertices = undefined, .indices = undefined, .parts = &.{}, .bounds = .{ .min = .{ -2, -2, -2 }, .max = .{ 2, 2, 2 } } });
     defer models.entries.deinit(std.testing.allocator);
-    try std.testing.expectEqual(@as(u32, 3), pick(&.{model}, &models, view, scene, .{ .x = 520, .y = 300 }).?.id);
+    try std.testing.expectEqual(@as(u32, 3), pick(&.{model}, &models, &ui_scenes, .{}, view, scene, .{ .x = 520, .y = 300 }).?.id);
 }

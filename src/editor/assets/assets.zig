@@ -40,6 +40,8 @@ pub const Action = union(enum) {
     create_folder: []const u8,
     create_file: struct { folder: []const u8, file_type: eggy.plugins.EditorFileType },
     open_input_map: []const u8,
+    /// Open this UI scene in the UI Designer.
+    open_ui_scene: []const u8,
     rename: struct { path: []const u8, name: []const u8 },
     duplicate: []const u8,
     /// Move this into the project's trash.
@@ -443,6 +445,7 @@ pub const AssetsPanel = struct {
             },
             .scene => .{ .used = true, .action = .{ .open_scene = entry.path } },
             .input_map => .{ .used = true, .action = .{ .open_input_map = entry.path } },
+            .ui => .{ .used = true, .action = .{ .open_ui_scene = entry.path } },
             .folder => blk: {
                 if (self.view == .grid and self.filter.text().len == 0) {
                     self.enter(entry.path);
@@ -606,6 +609,7 @@ pub const AssetsPanel = struct {
                 .open => switch (menu.entry.?.kind) {
                     .scene => .{ .open_scene = menu.entry.?.path },
                     .input_map => .{ .open_input_map = menu.entry.?.path },
+                    .ui => .{ .open_ui_scene = menu.entry.?.path },
                     else => .{ .open_code = menu.entry.?.path },
                 },
                 .rename => blk: {
