@@ -23,10 +23,11 @@ pub fn ndkFor(api: u32) []const u8 {
     return if (api <= 35) "27.1.12297006" else "30.0.16248370";
 }
 
-/// Build `libmain.so`, SDL's Android backend and Java activity, with packaged game assets.
+/// Build `libmain.so`, SDL's Android backend and Java activity, with packaged game assets and
+/// `icon_path` (the project's icon, an image in it) as the launcher's icon.
 /// Requires the SDK environment prepared by sdk_setup; never builds the desktop editor.
 /// An API level outside `min_api`..`max_api` fails the build, saying which it takes.
-pub fn addApp(b: *std.Build, engine: *std.Build, comptime android: type, root: *std.Build.Module, name: []const u8, data: std.Build.LazyPath) void {
+pub fn addApp(b: *std.Build, engine: *std.Build, comptime android: type, root: *std.Build.Module, name: []const u8, data: std.Build.LazyPath, icon_path: ?[]const u8) void {
     const target = root.resolved_target.?;
     const api = apiOf(target.result);
     if (api < min_api or api > max_api) {
@@ -47,7 +48,18 @@ pub fn addApp(b: *std.Build, engine: *std.Build, comptime android: type, root: *
     });
     apk.setKeyStore(sdk.createKeyStore(.example));
     const package = packageName(b, name);
-    apk.setAndroidManifest(b.addWriteFiles().add("AndroidManifest.xml", b.fmt(android_manifest, .{ package, api, api, name })));
+    // The launcher's icon, as a mipmap resource; aapt2 takes PNG, JPEG, GIF and WebP.
+    const extension = std.fs.path.extension(icon_path orelse "");
+    const launcher_icon = for ([_][]const u8{ ".png", ".jpg", ".jpeg", ".gif", ".webp" }) |known| {
+        if (std.ascii.eqlIgnoreCase(extension, known)) break true;
+    } else false;
+    if (launcher_icon) {
+        const res = b.addWriteFiles();
+        _ = res.addCopyFile(b.path(icon_path.?), b.fmt("mipmap/ic_launcher{s}", .{std.ascii.lowerString(b.allocator.alloc(u8, extension.len) catch @panic("OOM"), extension)}));
+        apk.addResourceDirectory(res.getDirectory());
+    } else if (icon_path) |path| std.log.warn("the project's icon {s} isn't a PNG, JPEG, GIF or WebP: the Android launcher shows the default", .{path});
+    const icon_attribute = if (launcher_icon) " android:icon=\"@mipmap/ic_launcher\"" else "";
+    apk.setAndroidManifest(b.addWriteFiles().add("AndroidManifest.xml", b.fmt(android_manifest, .{ package, api, api, name, icon_attribute })));
     const sdl = prepareSdl(b, engine, root);
     const installed_sdl = b.addInstallFileWithDir(sdl.library, .{ .custom = "android" }, "libSDL3.so");
     app.step.dependOn(&installed_sdl.step);
@@ -142,7 +154,7 @@ const android_manifest =
     \\<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="{s}" android:versionCode="1" android:versionName="0.1.0">
     \\  <uses-sdk android:minSdkVersion="{d}" android:targetSdkVersion="{d}" />
     \\  <uses-feature android:name="android.hardware.vulkan.version" android:version="0x00403000" android:required="true" />
-    \\  <application android:label="{s}" android:theme="@android:style/Theme.NoTitleBar.Fullscreen" android:hardwareAccelerated="true" android:extractNativeLibs="true">
+    \\  <application android:label="{s}"{s} android:theme="@android:style/Theme.NoTitleBar.Fullscreen" android:hardwareAccelerated="true" android:extractNativeLibs="true">
     \\    <activity android:name="org.libsdl.app.SDLActivity" android:exported="true" android:configChanges="layoutDirection|locale|orientation|uiMode|screenLayout|screenSize|smallestScreenSize|keyboard|keyboardHidden|navigation">
     \\      <intent-filter><action android:name="android.intent.action.MAIN" /><category android:name="android.intent.category.LAUNCHER" /></intent-filter>
     \\    </activity>

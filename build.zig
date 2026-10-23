@@ -231,6 +231,12 @@ fn addProject(b: *std.Build, engine: *std.Build, emscripten: Emscripten, target:
     // And what its executable says about itself, which it keeps in a section of its own.
     const metadata = if (own) &.{} else game_metadata.read(b);
     if (metadata.len > 0) source.print(b.allocator, "pub const metadata_text = \"{f}\".*;\n", .{std.zig.fmtString(game_metadata.text(b, metadata))}) catch @panic("OOM");
+    // And its icon, which the desktop runtime puts on its window from the packaged image.
+    const icon_path = if (own) null else game_metadata.iconPath(b);
+    const icon_key = if (icon_path) |path| game_resources.imageKey(b, files, path) else null;
+    if (icon_key) |key| if (target.result.os.tag != .emscripten and !target.result.abi.isAndroid()) {
+        source.print(b.allocator, "pub const icon: []const u8 = \"{s}\";\n", .{key}) catch @panic("OOM");
+    };
     @import("src/build/render_settings.zig").appendDefaults(b, &source, own);
     const runtime_project = b.createModule(.{ .root_source_file = addPreferenceFiles(b, source.items), .target = target, .optimize = optimize });
     runtime_project.addImport("game", options.game);
@@ -265,11 +271,13 @@ fn addProject(b: *std.Build, engine: *std.Build, emscripten: Emscripten, target:
     }
     if (target.result.abi.isAndroid()) {
         const android = engine.lazyImport(@This(), "android") orelse return null;
-        android_build.addApp(b, engine, android, runtime_module, runtime_name, prepared.directory);
+        android_build.addApp(b, engine, android, runtime_module, runtime_name, prepared.directory, icon_path);
         return null;
     }
     const runtime_app = addDesktopApp(b, target, runtime_module, runtime_name);
-    game_metadata.addTo(b, runtime_app.install.artifact, metadata);
+    // The executable's own icon, which Windows shows for it, from the same packaged image.
+    const icon_ico = if (icon_key != null and target.result.os.tag == .windows) game_metadata.icoFrom(b, engine, prepared.directory.path(b, icon_key.?)) else null;
+    game_metadata.addTo(b, runtime_app.install.artifact, metadata, icon_ico);
     const runtime_step = b.step("runtime", "Build the game");
     runtime_step.dependOn(&runtime_app.install.step);
     const runtime_libraries = installRuntimeLibraries(b, engine);
@@ -793,7 +801,7 @@ fn addDesktopApp(b: *std.Build, target: std.Build.ResolvedTarget, root_module: *
     return .{ .install = install, .run = run };
 }
 
-/// `zig build test-core`: the engine's tests, the fatal dialog's, and the 3D scene's.
+/// `zig build test-core`: the engine's tests, the fatal dialog's, the 3D scene's, and the icon tool's.
 fn addCoreTests(b: *std.Build, engine: Engine) *std.Build.Step {
     const step = b.step("test-core", "Run eggy's core tests");
     step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = engine.eggy, .use_llvm = true })).step);
@@ -816,6 +824,9 @@ fn addCoreTests(b: *std.Build, engine: Engine) *std.Build.Step {
     });
     step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = viewport, .use_llvm = true })).step);
     step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = engine.assets, .use_llvm = true })).step);
+    // The build tool that makes a Windows game's executable icon.
+    const ico = b.createModule(.{ .root_source_file = b.path("src/build/ico.zig"), .target = engine.eggy.resolved_target, .optimize = engine.eggy.optimize, .imports = &.{.{ .name = "eggy_assets", .module = engine.assets }} });
+    step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = ico, .use_llvm = true })).step);
     return step;
 }
 

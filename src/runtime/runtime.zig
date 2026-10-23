@@ -85,6 +85,7 @@ pub fn Runtime(comptime project: type) type {
                 app.graphics.models.loader = packaged.models();
                 app.graphics.textures.loader = packaged.textures();
                 app.resource_provider = packaged.resources();
+                if (@hasDecl(project, "icon")) setWindowIcon(gpa, packaged, app.window.window, project.icon);
             }
             app.scene_access = eggy.scene.registryAccess(Plugins.Components);
             app.graphics.materials.resources = app.resources();
@@ -114,6 +115,17 @@ pub fn Runtime(comptime project: type) type {
                 .app = app,
                 .data = data,
             };
+        }
+
+        /// Give `window` the project's icon, the packaged image `key` (its first frame); one that
+        /// can't be loaded or set leaves the default, having said why.
+        fn setWindowIcon(gpa: std.mem.Allocator, data: *packaged_assets.Data, window: sdl3.video.Window, key: []const u8) void {
+            const loader = data.textures();
+            var texture = loader.load(loader.context, gpa, key) catch |err| return std.log.warn("cannot load the game's icon: {t}", .{err});
+            defer texture.deinit(gpa);
+            const surface = sdl3.surface.Surface.initFrom(texture.width, texture.height, .array_rgba_32, texture.frame(0)) catch |err| return std.log.warn("cannot use the game's icon: {t}", .{err});
+            defer surface.deinit();
+            window.setIcon(surface) catch |err| std.log.warn("cannot set the game's icon: {t}", .{err});
         }
 
         /// Put the scene at `path` (from `files`) into `world`; a scene that can't be read leaves

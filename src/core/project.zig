@@ -35,7 +35,8 @@ pub const Config = struct {
     /// editor has open, else the first in `resources_dir`: see `src/build/resources.zig`).
     default_scene: ?[]const u8 = null,
     /// The project's icon: an image file, relative to the project. The editor wears it in the
-    /// corner of its egg.
+    /// corner of its egg; the built game puts it on its window, its Windows executable (PNGs
+    /// only) and its Android launcher.
     icon: ?[]const u8 = null,
     /// What the built game says about itself, in its executable.
     metadata: Metadata = .{},

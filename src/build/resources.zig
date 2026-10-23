@@ -54,6 +54,18 @@ pub fn sceneKey(b: *std.Build, files: []const Entry, path: []const u8) []const u
     std.debug.panic("startup scene disappeared from the asset catalog: {s}", .{path});
 }
 
+/// The identity of the catalogued image at `path`, for the runtime to load it packaged; null,
+/// with a warning, when `path` isn't one.
+pub fn imageKey(b: *std.Build, files: []const Entry, path: []const u8) ?[]const u8 {
+    for (files) |entry| {
+        if (entry.kind != .image or !std.mem.eql(u8, entry.path, path)) continue;
+        var key: [asset_id.key_len]u8 = undefined;
+        return b.dupe(asset_id.key(&key, entry.id));
+    }
+    std.log.warn("the project's icon {s} isn't an image in resources/: the game's window has none", .{path});
+    return null;
+}
+
 fn sceneSource(files: []const Entry, path: []const u8) ?[]const u8 {
     const identity: ?u64 = asset_id.parse(path) catch null;
     for (files) |entry| {
