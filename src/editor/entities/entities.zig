@@ -4,6 +4,7 @@
 //! world through the game's library. A model or scene file dropped into the world becomes an
 //! entity of its own, and each scene instance's entities are kept made (`eggy.SceneInstances`).
 const std = @import("std");
+const zon_file = @import("eggy").assets.zon;
 const eggy = @import("eggy");
 const ui = eggy.ui;
 const ecs = eggy.ecs;
@@ -136,7 +137,7 @@ pub const EntityEditor = struct {
         var buffer: [8192]u8 = undefined;
         var fba = std.heap.FixedBufferAllocator.init(&buffer);
         const action = self.inspector.dropAt(context, at, dragging, fba.allocator()) orelse return false;
-        const text = fba.allocator().dupeZ(u8, action.set_field.text) catch return false;
+        const text = fba.allocator().dupeSentinel(u8, action.set_field.text, 0) catch return false;
         return loaded.writeField(app, entity, action.set_field.component, action.set_field.field, text);
     }
 
@@ -168,7 +169,7 @@ pub const EntityEditor = struct {
         if (self.inspector.build(context, details)) |action| switch (action) {
             .rename => |name| loaded.writeName(app, entity, name),
             .set_field => |change| {
-                const text = arena.dupeZ(u8, change.text) catch return true;
+                const text = arena.dupeSentinel(u8, change.text, 0) catch return true;
                 // Text that doesn't parse yet is left until it does.
                 _ = loaded.writeField(app, entity, change.component, change.field, text);
             },
@@ -384,15 +385,15 @@ pub const EntityEditor = struct {
         // Its identity (a model as the Mesh's shape), then where it goes; adding it adds Transform.
         var buffer: [eggy.assets.id.key_len + 32]u8 = undefined;
         const field_text = if (asset.kind == .model)
-            std.fmt.bufPrintZ(&buffer, ".{{ .model = \"{s}\" }}", .{asset.key()})
+            std.fmt.bufPrintSentinel(&buffer, ".{{ .model = \"{s}\" }}", .{asset.key()}, 0)
         else
-            std.fmt.bufPrintZ(&buffer, "\"{s}\"", .{asset.key()});
+            std.fmt.bufPrintSentinel(&buffer, "\"{s}\"", .{asset.key()}, 0);
         const field = for (loaded.component_types[component].fields, 0..) |info, i| {
             if (std.mem.eql(u8, info.name, if (asset.kind == .model) "shape" else "scene")) break i;
         } else 0;
         _ = loaded.addComponent(app, entity, component);
         _ = loaded.writeField(app, entity, component, field, field_text catch return false);
-        const position_text = std.fmt.bufPrintZ(&buffer, ".{{ {d}, {d}, {d} }}", .{ position[0], position[1], position[2] }) catch unreachable;
+        const position_text = std.fmt.bufPrintSentinel(&buffer, ".{{ {d}, {d}, {d} }}", .{ position[0], position[1], position[2] }, 0) catch unreachable;
         _ = loaded.writeField(app, entity, transform, 0, position_text);
         self.selected = entity;
         return true;
@@ -415,7 +416,7 @@ pub const EntityEditor = struct {
             if (std.mem.eql(u8, info.name, "texture")) break i;
         } else return false;
         var buffer: [eggy.assets.id.key_len + 8]u8 = undefined;
-        const text = std.fmt.bufPrintZ(&buffer, "\"{s}\"", .{asset.key()}) catch return false;
+        const text = std.fmt.bufPrintSentinel(&buffer, "\"{s}\"", .{asset.key()}, 0) catch return false;
         if (!loaded.writeField(app, entity, component, field, text)) return false;
         self.selected = entity;
         return true;
@@ -555,17 +556,17 @@ pub fn isOff(off: []const []const u8, owner: []const u8) bool {
 /// empty when unset; null for other kinds of field.
 fn referenceLabel(arena: std.mem.Allocator, app: *eggy.App, game: *const HotGame, assets: ?*ProjectAssets, kind: eggy.components.Kind, zon: []const u8) !?[]const u8 {
     // Parsing builds a syntax tree, so it takes the arena rather than a small fixed buffer.
-    const source = try arena.dupeZ(u8, zon);
+    const source = try arena.dupeSentinel(u8, zon, 0);
     switch (kind) {
         .entity => {
-            const target = (std.zon.parse.fromSlice(?ecs.EntityId, arena, source, null, .{}) catch return "") orelse return "";
+            const target = (zon_file.parse(?ecs.EntityId, arena, source, .{}) catch return "") orelse return "";
             if (!app.world.isAlive(target)) return try std.fmt.allocPrint(arena, "Entity {d} (gone)", .{target.id});
             var name_buffer: [eggy.Name.max_len]u8 = undefined;
             if (game.readName(app, target, &name_buffer)) |name| if (name.len > 0) return try arena.dupe(u8, name);
             return try std.fmt.allocPrint(arena, "Entity {d}", .{target.id});
         },
         .asset => {
-            const key = std.zon.parse.fromSliceAlloc([]const u8, arena, source, null, .{}) catch return "";
+            const key = zon_file.parse([]const u8, arena, source, .{}) catch return "";
             return if (assets) |known| known.label(arena, key) else key;
         },
         else => return null,
@@ -653,7 +654,7 @@ test "preparing extraction history excludes the original and restores its siblin
     try editor.placeReplacement(&world, replacement, original);
     const after = try editor.textWithout(&world, access, original);
     defer gpa.free(after);
-    const text = try gpa.dupeZ(u8, after);
+    const text = try gpa.dupeSentinel(u8, after, 0);
     defer gpa.free(text);
     var captured = try eggy.scene.Scene.parse(gpa, text);
     defer captured.deinit();

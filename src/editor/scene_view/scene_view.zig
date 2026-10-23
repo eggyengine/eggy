@@ -8,6 +8,7 @@
 //! (`stand_ins.zig`). W, E, R and T pick Move, Rotate, Scale and Universal while the pointer is over
 //! the panel; Ctrl turns snapping round while dragging.
 const std = @import("std");
+const zon_file = @import("eggy").assets.zon;
 const eggy = @import("eggy");
 const ui = eggy.ui;
 const L = ui.Layout;
@@ -400,8 +401,8 @@ pub const SceneView = struct {
                 const component = transformIndex(target.game) orelse return true;
                 const change = drag.changeAt(at, self.snapping());
                 var text: [160]u8 = undefined;
-                const zon = std.fmt.bufPrintZ(&text, ".{{ {d}, {d}, {d} }}", .{ change.value[0], change.value[1], change.value[2] }) catch return true;
-                _ = target.game.writeField(target.app, entity, component, @intFromEnum(change.field), zon);
+                const zon = std.fmt.bufPrintSentinel(&text, ".{{ {d}, {d}, {d} }}", .{ change.value[0], change.value[1], change.value[2] }, 0) catch return true;
+                _ = target.game.writeField(target.app, entity, component, @backingInt(change.field), zon);
                 return true;
             },
             .mouse_button_up => |up| {
@@ -491,11 +492,11 @@ fn startDrag(target: Target, layout: gizmo.Layout, handle: gizmo.Handle, at: ui.
 /// Three numbers, `.{ x, y, z }` in ZON; null when `text` isn't that.
 pub fn parseVector(text: []const u8) ?[3]f32 {
     var source: [160]u8 = undefined;
-    const terminated = std.fmt.bufPrintZ(&source, "{s}", .{text}) catch return null;
+    const terminated = std.fmt.bufPrintSentinel(&source, "{s}", .{text}, 0) catch return null;
     // ZON's parser needs room for its syntax tree, as the Inspector's does.
     var scratch: [16 * 1024]u8 = undefined;
     var fba = std.heap.FixedBufferAllocator.init(&scratch);
-    return std.zon.parse.fromSlice([3]f32, fba.allocator(), terminated, null, .{}) catch null;
+    return zon_file.parse([3]f32, fba.allocator(), terminated, .{}) catch null;
 }
 
 /// Eggy's `Transform` among the game's component types.

@@ -129,7 +129,7 @@ pub const Queue = struct {
         if (job.failure) |err| return err;
         const loaded = job.value.?;
         return .{ .gpa = job.caller, .value = switch (loaded.value) {
-            .bytes => |bytes| .{ .bytes = try job.caller.dupeZ(u8, bytes) },
+            .bytes => |bytes| .{ .bytes = try job.caller.dupeSentinel(u8, bytes, 0) },
             .model => |model| block: {
                 var encoded: std.Io.Writer.Allocating = .init(job.arena.allocator());
                 try assets.model.write(&encoded.writer, model);
@@ -159,7 +159,7 @@ test "asynchronous bytes, models and images transfer ownership and reject consum
     const Source = struct {
         fn read(_: *anyopaque, gpa: std.mem.Allocator, path: []const u8) ![:0]u8 {
             if (std.mem.eql(u8, path, refs.AssetRef(.text).init("missing.txt").key())) return error.FileNotFound;
-            return gpa.dupeZ(u8, "loaded");
+            return gpa.dupeSentinel(u8, "loaded", 0);
         }
         fn model(_: *anyopaque, gpa: std.mem.Allocator, _: []const u8) !assets.Model {
             return .{ .vertices = try gpa.alloc(assets.model.Vertex, 0), .indices = try gpa.alloc(u32, 0), .parts = try gpa.alloc(assets.model.Part, 0), .textures = try gpa.alloc(assets.Texture, 0) };
@@ -183,7 +183,7 @@ test "asynchronous bytes, models and images transfer ownership and reject consum
         while (loaded == null) loaded = try resources.poll(request);
         var result = loaded.?;
         defer result.deinit();
-        try std.testing.expectEqual(@as(api.LoadKind, @enumFromInt(index)), std.meta.activeTag(result.value));
+        try std.testing.expectEqual(@as(api.LoadKind, @fromBackingInt(@intCast(index))), std.meta.activeTag(result.value));
         if (index == 0) try std.testing.expectEqualStrings("loaded", result.value.bytes);
         try std.testing.expectError(error.InvalidResourceRequest, resources.poll(request));
     }
@@ -215,13 +215,13 @@ test "native imports run off-thread and cancellation does not wait for the impor
             self.worker_id.store(@intCast(std.Thread.getCurrentId()), .release);
             self.entered.store(true, .release);
             while (!self.release.load(.acquire)) std.atomic.spinLoopHint();
-            return gpa.dupeZ(u8, "discard me");
+            return gpa.dupeSentinel(u8, "discard me", 0);
         }
 
         test "submission and cancellation never touch the caller allocator" {
             const Source = struct {
                 fn read(_: *anyopaque, gpa: std.mem.Allocator, _: []const u8) ![:0]u8 {
-                    return gpa.dupeZ(u8, "loaded");
+                    return gpa.dupeSentinel(u8, "loaded", 0);
                 }
                 fn model(_: *anyopaque, _: std.mem.Allocator, _: []const u8) !assets.Model {
                     return error.NotPackaged;

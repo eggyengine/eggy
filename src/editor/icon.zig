@@ -159,7 +159,7 @@ pub fn pixels() !Pixels {
 }
 
 test "a badge keeps the egg's top left and puts the image in the bottom right" {
-    const red = [_]u8{ 255, 0, 0, 255 } ** 4;
+    const red: [16]u8 = @bitCast(@as([4][4]u8, @splat(.{ 255, 0, 0, 255 })));
     const badged = try std.testing.allocator.create(Badged);
     defer std.testing.allocator.destroy(badged);
     try badge(&red, 2, 2, badged);

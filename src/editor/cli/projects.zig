@@ -57,7 +57,7 @@ pub fn create(process: *const std.process.Init, prompt: *Prompt, options: New) !
 
 /// Export without changing the project's saved default scene.
 /// Editor CLI only: resolve missing options through `prompt`, validate an existing resources
-/// scene and Zig target, then block while building ReleaseFast folder/ZIP output. Progress
+/// scene and Zig target, then block while building the fast-optimized folder/ZIP output. Progress
 /// goes to the prompt writer; validation, I/O and job errors propagate. Scratch strings live
 /// in the prompt arena; the job is joined/freed before returning, even on failure.
 ///
@@ -83,7 +83,7 @@ pub fn exportGame(process: *const std.process.Init, prompt: *Prompt, options: Ex
     if (options.target == null and !prompt.non_interactive) {
         const defaults = platforms.Settings.defaults();
         for (defaults, 0..) |settings, i| {
-            const platform: platforms.Platform = @enumFromInt(i);
+            const platform: platforms.Platform = @fromBackingInt(@intCast(i));
             try prompt.output.print("  {s}: {s}. {s}\n", .{ platforms.target(platform, settings), platforms.title(platform), platforms.note(platform) });
         }
     }

@@ -2,6 +2,7 @@
 //! `dev_plugins`), then those installed from the editor's Plugins window (its `eggy.zon`'s
 //! `.plugins`): each a module of Eggy's own (`plugins/`) or of a dependency in `build.zig.zon`.
 const std = @import("std");
+const package_root = @import("package_root.zig");
 const project = @import("../core/project.zig");
 
 pub const Plugin = struct {
@@ -18,7 +19,7 @@ pub const Plugin = struct {
 /// ```zig
 /// const plugins = game_plugins.collect(b, engine, target, optimize, options.plugins, options.dev_plugins) orelse return null;
 /// ```
-pub fn collect(b: *std.Build, engine: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builtin.OptimizeMode, listed: []const *std.Build.Module, dev_listed: []const *std.Build.Module) ?[]const Plugin {
+pub fn collect(b: *std.Build, engine: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builtin.Optimize, listed: []const *std.Build.Module, dev_listed: []const *std.Build.Module) ?[]const Plugin {
     var plugins: std.ArrayList(Plugin) = .empty;
     for (listed) |module| plugins.append(b.allocator, .{ .module = module, .dev = false }) catch @panic("OOM");
     for (dev_listed) |module| plugins.append(b.allocator, .{ .module = module, .dev = true }) catch @panic("OOM");
@@ -38,7 +39,7 @@ pub fn collect(b: *std.Build, engine: *std.Build, target: std.Build.ResolvedTarg
 /// The plugins `eggy.zon` lists as installed; none without one that reads (the build reports a
 /// broken `eggy.zon` elsewhere).
 fn installed(b: *std.Build) []const @import("../core/plugin_manifest.zig").Installed {
-    const source = b.build_root.handle.readFileAllocOptions(b.graph.io, project.file_name, b.allocator, .limited(1 << 20), .of(u8), 0) catch return &.{};
+    const source = package_root.open(b).readFileAllocOptions(b.graph.io, project.file_name, b.allocator, .limited(1 << 20), .of(u8), 0) catch return &.{};
     const config = project.parse(b.allocator, source) catch return &.{};
     return config.plugins;
 }

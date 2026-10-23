@@ -23,8 +23,8 @@ pub const Value = struct {
     /// const value = Value.parse(arena, ".{ .speed = 2 }") orelse return;
     /// ```
     pub fn parse(arena: std.mem.Allocator, zon: []const u8) ?Value {
-        const source = arena.dupeZ(u8, zon) catch return null;
-        const ast = std.zig.Ast.parse(arena, source, .zon) catch return null;
+        const source = arena.dupeSentinel(u8, zon, 0) catch return null;
+        const ast = std.zig.Ast.parse(arena, source, .{ .mode = .zon }) catch return null;
         if (ast.errors.len > 0) return null;
         const zoir = std.zig.ZonGen.generate(arena, ast, .{ .parse_str_lits = true }) catch return null;
         if (zoir.hasCompileErrors()) return null;
@@ -39,7 +39,7 @@ pub const Value = struct {
     /// const root = value.get(.root);
     /// ```
     pub fn get(self: *const Value, node: Node) Zoir.Node {
-        return node.get(self.zoir);
+        return node.get(&self.zoir);
     }
 
     /// The node's own text.
@@ -50,7 +50,7 @@ pub const Value = struct {
     /// const source = value.text(.root);
     /// ```
     pub fn text(self: *const Value, node: Node) []const u8 {
-        return self.ast.getNodeSource(node.getAstNode(self.zoir));
+        return self.ast.getNodeSource(node.getAstNode(&self.zoir));
     }
 
     /// A number node's value; null for anything else.
@@ -108,7 +108,7 @@ pub const Value = struct {
             else => return null,
         };
         for (literal.names, 0..) |field_name, i| {
-            if (std.mem.eql(u8, field_name.get(self.zoir), name)) return literal.vals.at(@intCast(i));
+            if (std.mem.eql(u8, field_name.get(&self.zoir), name)) return literal.vals.at(@intCast(i));
         }
         return null;
     }
@@ -125,8 +125,8 @@ pub const Value = struct {
     /// ```
     pub fn variant(self: *const Value, node: Node) ?struct { tag: []const u8, payload: ?Node } {
         return switch (self.get(node)) {
-            .enum_literal => |tag| .{ .tag = tag.get(self.zoir), .payload = null },
-            .struct_literal => |literal| if (literal.names.len == 1) .{ .tag = literal.names[0].get(self.zoir), .payload = literal.vals.at(0) } else null,
+            .enum_literal => |tag| .{ .tag = tag.get(&self.zoir), .payload = null },
+            .struct_literal => |literal| if (literal.names.len == 1) .{ .tag = literal.names[0].get(&self.zoir), .payload = literal.vals.at(0) } else null,
             else => null,
         };
     }

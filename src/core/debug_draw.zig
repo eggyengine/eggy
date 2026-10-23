@@ -187,7 +187,7 @@ test "debug boxes reserve twelve edges and requests validate before recording" {
     try debug.text(@splat(0), &message);
     message[0] = 'x';
     try std.testing.expectEqualStrings("hi", debug.labels[0].bytes[0..2]);
-    try std.testing.expectError(error.DebugLabelTooLong, debug.text(@splat(0), "x" ** 257));
+    try std.testing.expectError(error.DebugLabelTooLong, debug.text(@splat(0), &@as([257]u8, @splat('x'))));
 }
 
 test "debug lines clip across the near plane and reject segments behind the camera" {

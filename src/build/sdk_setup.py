@@ -224,7 +224,6 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("platform", choices=("web", "android"))
     parser.add_argument("--root")
-    parser.add_argument("--result", required=True)
     parser.add_argument("--android-api", type=int, default=35)
     parser.add_argument("--ndk", default="27.1.12297006")
     args = parser.parse_args()
@@ -252,7 +251,8 @@ def main():
                         raise
                     time.sleep(1)
         result = web(cache, args.root) if args.platform == "web" else android(cache, args.root, args.android_api, args.ndk)
-        Path(args.result).write_text(json.dumps(result), encoding="utf-8")
+        # The environment to build with, on stdout; everything else goes to stderr.
+        print(json.dumps(result), flush=True)
 
 
 if __name__ == "__main__":

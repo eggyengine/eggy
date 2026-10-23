@@ -21,7 +21,7 @@ const glyph_size: f32 = 30;
 
 /// The tab a press on element `id` opens, if it is one of the rows.
 pub fn kindOf(id: u32) ?Kind {
-    for (choices) |choice| if (id == first_id + @as(u32, @intFromEnum(choice.kind))) return choice.kind;
+    for (choices) |choice| if (id == first_id + @as(u32, @backingInt(choice.kind))) return choice.kind;
     return null;
 }
 
@@ -47,7 +47,7 @@ pub fn element(b: L.Builder, area: ui.Rect, hot: u32) !*L.Element {
 
 /// A row: the kind's glyph, then its name over what it gives.
 fn rowElement(b: L.Builder, kind: Kind, title: []const u8, description: []const u8, hot: u32) !*L.Element {
-    const id = first_id + @as(u32, @intFromEnum(kind));
+    const id = first_id + @as(u32, @backingInt(kind));
     const glyph_look = try b.allocator.create(Glyph);
     glyph_look.* = .{ .kind = kind };
     const row_look = try b.allocator.create(Row);
@@ -132,6 +132,6 @@ const Glyph = struct {
 };
 
 test "each row opens its kind of tab" {
-    for (choices) |choice| try std.testing.expectEqual(choice.kind, kindOf(first_id + @as(u32, @intFromEnum(choice.kind))).?);
-    try std.testing.expect(kindOf(first_id + @as(u32, @intFromEnum(Kind.panels))) == null);
+    for (choices) |choice| try std.testing.expectEqual(choice.kind, kindOf(first_id + @as(u32, @backingInt(choice.kind))).?);
+    try std.testing.expect(kindOf(first_id + @as(u32, @backingInt(Kind.panels))) == null);
 }

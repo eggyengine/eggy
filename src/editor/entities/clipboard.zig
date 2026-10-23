@@ -1,5 +1,6 @@
 //! An editor-owned entity-tree clipboard, independent of the loaded game library.
 const std = @import("std");
+const zon_file = @import("eggy").assets.zon;
 const eggy = @import("eggy");
 const ecs = eggy.ecs;
 
@@ -27,8 +28,8 @@ pub const Clipboard = struct {
             } else unreachable;
             for (@constCast(component.fields), info.fields) |*field, metadata| {
                 if (metadata.kind != .entity) continue;
-                const source = try arena.dupeZ(u8, field.value);
-                const target = (std.zon.parse.fromSlice(?ecs.EntityId, arena, source, null, .{}) catch continue) orelse continue;
+                const source = try arena.dupeSentinel(u8, field.value, 0);
+                const target = (zon_file.parse(?ecs.EntityId, arena, source, .{}) catch continue) orelse continue;
                 _ = target;
                 try external.append(arena, field);
             }

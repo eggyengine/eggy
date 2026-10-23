@@ -317,7 +317,7 @@ pub const EntityInspector = struct {
         var listed: usize = 0;
         var picked: ?usize = null;
         for (addable) |choice| {
-            if (query.len > 0 and std.ascii.indexOfIgnoreCase(choice.label, query) == null) continue;
+            if (query.len > 0 and std.ascii.findIgnoreCase(choice.label, query) == null) continue;
             if (listed == max_listed) break;
             const id = pick_id_base + @as(u32, @intCast(listed));
             if (context.activated(id) or (enter and listed == 0)) picked = choice.index;

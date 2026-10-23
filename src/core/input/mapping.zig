@@ -124,7 +124,7 @@ pub fn usesKey(binding: t.Binding, key: t.Key) bool {
 /// ```
 pub fn usesButton(binding: t.Binding, device: u32, button: t.ControllerButton) bool {
     return switch (binding) {
-        .controller => |value| (value.device == null or @intFromEnum(value.device.?) == device) and value.button == button,
+        .controller => |value| (value.device == null or @backingInt(value.device.?) == device) and value.button == button,
         else => false,
     };
 }
@@ -136,8 +136,8 @@ pub fn usesButton(binding: t.Binding, device: u32, button: t.ControllerButton) b
 /// ```
 pub fn usesAxis(binding: t.Binding, device: u32, axis: @import("vitellus_sdl3").sdl.gamepad.Axis) bool {
     return switch (binding) {
-        .controller_axis => |value| (value.device == null or @intFromEnum(value.device.?) == device) and value.axis == axis,
-        .controller_stick => |value| (value.device == null or @intFromEnum(value.device.?) == device) and switch (axis) {
+        .controller_axis => |value| (value.device == null or @backingInt(value.device.?) == device) and value.axis == axis,
+        .controller_stick => |value| (value.device == null or @backingInt(value.device.?) == device) and switch (axis) {
             .left_x, .left_y => value.stick == .left,
             .right_x, .right_y => value.stick == .right,
             else => false,

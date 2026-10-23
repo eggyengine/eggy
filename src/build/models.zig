@@ -1,6 +1,7 @@
 //! Models and images in the build: `eggy_assimp`, the shared library the editor imports model
 //! files and decodes images with, plus identity-addressed payloads and the compiled asset lookup.
 const std = @import("std");
+const package_root = @import("package_root.zig");
 const assimp = @import("assimp.zig");
 const mingw_fortify = @import("mingw_fortify.zig");
 const package = @import("../core/assets/package.zig");
@@ -21,7 +22,7 @@ pub const Importer = struct {
 /// const assets = models.assetsModule(engine_builder, target, optimize);
 /// tool_module.addImport("eggy_assets", assets);
 /// ```
-pub fn assetsModule(eggy: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builtin.OptimizeMode) *std.Build.Module {
+pub fn assetsModule(eggy: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builtin.Optimize) *std.Build.Module {
     const s2s = eggy.dependency("s2s", .{ .target = target, .optimize = optimize });
     return eggy.createModule(.{
         .root_source_file = eggy.path("src/core/assets/assets.zig"),
@@ -41,7 +42,7 @@ pub fn assetsModule(eggy: *std.Build, target: std.Build.ResolvedTarget, optimize
 /// const importer = models.addImporter(engine_builder, target, optimize, assets) orelse return;
 /// editor_module.addImport("eggy_model_import", importer.module);
 /// ```
-pub fn addImporter(eggy: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builtin.OptimizeMode, assets: *std.Build.Module) ?Importer {
+pub fn addImporter(eggy: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builtin.Optimize, assets: *std.Build.Module) ?Importer {
     const source = eggy.lazyDependency("assimp", .{}) orelse return null;
     const built = assimp.build(eggy, source, target, optimize);
 
@@ -104,7 +105,7 @@ pub const Prepared = struct {
 /// Produce payloads and their compile-time authoring aliases once for every target.
 /// Imported clips require host conversion before game/library compilation, not a runtime index.
 /// Null means a lazy importer dependency was requested and Zig will reevaluate the build.
-pub fn prepare(b: *std.Build, eggy: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builtin.OptimizeMode, files: []const package.Entry) ?Prepared {
+pub fn prepare(b: *std.Build, eggy: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builtin.Optimize, files: []const package.Entry) ?Prepared {
     const converted = for (files) |entry| {
         if (entry.kind != .folder and package.Conversion.of(entry.path) != .copy) break true;
     } else false;
@@ -140,7 +141,7 @@ pub fn prepare(b: *std.Build, eggy: *std.Build, target: std.Build.ResolvedTarget
 
     // Every source and import setting participates in the same conversion/lookup cache key.
     const run = b.addRunArtifact(tool);
-    run.addArg(b.build_root.handle.realPathFileAlloc(b.graph.io, ".", b.allocator) catch |err| std.debug.panic("cannot resolve the project's directory: {t}", .{err}));
+    run.addArg(package_root.absolute(b));
     const output = run.addOutputDirectoryArg("assets");
     const ids = run.addOutputFileArg("asset_ids.zig");
     for (files) |entry| {
@@ -151,7 +152,7 @@ pub fn prepare(b: *std.Build, eggy: *std.Build, target: std.Build.ResolvedTarget
     return .{ .directory = output, .ids = b.createModule(.{ .root_source_file = ids, .target = target, .optimize = optimize }) };
 }
 
-fn registryModule(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builtin.OptimizeMode, aliases: *const registry.Builder) *std.Build.Module {
+fn registryModule(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builtin.Optimize, aliases: *const registry.Builder) *std.Build.Module {
     var source: std.Io.Writer.Allocating = .init(b.allocator);
     aliases.write(&source.writer) catch @panic("OOM");
     return b.createModule(.{ .root_source_file = b.addWriteFiles().add("asset_ids.zig", source.written()), .target = target, .optimize = optimize });

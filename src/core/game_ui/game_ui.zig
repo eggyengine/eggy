@@ -59,7 +59,7 @@ pub const Overlay = struct {
     font_bytes: ?[]u8 = null,
     last_owner: ?*const anyopaque = null,
     pointer_active: bool = false,
-    captured_keys: std.StaticBitSet(512) = .initEmpty(),
+    captured_keys: std.StaticBitSet(512) = .empty,
     keyboard_owned: bool = false,
     touch_owners: std.AutoHashMapUnmanaged(input_types.TouchKey, void) = .empty,
     primary_touch: ?input_types.TouchKey = null,
@@ -197,13 +197,13 @@ pub const Overlay = struct {
         if (event == .mouse_button_down and !consumed) self.releaseKeyboard();
         switch (event) {
             .key_down => |key| if (key.scancode) |code| {
-                const index = @intFromEnum(code);
+                const index = @backingInt(code);
                 if (index < 512) {
                     if (consumed) self.captured_keys.set(index) else self.captured_keys.unset(index);
                 }
             },
             .key_up => |key| if (key.scancode) |code| {
-                const index = @intFromEnum(code);
+                const index = @backingInt(code);
                 if (index < 512) {
                     consumed = consumed or self.captured_keys.isSet(index);
                     self.captured_keys.unset(index);
@@ -305,7 +305,7 @@ pub const Overlay = struct {
     /// ```
     pub fn syncClipboard(self: *Overlay) !void {
         if (self.context.copied) |text| {
-            const copy = try self.gpa.dupeZ(u8, text);
+            const copy = try self.gpa.dupeSentinel(u8, text, 0);
             defer self.gpa.free(copy);
             try sdl.clipboard.setText(copy);
         }

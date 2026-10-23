@@ -135,7 +135,7 @@ pub const Form = struct {
 
         if (caps.window_settings) {
             rows.begin(context, "Window mode", "Borderless fullscreen fills the screen without changing its resolution.");
-            _ = pick(context, "##window mode", render_settings.WindowMode, &draft.window_mode, &window_mode_labels, .initFull());
+            _ = pick(context, "##window mode", render_settings.WindowMode, &draft.window_mode, &window_mode_labels, .full);
             rows.end(context);
             if (draft.window_mode == .windowed) {
                 rows.begin(context, "Window size", "How big the window opens, in pixels.");
@@ -177,7 +177,7 @@ pub const Form = struct {
         rows.end(context);
 
         rows.begin(context, "Texture filtering", "How textures are smoothed up close. Linear with mipmapping is trilinear.");
-        if (pick(context, "##texture filter", render_settings.TextureFilter, &draft.texture_filter, &texture_filter_labels, .initFull())) {
+        if (pick(context, "##texture filter", render_settings.TextureFilter, &draft.texture_filter, &texture_filter_labels, .full)) {
             // Anisotropic filtering works only on smoothed textures.
             if (draft.texture_filter == .nearest) draft.anisotropy = 1;
         }
@@ -304,7 +304,7 @@ fn pick(context: *ui.Context, id: []const u8, comptime E: type, value: *E, label
         const offered = allowed.contains(choice);
         if (!offered and choice != value.*) continue;
         if (choice == value.*) selected = names.items.len;
-        const label = labels[@intFromEnum(choice)];
+        const label = labels[@backingInt(choice)];
         names.append(arena, if (offered) label else std.fmt.allocPrint(arena, "{s} (unavailable)", .{label}) catch label) catch return false;
         choices.append(arena, choice) catch return false;
     }
@@ -480,12 +480,12 @@ test "opening one dropdown does not stop another from opening" {
 }
 
 test "the choice labels cover every enum value in order" {
-    try std.testing.expectEqual(@typeInfo(render_settings.Backend).@"enum".fields.len, backend_labels.len);
-    try std.testing.expectEqual(@typeInfo(render_settings.PresentMode).@"enum".fields.len, present_mode_labels.len);
-    try std.testing.expectEqual(@typeInfo(render_settings.AntiAliasing).@"enum".fields.len, anti_aliasing_labels.len);
-    try std.testing.expectEqual(@typeInfo(render_settings.TextureFilter).@"enum".fields.len, texture_filter_labels.len);
-    try std.testing.expectEqual(@typeInfo(render_settings.ShadowQuality).@"enum".fields.len, shadow_quality_labels.len);
-    try std.testing.expectEqual(@typeInfo(render_settings.WindowMode).@"enum".fields.len, window_mode_labels.len);
+    try std.testing.expectEqual(@typeInfo(render_settings.Backend).@"enum".field_names.len, backend_labels.len);
+    try std.testing.expectEqual(@typeInfo(render_settings.PresentMode).@"enum".field_names.len, present_mode_labels.len);
+    try std.testing.expectEqual(@typeInfo(render_settings.AntiAliasing).@"enum".field_names.len, anti_aliasing_labels.len);
+    try std.testing.expectEqual(@typeInfo(render_settings.TextureFilter).@"enum".field_names.len, texture_filter_labels.len);
+    try std.testing.expectEqual(@typeInfo(render_settings.ShadowQuality).@"enum".field_names.len, shadow_quality_labels.len);
+    try std.testing.expectEqual(@typeInfo(render_settings.WindowMode).@"enum".field_names.len, window_mode_labels.len);
 }
 
 test "shadow quality offers only the maps the GPU can hold" {

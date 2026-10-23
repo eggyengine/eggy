@@ -1,4 +1,5 @@
 const std = @import("std");
+const package_root = @import("src/build/package_root.zig");
 const vitellus_build = @import("vitellus");
 const Emscripten = vitellus_build.Emscripten;
 const models = @import("src/build/models.zig");
@@ -29,15 +30,8 @@ pub fn build(b: *std.Build) void {
 
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
-    const macos_sdk = b.option([]const u8, "macos-sdk", "MacOSX.sdk path (default: Xcode's on a Mac, else $HOME/SDKs, or --sysroot)");
-    if (target.result.os.tag == .macos and b.sysroot == null) {
-        b.sysroot = macos_sdk orelse defaultMacSdk(b) orelse {
-            std.log.err("macOS builds need --sysroot or -Dmacos-sdk pointing at a MacOSX.sdk", .{});
-            std.process.exit(1);
-        };
-    }
     const emsdk = sdk_setup.prepare(b, target, b.option([]const u8, "emsdk", "Use this installed emsdk instead of automatically setting it up"), b.option([]const u8, "android-sdk", "Use this Android SDK instead of Eggy's cached SDK"));
-    const emscripten = Emscripten.init(b, target, emsdk);
+    const emscripten = Emscripten.init(b, emsdk);
     // On a fresh checkout Slang isn't fetched yet: Zig fetches it and runs this build again.
     const engine = addEngine(b, target, optimize, emscripten) orelse return;
 
@@ -118,7 +112,7 @@ pub const GameOptions = struct {
     /// Default: `-Dtarget`.
     target: ?std.Build.ResolvedTarget = null,
     /// Default: `-Doptimize`.
-    optimize: ?std.builtin.OptimizeMode = null,
+    optimize: ?std.builtin.Optimize = null,
 };
 
 /// Build a game made with Eggy (a package's `src/main.zig`): its runtime, its editor (desktop
@@ -142,7 +136,7 @@ pub const GameOptions = struct {
 pub fn addGame(b: *std.Build, options: GameOptions) void {
     const target = options.target orelse b.standardTargetOptions(.{});
     const optimize = options.optimize orelse b.standardOptimizeOption(.{});
-    _ = addProject(b, eggyDependency(b, target, optimize).builder, Emscripten.init(b, target, null), target, optimize, options, options.name);
+    _ = addProject(b, eggyDependency(b, target, optimize).builder, Emscripten.init(b, null), target, optimize, options, options.name);
 }
 
 pub const PluginOptions = struct {
@@ -153,7 +147,7 @@ pub const PluginOptions = struct {
     /// Default: `-Dtarget`.
     target: ?std.Build.ResolvedTarget = null,
     /// Default: `-Doptimize`.
-    optimize: ?std.builtin.OptimizeMode = null,
+    optimize: ?std.builtin.Optimize = null,
 };
 
 /// Publish a plugin or library (a package's `src/root.zig`) as module `name`, with
@@ -182,14 +176,14 @@ pub fn addPlugin(b: *std.Build, options: PluginOptions) *std.Build.Module {
 
 /// Eggy as a dependency of `b`. `addGame` and `addPlugin` pass the same arguments, so a package
 /// that calls both gets one eggy, and the game's and plugin's `eggy.App` are the same type.
-fn eggyDependency(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builtin.OptimizeMode) *std.Build.Dependency {
+fn eggyDependency(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builtin.Optimize) *std.Build.Dependency {
     return b.dependencyFromBuildZig(@This(), .{ .target = target, .optimize = optimize });
 }
 
 /// `addGame` for any builder: `engine` is Eggy's own builder, which is `b` itself for Eggy's own
 /// executables. The runtime executable is `runtime_name`; the editor is `<options.name>_editor`.
 /// Returns the editor's game library; null on the web, which has no editor.
-fn addProject(b: *std.Build, engine: *std.Build, emscripten: Emscripten, target: std.Build.ResolvedTarget, optimize: std.builtin.OptimizeMode, options: GameOptions, runtime_name: []const u8) ?*std.Build.Step.Compile {
+fn addProject(b: *std.Build, engine: *std.Build, emscripten: Emscripten, target: std.Build.ResolvedTarget, optimize: std.builtin.Optimize, options: GameOptions, runtime_name: []const u8) ?*std.Build.Step.Compile {
     // Missing until Eggy's lazy dependencies are fetched; Zig then runs the build again.
     const eggy = engine.modules.get("eggy") orelse return null;
     const runtime = engine.modules.get("eggy_runtime").?;
@@ -374,7 +368,7 @@ fn addPreferenceFiles(b: *std.Build, project_source: []const u8) std.Build.LazyP
     var source: std.ArrayList(u8) = .empty;
     source.appendSlice(b.allocator, project_source) catch @panic("OOM");
     source.appendSlice(b.allocator, "pub const preference_files = [_]struct { key: []const u8, zon: [:0]const u8 }{\n") catch @panic("OOM");
-    if (b.build_root.handle.openDir(io, ".eggy/plugins", .{ .iterate = true })) |opened| {
+    if (package_root.open(b).openDir(io, ".eggy/plugins", .{ .iterate = true })) |opened| {
         var dir = opened;
         defer dir.close(io);
         var it = dir.iterate();
@@ -386,14 +380,14 @@ fn addPreferenceFiles(b: *std.Build, project_source: []const u8) std.Build.LazyP
         }
     } else |_| {}
     source.appendSlice(b.allocator, "};\n") catch @panic("OOM");
-    if (b.build_root.handle.access(io, @import("src/core/project.zig").controls_file, .{})) {
+    if (package_root.open(b).access(io, @import("src/core/project.zig").controls_file, .{})) {
         _ = files.addCopyFile(b.path(@import("src/core/project.zig").controls_file), "controls.zon");
         source.appendSlice(b.allocator, "pub const input_bindings = @embedFile(\"controls.zon\");\n") catch @panic("OOM");
     } else |err| switch (err) {
         error.FileNotFound => {},
         else => std.debug.panic("cannot read controls.zon: {t}", .{err}),
     }
-    if (b.build_root.handle.access(io, ".eggy/plugins.zon", .{})) {
+    if (package_root.open(b).access(io, ".eggy/plugins.zon", .{})) {
         _ = files.addCopyFile(b.path(".eggy/plugins.zon"), "plugins.zon");
         source.appendSlice(b.allocator, "pub const plugin_registry = @embedFile(\"plugins.zon\");\n") catch @panic("OOM");
     } else |_| {}
@@ -402,7 +396,7 @@ fn addPreferenceFiles(b: *std.Build, project_source: []const u8) std.Build.LazyP
 
 /// The game and its plugins (`project`) as a shared library for the editor, which loads it and
 /// swaps in a rebuilt one while it runs (see `src/editor/hot_reload`).
-fn addGameLibrary(b: *std.Build, engine: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builtin.OptimizeMode, project: *std.Build.Module, name: []const u8) *std.Build.Step.Compile {
+fn addGameLibrary(b: *std.Build, engine: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builtin.Optimize, project: *std.Build.Module, name: []const u8) *std.Build.Step.Compile {
     const module = b.createModule(.{
         .root_source_file = engine.path("src/editor/hot_reload/library.zig"),
         .target = target,
@@ -420,7 +414,6 @@ fn addGameLibrary(b: *std.Build, engine: *std.Build, target: std.Build.ResolvedT
 /// The modules and dependencies Eggy's own tests need.
 const Engine = struct {
     eggy: *std.Build.Module,
-    fatal_dialog: *std.Build.Module,
     vitellus: *std.Build.Dependency,
     weeoui: *std.Build.Dependency,
     sdl3: *std.Build.Dependency,
@@ -432,7 +425,7 @@ const Engine = struct {
 
 /// Publish Eggy's modules (`eggy`, `eggy_runtime`, and `eggy_editor` on desktop) and the runtime
 /// libraries games install beside their executables. Null until Slang has been fetched.
-fn addEngine(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builtin.OptimizeMode, emscripten: Emscripten) ?Engine {
+fn addEngine(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builtin.Optimize, emscripten: Emscripten) ?Engine {
     // The web build renders with WebGPU, takes WGSL, and is linked by emcc instead of Zig.
     const web = target.result.os.tag == .emscripten;
     // On Windows DirectX 12 comes first, running the SPIR-V shaders through SPIRV-Cross and DXC.
@@ -518,14 +511,6 @@ fn addEngine(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.buil
     // Eggy wires Weeoui's SDL adapter below, against the same SDL as the game.
     const weeoui = b.dependency("weeoui", .{ .target = target, .optimize = optimize, .sdl3 = false });
     if (android) b.addNamedLazyPath("android_java", weeoui.path("examples/android/java"));
-    const nvdialog = b.dependency("nvdialog", .{});
-    const fatal_dialog = b.createModule(.{ .root_source_file = b.path("src/core/fatal_dialog.zig"), .target = target, .optimize = optimize, .link_libc = true });
-    // Linux's dialog links this system's GTK, so a game built for another Linux logs instead.
-    const native_dialog = !web and !android and (target.result.os.tag != .linux or (target.query.isNativeOs() and target.query.isNativeAbi() and target.query.cpu_arch == null));
-    const dialog_options = b.addOptions();
-    dialog_options.addOption(bool, "native_dialog", native_dialog);
-    fatal_dialog.addOptions("fatal_dialog_options", dialog_options);
-    if (native_dialog) addNvdialog(b, fatal_dialog, nvdialog, target.result);
     const sdl3 = sdl_build.dependency(b, target, optimize, if (web) emscripten.include else null) orelse return null;
     const sdl_adapter = b.createModule(.{
         .root_source_file = vitellus.path("src/windowing/sdl3.zig"),
@@ -546,7 +531,6 @@ fn addEngine(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.buil
     engine.addImport("eggenvector", emath.module("eggenvector"));
     engine.addImport("clutch", b.dependency("clutch", .{ .target = target, .optimize = optimize }).module("clutch"));
     engine.addImport("weeoui", weeoui.module("weeoui"));
-    engine.addImport("fatal_dialog", fatal_dialog);
     const assets = models.assetsModule(b, target, optimize);
     // Tools can import the formats without linking App, SDL, the renderer, or editor code.
     b.modules.put(b.allocator, "eggy_assets", assets) catch @panic("OOM");
@@ -598,7 +582,6 @@ fn addEngine(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.buil
         .emscripten => {},
         else => unreachable,
     }
-    addMacSdk(b, engine);
 
     // One SDL adapter for game UI and editor tools, sharing Eggy's existing SDL and device.
     const weeoui_sdl3 = b.createModule(.{
@@ -652,7 +635,7 @@ fn addEngine(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.buil
         build_options.addOption([]const u8, "zig_version", @import("build.zig.zon").minimum_zig_version);
         // Eggy's fingerprint, which the plugins inside it name (see `plugin_manifest`).
         build_options.addOption(u64, "fingerprint", @import("build.zig.zon").fingerprint);
-        const source_dir = b.build_root.handle.realPathFileAlloc(b.graph.io, ".", b.allocator) catch |err| std.debug.panic("cannot resolve Eggy's directory: {t}", .{err});
+        const source_dir = package_root.absolute(b);
         build_options.addOption([]const u8, "source_dir", source_dir);
         editor.addOptions("build_options", build_options);
         editor.addAnonymousImport("mono_font", .{ .root_source_file = b.path("resources/fonts/JetBrainsMono-Regular.ttf") });
@@ -669,7 +652,6 @@ fn addEngine(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.buil
 
     return .{
         .eggy = engine,
-        .fatal_dialog = fatal_dialog,
         .vitellus = vitellus,
         .weeoui = weeoui,
         .sdl3 = sdl3,
@@ -708,7 +690,7 @@ fn packTarball(b: *std.Build, engine: *std.Build, tool: *std.Build.Step.Compile,
     // sorted, so the same files always make the same tarball, whatever order the disk lists them.
     const File = struct { archive_path: []const u8, path: []const u8 };
     var files: std.ArrayList(File) = .empty;
-    var dir = engine.build_root.handle.openDir(io, root, .{ .iterate = true }) catch |err| std.debug.panic("cannot open {s}: {t}", .{ root, err });
+    var dir = package_root.open(engine).openDir(io, root, .{ .iterate = true }) catch |err| std.debug.panic("cannot open {s}: {t}", .{ root, err });
     defer dir.close(io);
     var walker = dir.walkSelectively(b.allocator) catch @panic("OOM");
     defer walker.deinit();
@@ -789,23 +771,21 @@ const DesktopApp = struct { install: *std.Build.Step.InstallArtifact, run: *std.
 /// Executable `name` from `root_module`: installed with `zig build`, and runnable on its own.
 fn addDesktopApp(b: *std.Build, target: std.Build.ResolvedTarget, root_module: *std.Build.Module, name: []const u8) DesktopApp {
     const exe = b.addExecutable(.{ .name = name, .root_module = root_module, .use_llvm = true });
-    addMacSdk(b, exe.root_module);
     const install = b.addInstallArtifact(exe, .{});
     b.getInstallStep().dependOn(&install.step);
 
     // Run the installed copy, so libraries installed beside it (DXC, Slang, AccessKit) are found.
     const file_name = if (target.result.os.tag == .windows) b.fmt("{s}.exe", .{name}) else name;
-    const run = b.addSystemCommand(&.{b.getInstallPath(.bin, file_name)});
+    const run = b.addRunFile(b.graph.path(.install_bin, file_name));
     run.step.dependOn(b.getInstallStep());
-    if (b.args) |args| run.addArgs(args);
+    run.addPassthruArgs();
     return .{ .install = install, .run = run };
 }
 
-/// `zig build test-core`: the engine's tests, the fatal dialog's, the 3D scene's, and the icon tool's.
+/// `zig build test-core`: the engine's tests, the 3D scene's, and the icon tool's.
 fn addCoreTests(b: *std.Build, engine: Engine) *std.Build.Step {
     const step = b.step("test-core", "Run eggy's core tests");
     step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = engine.eggy, .use_llvm = true })).step);
-    step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = engine.fatal_dialog, .use_llvm = true })).step);
     const viewport = b.createModule(.{
         .root_source_file = b.path("src/core/viewport3d.zig"),
         .target = engine.eggy.resolved_target,
@@ -828,98 +808,4 @@ fn addCoreTests(b: *std.Build, engine: Engine) *std.Build.Step {
     const ico = b.createModule(.{ .root_source_file = b.path("src/build/ico.zig"), .target = engine.eggy.resolved_target, .optimize = engine.eggy.optimize, .imports = &.{.{ .name = "eggy_assets", .module = engine.assets }} });
     step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = ico, .use_llvm = true })).step);
     return step;
-}
-
-/// The native fatal-error dialog; the web build reports to the browser console instead.
-fn addNvdialog(b: *std.Build, fatal_dialog: *std.Build.Module, nvdialog: *std.Build.Dependency, target: std.Target) void {
-    fatal_dialog.addIncludePath(nvdialog.path("include"));
-    fatal_dialog.addIncludePath(nvdialog.path("src"));
-    fatal_dialog.addIncludePath(nvdialog.path("src/impl"));
-    fatal_dialog.addIncludePath(nvdialog.path("vendor"));
-    fatal_dialog.addCSourceFiles(.{
-        .root = nvdialog.path("."),
-        .files = &.{
-            "src/nvdialog_error.c",
-            "src/nvdialog_image.c",
-            "src/nvdialog_util.c",
-            "src/nvdialog_capab.c",
-            "src/nvdialog_version.c",
-            "src/nvdialog_init.c",
-            "src/nvdialog_string.c",
-            "src/nvdialog_main.c",
-        },
-        .flags = if (target.os.tag == .macos)
-            &.{ "-std=c11", "-DNVDIALOG_MAXBUF=4096", "-DNVD_STATIC_LINKAGE", "-DNVD_USE_COCOA=1" }
-        else
-            &.{ "-std=c11", "-DNVDIALOG_MAXBUF=4096", "-DNVD_STATIC_LINKAGE" },
-    });
-    switch (target.os.tag) {
-        .linux => {
-            fatal_dialog.addCSourceFiles(.{
-                .root = nvdialog.path("."),
-                .files = &.{
-                    "src/backend/gtk/nvdialog_about_dialog.c",
-                    "src/backend/gtk/nvdialog_file_dialog.c",
-                    "src/backend/gtk/nvdialog_dialog_box.c",
-                    "src/backend/gtk/nvdialog_question_dialog.c",
-                    "src/backend/gtk/nvdialog_notification.c",
-                    "src/backend/gtk/nvdialog_input_dialog.c",
-                },
-                .flags = &.{ "-std=c11", "-DNVDIALOG_MAXBUF=4096", "-DNVD_STATIC_LINKAGE" },
-            });
-            fatal_dialog.linkSystemLibrary("gtk+-3.0", .{ .use_pkg_config = .force });
-            fatal_dialog.linkSystemLibrary("dbus-1", .{ .use_pkg_config = .force });
-        },
-        .macos => {
-            fatal_dialog.addCSourceFiles(.{
-                .root = nvdialog.path("."),
-                .files = &.{
-                    "src/backend/cocoa/nvdialog_dialog_box.m",
-                    "src/backend/cocoa/nvdialog_file_dialog.m",
-                    "src/backend/cocoa/nvdialog_input_box.m",
-                    "src/backend/cocoa/nvdialog_question_dialog.m",
-                    "src/backend/cocoa/nvdialog_notification.m",
-                    "src/backend/cocoa/nvdialog_about_dialog.m",
-                    "src/backend/cocoa/nvdialog_cocoa_init.m",
-                },
-                .flags = &.{ "-DNVD_USE_COCOA=1", "-fno-objc-arc", "-DNVDIALOG_MAXBUF=4096", "-DNVD_STATIC_LINKAGE" },
-            });
-            addMacSdk(b, fatal_dialog);
-            inline for (.{ "AppKit", "Cocoa", "Foundation", "UserNotifications" }) |framework| fatal_dialog.linkFramework(framework, .{});
-        },
-        .windows => {
-            fatal_dialog.addCSourceFiles(.{
-                .root = nvdialog.path("."),
-                .files = &.{
-                    "src/backend/win32/nvdialog_about_dialog.c",
-                    "src/backend/win32/nvdialog_dialog_box.c",
-                    "src/backend/win32/nvdialog_question_dialog.c",
-                    "src/backend/win32/nvdialog_file_dialog.c",
-                    "src/backend/win32/nvdialog_notification.c",
-                    "src/backend/win32/nvdialog_input_box.c",
-                },
-                .flags = &.{ "-std=c11", "-DNVDIALOG_MAXBUF=4096", "-DNVD_STATIC_LINKAGE" },
-            });
-            inline for (.{ "comdlg32", "shell32", "user32", "gdi32", "ole32" }) |lib| fatal_dialog.linkSystemLibrary(lib, .{});
-        },
-        else => @panic("nvdialog is supported only on desktop Linux, macOS, and Windows"),
-    }
-}
-
-/// On a Mac, the SDK Xcode or its Command Line Tools installed; elsewhere `~/SDKs`.
-fn defaultMacSdk(b: *std.Build) ?[]const u8 {
-    if (b.graph.host.result.os.tag == .macos) {
-        const sdk = b.run(&.{ "xcrun", "--sdk", "macosx", "--show-sdk-path" });
-        return std.mem.trimEnd(u8, sdk, "\n");
-    }
-    const home = b.graph.environ_map.get("HOME") orelse return null;
-    return b.pathJoin(&.{ home, "SDKs" });
-}
-
-fn addMacSdk(b: *std.Build, mod: *std.Build.Module) void {
-    if (mod.resolved_target.?.result.os.tag != .macos) return;
-    const sysroot = b.sysroot orelse return;
-    mod.addSystemIncludePath(.{ .cwd_relative = b.pathJoin(&.{ sysroot, "usr/include" }) });
-    mod.addSystemFrameworkPath(.{ .cwd_relative = b.pathJoin(&.{ sysroot, "System/Library/Frameworks" }) });
-    mod.addLibraryPath(.{ .cwd_relative = "/usr/lib" });
 }

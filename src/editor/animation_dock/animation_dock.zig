@@ -112,7 +112,7 @@ pub const Dock = struct {
     /// Errors: the file can't be written or `text` isn't a valid clip.
     pub fn restore(self: *Dock, env: Env, io: std.Io, project: std.Io.Dir, path: []const u8, text: []const u8) !void {
         const gpa = env.history.gpa;
-        const source = try gpa.dupeZ(u8, text);
+        const source = try gpa.dupeSentinel(u8, text, 0);
         defer gpa.free(source);
         const clip = try eggy.assets.clip.parse(gpa, source);
         defer clip.deinit(gpa);

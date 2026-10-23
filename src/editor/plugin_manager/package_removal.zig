@@ -10,7 +10,7 @@ const Ast = std.zig.Ast;
 /// if (try withoutDependency(arena, text, "stat_pack")) |after| try dir.writeFile(io, .{ .sub_path = "build.zig.zon", .data = after });
 /// ```
 pub fn withoutDependency(arena: std.mem.Allocator, manifest: [:0]const u8, name: []const u8) !?[]const u8 {
-    const tree = try Ast.parse(arena, manifest, .zon);
+    const tree = try Ast.parse(arena, manifest, .{ .mode = .zon });
     if (tree.errors.len > 0) return error.ParseZon;
     var root_buffer: [2]Ast.Node.Index = undefined;
     const root = tree.fullStructInit(&root_buffer, tree.rootDecls()[0]) orelse return error.ParseZon;

@@ -46,12 +46,8 @@ jobs:
       - if: github.event_name != 'delete'
         uses: mlugg/setup-zig@v2
         with:
-          version: 0.16.0
-      # The eggy module links the fatal-error dialog's GTK and D-Bus through pkg-config, which
-      # runs even when only its docs are emitted.
-      - if: github.event_name != 'delete'
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libgtk-3-dev libdbus-1-dev
-      # Zig 0.16.0 writes fetched zip archives to $ZIG_GLOBAL_CACHE_DIR/tmp and
+          version: 0.17.0
+      # Zig (seen on 0.16.0) writes fetched zip archives to $ZIG_GLOBAL_CACHE_DIR/tmp and
       # does not create that directory (https://codeberg.org/ziglang/zig/issues/31964).
       # Its HTTP client also drops some GitHub release downloads (HttpConnectionClosing).
       # A retry continues from the packages already in the cache.

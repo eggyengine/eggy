@@ -1,5 +1,6 @@
 //! Save an entity tree as a scene before replacing it with a positioned scene instance.
 const std = @import("std");
+const zon_file = @import("eggy").assets.zon;
 const eggy = @import("eggy");
 const ecs = eggy.ecs;
 const file_ops = @import("../assets/file_ops.zig");
@@ -43,7 +44,7 @@ pub fn prepare(gpa: std.mem.Allocator, io: std.Io, project: std.Io.Dir, world: *
     const file_title = if (title.len > 0 and std.mem.indexOfAny(u8, title, "/\\\x00") == null and !std.mem.eql(u8, title, ".") and !std.mem.eql(u8, title, "..")) title else "Extracted scene";
     const path = try file_ops.createFile(gpa, io, project, folder, .{
         .key = "eggy/scene",
-        .title = try scene.arena.allocator().dupeZ(u8, file_title),
+        .title = try scene.arena.allocator().dupeSentinel(u8, file_title, 0),
         .extension = ".scene.zon",
         .contents = text.written(),
     });
@@ -76,7 +77,7 @@ fn moveTransform(scene: *eggy.scene.Scene, world: *ecs.World, access: eggy.scene
                 if (std.mem.eql(u8, field.name, info.name)) break i;
             } else return error.NoTransformField;
             const identity = try access.readFieldAlloc(scene.arena.allocator(), world, instance, index, field_index);
-            const original = try scene.arena.allocator().dupeZ(u8, field.value);
+            const original = try scene.arena.allocator().dupeSentinel(u8, field.value, 0);
             if (!access.writeField(world, instance, index, field_index, original)) return error.CannotSetTransform;
             field.value = identity;
         }
@@ -96,8 +97,8 @@ fn validateReferences(gpa: std.mem.Allocator, world: *ecs.World, access: eggy.sc
                 try @import("snapshot.zig").validateReferenceField(field);
                 if (field.kind != .entity) continue;
                 const text = try access.readFieldAlloc(arena.allocator(), world, entity, index, field_index);
-                const source = try arena.allocator().dupeZ(u8, text);
-                const target = (try std.zon.parse.fromSlice(?ecs.EntityId, arena.allocator(), source, null, .{})) orelse continue;
+                const source = try arena.allocator().dupeSentinel(u8, text, 0);
+                const target = (try zon_file.parse(?ecs.EntityId, arena.allocator(), source, .{})) orelse continue;
                 if (contains(tree, entity) != contains(tree, target)) return error.CrossSceneEntityReference;
             }
         }

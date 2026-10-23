@@ -2,6 +2,7 @@
 //! blend shapes of the model an entity draws. A clip is a value that owns its memory; every edit
 //! (`withKey`, `withoutKey`, ...) builds a new clip, so an editor's undo is a stack of clips.
 const std = @import("std");
+const zon_file = @import("zon.zig");
 
 /// The `.clip.zon` layout this build reads and writes; a file of another version is refused.
 pub const format_version: u32 = 1;
@@ -262,10 +263,11 @@ fn validTarget(track: Track) bool {
 /// defer clip.deinit(gpa);
 /// ```
 pub fn parse(gpa: std.mem.Allocator, source: [:0]const u8) !Clip {
-    const parsed = try std.zon.parse.fromSliceAlloc(Clip, gpa, source, null, .{});
-    errdefer parsed.deinit(gpa);
+    var arena: std.heap.ArenaAllocator = .init(gpa);
+    defer arena.deinit();
+    const parsed = try zon_file.parse(Clip, arena.allocator(), source, .{});
     try parsed.validate();
-    return parsed;
+    return parsed.clone(gpa);
 }
 
 test "a track holds before its first key, blends between keys and holds after the last" {
@@ -328,7 +330,7 @@ test "a clip survives writing and parsing, and a bad one is refused" {
     var text: std.Io.Writer.Allocating = .init(gpa);
     defer text.deinit();
     try clip.write(&text.writer);
-    const source = try gpa.dupeZ(u8, text.written());
+    const source = try gpa.dupeSentinel(u8, text.written(), 0);
     defer gpa.free(source);
     const again = try parse(gpa, source);
     defer again.deinit(gpa);

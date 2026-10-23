@@ -18,6 +18,7 @@
 //!         speed: f32 = 1,
 //!     };
 const std = @import("std");
+const zon_file = @import("eggy_assets").zon;
 const ecs = @import("clutch");
 const refs = @import("refs.zig");
 pub const max_field_bytes = 4096;
@@ -218,9 +219,10 @@ pub fn Registry(comptime types: []const type, comptime owners: []const [:0]const
         pub fn writeField(world: *ecs.World, entity: ecs.EntityId, component: usize, field: usize, writer: *std.Io.Writer) (std.Io.Writer.Error || error{ NoComponent, NoSuchComponent })!void {
             inline for (types, 0..) |T, i| if (i == component) {
                 const value = world.get(entity, T) orelse return error.NoComponent;
-                inline for (@typeInfo(T).@"struct".fields, 0..) |struct_field, j| if (j == field) {
-                    if (comptime !showable(struct_field.type)) return writer.writeAll("...");
-                    return std.zon.stringify.serialize(store(struct_field.type, &@field(value.*, struct_field.name)), .{ .whitespace = false }, writer);
+                const info = @typeInfo(T).@"struct";
+                inline for (info.field_names, info.field_types, 0..) |name, Member, j| if (j == field) {
+                    if (comptime !showable(Member)) return writer.writeAll("...");
+                    return std.zon.stringify.serialize(store(Member, &@field(value.*, name)), .{ .whitespace = false }, writer);
                 };
             };
             return error.NoSuchComponent;
@@ -238,10 +240,11 @@ pub fn Registry(comptime types: []const type, comptime owners: []const [:0]const
         pub fn setField(world: *ecs.World, entity: ecs.EntityId, component: usize, field: usize, text: [:0]const u8) error{ NoComponent, NoSuchComponent, NotEditable, ParseZon, OutOfMemory }!void {
             inline for (types, 0..) |T, i| if (i == component) {
                 const value = world.get(entity, T) orelse return error.NoComponent;
-                inline for (@typeInfo(T).@"struct".fields, 0..) |struct_field, j| if (j == field) {
-                    if (comptime !editableType(struct_field.type)) return error.NotEditable;
-                    const target = &@field(value.*, struct_field.name);
-                    target.* = try parseFieldValue(struct_field.type, text);
+                const info = @typeInfo(T).@"struct";
+                inline for (info.field_names, info.field_types, 0..) |name, Member, j| if (j == field) {
+                    if (comptime !editableType(Member)) return error.NotEditable;
+                    const target = &@field(value.*, name);
+                    target.* = try parseFieldValue(Member, text);
                     world.markChanged(entity, T);
                     return;
                 };
@@ -282,26 +285,20 @@ pub fn listedBy(comptime T: type) []const type {
 }
 
 fn infoOf(comptime T: type, comptime owner: [:0]const u8) Info {
-    const struct_fields = switch (@typeInfo(T)) {
-        .@"struct" => |info| info.fields,
+    const info = switch (@typeInfo(T)) {
+        .@"struct" => |info| info,
         else => @compileError("component `" ++ @typeName(T) ++ "` must be a struct"),
     };
-    var fields: [struct_fields.len]Field = undefined;
+    var fields: [info.field_names.len]Field = undefined;
     var addable = true;
-    for (struct_fields, &fields) |struct_field, *field| {
-        if (struct_field.defaultValue() == null) addable = false;
-        field.* = .{ .name = struct_field.name, .kind = kindOf(struct_field.type), .editable = editableType(struct_field.type), .parts = partsOf(struct_field.type, struct_field.name) };
-        if (refs.refKind(struct_field.type)) |kind| switch (kind) {
-            .entity => field.requires = if (struct_field.type.Required == void) "" else shortName(struct_field.type.Required),
-            .asset => field.accepts = struct_field.type.accepts,
+    for (info.field_names, info.field_types, info.field_attrs, &fields) |name, FieldType, attrs, *field| {
+        if (attrs.default_value_ptr == null) addable = false;
+        field.* = .{ .name = name, .kind = kindOf(FieldType), .editable = editableType(FieldType), .parts = partsOf(FieldType, name) };
+        if (refs.refKind(FieldType)) |kind| switch (kind) {
+            .entity => field.requires = if (FieldType.Required == void) "" else shortName(FieldType.Required),
+            .asset => field.accepts = FieldType.accepts,
         };
-        if (@typeInfo(struct_field.type) == .@"enum") {
-            const tags = @typeInfo(struct_field.type).@"enum".fields;
-            var options: [tags.len][:0]const u8 = undefined;
-            for (tags, &options) |tag, *option| option.* = tag.name;
-            const frozen = options;
-            field.options = &frozen;
-        }
+        if (@typeInfo(FieldType) == .@"enum") field.options = @typeInfo(FieldType).@"enum".field_names;
     }
     const frozen = fields;
     const icon: [:0]const u8 = if (@hasDecl(T, "icon")) T.icon ++ "" else default_icon;
@@ -344,11 +341,11 @@ pub fn editableType(comptime T: type) bool {
         .array => |info| editableType(info.child),
         .vector => |info| editableType(info.child),
         .optional => |info| editableType(info.child),
-        .@"struct" => |info| for (info.fields) |field| {
-            if (field.is_comptime or !editableType(field.type)) break false;
+        .@"struct" => |info| for (info.field_types, info.field_attrs) |Member, attrs| {
+            if (attrs.@"comptime" or !editableType(Member)) break false;
         } else true,
-        .@"union" => |info| info.tag_type != null and for (info.fields) |field| {
-            if (field.type != void and !editableType(field.type)) break false;
+        .@"union" => |info| info.tag_type != null and for (info.field_types) |Member| {
+            if (Member != void and !editableType(Member)) break false;
         } else true,
         .void => true,
         else => false,
@@ -366,26 +363,16 @@ fn Stored(comptime T: type) type {
     return switch (@typeInfo(T)) {
         .array => |info| [info.len]Stored(info.child),
         .optional => |info| ?Stored(info.child),
-        .@"struct" => |info| blk: {
-            var names: [info.fields.len][]const u8 = undefined;
-            var types_list: [info.fields.len]type = undefined;
-            for (info.fields, &names, &types_list) |field, *name, *Type| {
-                name.* = field.name;
-                Type.* = Stored(field.type);
-            }
-            break :blk @Struct(.auto, null, &names, &types_list, &@splat(.{}));
-        },
-        .@"union" => |info| blk: {
-            var names: [info.fields.len][]const u8 = undefined;
-            var types_list: [info.fields.len]type = undefined;
-            for (info.fields, &names, &types_list) |field, *name, *Type| {
-                name.* = field.name;
-                Type.* = Stored(field.type);
-            }
-            break :blk @Union(.auto, info.tag_type, &names, &types_list, &@splat(.{}));
-        },
+        .@"struct" => |info| @Struct(.auto, null, info.field_names, &storedTypes(info.field_types), &@splat(.{})),
+        .@"union" => |info| @Union(.auto, info.tag_type, info.field_names, &storedTypes(info.field_types), &@splat(.{})),
         else => T,
     };
+}
+
+fn storedTypes(comptime types: []const type) [types.len]type {
+    var stored: [types.len]type = undefined;
+    for (&stored, types) |*slot, Member| slot.* = Stored(Member);
+    return stored;
 }
 
 /// Whether `T` has a reference anywhere inside it.
@@ -394,11 +381,8 @@ fn holdsRef(comptime T: type) bool {
     return switch (@typeInfo(T)) {
         .array => |info| holdsRef(info.child),
         .optional => |info| holdsRef(info.child),
-        .@"struct" => |info| for (info.fields) |field| {
-            if (holdsRef(field.type)) break true;
-        } else false,
-        .@"union" => |info| for (info.fields) |field| {
-            if (holdsRef(field.type)) break true;
+        inline .@"struct", .@"union" => |info| for (info.field_types) |Member| {
+            if (holdsRef(Member)) break true;
         } else false,
         else => false,
     };
@@ -417,8 +401,8 @@ fn store(comptime T: type, value: *const T) Stored(T) {
             part.* = store(@TypeOf(source.*), source);
         },
         .optional => |info| out = if (value.*) |*inner| store(info.child, inner) else null,
-        .@"struct" => |info| inline for (info.fields) |field| {
-            @field(out, field.name) = store(field.type, &@field(value.*, field.name));
+        .@"struct" => |info| inline for (info.field_names, info.field_types) |name, Member| {
+            @field(out, name) = store(Member, &@field(value.*, name));
         },
         .@"union" => switch (value.*) {
             inline else => |*payload, tag| out = @unionInit(Stored(T), @tagName(tag), store(@TypeOf(payload.*), payload)),
@@ -431,7 +415,7 @@ fn store(comptime T: type, value: *const T) Stored(T) {
 fn parseFieldValue(comptime T: type, text: [:0]const u8) error{ ParseZon, OutOfMemory }!T {
     var scratch: [16 * 1024]u8 = undefined;
     var fba = std.heap.FixedBufferAllocator.init(&scratch);
-    const stored = try std.zon.parse.fromSliceAlloc(Stored(T), fba.allocator(), text, null, .{});
+    const stored = try zon_file.parse(Stored(T), fba.allocator(), text, .{});
     return restore(T, stored);
 }
 
@@ -448,12 +432,13 @@ fn parseFieldValue(comptime T: type, text: [:0]const u8) error{ ParseZon, OutOfM
 pub fn validateSnapshot(comptime T: type, value: *const T) !void {
     if (T == @import("name.zig").Name) return;
     // ponytail: fields have a 4 KiB text/16 KiB parse budget, add sized field reads to the ABI before accepting larger snapshots.
-    inline for (std.meta.fields(T)) |field| {
+    const info = @typeInfo(T).@"struct";
+    inline for (info.field_names, info.field_types) |name, Member| {
         var buffer: [max_field_bytes + 1]u8 = undefined;
         var writer: std.Io.Writer = .fixed(buffer[0..max_field_bytes]);
-        std.zon.stringify.serialize(store(field.type, &@field(value.*, field.name)), .{ .whitespace = false }, &writer) catch return error.ValueTooLarge;
+        std.zon.stringify.serialize(store(Member, &@field(value.*, name)), .{ .whitespace = false }, &writer) catch return error.ValueTooLarge;
         buffer[writer.end] = 0;
-        _ = try parseFieldValue(field.type, buffer[0..writer.end :0]);
+        _ = try parseFieldValue(Member, buffer[0..writer.end :0]);
     }
 }
 
@@ -499,8 +484,8 @@ fn restore(comptime T: type, stored: Stored(T)) error{ParseZon}!T {
             part.* = try restore(@TypeOf(part.*), source);
         },
         .optional => |info| out = if (stored) |inner| try restore(info.child, inner) else null,
-        .@"struct" => |info| inline for (info.fields) |field| {
-            @field(out, field.name) = try restore(field.type, @field(stored, field.name));
+        .@"struct" => |info| inline for (info.field_names, info.field_types) |name, Member| {
+            @field(out, name) = try restore(Member, @field(stored, name));
         },
         .@"union" => switch (stored) {
             inline else => |payload, tag| out = @unionInit(T, @tagName(tag), try restore(@FieldType(T, @tagName(tag)), payload)),
@@ -540,9 +525,13 @@ fn partsOf(comptime T: type, comptime name: [:0]const u8) []const Part {
                     child_types = &.{@typeInfo(Type).optional.child};
                     child_names = &.{names[next]};
                 },
-                .@"struct", .@"union" => for (std.meta.fields(Type)) |field| {
-                    child_types = child_types ++ &[_]type{field.type};
-                    child_names = child_names ++ &[_][:0]const u8{field.name};
+                .@"struct" => {
+                    child_types = @typeInfo(Type).@"struct".field_types;
+                    child_names = @typeInfo(Type).@"struct".field_names;
+                },
+                .@"union" => {
+                    child_types = @typeInfo(Type).@"union".field_types;
+                    child_names = @typeInfo(Type).@"union".field_names;
                 },
                 else => {},
             }
@@ -573,13 +562,13 @@ fn describePart(comptime T: type, comptime name: []const u8) Part {
         .int => |info| .{ .kind = .int, .unsigned = info.signedness == .unsigned },
         .float => .{ .kind = .float },
         .@"enum" => |info| blk: {
-            var options: [info.fields.len][*:0]const u8 = undefined;
-            for (info.fields, &options) |tag, *option| option.* = tag.name;
+            var options: [info.field_names.len][*:0]const u8 = undefined;
+            for (info.field_names, &options) |tag, *option| option.* = tag.ptr;
             const frozen = options;
             break :blk .{ .kind = .@"enum", .options = &frozen, .option_count = frozen.len };
         },
         .void => .{ .kind = .none },
-        .@"struct" => |info| if (info.fields.len > 0 and editableType(T)) .{ .kind = .@"struct" } else .{ .kind = .other },
+        .@"struct" => |info| if (info.field_names.len > 0 and editableType(T)) .{ .kind = .@"struct" } else .{ .kind = .other },
         .@"union" => |info| if (info.tag_type != null and editableType(T)) .{ .kind = .@"union" } else .{ .kind = .other },
         .array => |info| if (editableType(info.child)) .{ .kind = .array, .len = info.len } else .{ .kind = .other },
         .optional => |info| if (editableType(info.child)) .{ .kind = .optional } else .{ .kind = .other },
@@ -592,7 +581,7 @@ fn numberOf(comptime T: type) ?type {
     const Number = switch (@typeInfo(T)) {
         .array => |info| info.child,
         .vector => |info| info.child,
-        .@"struct" => |info| if (info.fields.len > 0) info.fields[0].type else return null,
+        .@"struct" => |info| if (info.field_types.len > 0) info.field_types[0] else return null,
         else => return null,
     };
     return switch (@typeInfo(Number)) {
@@ -627,11 +616,11 @@ fn numbersLen(comptime T: type, comptime labels: []const []const u8) ?u32 {
         .array => |info| info.len,
         .vector => |info| info.len,
         .@"struct" => |info| blk: {
-            if (info.fields.len > labels.len) return null;
-            for (info.fields, 0..) |field, i| {
-                if (field.type != Number or !std.mem.eql(u8, field.name, labels[i])) return null;
+            if (info.field_names.len > labels.len) return null;
+            for (info.field_names, info.field_types, 0..) |name, Member, i| {
+                if (Member != Number or !std.mem.eql(u8, name, labels[i])) return null;
             }
-            break :blk info.fields.len;
+            break :blk info.field_names.len;
         },
         else => return null,
     };
@@ -650,8 +639,8 @@ fn isEuler(comptime T: type, comptime name: []const u8) bool {
 /// Whether `T` is an `eggy.math` quaternion: four numbers in one `@Vector` field `v`.
 fn isQuaternion(comptime T: type) bool {
     if (@typeInfo(T) != .@"struct" or !@hasDecl(T, "fromAxisAngle")) return false;
-    const fields = @typeInfo(T).@"struct".fields;
-    return fields.len == 1 and std.mem.eql(u8, fields[0].name, "v") and vectorLen(fields[0].type) == 4;
+    const info = @typeInfo(T).@"struct";
+    return info.field_names.len == 1 and std.mem.eql(u8, info.field_names[0], "v") and vectorLen(info.field_types[0]) == 4;
 }
 
 /// Whether ZON can show values of `T`: plain data, or strings.

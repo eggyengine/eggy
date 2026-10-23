@@ -61,6 +61,7 @@ pub const Command = enum(u32) {
     new_tab_3d,
     new_tab_2d,
     new_tab_ui,
+    oopsies,
 };
 /// Window menu items: `window_item_first` + panel id.
 const window_item_first: u32 = first_id + 0x200;
@@ -128,61 +129,62 @@ pub const Menubar = struct {
         const built_in = std.enums.values(Panel);
         const window_items = try gpa.alloc(widgets.MenuItem, built_in.len + plugin_panels.len + 2);
         for (window_items[0 .. built_in.len + plugin_panels.len], 0..) |*item, i| {
-            const id: u32 = if (i < built_in.len) @intFromEnum(built_in[i]) else panels.pluginId(plugin_panels[i - built_in.len], i - built_in.len);
+            const id: u32 = if (i < built_in.len) @backingInt(built_in[i]) else panels.pluginId(plugin_panels[i - built_in.len], i - built_in.len);
             item.* = .{ .id = window_item_first + id, .label = panels.panelTitle(id, plugin_panels), .kind = .checkbox, .checked = layout.nodeOf(id) != null };
         }
         window_items[window_items.len - 2] = .{ .kind = .separator };
-        window_items[window_items.len - 1] = .{ .id = @intFromEnum(Command.reset_layout), .label = "Reset Layout" };
+        window_items[window_items.len - 1] = .{ .id = @backingInt(Command.reset_layout), .label = "Reset Layout" };
 
         const file_items = try gpa.dupe(widgets.MenuItem, &.{
-            .{ .id = @intFromEnum(Command.new_project), .label = "New Project...", .shortcut = "Ctrl+N" },
+            .{ .id = @backingInt(Command.new_project), .label = "New Project...", .shortcut = "Ctrl+N" },
             if (project.shift_held)
-                .{ .id = @intFromEnum(Command.open_project_linked), .label = "Open Project with Developer Eggy...", .disabled = !project.developer_known }
+                .{ .id = @backingInt(Command.open_project_linked), .label = "Open Project with Developer Eggy...", .disabled = !project.developer_known }
             else
-                .{ .id = @intFromEnum(Command.open_project), .label = "Open Project...", .shortcut = "Ctrl+O" },
-            .{ .id = @intFromEnum(Command.open_project_folder), .label = "Open Project Folder", .disabled = !project.open },
-            .{ .id = @intFromEnum(Command.save), .label = "Save", .shortcut = "Ctrl+S" },
+                .{ .id = @backingInt(Command.open_project), .label = "Open Project...", .shortcut = "Ctrl+O" },
+            .{ .id = @backingInt(Command.open_project_folder), .label = "Open Project Folder", .disabled = !project.open },
+            .{ .id = @backingInt(Command.save), .label = "Save", .shortcut = "Ctrl+S" },
             .{ .kind = .separator },
-            .{ .id = @intFromEnum(Command.new_tab), .label = "New Tab...", .shortcut = "Ctrl+T" },
-            .{ .id = @intFromEnum(Command.new_tab_3d), .label = "New 3D Scene Tab" },
-            .{ .id = @intFromEnum(Command.new_tab_2d), .label = "New 2D Scene Tab" },
-            .{ .id = @intFromEnum(Command.new_tab_ui), .label = "New UI Scene Tab" },
+            .{ .id = @backingInt(Command.new_tab), .label = "New Tab...", .shortcut = "Ctrl+T" },
+            .{ .id = @backingInt(Command.new_tab_3d), .label = "New 3D Scene Tab" },
+            .{ .id = @backingInt(Command.new_tab_2d), .label = "New 2D Scene Tab" },
+            .{ .id = @backingInt(Command.new_tab_ui), .label = "New UI Scene Tab" },
             .{ .kind = .separator },
-            .{ .id = @intFromEnum(Command.export_game), .label = "Export...", .disabled = !project.open },
-            .{ .id = @intFromEnum(Command.project_settings), .label = "Project Settings...", .disabled = !project.open },
+            .{ .id = @backingInt(Command.export_game), .label = "Export...", .disabled = !project.open },
+            .{ .id = @backingInt(Command.project_settings), .label = "Project Settings...", .disabled = !project.open },
             .{ .kind = .separator },
             if (project.shift_held)
-                .{ .id = @intFromEnum(Command.link_developer), .label = "Link Developer Eggy...", .disabled = !project.can_link }
+                .{ .id = @backingInt(Command.link_developer), .label = "Link Developer Eggy...", .disabled = !project.can_link }
             else
-                .{ .id = @intFromEnum(Command.upgrade_editor), .label = "Upgrade Editor", .disabled = !project.can_upgrade },
+                .{ .id = @backingInt(Command.upgrade_editor), .label = "Upgrade Editor", .disabled = !project.can_upgrade },
             .{ .kind = .separator },
-            .{ .id = @intFromEnum(Command.quit), .label = "Quit", .shortcut = "Ctrl+Q" },
+            .{ .id = @backingInt(Command.quit), .label = "Quit", .shortcut = "Ctrl+Q" },
         });
 
         const edit_items = [_]widgets.MenuItem{
-            .{ .id = @intFromEnum(Command.undo), .label = "Undo", .shortcut = "Ctrl+Z" },
-            .{ .id = @intFromEnum(Command.redo), .label = "Redo", .shortcut = "Ctrl+Shift+Z" },
+            .{ .id = @backingInt(Command.undo), .label = "Undo", .shortcut = "Ctrl+Z" },
+            .{ .id = @backingInt(Command.redo), .label = "Redo", .shortcut = "Ctrl+Shift+Z" },
             .{ .kind = .separator },
-            .{ .id = @intFromEnum(Command.preferences), .label = "Preferences..." },
-            .{ .id = @intFromEnum(Command.plugins), .label = "Plugins...", .disabled = !project.open },
+            .{ .id = @backingInt(Command.preferences), .label = "Preferences..." },
+            .{ .id = @backingInt(Command.plugins), .label = "Plugins...", .disabled = !project.open },
         };
         const help_items = [_]widgets.MenuItem{
-            .{ .id = @intFromEnum(Command.documentation), .label = "Documentation" },
-            .{ .id = @intFromEnum(Command.report_issue), .label = "Report an Issue" },
-            .{ .id = @intFromEnum(Command.show_logs), .label = "Show Log Files" },
+            .{ .id = @backingInt(Command.documentation), .label = "Documentation" },
+            .{ .id = @backingInt(Command.report_issue), .label = "Report an Issue" },
+            .{ .id = @backingInt(Command.show_logs), .label = "Show Log Files" },
             .{ .kind = .separator },
-            .{ .id = @intFromEnum(Command.devtools), .label = "DevTools", .shortcut = "F12" },
+            .{ .id = @backingInt(Command.devtools), .label = "DevTools", .shortcut = "F12" },
             .{ .kind = .separator },
-            .{ .id = @intFromEnum(Command.about), .label = "About Eggy" },
+            .{ .id = @backingInt(Command.about), .label = "About Eggy" },
+            .{ .id = @backingInt(Command.oopsies), .label = "😛" },
         };
         const own = try plugin_bars.ownMenus(gpa, bars, states);
         const all = try gpa.alloc(widgets.MenubarMenu, menu_order.len + own.len);
         all[0..menu_order.len].* = .{
-            .{ .id = @intFromEnum(Menu.file), .label = Menu.file.label(), .items = try plugin_bars.extend(gpa, file_items, .file, bars, states) },
-            .{ .id = @intFromEnum(Menu.edit), .label = Menu.edit.label(), .items = try plugin_bars.extend(gpa, &edit_items, .edit, bars, states) },
-            .{ .id = @intFromEnum(Menu.view), .label = Menu.view.label(), .items = try plugin_bars.extend(gpa, command_items, .view, bars, states) },
-            .{ .id = @intFromEnum(Menu.window), .label = Menu.window.label(), .items = try plugin_bars.extend(gpa, window_items, .window, bars, states) },
-            .{ .id = @intFromEnum(Menu.help), .label = Menu.help.label(), .items = try plugin_bars.extend(gpa, &help_items, .help, bars, states) },
+            .{ .id = @backingInt(Menu.file), .label = Menu.file.label(), .items = try plugin_bars.extend(gpa, file_items, .file, bars, states) },
+            .{ .id = @backingInt(Menu.edit), .label = Menu.edit.label(), .items = try plugin_bars.extend(gpa, &edit_items, .edit, bars, states) },
+            .{ .id = @backingInt(Menu.view), .label = Menu.view.label(), .items = try plugin_bars.extend(gpa, command_items, .view, bars, states) },
+            .{ .id = @backingInt(Menu.window), .label = Menu.window.label(), .items = try plugin_bars.extend(gpa, window_items, .window, bars, states) },
+            .{ .id = @backingInt(Menu.help), .label = Menu.help.label(), .items = try plugin_bars.extend(gpa, &help_items, .help, bars, states) },
         };
         @memcpy(all[menu_order.len..], own);
         self.menu_count = all.len;
@@ -193,7 +195,7 @@ pub const Menubar = struct {
         @memcpy(result[0..shown], all[0..shown]);
         const folded = try gpa.alloc(widgets.MenuItem, all.len - shown);
         for (folded, all[shown..], shown..) |*row, menu, i| row.* = .{ .id = overflow_first + @as(u32, @intCast(i)), .label = menu.label, .kind = .submenu, .items = menu.items };
-        result[shown] = .{ .id = @intFromEnum(Menu.more), .label = Menu.more.label(), .items = folded };
+        result[shown] = .{ .id = @backingInt(Menu.more), .label = Menu.more.label(), .items = folded };
         return result;
     }
 
@@ -244,7 +246,7 @@ pub const Menubar = struct {
     /// _ = menubar.hover(hit_id); // Host pointer-motion route.
     /// ```
     pub fn hover(self: *Menubar, id: u32) bool {
-        if (self.open != @intFromEnum(Menu.more) or !self.isOverflowRow(id) or self.open_submenu == id) return false;
+        if (self.open != @backingInt(Menu.more) or !self.isOverflowRow(id) or self.open_submenu == id) return false;
         self.open_submenu = id;
         return true;
     }
@@ -310,7 +312,7 @@ fn triggerWidth(font: *const ui.Font, index: usize, bars: plugin_bars.Bars) f32 
 /// ```
 pub fn drawMoreAsDots(b: L.Builder, tree: *L.Element) !void {
     for (tree.children) |child| try drawMoreAsDots(b, child);
-    if (tree.id != @intFromEnum(Menu.more)) return;
+    if (tree.id != @backingInt(Menu.more)) return;
     // The trigger spans the bar; its look is its one child, a button.
     if (tree.children.len != 1 or tree.children[0].paint_kind != .button) return;
     const look = tree.children[0];
@@ -343,22 +345,22 @@ test "plugin View commands dispatch their current index without storing callback
     const commands = [_]eggy.plugins.EditorCommand{.{ .key = "game/raise", .title = "Raise" }};
     const list = try menubar.list(arena.allocator(), &layout, &.{}, &commands, .{}, .{}, .{}, menu_order.len);
     try std.testing.expectEqualStrings("Raise", list[2].items[0].label);
-    _ = menubar.press(@intFromEnum(Menu.view), .{});
+    _ = menubar.press(@backingInt(Menu.view), .{});
     try std.testing.expectEqual(Action{ .plugin_command = 0 }, menubar.press(list[2].items[0].id, .{}).?);
 }
 
 test "pressing a trigger opens its menu, and an item runs and closes it" {
     var menubar = Menubar{};
-    try std.testing.expectEqual(Action.handled, menubar.press(@intFromEnum(Menu.file), .{}).?);
-    try std.testing.expectEqual(@intFromEnum(Menu.file), menubar.open);
-    try std.testing.expectEqual(Action{ .command = .quit }, menubar.press(@intFromEnum(Command.quit), .{}).?);
+    try std.testing.expectEqual(Action.handled, menubar.press(@backingInt(Menu.file), .{}).?);
+    try std.testing.expectEqual(@backingInt(Menu.file), menubar.open);
+    try std.testing.expectEqual(Action{ .command = .quit }, menubar.press(@backingInt(Command.quit), .{}).?);
     try std.testing.expectEqual(@as(u32, 0), menubar.open);
-    try std.testing.expect(menubar.press(@intFromEnum(Command.quit), .{}) == null); // closed: not ours
+    try std.testing.expect(menubar.press(@backingInt(Command.quit), .{}) == null); // closed: not ours
 }
 
 test "the Window menu's items toggle their panel" {
-    var menubar = Menubar{ .open = @intFromEnum(Menu.window) };
-    const console = @intFromEnum(Panel.console);
+    var menubar = Menubar{ .open = @backingInt(Menu.window) };
+    const console = @backingInt(Panel.console);
     try std.testing.expectEqual(Action{ .toggle_panel = console }, menubar.press(window_item_first + console, .{}).?);
 }
 
@@ -376,14 +378,14 @@ test "menus that don't fit fold into the \"...\" menu, and its rows open them be
     var layout = dock.DockSpace.init();
     const list = try menubar.list(arena.allocator(), &layout, &.{}, &.{}, .{}, .{}, .{}, shown);
     try std.testing.expectEqual(@as(usize, 3), list.len);
-    try std.testing.expectEqual(@intFromEnum(Menu.more), list[2].id);
+    try std.testing.expectEqual(@backingInt(Menu.more), list[2].id);
     try std.testing.expectEqualStrings("View", list[2].items[0].label);
 
-    _ = menubar.press(@intFromEnum(Menu.more), .{});
+    _ = menubar.press(@backingInt(Menu.more), .{});
     try std.testing.expect(menubar.hover(overflow_first + 3));
     try std.testing.expectEqual(Action.handled, menubar.press(overflow_first + 4, .{}).?);
-    try std.testing.expectEqual(@intFromEnum(Menu.more), menubar.open); // still open, on Help now
-    try std.testing.expectEqual(Action{ .command = .about }, menubar.press(@intFromEnum(Command.about), .{}).?);
+    try std.testing.expectEqual(@backingInt(Menu.more), menubar.open); // still open, on Help now
+    try std.testing.expectEqual(Action{ .command = .about }, menubar.press(@backingInt(Command.about), .{}).?);
     try std.testing.expectEqual(@as(u32, 0), menubar.open_submenu);
 }
 
@@ -418,13 +420,13 @@ test "plugin menus join the bar and Eggy's menus, and their rows run by place" {
     try std.testing.expectEqual(@as(u32, 0), menubar.open);
 
     // The extension is pressed from its own place in View.
-    _ = menubar.press(@intFromEnum(Menu.view), bars);
+    _ = menubar.press(@backingInt(Menu.view), bars);
     const snap = menubar.press(list[2].items[list[2].items.len - 1].id, bars).?;
     try std.testing.expectEqual(@as(usize, 1), snap.plugin_bar.menu_item.menu);
 }
 
 test "a status button acts at once and a status menu opens and closes" {
-    var menubar = Menubar{ .open = @intFromEnum(Menu.file) };
+    var menubar = Menubar{ .open = @backingInt(Menu.file) };
     const bars = plugin_bars.Bars{ .menus = &test_menus, .status_items = &test_status };
     const button = menubar.press(plugin_bars.statusId(0), bars).?;
     try std.testing.expectEqual(@as(usize, 0), button.plugin_bar.status);

@@ -104,7 +104,7 @@ pub fn element(b: L.Builder, state: State, scene: ui.Rect) !*L.Element {
     var buttons: std.ArrayList(*L.Element) = .empty;
     for (shown(state)) |button| {
         const look = try b.allocator.create(Look);
-        look.* = .{ .button = button, .pressed = pressed(button, state), .folded = state.folded, .id = first_id + @intFromEnum(button) };
+        look.* = .{ .button = button, .pressed = pressed(button, state), .folded = state.folded, .id = first_id + @backingInt(button) };
         const node = try b.node(look.id, .{ .width = button_pt, .height = button_pt }, .{ .custom = .{ .context = look, .draw = Look.draw } }, &.{});
         node.cursor = if (button == .grip) .move else .pointer;
         node.accessibility = .{ .role = .button, .label = describe(button, state) };

@@ -33,7 +33,7 @@ pub const Fetched = struct {
             .url => |url| .{ .url = try a.dupe(u8, url) },
             .path => |path| .{ .path = try a.dupe(u8, path) },
         };
-        const manifest = try eggy.plugin_manifest.parse(a, try a.dupeZ(u8, manifest_text));
+        const manifest = try eggy.plugin_manifest.parse(a, try a.dupeSentinel(u8, manifest_text, 0));
         const package = try source.packageFor(a, manifest, kept_origin, if (package_root) |root| try a.dupe(u8, root) else null);
         const self = try a.create(Fetched);
         self.* = .{ .arena = undefined, .origin = kept_origin, .manifest = manifest, .readme = if (readme) |text| try a.dupe(u8, text) else null, .package = package };
@@ -121,7 +121,7 @@ pub const Fetch = struct {
         defer client.deinit();
 
         const manifest_text = try readFile(arena, io, &client, self.origin);
-        const manifest = try eggy.plugin_manifest.parse(arena, try arena.dupeZ(u8, manifest_text));
+        const manifest = try eggy.plugin_manifest.parse(arena, try arena.dupeSentinel(u8, manifest_text, 0));
         // No read-me is fine: the window says so.
         const readme_at = try source.sibling(arena, self.origin, manifest.readme);
         const readme = readFile(arena, io, &client, readme_at) catch |err| switch (err) {

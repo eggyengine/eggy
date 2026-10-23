@@ -1,5 +1,6 @@
 //! Versioned developer control overrides, independent of SDL device ownership.
 const std = @import("std");
+const zon_file = @import("eggy_assets").zon;
 const types = @import("types.zig");
 pub const file_name = @import("../project.zig").controls_file;
 pub const Persistence = struct {
@@ -86,11 +87,11 @@ const Change = union(enum) {
 /// ```
 pub fn validate(mappings: []const types.Binding, persistent: bool) !void {
     for (mappings) |binding| switch (binding) {
-        .key => |key| if (@intFromEnum(key) == 0 or @intFromEnum(key) >= types.key_count) return error.InvalidBinding,
+        .key => |key| if (@backingInt(key) == 0 or @backingInt(key) >= types.key_count) return error.InvalidBinding,
         .mouse => {},
         .controller => |controller| if (controller.device) |device| {
             if (persistent) return error.TransientControllerBinding;
-            if (@intFromEnum(device) == 0) return error.InvalidBinding;
+            if (@backingInt(device) == 0) return error.InvalidBinding;
         },
         .key_axis => |axis| {
             try validate(&.{ .{ .key = axis.negative }, .{ .key = axis.positive } }, persistent);
@@ -311,7 +312,7 @@ pub const Overrides = struct {
     pub fn read(self: *Overrides, source: [:0]const u8) !void {
         var arena = std.heap.ArenaAllocator.init(self.gpa);
         defer arena.deinit();
-        const saved = try std.zon.parse.fromSliceAlloc(Saved, arena.allocator(), source, null, .{});
+        const saved = try zon_file.parse(Saved, arena.allocator(), source, .{});
         if (saved.version != 1) return error.UnsupportedInputSettings;
         var replacement = Overrides.init(self.gpa);
         errdefer replacement.deinit();
@@ -365,5 +366,5 @@ test "saved overrides use stable owner/tag names and failed saves preserve the a
     var context: u8 = 0;
     try std.testing.expectError(error.AccessDenied, overrides.set("game", "jump", &.{.{ .key = .j }}, null, .{ .context = &context, .save = Sink.fail }));
     try std.testing.expectEqual(types.Key.space, overrides.get(key).?[0].key);
-    try std.testing.expectError(error.TransientControllerBinding, validate(&.{.{ .controller = .{ .device = @enumFromInt(1), .button = .south } }}, true));
+    try std.testing.expectError(error.TransientControllerBinding, validate(&.{.{ .controller = .{ .device = @fromBackingInt(@intCast(1)), .button = .south } }}, true));
 }

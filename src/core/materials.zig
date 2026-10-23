@@ -1,5 +1,6 @@
 //! Authored surface materials, stored as components or reusable `.material.zon` assets.
 const std = @import("std");
+const zon_file = @import("eggy_assets").zon;
 const ecs = @import("clutch");
 const refs = @import("refs.zig");
 const api = @import("support.zig");
@@ -36,8 +37,9 @@ pub fn parse(gpa: std.mem.Allocator, source: [:0]const u8) !Material {
         unlit: bool = false,
         alpha_cutoff: f32 = 0.01,
     };
-    const file = try std.zon.parse.fromSliceAlloc(File, gpa, source, null, .{});
-    defer std.zon.parse.free(gpa, file);
+    var arena: std.heap.ArenaAllocator = .init(gpa);
+    defer arena.deinit();
+    const file = try zon_file.parse(File, arena.allocator(), source, .{});
     const material = Material{
         .color = file.color,
         .texture = try refs.AssetRef(.image).parse(file.texture),
@@ -88,7 +90,7 @@ test "authored materials and lights survive scene serialization" {
     var bytes: std.Io.Writer.Allocating = .init(std.testing.allocator);
     defer bytes.deinit();
     try captured.write(&bytes.writer);
-    const source = try std.testing.allocator.dupeZ(u8, bytes.written());
+    const source = try std.testing.allocator.dupeSentinel(u8, bytes.written(), 0);
     defer std.testing.allocator.free(source);
     var parsed = try scene.Scene.parse(std.testing.allocator, source);
     defer parsed.deinit();

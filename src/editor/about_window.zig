@@ -61,7 +61,7 @@ const View = struct {
         const version = std.fmt.allocPrint(context.builder().allocator, "Version {s}", .{@import("build_options").version}) catch "Version";
         context.badge(version, .secondary);
         restyle(context, .{ .width = context.font.measure(version, context.theme.small_text_size) + 20 });
-        context.muted(if (self.hatched_at_ms != null) "Chirp! Your next game starts with a little idea." else "A game engine for making games in Zig.");
+        context.muted(if (self.hatched_at_ms != null) "what the fuck" else "A game engine for making games in Zig.");
         centerText(context);
         context.begin(.row);
         for (links) |link| if (context.buttonVariant(link.label, .link)) {
@@ -161,18 +161,23 @@ fn drawEgg(raw: *const anyopaque, canvas: *ui.Canvas, rect: ui.Rect) !void {
         return;
     }
 
-    // The chick rises from the lower shell, wearing the top of it.
+    // A dinosaur rises from the lower shell, wearing the top of it.
     const center_x = origin[0] + extent / 2;
     const break_y = origin[1] + 16 * scale;
-    const chick = [4]f32{ 1, 0.92, 0.35, 1 };
-    const dark = [4]f32{ 0.45, 0.24, 0.09, 1 };
+    const scales = [4]f32{ 0.36, 0.7, 0.3, 1 };
+    const spines = [4]f32{ 0.2, 0.48, 0.18, 1 };
+    const dark = [4]f32{ 0.1, 0.12, 0.08, 1 };
+    const white = [4]f32{ 1, 1, 1, 1 };
     const head_y = break_y + 5 - 30 * glyph.hatch;
-    try disc(canvas, .{ center_x, break_y + 10 }, .{ 27, 27 }, chick);
-    try disc(canvas, .{ center_x, head_y }, .{ 22, 22 }, chick);
-    try disc(canvas, .{ center_x - 8, head_y - 1 }, .{ 2.5, 3.5 }, dark);
-    try disc(canvas, .{ center_x + 8, head_y - 1 }, .{ 2.5, 3.5 }, dark);
-    const beak = [4]f32{ 0.95, 0.42, 0.1, 1 };
-    try canvas.triangle(.{ .{ center_x - 5, head_y + 6 }, .{ center_x + 5, head_y + 6 }, .{ center_x, head_y + 12 } }, .{ beak, beak, beak });
+    // Spines down the back of its head, then the body, and a long head with its snout to the right.
+    for ([_]f32{ -20, -10, 0 }) |x| try canvas.triangle(.{ .{ center_x + x - 6, head_y - 10 }, .{ center_x + x + 6, head_y - 10 }, .{ center_x + x, head_y - 24 } }, .{ spines, spines, spines });
+    try disc(canvas, .{ center_x, break_y + 10 }, .{ 27, 27 }, scales);
+    try disc(canvas, .{ center_x, head_y }, .{ 22, 18 }, scales);
+    try disc(canvas, .{ center_x + 18, head_y + 4 }, .{ 16, 11 }, scales);
+    try disc(canvas, .{ center_x + 4, head_y - 5 }, .{ 3.5, 4 }, dark);
+    try disc(canvas, .{ center_x + 29, head_y - 1 }, .{ 1.5, 1.5 }, dark);
+    // Teeth along the jaw.
+    for ([_]f32{ 10, 17, 24 }) |x| try canvas.triangle(.{ .{ center_x + x, head_y + 10 }, .{ center_x + x + 5, head_y + 10 }, .{ center_x + x + 2.5, head_y + 15 } }, .{ white, white, white });
     try drawShell(canvas, glyph.egg, origin, scale, false, .{ 0, 0 }, 0);
     try drawShell(canvas, glyph.egg, origin, scale, true, .{ 6 * glyph.hatch, -35 * glyph.hatch }, 0);
 }

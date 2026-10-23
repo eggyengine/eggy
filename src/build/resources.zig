@@ -1,5 +1,7 @@
 //! Project catalog inputs and startup-scene selection for identity-addressed runtime builds.
 const std = @import("std");
+const zon_file = @import("../core/assets/zon.zig");
+const package_root = @import("package_root.zig");
 const catalog_zig = @import("../core/assets/catalog.zig");
 const asset_id = @import("../core/assets/id.zig");
 const Entry = @import("../core/assets/package.zig").Entry;
@@ -8,10 +10,10 @@ const Entry = @import("../core/assets/package.zig").Entry;
 /// Preserves migrated sidecar identities/settings; malformed metadata and I/O failures fail
 /// the build. Returned source paths live in the build arena, independently of the catalog.
 pub fn entries(b: *std.Build) []const Entry {
-    var catalog = catalog_zig.Catalog.open(b.allocator, b.graph.io, b.build_root.handle) catch |err|
+    var catalog = catalog_zig.Catalog.open(b.allocator, b.graph.io, package_root.open(b)) catch |err|
         std.debug.panic("cannot open .eggy/assets.zon: {t}", .{err});
     defer catalog.deinit();
-    _ = catalog.sync(b.graph.io, b.build_root.handle) catch |err|
+    _ = catalog.sync(b.graph.io, package_root.open(b)) catch |err|
         std.debug.panic("cannot synchronize the project's asset catalog: {t}", .{err});
     var found: std.ArrayList(Entry) = .empty;
     for (catalog.view().entries) |entry| {
@@ -34,8 +36,8 @@ pub fn mainScene(b: *std.Build, files: []const Entry, scene: ?[]const u8, export
     const Chosen = struct { default_scene: ?[]const u8 = null, scene: ?[]const u8 = null };
     const sources: []const []const u8 = if (exporting) &.{"eggy.zon"} else &.{ "eggy.zon", ".eggy/scene.zon" };
     for (sources) |file| {
-        const source = b.build_root.handle.readFileAllocOptions(b.graph.io, file, b.allocator, .limited(64 * 1024), .of(u8), 0) catch continue;
-        const chosen = std.zon.parse.fromSliceAlloc(Chosen, b.allocator, source, null, .{ .ignore_unknown_fields = true }) catch continue;
+        const source = package_root.open(b).readFileAllocOptions(b.graph.io, file, b.allocator, .limited(64 * 1024), .of(u8), 0) catch continue;
+        const chosen = zon_file.parse(Chosen, b.allocator, source, .{ .ignore_unknown_fields = true }) catch continue;
         const path = chosen.default_scene orelse chosen.scene orelse continue;
         if (sceneSource(files, path)) |found| return found;
     }

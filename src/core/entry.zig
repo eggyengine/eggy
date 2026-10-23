@@ -1,10 +1,10 @@
 //! SDL main callbacks shared by Eggy's executables. Each forwards to the program's app type and
-//! shows a fatal error in a native dialog (the browser console on the web) before exiting.
+//! shows a fatal error in SDL's message box before exiting.
 const builtin = @import("builtin");
 const std = @import("std");
 const vit = @import("vitellus");
 const sdl3 = @import("vitellus_sdl3").sdl;
-const fatal_dialog = @import("fatal_dialog");
+const fatal_dialog = @import("fatal_dialog.zig");
 const process_init = @import("process_init.zig");
 const log = @import("log/log.zig");
 

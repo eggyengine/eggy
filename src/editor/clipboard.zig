@@ -15,7 +15,7 @@ const ui = eggy.ui;
 pub fn sync(page_ui: *ui.Context) void {
     if (page_ui.copied) |text| {
         var buffer: [4096]u8 = undefined;
-        if (std.fmt.bufPrintZ(&buffer, "{s}", .{text})) |copy| sdl3.clipboard.setText(copy) catch {} else |_| {}
+        if (std.fmt.bufPrintSentinel(&buffer, "{s}", .{text}, 0)) |copy| sdl3.clipboard.setText(copy) catch {} else |_| {}
     }
     if (page_ui.paste_requested) {
         page_ui.paste_requested = false;

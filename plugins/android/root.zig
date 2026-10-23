@@ -19,7 +19,7 @@ pub const ApiLevel = enum(u32) {
     pub const labels = blk: {
         const versions = [_][]const u8{ "13", "14", "15", "16" };
         var all: [versions.len][]const u8 = undefined;
-        for (&all, versions, std.enums.values(ApiLevel)) |*label, version, level| label.* = std.fmt.comptimePrint("Android {s} (API {d})", .{ version, @intFromEnum(level) });
+        for (&all, versions, std.enums.values(ApiLevel)) |*label, version, level| label.* = std.fmt.comptimePrint("Android {s} (API {d})", .{ version, @backingInt(level) });
         break :blk all;
     };
 };
@@ -75,8 +75,8 @@ pub const Plugin = struct {
         if (ui.select("##android version", &ApiLevel.labels, &level)) self.api_level = std.enums.values(ApiLevel)[level];
         rows.end(ui);
         rows.begin(ui, "Architecture", "The processor the game runs on.");
-        var architecture: usize = @intFromEnum(self.architecture);
-        if (ui.select("##android architecture", &Architecture.labels, &architecture)) self.architecture = @enumFromInt(architecture);
+        var architecture: usize = @backingInt(self.architecture);
+        if (ui.select("##android architecture", &Architecture.labels, &architecture)) self.architecture = @fromBackingInt(@intCast(architecture));
         rows.end(ui);
         eggy.setting_rows.endGroup(ui);
     }
@@ -94,7 +94,7 @@ pub const Plugin = struct {
             .arm64 => "aarch64",
             .x86_64 => "x86_64",
         };
-        return std.fmt.allocPrint(arena, "{s}-linux-android.{d}", .{ cpu, @intFromEnum(self.api_level) });
+        return std.fmt.allocPrint(arena, "{s}-linux-android.{d}", .{ cpu, @backingInt(self.api_level) });
     }
 };
 

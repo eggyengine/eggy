@@ -30,7 +30,7 @@ pub const Built = struct {
 /// importer_module.linkLibrary(built.library);
 /// importer_module.addConfigHeader(built.config);
 /// ```
-pub fn build(b: *std.Build, source: *std.Build.Dependency, target: std.Build.ResolvedTarget, optimize: std.builtin.OptimizeMode) Built {
+pub fn build(b: *std.Build, source: *std.Build.Dependency, target: std.Build.ResolvedTarget, optimize: std.builtin.Optimize) Built {
     const library = b.addLibrary(.{
         .name = "assimp",
         .linkage = .static,
@@ -57,15 +57,15 @@ pub fn build(b: *std.Build, source: *std.Build.Dependency, target: std.Build.Res
     // The core, its bundled libraries, and the importers for `formats`; the others are turned off.
     module.addCSourceFiles(.{ .root = source.path(""), .files = &sources.common });
     inline for (comptime std.meta.declarations(sources.libraries)) |bundled| {
-        module.addCSourceFiles(.{ .root = source.path(""), .files = &@field(sources.libraries, bundled.name) });
+        module.addCSourceFiles(.{ .root = source.path(""), .files = &@field(sources.libraries, bundled) });
     }
     inline for (comptime std.meta.declarations(sources.formats)) |format| {
         const wanted = for (formats) |name| {
-            if (std.mem.eql(u8, name, format.name)) break true;
+            if (std.mem.eql(u8, name, format)) break true;
         } else false;
         if (wanted) {
-            module.addCSourceFiles(.{ .root = source.path(""), .files = &@field(sources.formats, format.name) });
-        } else turnOff(b, module, format.name);
+            module.addCSourceFiles(.{ .root = source.path(""), .files = &@field(sources.formats, format) });
+        } else turnOff(b, module, format);
     }
     for (unsupported_formats) |format| turnOff(b, module, format);
     return .{ .library = library, .include = source.path("include"), .config = config };

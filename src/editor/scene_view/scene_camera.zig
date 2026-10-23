@@ -205,7 +205,7 @@ pub const SceneCamera = struct {
         const keys = sdl3.keyboard.getState();
         const held = struct {
             fn f(state: []const bool, code: sdl3.Scancode) f32 {
-                const index: usize = @intCast(@intFromEnum(code));
+                const index: usize = @intCast(@backingInt(code));
                 return if (index < state.len and state[index]) 1 else 0;
             }
         }.f;

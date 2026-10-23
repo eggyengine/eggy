@@ -3,6 +3,7 @@
 //!
 //!     .{ .id = 8410273145522034177, .kind = .model, .model = .{ .scale = 0.01 } }
 const std = @import("std");
+const zon_file = @import("zon.zig");
 const Kind = @import("kind.zig").Kind;
 
 /// What a descriptor's file name adds to its file's.
@@ -77,7 +78,7 @@ pub fn new(io: std.Io, path: []const u8) Descriptor {
 /// const descriptor = try parse(arena.allocator(), ".{ .id = 42, .kind = .model }");
 /// ```
 pub fn parse(arena: std.mem.Allocator, text: [:0]const u8) !Descriptor {
-    return std.zon.parse.fromSliceAlloc(Descriptor, arena, text, null, .{ .ignore_unknown_fields = true });
+    return zon_file.parse(Descriptor, arena, text, .{ .ignore_unknown_fields = true });
 }
 
 /// The descriptor of the file at `path` in `dir`, read in `arena`; null when it has none.

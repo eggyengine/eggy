@@ -645,7 +645,7 @@ test "a read-me's text is set at the editor's size, headings still larger" {
     fitToTheme(typeset, 14);
     var sizes: [2]f32 = undefined;
     var found: usize = 0;
-    var stack = [_]*ui.Layout.Element{typeset} ** 16;
+    var stack: [16]*ui.Layout.Element = @splat(typeset);
     var depth: usize = 1;
     while (depth > 0) {
         depth -= 1;
@@ -701,8 +701,8 @@ pub fn pluginsDiffer(gpa: std.mem.Allocator, before: []const u8, after: []const 
     var arena_state = std.heap.ArenaAllocator.init(gpa);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
-    const old = eggy.project.parse(arena, arena.dupeZ(u8, before) catch return true) catch return true;
-    const new = eggy.project.parse(arena, arena.dupeZ(u8, after) catch return true) catch return true;
+    const old = eggy.project.parse(arena, arena.dupeSentinel(u8, before, 0) catch return true) catch return true;
+    const new = eggy.project.parse(arena, arena.dupeSentinel(u8, after, 0) catch return true) catch return true;
     if (old.plugins.len != new.plugins.len) return true;
     for (old.plugins, new.plugins) |a, b| {
         if (!std.mem.eql(u8, a.module, b.module) or !std.mem.eql(u8, a.version, b.version) or a.dev != b.dev) return true;

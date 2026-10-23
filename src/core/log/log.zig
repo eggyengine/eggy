@@ -58,7 +58,7 @@ pub fn setLevel(level: std.log.Level) void {
 
 /// Whether a message at `level` is shown.
 pub fn shows(level: std.log.Level) bool {
-    return @intFromEnum(level) <= @intFromEnum(shown_level);
+    return @backingInt(level) <= @backingInt(shown_level);
 }
 
 /// The run's log file, absolute, or null without one.

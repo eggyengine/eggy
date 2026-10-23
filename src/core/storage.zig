@@ -313,7 +313,7 @@ test "save slots roundtrip binary and empty bytes, overwrite atomically, and del
 
 test "invalid slots fail before provider access or allocation" {
     const storage: Storage = .{};
-    for ([_][]const u8{ "", ".", "..", "../save", "/save", "a/b", "a\\b", "C:save", "name.ext", "a b", "bad\x00name", "sävé", &("a".* ** 65) }) |slot| {
+    for ([_][]const u8{ "", ".", "..", "../save", "/save", "a/b", "a\\b", "C:save", "name.ext", "a b", "bad\x00name", "sävé", &@as([65]u8, @splat('a')) }) |slot| {
         try std.testing.expectError(error.InvalidSlot, storage.read(std.testing.failing_allocator, slot));
         try std.testing.expectError(error.InvalidSlot, storage.write(slot, "bytes"));
         try std.testing.expectError(error.InvalidSlot, storage.remove(slot));
@@ -382,7 +382,7 @@ test "project namespaces and portable slot filenames cannot traverse" {
     try std.testing.expectEqual(@as(usize, 64), identityHash("../../escape").len);
     var name_buffer: [file_name_bytes]u8 = undefined;
     try std.testing.expect(std.mem.startsWith(u8, slotFileName(&name_buffer, "CON"), "slot-"));
-    try validateSlot(&("a".* ** 64));
+    try validateSlot(&@as([64]u8, @splat('a')));
 }
 
 test "all storage allocations release on failure and reads remain caller owned" {
@@ -475,8 +475,7 @@ test "failed writes, syncs and renames preserve the previous valid save" {
 }
 
 test "stable storage statuses reconstruct errors without Zig error numbers" {
-    inline for (std.meta.fields(Status)) |field| {
-        const code: Status = @enumFromInt(field.value);
+    for (std.enums.values(Status)) |code| {
         if (code == .ok) continue;
         check(code) catch |err| try std.testing.expectEqual(code, status(err));
     }

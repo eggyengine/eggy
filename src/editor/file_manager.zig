@@ -33,7 +33,7 @@ pub fn openFile(gpa: std.mem.Allocator, file: []const u8) !void {
 /// What SDL's `openURL` takes for `dir`: a `file://` URL, except on Windows, whose shell opens a
 /// folder's own path. Caller-owned.
 fn folderUrl(gpa: std.mem.Allocator, dir: []const u8) ![:0]u8 {
-    if (builtin.os.tag == .windows) return gpa.dupeZ(u8, dir);
+    if (builtin.os.tag == .windows) return gpa.dupeSentinel(u8, dir, 0);
     return std.fmt.allocPrintSentinel(gpa, "file://{f}", .{std.fmt.alt(std.Uri.Component{ .raw = dir }, .formatPath)}, 0);
 }
 

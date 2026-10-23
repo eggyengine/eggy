@@ -35,7 +35,7 @@ pub const Panel = struct {
 
     /// Show tab `tab` next.
     pub fn open(self: *Panel, tab: Tab) void {
-        self.tab = @intFromEnum(tab);
+        self.tab = @backingInt(tab);
     }
 
     /// Build the panel for `repo` (null without a project) on `context`.
@@ -63,7 +63,7 @@ pub const Panel = struct {
             try std.fmt.allocPrint(arena, "Remotes {d}##remotes", .{state.remotes.len}),
         };
         if (context.tabs(&labels, &self.tab)) self.select(known, "");
-        switch (@as(Tab, @enumFromInt(self.tab))) {
+        switch (@as(Tab, @fromBackingInt(@intCast(self.tab)))) {
             .changes => try self.buildChanges(known, state, context),
             .history => try self.buildHistory(known, state, context),
             .branches => try self.buildBranches(known, state, context),

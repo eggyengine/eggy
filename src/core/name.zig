@@ -60,8 +60,8 @@ test "an entity is found by its name" {
 
 test "a name keeps its text, cut at a character boundary when too long" {
     try std.testing.expectEqualStrings("Sun", Name.init("Sun").text());
-    const long = "é" ** 40; // 80 bytes
-    const cut = Name.init(long);
+    const long: [80]u8 = @bitCast(@as([40][2]u8, @splat("é".*)));
+    const cut = Name.init(&long);
     try std.testing.expectEqual(@as(usize, 64), cut.text().len);
     try std.testing.expect(std.unicode.utf8ValidateSlice(cut.text()));
 }

@@ -13,7 +13,7 @@ pub fn addApp(b: *std.Build, engine: *std.Build, emscripten: anytype, root: *std
         .args = &.{"-sSTACK_SIZE=8388608"},
     });
     if (data) |directory| {
-        const link: *std.Build.Step.Run = @fieldParentPtr("step", app.install.options.source_dir.generated.file.step);
+        const link: *std.Build.Step.Run = @fieldParentPtr("step", b.graph.generated_files.items[@backingInt(app.install.options.source_dir.generated.index)]);
         const bundled = resources.bundledDirectory(b, directory);
         link.addArg("--preload-file");
         link.addDecoratedDirectoryArg("", bundled.path(b, "data"), "@/data");

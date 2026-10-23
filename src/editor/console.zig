@@ -236,9 +236,9 @@ pub const Console = struct {
     fn levelChip(self: *Console, context: *ui.Context, level: std.log.Level, label: []const u8) !void {
         const b = context.builder();
         const id = context.idFor(try std.fmt.allocPrint(b.allocator, "console-level-{t}", .{level}));
-        const shown = &self.levels[@intFromEnum(level)];
+        const shown = &self.levels[@backingInt(level)];
         if (context.activated(id)) shown.* = !shown.*;
-        const count = try std.fmt.allocPrint(b.allocator, "{d}", .{self.counts.per_level[@intFromEnum(level)]});
+        const count = try std.fmt.allocPrint(b.allocator, "{d}", .{self.counts.per_level[@backingInt(level)]});
         const chip = try b.allocator.create(LevelChip);
         chip.* = .{ .id = id, .label = label, .count = count, .color = terminal_view.levelColor(level), .shown = shown.* };
         const width = chip_padding * 2 + dot_size + chip_gap + context.font.measure(label, chip_text_size) + chip_gap + context.font.measure(count, chip_text_size);

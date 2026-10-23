@@ -422,42 +422,42 @@ pub const HotGame = struct {
             gpa.free(panel.title);
         };
         for (panels, game.panels[0..game.panel_count]) |*panel, source| {
-            const key = try gpa.dupeZ(u8, std.mem.span(source.key));
+            const key = try gpa.dupeSentinel(u8, std.mem.span(source.key), 0);
             errdefer gpa.free(key);
-            panel.* = .{ .key = key, .title = try gpa.dupeZ(u8, std.mem.span(source.title)) };
+            panel.* = .{ .key = key, .title = try gpa.dupeSentinel(u8, std.mem.span(source.title), 0) };
             panel_count += 1;
         }
 
         const manifests = try copyManifests(self.manifest_arena.allocator(), game.preferences[0..game.preference_count]);
         const component_types = try copyComponentTypes(self.manifest_arena.allocator(), game.components[0..game.component_count]);
         const plugin_keys = try self.manifest_arena.allocator().alloc([:0]const u8, game.plugin_count);
-        for (plugin_keys, game.plugin_keys[0..game.plugin_count]) |*key, source| key.* = try self.manifest_arena.allocator().dupeZ(u8, std.mem.span(source));
+        for (plugin_keys, game.plugin_keys[0..game.plugin_count]) |*key, source| key.* = try self.manifest_arena.allocator().dupeSentinel(u8, std.mem.span(source), 0);
         const commands = try self.manifest_arena.allocator().alloc(eggy.plugins.EditorCommand, game.command_count);
         for (commands, game.commands[0..game.command_count]) |*command, source| command.* = .{
-            .key = try self.manifest_arena.allocator().dupeZ(u8, std.mem.span(source.key)),
-            .title = try self.manifest_arena.allocator().dupeZ(u8, std.mem.span(source.title)),
+            .key = try self.manifest_arena.allocator().dupeSentinel(u8, std.mem.span(source.key), 0),
+            .title = try self.manifest_arena.allocator().dupeSentinel(u8, std.mem.span(source.title), 0),
         };
         const arena = self.manifest_arena.allocator();
         const file_types = try arena.alloc(eggy.plugins.EditorFileType, game.file_type_count);
         for (file_types, game.file_types[0..game.file_type_count]) |*file_type, source| file_type.* = .{
-            .key = try arena.dupeZ(u8, std.mem.span(source.key)),
-            .title = try arena.dupeZ(u8, std.mem.span(source.title)),
-            .extension = try arena.dupeZ(u8, std.mem.span(source.extension)),
+            .key = try arena.dupeSentinel(u8, std.mem.span(source.key), 0),
+            .title = try arena.dupeSentinel(u8, std.mem.span(source.title), 0),
+            .extension = try arena.dupeSentinel(u8, std.mem.span(source.extension), 0),
             .contents = try arena.dupe(u8, source.contents[0..source.contents_len]),
         };
         const ui_widgets = try arena.alloc(eggy.plugins.UiWidget, game.ui_widget_count);
         for (ui_widgets, game.ui_widgets[0..game.ui_widget_count]) |*widget, source| widget.* = .{
-            .key = try arena.dupeZ(u8, std.mem.span(source.key)),
-            .title = try arena.dupeZ(u8, std.mem.span(source.title)),
+            .key = try arena.dupeSentinel(u8, std.mem.span(source.key), 0),
+            .title = try arena.dupeSentinel(u8, std.mem.span(source.title), 0),
         };
         const menus = try copyMenus(arena, game);
         const status_items = try copyStatusItems(arena, game);
         const export_platforms = try arena.alloc(eggy.plugins.ExportPlatform, game.export_platform_count);
         for (export_platforms, game.export_platforms[0..game.export_platform_count]) |*platform, source| platform.* = .{
-            .key = try arena.dupeZ(u8, std.mem.span(source.key)),
-            .title = try arena.dupeZ(u8, std.mem.span(source.title)),
-            .target = try arena.dupeZ(u8, std.mem.span(source.target)),
-            .note = try arena.dupeZ(u8, std.mem.span(source.note)),
+            .key = try arena.dupeSentinel(u8, std.mem.span(source.key), 0),
+            .title = try arena.dupeSentinel(u8, std.mem.span(source.title), 0),
+            .target = try arena.dupeSentinel(u8, std.mem.span(source.target), 0),
+            .note = try arena.dupeSentinel(u8, std.mem.span(source.note), 0),
             .icon_png = try arena.dupe(u8, source.icon_png[0..source.icon_png_len]),
         };
         self.* = .{ .gpa = gpa, .path = self.path, .copy_path = copy_path, .library = library, .game = game, .state = null, .panels = panels, .commands = commands, .file_types = file_types, .ui_widgets = ui_widgets, .menus = menus, .status_items = status_items, .export_platforms = export_platforms, .loads = self.loads, .preference_manifests = manifests, .component_types = component_types, .plugin_keys = plugin_keys, .manifest_arena = self.manifest_arena };
@@ -470,8 +470,8 @@ pub const HotGame = struct {
         for (menus, game.menus[0..game.menu_count]) |*menu, source| {
             if (next + source.item_count > game.menu_item_count) return error.MalformedGameLibrary;
             menu.* = .{
-                .key = try arena.dupeZ(u8, std.mem.span(source.key)),
-                .title = try arena.dupeZ(u8, std.mem.span(source.title)),
+                .key = try arena.dupeSentinel(u8, std.mem.span(source.key), 0),
+                .title = try arena.dupeSentinel(u8, std.mem.span(source.title), 0),
                 .extends = std.enums.fromInt(eggy.plugins.BuiltinMenu, source.extends),
                 .items = try copyMenuItems(arena, game.menu_items[next..][0..source.item_count]),
             };
@@ -487,8 +487,8 @@ pub const HotGame = struct {
         for (items, game.status_items[0..game.status_item_count]) |*item, source| {
             if (next + source.item_count > game.status_menu_item_count) return error.MalformedGameLibrary;
             item.* = .{
-                .key = try arena.dupeZ(u8, std.mem.span(source.key)),
-                .title = try arena.dupeZ(u8, std.mem.span(source.title)),
+                .key = try arena.dupeSentinel(u8, std.mem.span(source.key), 0),
+                .title = try arena.dupeSentinel(u8, std.mem.span(source.title), 0),
                 .side = std.enums.fromInt(eggy.plugins.StatusSide, source.side) orelse return error.MalformedGameLibrary,
                 .items = try copyMenuItems(arena, game.status_menu_items[next..][0..source.item_count]),
             };
@@ -500,9 +500,9 @@ pub const HotGame = struct {
     fn copyMenuItems(arena: std.mem.Allocator, sources: []const api.MenuItem) ![]eggy.plugins.EditorMenuItem {
         const items = try arena.alloc(eggy.plugins.EditorMenuItem, sources.len);
         for (items, sources) |*item, source| item.* = .{
-            .key = try arena.dupeZ(u8, std.mem.span(source.key)),
-            .title = try arena.dupeZ(u8, std.mem.span(source.title)),
-            .shortcut = try arena.dupeZ(u8, std.mem.span(source.shortcut)),
+            .key = try arena.dupeSentinel(u8, std.mem.span(source.key), 0),
+            .title = try arena.dupeSentinel(u8, std.mem.span(source.title), 0),
+            .shortcut = try arena.dupeSentinel(u8, std.mem.span(source.shortcut), 0),
             .checkable = source.checkable,
         };
         return items;
@@ -819,16 +819,16 @@ fn copyManifests(arena: std.mem.Allocator, sets: []const api.Preferences) ![]con
         const fields = try arena.alloc(eggy.preferences.Field, set.field_count);
         for (fields, set.fields[0..set.field_count]) |*field, source| {
             const options = try arena.alloc([:0]const u8, source.option_count);
-            for (options, source.options[0..source.option_count]) |*option, name| option.* = try arena.dupeZ(u8, std.mem.span(name));
+            for (options, source.options[0..source.option_count]) |*option, name| option.* = try arena.dupeSentinel(u8, std.mem.span(name), 0);
             field.* = .{
-                .name = try arena.dupeZ(u8, std.mem.span(source.name)),
+                .name = try arena.dupeSentinel(u8, std.mem.span(source.name), 0),
                 .kind = std.enums.fromInt(eggy.preferences.Kind, source.kind) orelse return error.GameLibraryVersionMismatch,
-                .default = try arena.dupeZ(u8, std.mem.span(source.default)),
+                .default = try arena.dupeSentinel(u8, std.mem.span(source.default), 0),
                 .options = options,
-                .description = try arena.dupeZ(u8, std.mem.span(source.description)),
+                .description = try arena.dupeSentinel(u8, std.mem.span(source.description), 0),
             };
         }
-        manifest.* = .{ .key = try arena.dupeZ(u8, std.mem.span(set.key)), .fields = fields };
+        manifest.* = .{ .key = try arena.dupeSentinel(u8, std.mem.span(set.key), 0), .fields = fields };
     }
     return manifests;
 }
@@ -906,18 +906,18 @@ fn copyComponentTypes(arena: std.mem.Allocator, types: []const api.ComponentType
         const fields = try arena.alloc(eggy.components.Field, source.field_count);
         for (fields, source.fields[0..source.field_count]) |*field, field_source| {
             const options = try arena.alloc([:0]const u8, field_source.option_count);
-            for (options, field_source.options[0..field_source.option_count]) |*option, name| option.* = try arena.dupeZ(u8, std.mem.span(name));
+            for (options, field_source.options[0..field_source.option_count]) |*option, name| option.* = try arena.dupeSentinel(u8, std.mem.span(name), 0);
             field.* = .{
-                .name = try arena.dupeZ(u8, std.mem.span(field_source.name)),
+                .name = try arena.dupeSentinel(u8, std.mem.span(field_source.name), 0),
                 .kind = std.enums.fromInt(eggy.components.Kind, field_source.kind) orelse return error.GameLibraryVersionMismatch,
                 .options = options,
                 .editable = field_source.editable,
-                .requires = try arena.dupeZ(u8, std.mem.span(field_source.requires)),
+                .requires = try arena.dupeSentinel(u8, std.mem.span(field_source.requires), 0),
                 .accepts = std.enums.fromInt(eggy.refs.AssetKind, field_source.accepts) orelse return error.GameLibraryVersionMismatch,
                 .parts = try copyParts(arena, field_source.parts[0..field_source.part_count]),
             };
         }
-        info.* = .{ .name = try arena.dupeZ(u8, std.mem.span(source.name)), .owner = try arena.dupeZ(u8, std.mem.span(source.owner)), .fields = fields, .addable = source.addable, .dependencies = try arena.dupe(usize, source.dependencies[0..source.dependency_count]), .icon = try arena.dupeZ(u8, std.mem.span(source.icon)) };
+        info.* = .{ .name = try arena.dupeSentinel(u8, std.mem.span(source.name), 0), .owner = try arena.dupeSentinel(u8, std.mem.span(source.owner), 0), .fields = fields, .addable = source.addable, .dependencies = try arena.dupe(usize, source.dependencies[0..source.dependency_count]), .icon = try arena.dupeSentinel(u8, std.mem.span(source.icon), 0) };
     }
     return infos;
 }
@@ -926,10 +926,10 @@ fn copyComponentTypes(arena: std.mem.Allocator, types: []const api.ComponentType
 fn copyParts(arena: std.mem.Allocator, source: []const eggy.components.Part) ![]const eggy.components.Part {
     const parts = try arena.dupe(eggy.components.Part, source);
     for (parts) |*part| {
-        part.name = (try arena.dupeZ(u8, std.mem.span(part.name))).ptr;
-        part.requires = (try arena.dupeZ(u8, std.mem.span(part.requires))).ptr;
+        part.name = (try arena.dupeSentinel(u8, std.mem.span(part.name), 0)).ptr;
+        part.requires = (try arena.dupeSentinel(u8, std.mem.span(part.requires), 0)).ptr;
         const options = try arena.alloc([*:0]const u8, part.option_count);
-        for (options, part.optionNames()) |*option, name| option.* = (try arena.dupeZ(u8, std.mem.span(name))).ptr;
+        for (options, part.optionNames()) |*option, name| option.* = (try arena.dupeSentinel(u8, std.mem.span(name), 0)).ptr;
         part.options = options.ptr;
     }
     return parts;

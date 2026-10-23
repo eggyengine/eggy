@@ -5,6 +5,7 @@
 //! instance does, or loses the component. An instance inside its own scene, however deep, is
 //! left empty rather than made forever.
 const std = @import("std");
+const zon_file = @import("eggy_assets").zon;
 const ecs = @import("clutch");
 const components = @import("components.zig");
 const scene_zig = @import("scene.zig");
@@ -241,7 +242,7 @@ fn scenePath(zon: []const u8, buffer: []u8) ?[]const u8 {
     // The parse's own scratch.
     var scratch: [16 * 1024]u8 = undefined;
     var fba = std.heap.FixedBufferAllocator.init(&scratch);
-    const path = std.zon.parse.fromSliceAlloc([]const u8, fba.allocator(), source[0..zon.len :0], null, .{}) catch return null;
+    const path = zon_file.parse([]const u8, fba.allocator(), source[0..zon.len :0], .{}) catch return null;
     if (path.len > buffer.len) return null;
     @memcpy(buffer[0..path.len], path);
     return buffer[0..path.len];

@@ -10,7 +10,7 @@ component in Zig, and make the camera follow the cube.
 
 ## Before you begin
 
-Install Zig 0.16.0 and Git. Eggy recommends [zvm](https://www.zvm.app) to select the
+Install Zig 0.17.0 and Git. Eggy recommends [zvm](https://www.zvm.app) to select the
 required Zig version. You will also need a code editor to edit `src/main.zig`.
 The [project setup guide](../how-to/set-up-project.md) covers setup separately.
 

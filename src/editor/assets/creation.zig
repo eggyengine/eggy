@@ -94,7 +94,7 @@ pub fn at(index: usize, plugins: []const FileType) ?Entry {
 test "built-in input maps are valid ZON and plugin templates extend the same catalog" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
-    _ = try eggy.input.asset.File.parse(arena.allocator(), try arena.allocator().dupeZ(u8, builtins[1].file.contents));
+    _ = try eggy.input.asset.File.parse(arena.allocator(), try arena.allocator().dupeSentinel(u8, builtins[1].file.contents, 0));
     const plugins = [_]FileType{.{ .key = "game/material", .title = "Material", .extension = ".material.zon", .contents = ".{}" }};
     try std.testing.expectEqualStrings("Material", at(builtins.len, &plugins).?.label());
     try std.testing.expect(at(count(&plugins), &plugins) == null);

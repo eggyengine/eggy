@@ -118,7 +118,7 @@ pub const InputSettings = struct {
     /// try settings.restore(step.input_bindings.value(direction));
     /// ```
     pub fn restore(self: *InputSettings, text: []const u8) !void {
-        const source = try self.gpa.dupeZ(u8, text);
+        const source = try self.gpa.dupeSentinel(u8, text, 0);
         defer self.gpa.free(source);
         var replacement = try self.state.prepareOverrides(source);
         errdefer replacement.deinit();
@@ -163,7 +163,7 @@ test "project mappings save atomically, reload by stable names, and undo without
     defer gpa.free(saved);
     var fresh = eggy.input_backend.State.init(gpa);
     defer fresh.deinit();
-    const source = try gpa.dupeZ(u8, saved);
+    const source = try gpa.dupeSentinel(u8, saved, 0);
     defer gpa.free(source);
     try fresh.readOverrides(source);
     var reloaded = eggy.Input{ .backend = fresh.interface() };

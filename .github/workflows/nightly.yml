@@ -62,11 +62,11 @@ jobs:
       - uses: actions/checkout@v7
       - uses: mlugg/setup-zig@v2
         with:
-          version: 0.16.0
-      # The fatal-error dialog links GTK and D-Bus through pkg-config; the engine links libunwind.
+          version: 0.17.0
+      # The engine links libunwind.
       - if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libgtk-3-dev libdbus-1-dev libunwind-dev
-      # Zig 0.16.0 writes fetched zip archives to $ZIG_GLOBAL_CACHE_DIR/tmp and does not create
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libunwind-dev
+      # Zig (seen on 0.16.0) writes fetched zip archives to $ZIG_GLOBAL_CACHE_DIR/tmp and does not create
       # that directory (https://codeberg.org/ziglang/zig/issues/31964). Its HTTP client also drops
       # some GitHub release downloads; a retry continues from the packages already in the cache.
       - name: Build
@@ -76,7 +76,7 @@ jobs:
           log=$(mktemp)
           for attempt in 1 2 3; do
             set +e
-            zig build all -Doptimize=ReleaseSafe --prefix nightly 2>&1 | tee "$log"
+            zig build all -Doptimize=safe --prefix nightly 2>&1 | tee "$log"
             status=${PIPESTATUS[0]}
             set -e
             if [ "$status" -eq 0 ]; then exit 0; fi

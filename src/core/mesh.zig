@@ -242,7 +242,7 @@ pub const Geometry = struct {
                 .cylinder => try builder.lathe(.{ 0.5, 0.5 }),
                 .cone => try builder.lathe(.{ 0.5, 0 }),
             }
-            ranges[@intFromEnum(shape)] = .{ .first_index = first, .index_count = @as(u32, @intCast(builder.indices.items.len)) - first };
+            ranges[@backingInt(shape)] = .{ .first_index = first, .index_count = @as(u32, @intCast(builder.indices.items.len)) - first };
         }
         return .{ .vertices = builder.vertices.items, .indices = builder.indices.items, .ranges = ranges };
     }

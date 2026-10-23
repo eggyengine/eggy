@@ -93,9 +93,9 @@ pub fn steer(game: *const HotGame, app: *eggy.App, entity: eggy.ecs.EntityId, ca
     var buffer: [160]u8 = undefined;
     // A camera looks down its -z: turning it by the scene camera's pitch about x, then its yaw
     // about y, points it the same way.
-    const position = std.fmt.bufPrintZ(&buffer, ".{{ {d}, {d}, {d} }}", .{ view.eye[0], view.eye[1], view.eye[2] }) catch return;
+    const position = std.fmt.bufPrintSentinel(&buffer, ".{{ {d}, {d}, {d} }}", .{ view.eye[0], view.eye[1], view.eye[2] }, 0) catch return;
     _ = game.writeField(app, entity, component, 0, position);
-    const rotation = std.fmt.bufPrintZ(&buffer, ".{{ {d}, {d}, 0 }}", .{ camera.pitch_deg, camera.yaw_deg }) catch return;
+    const rotation = std.fmt.bufPrintSentinel(&buffer, ".{{ {d}, {d}, 0 }}", .{ camera.pitch_deg, camera.yaw_deg }, 0) catch return;
     _ = game.writeField(app, entity, component, 1, rotation);
 }
 

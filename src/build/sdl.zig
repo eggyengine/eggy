@@ -12,7 +12,7 @@ const c_libraries = @import("c_libraries.zig");
 /// const dep = sdl_build.dependency(b, target, optimize, null) orelse return;
 /// app_module.addImport("sdl3", dep.module("sdl3"));
 /// ```
-pub fn dependency(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builtin.OptimizeMode, web_include: ?std.Build.LazyPath) ?*std.Build.Dependency {
+pub fn dependency(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builtin.Optimize, web_include: ?std.Build.LazyPath) ?*std.Build.Dependency {
     // ponytail: SDL 3.4.0's Wayland pointer-leave shifts by -1; restore C UB traps after an SDL bump.
     if (web_include) |include| return b.dependency("sdl3", .{ .target = target, .optimize = c_libraries.optimize(optimize), .c_sdl_sanitize_c = .off, .sdl_system_include_path = include });
     const dep = b.dependency("sdl3", .{ .target = target, .optimize = c_libraries.optimize(optimize), .c_sdl_sanitize_c = .off, .c_sdl_preferred_linkage = .dynamic });
@@ -27,7 +27,13 @@ pub fn dependency(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std
         if (object != .other_step) continue;
         const library = object.other_step;
         if (!std.mem.eql(u8, library.name, "SDL3") or library.linkage != .dynamic) continue;
-        const name = library.major_only_filename orelse library.out_filename;
+        // The loader asks for the soname, which keeps only the major version.
+        const major = if (library.version) |version| version.major else null;
+        const name = if (major == null) library.out_filename else switch (target.result.os.tag) {
+            .linux => b.fmt("lib{s}.so.{d}", .{ library.name, major.? }),
+            .macos => b.fmt("lib{s}.{d}.dylib", .{ library.name, major.? }),
+            else => library.out_filename,
+        };
         if (target.result.os.tag == .macos) library.install_name = b.fmt("@rpath/{s}", .{name});
         const folder = if (target.result.os.tag == .windows) "bin" else "lib";
         b.addNamedLazyPath(b.fmt("runtime:{s}/{s}", .{ folder, name }), library.getEmittedBin());

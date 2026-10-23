@@ -73,7 +73,7 @@ pub const ColorPopup = struct {
                 const bounds = context.last_bounds.get(id) orelse continue;
                 if (!bounds.rect.contains(press.at.x, press.at.y)) continue;
                 context.active = id;
-                self.editor.press(@enumFromInt(channel), bounds.rect, press.at.x, press.at.y);
+                self.editor.press(@fromBackingInt(@intCast(channel)), bounds.rect, press.at.x, press.at.y);
                 self.hex = null;
             }
             for ([_]u32{ hex_linear, hex_srgb }) |which| {

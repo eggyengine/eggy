@@ -65,7 +65,7 @@ pub fn actionOf(id: u32) ?Action {
     if (id >= tab_first and id < tab_first + workspace_tabs.max_tabs) return .{ .show = @intCast(id - tab_first) };
     if (id >= close_first and id < close_first + workspace_tabs.max_tabs) return .{ .close = @intCast(id - close_first) };
     if (id == new_id) return .choose;
-    if (id >= kind_first and id < kind_first + 3) return .{ .open = @enumFromInt(id - kind_first) };
+    if (id >= kind_first and id < kind_first + 3) return .{ .open = @fromBackingInt(@intCast(id - kind_first)) };
     if (id == pin_row_id) return .pin_open_menu;
     if (id == pop_out_id) return .pop_out;
     if (id == close_row_id) return .close_open_menu;
@@ -118,9 +118,9 @@ pub fn element(b: L.Builder, width: f32, font: *const ui.Font, look: Look) !*L.E
     try children.append(b.allocator, plus);
     if (look.popup == .choose) {
         const rows = [_]widgets.MenuItem{
-            .{ .id = kind_first + @intFromEnum(Kind.scene_3d), .label = "3D Scene" },
-            .{ .id = kind_first + @intFromEnum(Kind.scene_2d), .label = "2D Scene" },
-            .{ .id = kind_first + @intFromEnum(Kind.ui), .label = "UI Scene" },
+            .{ .id = kind_first + @backingInt(Kind.scene_3d), .label = "3D Scene" },
+            .{ .id = kind_first + @backingInt(Kind.scene_2d), .label = "2D Scene" },
+            .{ .id = kind_first + @backingInt(Kind.ui), .label = "UI Scene" },
         };
         try popups.append(b.allocator, widgets.anchorTo(try widgets.sizedMenuItems(b, &rows, look.hot, 0, .sm), plus, .bottom, 300));
     }
@@ -197,7 +197,7 @@ const DropZone = struct {
 test "the bar's ids say what a press asks for" {
     try std.testing.expectEqual(Action{ .show = 2 }, actionOf(tab_first + 2).?);
     try std.testing.expectEqual(Action{ .close = 1 }, actionOf(close_first + 1).?);
-    try std.testing.expectEqual(Action{ .open = .ui }, actionOf(kind_first + @intFromEnum(Kind.ui)).?);
+    try std.testing.expectEqual(Action{ .open = .ui }, actionOf(kind_first + @backingInt(Kind.ui)).?);
     try std.testing.expectEqual(Action.choose, actionOf(new_id).?);
     try std.testing.expectEqual(Action.pin_open_menu, actionOf(pin_row_id).?);
     try std.testing.expect(actionOf(first_id + 0x99) == null);

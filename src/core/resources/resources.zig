@@ -168,7 +168,7 @@ pub const Resources = struct {
         const provider = self.async_provider orelse return error.NoAsyncResourceProvider;
         var id: u64 = undefined;
         try check(provider.submit(provider.context, &gpa, kind, path.ptr, path.len, &id));
-        return @enumFromInt(id);
+        return @fromBackingInt(@intCast(id));
     }
 
     /// Take a completed result once; null means pending. Failures/cancellation consume the
@@ -176,7 +176,7 @@ pub const Resources = struct {
     pub fn poll(self: Resources, request: Request) !?Result {
         const provider = self.async_provider orelse return error.NoAsyncResourceProvider;
         var result: Result = undefined;
-        const outcome = provider.poll(provider.context, @intFromEnum(request), &result);
+        const outcome = provider.poll(provider.context, @backingInt(request), &result);
         if (outcome == .pending) return null;
         try check(outcome);
         return result;
@@ -186,14 +186,14 @@ pub const Resources = struct {
     /// discarded; poll until `ResourceCancelled`. Cancellation itself does not block.
     pub fn cancel(self: Resources, request: Request) !void {
         const provider = self.async_provider orelse return error.NoAsyncResourceProvider;
-        try check(provider.cancel(provider.context, @intFromEnum(request)));
+        try check(provider.cancel(provider.context, @backingInt(request)));
     }
 
     /// Observe queued/loading/cancelling/complete state without taking the result.
     pub fn progress(self: Resources, request: Request) !Progress {
         const provider = self.async_provider orelse return error.NoAsyncResourceProvider;
         var result: Progress = undefined;
-        try check(provider.progress(provider.context, @intFromEnum(request), &result));
+        try check(provider.progress(provider.context, @backingInt(request), &result));
         return result;
     }
 
@@ -227,7 +227,7 @@ fn checkImageAsset(identity: u64) !void {
     const root = @import("root");
     if (comptime @hasDecl(root, "eggy_asset_ids")) {
         if (root.eggy_asset_ids.findId(identity)) |entry| {
-            if (entry.kind != @intFromEnum(assets.Kind.image)) return error.WrongAssetKind;
+            if (entry.kind != @backingInt(assets.Kind.image)) return error.WrongAssetKind;
             if (!entry.converted) return error.UnsupportedImageFormat;
         }
     }
@@ -280,7 +280,7 @@ test "C-safe resource reads preserve stable failures and caller ownership" {
         fn read(_: *anyopaque, gpa: std.mem.Allocator, path: []const u8) ![:0]u8 {
             if (std.mem.eql(u8, path, refs.AssetRef(.image).init("ship.png").key())) return error.ConvertedResource;
             if (!std.mem.eql(u8, path, refs.AssetRef(.text).init("notes.txt").key())) return error.FileNotFound;
-            return gpa.dupeZ(u8, "hello");
+            return gpa.dupeSentinel(u8, "hello", 0);
         }
         fn model(_: *anyopaque, _: std.mem.Allocator, _: []const u8) !assets.Model {
             return error.NotPackaged;

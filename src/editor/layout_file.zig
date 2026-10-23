@@ -4,6 +4,7 @@
 //! so a crash or a reload keeps it, and restored when the next editor opens, in any project.
 //! The same text, kept in memory, is how Edit > Undo puts a layout back (`snapshot`, `restore`).
 const std = @import("std");
+const zon_file = @import("eggy").assets.zon;
 const eggy = @import("eggy");
 const dock = eggy.ui.dock;
 const workspace_tabs = @import("workspace_tabs.zig");
@@ -131,11 +132,11 @@ pub fn arrangement(layout: *const dock.DockSpace, tabs: *const Tabs) u64 {
 /// if (!restored) std.log.warn("Cannot restore layout", .{});
 /// ```
 pub fn restore(gpa: std.mem.Allocator, text: []const u8, layout: *dock.DockSpace, tabs: *Tabs) bool {
-    const source = gpa.dupeZ(u8, text) catch return false;
+    const source = gpa.dupeSentinel(u8, text, 0) catch return false;
     defer gpa.free(source);
     var arena = std.heap.ArenaAllocator.init(gpa);
     defer arena.deinit();
-    const saved = std.zon.parse.fromSliceAlloc(Saved, arena.allocator(), source, null, .{ .ignore_unknown_fields = true }) catch return false;
+    const saved = zon_file.parse(Saved, arena.allocator(), source, .{ .ignore_unknown_fields = true }) catch return false;
     if (saved.version != version) return false;
     apply(saved, layout, tabs);
     return true;
@@ -179,7 +180,7 @@ pub fn load(gpa: std.mem.Allocator, folder: []const u8, layout: *dock.DockSpace,
     defer gpa.free(source);
     var arena = std.heap.ArenaAllocator.init(gpa);
     defer arena.deinit();
-    const saved = std.zon.parse.fromSliceAlloc(Saved, arena.allocator(), source, null, .{ .ignore_unknown_fields = true }) catch {
+    const saved = zon_file.parse(Saved, arena.allocator(), source, .{ .ignore_unknown_fields = true }) catch {
         log.info("{s} is from another version of Eggy: the default layout is used", .{file_name});
         return false;
     };

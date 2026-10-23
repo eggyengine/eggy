@@ -303,7 +303,7 @@ pub const ProjectSettings = struct {
             graphics = self.saved_graphics;
         };
         // What the form doesn't edit (installed plugins, a plugin manifest) stays as the file has it.
-        const kept = try eggy.project.parse(arena, try arena.dupeZ(u8, self.written));
+        const kept = try eggy.project.parse(arena, try arena.dupeSentinel(u8, self.written, 0));
         const config = eggy.project.Config{
             .plugins = kept.plugins,
             .plugin = kept.plugin,
@@ -342,7 +342,7 @@ pub fn graphicsIn(gpa: std.mem.Allocator, text: []const u8) !render_settings.Set
     var arena_state = std.heap.ArenaAllocator.init(gpa);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
-    return (try eggy.project.parse(arena, try arena.dupeZ(u8, text))).graphics;
+    return (try eggy.project.parse(arena, try arena.dupeSentinel(u8, text, 0))).graphics;
 }
 
 /// The graphics in the `eggy.zon` of the project in `project_dir`, which the editor makes its

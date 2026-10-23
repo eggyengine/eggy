@@ -446,7 +446,7 @@ pub const Hierarchy = struct {
         for (choices.items) |choice| if (context.activated(choice.id)) {
             self.menu = null;
             const entity = menu.entity;
-            return switch (@as(MenuItem, @enumFromInt(choice.id - menu_id_base))) {
+            return switch (@as(MenuItem, @fromBackingInt(@intCast(choice.id - menu_id_base)))) {
                 .rename => blk: {
                     self.startRename(entity.?, self.nameOf(entity.?));
                     break :blk null;
@@ -467,7 +467,7 @@ pub const Hierarchy = struct {
     }
 
     fn menuId(item: MenuItem) u32 {
-        return menu_id_base + @intFromEnum(item);
+        return menu_id_base + @backingInt(item);
     }
 
     /// Where a drag of `dragged` would drop with the pointer at `at`: beside the row there (its
@@ -544,8 +544,8 @@ pub const Hierarchy = struct {
 
     fn onMenu(self: *const Hierarchy, context: *const ui.Context, at: ui.Vec2) bool {
         _ = self;
-        inline for (std.meta.fields(MenuItem)) |item| {
-            if (context.last_bounds.get(menu_id_base + item.value)) |target| if (target.rect.contains(at.x, at.y)) return true;
+        for (std.enums.values(MenuItem)) |item| {
+            if (context.last_bounds.get(menu_id_base + @backingInt(item))) |target| if (target.rect.contains(at.x, at.y)) return true;
         }
         return false;
     }
@@ -700,7 +700,7 @@ test "long names, deep trees and many components fit a narrow Hierarchy, the nam
     const rows = [_]Row{
         .{ .entity = .init(0, 0), .name = "A planet with a very long name indeed, longer than any panel", .depth = 0, .has_parent = false, .components = &many, .last = true },
         .{ .entity = .init(1, 0), .name = "Moon", .depth = 1, .has_parent = true, .components = &many, .lines = &.{false} },
-        .{ .entity = .init(2, 0), .name = "", .depth = 12, .has_parent = true, .components = &.{"Orbit"}, .lines = &(.{true} ** 12) },
+        .{ .entity = .init(2, 0), .name = "", .depth = 12, .has_parent = true, .components = &.{"Orbit"}, .lines = &@as([12]bool, @splat(true)) },
     };
     for ([_]f32{ 180, 260, 420, 900 }) |width| try buildPage(&context, &hierarchy, &rows, width);
 

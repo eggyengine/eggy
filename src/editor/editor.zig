@@ -304,6 +304,8 @@ pub fn Editor(comptime project: type) type {
             // Nerd Font icons for the characters the faces lack in private-use areas, in both.
             try context.font.setSymbolsFont(@embedFile("symbols_font"));
             try mono.setSymbolsFont(@embedFile("symbols_font"));
+            // Colour emoji from the system's font, where one is installed; '?' otherwise.
+            _ = context.font.loadSystemEmoji(process_init.io);
             var console_ui = ui.Context.initWithFont(gpa, context.font);
             errdefer console_ui.deinit();
             var hierarchy_ui = ui.Context.initWithFont(gpa, context.font);
@@ -359,7 +361,7 @@ pub fn Editor(comptime project: type) type {
             // The layout this user left the dock in last, in any project.
             _ = layout_file.load(gpa, preference_folders.global, &workspace.dock, &workspace.tabs, &workspace.seen_plugin_panels);
             preferences.load(gpa, &app.preference_values, preference_folders);
-            console.levels[@intFromEnum(std.log.Level.debug)] = preferences.editor(&app.preference_values).show_debug_logs;
+            console.levels[@backingInt(std.log.Level.debug)] = preferences.editor(&app.preference_values).show_debug_logs;
 
             // The game, from its library beside the editor, without the plugins the project turned
             // off, and the scene open last.
@@ -578,7 +580,7 @@ pub fn Editor(comptime project: type) type {
             defer frame_arena.deinit();
             self.workspace.build_state = try self.rebuildState(frame_arena.allocator());
             self.workspace.time_ms = sdl3.timer.getMillisecondsSinceInit();
-            eggy.log.setLevel(@enumFromInt(@intFromEnum(preferences.editor(&self.app.preference_values).log_level)));
+            eggy.log.setLevel(@fromBackingInt(@intCast(@backingInt(preferences.editor(&self.app.preference_values).log_level))));
             self.ui.theme = switch (preferences.editor(&self.app.preference_values).theme) {
                 .system => weeoui_sdl3.systemTheme(),
                 .light => .{},
@@ -649,7 +651,7 @@ pub fn Editor(comptime project: type) type {
                     },
                     panels.assets_page => {
                         // The view is a preference, so it is the same in the next editor.
-                        const view_before: assets.View = @enumFromInt(@intFromEnum(preferences.editor(&self.app.preference_values).assets_view));
+                        const view_before: assets.View = @fromBackingInt(@intCast(@backingInt(preferences.editor(&self.app.preference_values).assets_view)));
                         self.assets_panel.view = view_before;
                         self.assets_panel.file_types = if (self.game) |game| game.file_types else &.{};
                         if (self.assets_panel.build(page_ui, if (self.project) |opened| opened.dir else null, self.project_assets, &self.asset_icons, self.openScenePath())) |action| self.applyAssetAction(action);
@@ -811,7 +813,7 @@ pub fn Editor(comptime project: type) type {
         pub fn pickedProject(self: ?*Self, files: ?[]const [*:0]const u8, _: ?usize, failed: bool) void {
             const chosen = files orelse return;
             if (failed or chosen.len == 0) return;
-            const copy = std.heap.c_allocator.dupeZ(u8, std.mem.span(chosen[0])) catch return;
+            const copy = std.heap.c_allocator.dupeSentinel(u8, std.mem.span(chosen[0]), 0) catch return;
             if (self.?.picked_project.swap(copy.ptr, .acq_rel)) |old| std.heap.c_allocator.free(std.mem.span(old));
         }
 
@@ -1475,7 +1477,7 @@ pub fn Editor(comptime project: type) type {
                 .scene => |change| {
                     const game = if (self.game) |*loaded| loaded else return error.NoGame;
                     const text = change.value(direction);
-                    const source = try self.gpa.dupeZ(u8, text);
+                    const source = try self.gpa.dupeSentinel(u8, text, 0);
                     defer self.gpa.free(source);
                     var scene = try eggy.scene.Scene.parse(self.gpa, source);
                     defer scene.deinit();
@@ -1590,7 +1592,7 @@ pub fn Editor(comptime project: type) type {
                         change.trashed = null;
                     };
                     const text = if (back) change.from_world else change.to_world;
-                    const source = try self.gpa.dupeZ(u8, text);
+                    const source = try self.gpa.dupeSentinel(u8, text, 0);
                     defer self.gpa.free(source);
                     var world = try eggy.scene.Scene.parse(self.gpa, source);
                     defer world.deinit();

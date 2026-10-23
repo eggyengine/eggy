@@ -36,13 +36,13 @@ const commands = blk: {
 };
 const bar_menus = blk: {
     var list: [Plugins.editor_menus.len]api.Menu = undefined;
-    for (&list, Plugins.editor_menus) |*menu, source| menu.* = .{ .key = source.key.ptr, .title = source.title.ptr, .extends = if (source.extends) |builtin| @intFromEnum(builtin) else -1, .item_count = source.items.len };
+    for (&list, Plugins.editor_menus) |*menu, source| menu.* = .{ .key = source.key.ptr, .title = source.title.ptr, .extends = if (source.extends) |builtin| @backingInt(builtin) else -1, .item_count = source.items.len };
     break :blk list;
 };
 const bar_menu_items = barItems(Plugins.editor_menus);
 const bar_status_items = blk: {
     var list: [Plugins.editor_status_items.len]api.StatusItem = undefined;
-    for (&list, Plugins.editor_status_items) |*status, source| status.* = .{ .key = source.key.ptr, .title = source.title.ptr, .side = @intFromEnum(source.side), .item_count = source.items.len };
+    for (&list, Plugins.editor_status_items) |*status, source| status.* = .{ .key = source.key.ptr, .title = source.title.ptr, .side = @backingInt(source.side), .item_count = source.items.len };
     break :blk list;
 };
 const bar_status_menu_items = barItems(Plugins.editor_status_items);
@@ -102,7 +102,7 @@ const preference_sets = blk: {
             var options: [source.options.len][*:0]const u8 = undefined;
             for (&options, source.options) |*option, name| option.* = name.ptr;
             const frozen_options = options;
-            field.* = .{ .name = source.name.ptr, .kind = @intFromEnum(source.kind), .default = source.default.ptr, .options = &frozen_options, .option_count = frozen_options.len, .description = source.description.ptr };
+            field.* = .{ .name = source.name.ptr, .kind = @backingInt(source.kind), .default = source.default.ptr, .options = &frozen_options, .option_count = frozen_options.len, .description = source.description.ptr };
         }
         const frozen_fields = fields;
         set.* = .{ .key = manifest.key.ptr, .fields = &frozen_fields, .field_count = frozen_fields.len };
@@ -120,7 +120,7 @@ const component_types = blk: {
             var options: [source.options.len][*:0]const u8 = undefined;
             for (&options, source.options) |*option, name| option.* = name.ptr;
             const frozen_options = options;
-            field.* = .{ .name = source.name.ptr, .kind = @intFromEnum(source.kind), .options = &frozen_options, .option_count = frozen_options.len, .editable = source.editable, .requires = source.requires.ptr, .accepts = @intFromEnum(source.accepts), .parts = source.parts.ptr, .part_count = source.parts.len };
+            field.* = .{ .name = source.name.ptr, .kind = @backingInt(source.kind), .options = &frozen_options, .option_count = frozen_options.len, .editable = source.editable, .requires = source.requires.ptr, .accepts = @backingInt(source.accepts), .parts = source.parts.ptr, .part_count = source.parts.len };
         }
         const frozen_fields = fields;
         component_type.* = .{ .name = info.name.ptr, .owner = info.owner.ptr, .fields = &frozen_fields, .field_count = frozen_fields.len, .addable = info.addable, .dependencies = info.dependencies.ptr, .dependency_count = info.dependencies.len, .icon = info.icon.ptr };
@@ -237,10 +237,10 @@ fn start(editor: *const api.Host, gpa_ptr: *const anyopaque, app_ptr: *anyopaque
 /// What can fail each frame, and the error each last failed with: one failing every frame is
 /// logged once, and again only when it fails differently or after it recovers.
 const Hook = enum { update, game_ui, draw, ui_event, editor_update, editor_ui, editor_panel_ui, editor_command, bar_action, bar_state, export_ui, export_args, event, world_start, world_update, scene_lights };
-var failures: [std.meta.fields(Hook).len]?anyerror = @splat(null);
+var failures: [@typeInfo(Hook).@"enum".field_names.len]?anyerror = @splat(null);
 
 fn report(hook: Hook, err: anyerror) void {
-    const last = &failures[@intFromEnum(hook)];
+    const last = &failures[@backingInt(hook)];
     if (last.*) |previous| if (previous == err) return;
     last.* = err;
     const what = switch (hook) {
@@ -266,7 +266,7 @@ fn report(hook: Hook, err: anyerror) void {
 }
 
 fn recovered(hook: Hook) void {
-    failures[@intFromEnum(hook)] = null;
+    failures[@backingInt(hook)] = null;
 }
 
 fn stop(state_ptr: *anyopaque) callconv(.c) void {
@@ -572,5 +572,5 @@ fn logThroughEditor(comptime level: std.log.Level, comptime scope: @EnumLiteral(
     var buffer: [2048]u8 = undefined;
     const text = std.fmt.bufPrint(&buffer, format, args) catch buffer[0..];
     const scope_name = @tagName(scope);
-    editor.log(@intFromEnum(level), scope_name.ptr, scope_name.len, text.ptr, text.len);
+    editor.log(@backingInt(level), scope_name.ptr, scope_name.len, text.ptr, text.len);
 }

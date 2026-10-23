@@ -37,9 +37,9 @@ pub const ControllerButton = enum {
     touchpad,
 };
 pub const ControllerState = struct {
-    buttons: std.EnumSet(ControllerButton) = .initEmpty(),
-    buttons_pressed: std.EnumSet(ControllerButton) = .initEmpty(),
-    buttons_released: std.EnumSet(ControllerButton) = .initEmpty(),
+    buttons: std.EnumSet(ControllerButton) = .empty,
+    buttons_pressed: std.EnumSet(ControllerButton) = .empty,
+    buttons_released: std.EnumSet(ControllerButton) = .empty,
     /// Sticks are normalized to -1..1, with right/down positive. No hidden dead zone.
     left_stick: [2]f32 = .{ 0, 0 },
     right_stick: [2]f32 = .{ 0, 0 },

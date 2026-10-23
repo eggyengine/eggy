@@ -63,7 +63,7 @@ test "allocated input lists own complete snapshots and clean up on allocation fa
             input.cancel();
             try input.rebind(Controls.jump, .{ .key = .j });
             try input.map(Player).rebind(.jump, .{ .key = .j });
-            try std.testing.expectEqual(@as(u32, 7), @intFromEnum(devices[0]));
+            try std.testing.expectEqual(@as(u32, 7), @backingInt(devices[0]));
             try std.testing.expectEqual(@as(@TypeOf(touches[0].phase), .began), touches[0].phase);
             try std.testing.expectEqual(input_api.Key.q, bindings[0].key);
             try std.testing.expectEqual(input_api.Key.space, mapped[0].key);
@@ -145,7 +145,7 @@ test "typed controls aggregate devices and report exact buffer/disconnect errors
     state.removeController(7);
     try std.testing.expect(try player.released(.jump));
     try std.testing.expectEqual(@as(usize, 0), try input.controllerCount());
-    try std.testing.expectError(error.ControllerDisconnected, input.controllerState(@enumFromInt(7)));
+    try std.testing.expectError(error.ControllerDisconnected, input.controllerState(@fromBackingInt(@intCast(7))));
     try std.testing.expectError(error.WrongControlKind, player.axis(.jump));
 }
 
@@ -204,7 +204,7 @@ test "hold tap and chord triggers have explicit thresholds and reject cycles" {
     try std.testing.expect(try player.pressed(.fire));
     try key(&input, .left_shift, false);
     try std.testing.expect(try player.released(.fire));
-    try std.testing.expectError(error.InvalidTrigger, state.setMappings(.{ .type_marker = marker.of(Player), .tag = @intFromEnum(Player.Control.fire) }, &.{.{ .key = .f }}, .{ .chord = "fire" }));
+    try std.testing.expectError(error.InvalidTrigger, state.setMappings(.{ .type_marker = marker.of(Player), .tag = @backingInt(Player.Control.fire) }, &.{.{ .key = .f }}, .{ .chord = "fire" }));
 }
 
 test "higher priority maps own overlapping sources and activation does not invent a press" {

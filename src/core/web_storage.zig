@@ -31,7 +31,7 @@ fn invoke(operation: []const u8, key: []const u8, ptr: usize, len: usize) !usize
     for (key) |c| if (!std.ascii.isAlphanumeric(c) and c != '.' and c != '_' and c != '-') return error.InvalidStorageKey;
     // ponytail: Emscripten's default dynamic execution; use a JS library for a strict no-eval CSP.
     var buffer: [4096]u8 = undefined;
-    const source = try std.fmt.bufPrintZ(&buffer, "({s})('{s}','{s}',{d},{d})", .{ script, operation, key, ptr, len });
+    const source = try std.fmt.bufPrintSentinel(&buffer, "({s})('{s}','{s}',{d},{d})", .{ script, operation, key, ptr, len }, 0);
     const result = emscripten_run_script_int(source);
     return switch (result) {
         -1 => error.UnsupportedPlatform,

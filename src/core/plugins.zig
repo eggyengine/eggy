@@ -101,6 +101,7 @@
 //! and every `init` runs again. The editor logs hook failures and keeps running; standalone
 //! uncaught hook errors are fatal.
 const std = @import("std");
+const zon_file = @import("eggy_assets").zon;
 const App = @import("app.zig").App;
 const Event = @import("vitellus_sdl3").sdl.events.Event;
 const ui = @import("weeoui");
@@ -199,7 +200,7 @@ pub const Registry = struct {
 /// const off = try parseOff(arena.allocator(), ".{ .plugins = .{.{ .key = \"stats\", .on = false }} }");
 /// ```
 pub fn parseOff(arena: std.mem.Allocator, source: [:0]const u8) ![]const []const u8 {
-    const registry = try std.zon.parse.fromSliceAlloc(Registry, arena, source, null, .{ .ignore_unknown_fields = true });
+    const registry = try zon_file.parse(Registry, arena, source, .{ .ignore_unknown_fields = true });
     var off: std.ArrayList([]const u8) = .empty;
     for (registry.plugins) |entry| if (!entry.on) try off.append(arena, entry.key);
     return off.items;
@@ -350,7 +351,7 @@ pub fn Set(comptime types: anytype, comptime keys: []const [:0]const u8) type {
     if (keys.len != list.len) @compileError("one preference key per plugin");
     return struct {
         /// Each plugin, undefined while it is off.
-        instances: std.meta.Tuple(&list),
+        instances: @Tuple(&list),
         /// Which plugins are on, in list order.
         enabled: [list.len]bool,
 
@@ -814,7 +815,7 @@ pub fn Set(comptime types: anytype, comptime keys: []const [:0]const u8) type {
         /// try plugins.exportUi(0, "x86_64-windows-gnu", &editor_context, ui_context);
         /// ```
         pub fn exportUi(self: *Self, platform: usize, target: []const u8, editor: *EditorContext, context: *ui.Context) !void {
-            comptime var first: usize = std.meta.fields(BuiltinPlatform).len;
+            comptime var first: usize = @typeInfo(BuiltinPlatform).@"enum".field_names.len;
             inline for (list, 0..) |T, i| {
                 const count = if (@hasDecl(T, "export_platforms")) T.export_platforms.len else 0;
                 const seen = exportTarget(platform, first, count, target);
@@ -834,7 +835,7 @@ pub fn Set(comptime types: anytype, comptime keys: []const [:0]const u8) type {
         /// try plugins.exportArgs(0, "x86_64-windows-gnu", &args);
         /// ```
         pub fn exportArgs(self: *Self, platform: usize, target: []const u8, args: *ExportArgs) !void {
-            comptime var first: usize = std.meta.fields(BuiltinPlatform).len;
+            comptime var first: usize = @typeInfo(BuiltinPlatform).@"enum".field_names.len;
             inline for (list, 0..) |T, i| {
                 const count = if (@hasDecl(T, "export_platforms")) T.export_platforms.len else 0;
                 const seen = exportTarget(platform, first, count, target);
@@ -847,9 +848,9 @@ pub fn Set(comptime types: anytype, comptime keys: []const [:0]const u8) type {
 
         /// `platform` as the plugin whose own platforms start at `first` (`count` of them) sees it.
         fn exportTarget(platform: usize, first: usize, count: usize, target: []const u8) ExportTarget {
-            const builtin_count = std.meta.fields(BuiltinPlatform).len;
+            const builtin_count = @typeInfo(BuiltinPlatform).@"enum".field_names.len;
             return .{
-                .builtin = if (platform < builtin_count) @enumFromInt(platform) else null,
+                .builtin = if (platform < builtin_count) @fromBackingInt(@intCast(platform)) else null,
                 .own = if (platform >= first and platform < first + count) platform - first else null,
                 .target = target,
             };
@@ -1192,12 +1193,12 @@ test "export platforms are scoped to their plugin, which sees its own by local i
     var args = ExportArgs{ .arena = arena.allocator() };
 
     // Eggy's Windows: a built-in, not its own.
-    try plugins.exportArgs(@intFromEnum(BuiltinPlatform.windows), "x86_64-windows-gnu", &args);
+    try plugins.exportArgs(@backingInt(BuiltinPlatform.windows), "x86_64-windows-gnu", &args);
     try std.testing.expectEqual(BuiltinPlatform.windows, plugins.instances[1].seen.?.builtin.?);
     try std.testing.expectEqual(@as(?usize, null), plugins.instances[1].seen.?.own);
 
     // Its own platform comes after Eggy's five.
-    try plugins.exportArgs(std.meta.fields(BuiltinPlatform).len, "aarch64-linux-gnu", &args);
+    try plugins.exportArgs(@typeInfo(BuiltinPlatform).@"enum".field_names.len, "aarch64-linux-gnu", &args);
     try std.testing.expectEqual(@as(?usize, 0), plugins.instances[1].seen.?.own);
     try std.testing.expectEqual(@as(usize, 2), args.list.items.len);
 }
@@ -1309,8 +1310,8 @@ test "a turned-off plugin's bar entries are disabled and never run" {
 
 test "status text is cut on a character boundary" {
     var state = EditorBarState{};
-    const long = "é" ** 40;
-    state.setText(long);
+    const long: [80]u8 = @bitCast(@as([40][2]u8, @splat("é".*)));
+    state.setText(&long);
     try std.testing.expect(state.text().len <= EditorBarState.max_text);
     try std.testing.expect(std.unicode.utf8ValidateSlice(state.text()));
 }

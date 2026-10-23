@@ -413,7 +413,7 @@ pub const ProjectAssets = struct {
         var bytes: std.Io.Writer.Allocating = .init(gpa);
         defer bytes.deinit();
         try assets.imported_clip.write(&bytes.writer, .{ .source_model = assets.id.model(source.id), .clip = imported.rig.clips[index] });
-        return gpa.dupeZ(u8, bytes.written());
+        return gpa.dupeSentinel(u8, bytes.written(), 0);
     }
 
     fn loadModel(context: *anyopaque, gpa: std.mem.Allocator, key: []const u8) !assets.Model {

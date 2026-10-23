@@ -605,7 +605,7 @@ fn locationLength(text: []const u8) ?usize {
 /// terminal_view.copyToClipboard(terminal.selectedText() orelse terminal.content());
 /// ```
 pub fn copyToClipboard(text: []const u8) void {
-    var buffer = std.heap.c_allocator.dupeZ(u8, text) catch return;
+    var buffer = std.heap.c_allocator.dupeSentinel(u8, text, 0) catch return;
     defer std.heap.c_allocator.free(buffer);
     sdl3.clipboard.setText(buffer[0..text.len :0]) catch |err| std.log.warn("cannot copy: {t}", .{err});
 }

@@ -347,7 +347,7 @@ test "streamed diagnostics survive more than the progress window's output limit"
     defer console_log.clear();
     var stream = Stream{ .gpa = std.testing.allocator, .project_dir = "/game", .emit = captureStream };
     defer stream.deinit();
-    const progress = [_]u8{'x'} ** 4095 ++ "\n";
+    const progress = @as([4095]u8, @splat('x')) ++ "\n";
     for (0..300) |_| try stream.line(progress);
     try stream.line("src/main.zig:8:2: error: late streamed diagnostic\n");
     try stream.line("    broken();\n");

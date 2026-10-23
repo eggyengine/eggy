@@ -185,7 +185,7 @@ pub fn gather(world: *ecs.World) !Frame {
             result.options[2] = @floatFromInt(result.count);
         }
         result.lights[result.count] = .{
-            .position_kind = .{ matrix[3][0], matrix[3][1], matrix[3][2], @floatFromInt(@intFromEnum(light.kind)) },
+            .position_kind = .{ matrix[3][0], matrix[3][1], matrix[3][2], @floatFromInt(@backingInt(light.kind)) },
             .direction_range = .{ direction[0], direction[1], direction[2], light.range_m },
             .color_intensity = .{ light.color[0], light.color[1], light.color[2], if (light.kind == .directional) light.illuminance_lux else light.intensity_cd },
             .cone_shadow = .{ @cos(light.inner_angle_deg * std.math.rad_per_deg), @cos(light.outer_angle_deg * std.math.rad_per_deg), if (light.casts_shadows) 1 else 0, 0 },

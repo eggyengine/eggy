@@ -74,7 +74,7 @@ pub const Profiling = struct {
         const index = self.sample_count;
         self.samples[index] = .{ .name = copied, .start_ns = now_ns };
         self.sample_count += 1;
-        return @enumFromInt((@as(u64, self.generation) << 32) | index);
+        return @fromBackingInt(@intCast((@as(u64, self.generation) << 32) | index));
     }
 
     pub fn end(self: *Profiling, sample: Sample) !void {
@@ -82,7 +82,7 @@ pub const Profiling = struct {
     }
 
     fn endAt(self: *Profiling, sample: Sample, now_ns: u64) !void {
-        const id = @intFromEnum(sample);
+        const id = @backingInt(sample);
         const index: u32 = @truncate(id);
         if (id >> 32 != self.generation or index >= self.sample_count) return error.InvalidProfileSample;
         const timing = &self.samples[index];

@@ -1,6 +1,7 @@
 //! Where this computer's macOS SDK is, remembered for every project in Eggy's data folder
 //! (`macos_sdk.zon`): it is a place on this machine, not part of any one game.
 const std = @import("std");
+const zon_file = @import("eggy").assets.zon;
 const eggy = @import("eggy");
 const sdl3 = eggy.sdl_adapter.sdl;
 
@@ -53,7 +54,7 @@ fn read(io: std.Io, folder: std.Io.Dir, buffer: []u8) ?[]const u8 {
     scratch[text.len] = 0;
     var fba_buffer: [16 * 1024]u8 = undefined;
     var fba = std.heap.FixedBufferAllocator.init(&fba_buffer);
-    const saved = std.zon.parse.fromSliceAlloc(Saved, fba.allocator(), scratch[0..text.len :0], null, .{ .ignore_unknown_fields = true }) catch return null;
+    const saved = zon_file.parse(Saved, fba.allocator(), scratch[0..text.len :0], .{ .ignore_unknown_fields = true }) catch return null;
     if (saved.path.len == 0 or saved.path.len > buffer.len) return null;
     @memcpy(buffer[0..saved.path.len], saved.path);
     return buffer[0..saved.path.len];

@@ -5,10 +5,10 @@ const expect = std.testing.expectError;
 test "every missing backend operation returns NotImplemented" {
     const audio = @import("audio.zig").Audio{};
     try expect(error.NotImplemented, audio.play(.init("jump.ogg"), .{}));
-    try expect(error.NotImplemented, audio.pause(@enumFromInt(0)));
-    try expect(error.NotImplemented, audio.unpause(@enumFromInt(0)));
-    try expect(error.NotImplemented, audio.stop(@enumFromInt(0)));
-    try expect(error.NotImplemented, audio.setGain(@enumFromInt(0), 0.5));
+    try expect(error.NotImplemented, audio.pause(@fromBackingInt(@intCast(0))));
+    try expect(error.NotImplemented, audio.unpause(@fromBackingInt(@intCast(0))));
+    try expect(error.NotImplemented, audio.stop(@fromBackingInt(@intCast(0))));
+    try expect(error.NotImplemented, audio.setGain(@fromBackingInt(@intCast(0)), 0.5));
     try expect(error.NotImplemented, audio.setBusGain(.master, 1));
     try expect(error.NotImplemented, audio.setListener(@splat(0), .{ 0, 0, -1 }, .{ 0, 1, 0 }));
 
@@ -19,16 +19,16 @@ test "every missing backend operation returns NotImplemented" {
     try expect(error.NotImplemented, materials.applyEffect(.bloom, 1));
     const particles = @import("particles.zig").Particles{};
     try expect(error.NotImplemented, particles.emit(.{ .position_m = @splat(0) }));
-    try expect(error.NotImplemented, particles.stop(@enumFromInt(0)));
+    try expect(error.NotImplemented, particles.stop(@fromBackingInt(@intCast(0))));
 
     const network = @import("network.zig").Network{};
     const address = @import("network.zig").Address{ .host = "localhost", .port = 3000 };
     try expect(error.NotImplemented, network.connect(address));
     try expect(error.NotImplemented, network.listen(address));
-    try expect(error.NotImplemented, network.send(@enumFromInt(0), "hello"));
+    try expect(error.NotImplemented, network.send(@fromBackingInt(@intCast(0)), "hello"));
     var buffer: [32]u8 = undefined;
     try expect(error.NotImplemented, network.poll(&buffer));
-    try expect(error.NotImplemented, network.disconnect(@enumFromInt(0)));
+    try expect(error.NotImplemented, network.disconnect(@fromBackingInt(@intCast(0))));
     const navigation = @import("navigation.zig").Navigation{};
     try expect(error.NotImplemented, navigation.findPath(std.testing.allocator, @splat(0), @splat(1)));
     try expect(error.NotImplemented, navigation.setDestination(entity, @splat(1)));
@@ -43,7 +43,7 @@ test "every missing backend operation returns NotImplemented" {
 
     const resources = @import("resources/resources.zig").Resources{};
     try expect(error.NoAsyncResourceProvider, resources.readAsync(std.testing.allocator, @import("refs.zig").AssetRef(.text).init("notes.txt")));
-    try expect(error.NoAsyncResourceProvider, resources.cancel(@enumFromInt(0)));
+    try expect(error.NoAsyncResourceProvider, resources.cancel(@fromBackingInt(@intCast(0))));
     var world = @import("clutch").World.init(std.testing.allocator);
     defer world.deinit();
     var instances = @import("scene_instances.zig").SceneInstances.init(std.testing.allocator);

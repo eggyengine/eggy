@@ -10,7 +10,7 @@ scene file.
 
 ## Before you begin
 
-You need Zig 0.16.0, a code editor, and an Eggy game package containing
+You need Zig 0.17.0, a code editor, and an Eggy game package containing
 `src/main.zig`, `build.zig`, and `build.zig.zon`. You can use a project created by
 the [project setup guide](../how-to/set-up-project.md) or an existing Zig package.
 This lesson assumes you can edit and build Zig source files.
@@ -140,7 +140,7 @@ zig build runtime
 ```
 
 Or use `zig build run-runtime`. `zig build run` opens the desktop editor instead.
-Use `-Doptimize=ReleaseFast` for an optimized runtime.
+Use `-Doptimize=fast` for an optimized runtime.
 
 You should see the orange cube and the instruction label. Press W and S to move
 it along world Z, and A and D to move it sideways. If a controller is connected,

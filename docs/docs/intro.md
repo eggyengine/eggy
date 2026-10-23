@@ -6,7 +6,7 @@ title: Start here
 
 # Eggy
 
-Eggy is a game engine for Zig 0.16. Your game is a Zig package that builds into a runtime
+Eggy is a game engine for Zig 0.17. Your game is a Zig package that builds into a runtime
 for players and a desktop editor for making the game. Both run the same game and plugins.
 
 ## Choose what you need

@@ -44,8 +44,8 @@ pub const Plugin = struct {
     } }};
 
     comptime {
-        std.debug.assert(editor_menus[0].items.len == @typeInfo(MenuRow).@"enum".fields.len);
-        std.debug.assert(editor_status_items[0].items.len == @typeInfo(StatusRow).@"enum".fields.len);
+        std.debug.assert(editor_menus[0].items.len == @typeInfo(MenuRow).@"enum".field_names.len);
+        std.debug.assert(editor_status_items[0].items.len == @typeInfo(StatusRow).@"enum".field_names.len);
     }
 
     /// Stop any git command still running and close the repository.
@@ -83,12 +83,12 @@ pub const Plugin = struct {
                 else
                     std.fmt.bufPrint(&buffer, "Git: {s} \u{2022} {d} changed", .{ branch, current.changes.len }) catch "Git");
             },
-            .status_item => |row| bar.enabled = switch (@as(StatusRow, @enumFromInt(row.item))) {
+            .status_item => |row| bar.enabled = switch (@as(StatusRow, @fromBackingInt(@intCast(row.item)))) {
                 .open_panel => true,
                 .refresh => idle,
                 .fetch, .pull, .push => idle and ready,
             },
-            .menu_item => |row| bar.enabled = switch (@as(MenuRow, @enumFromInt(row.item))) {
+            .menu_item => |row| bar.enabled = switch (@as(MenuRow, @fromBackingInt(@intCast(row.item)))) {
                 .open_panel, .commit, .branches, .history => repo != null,
                 .create => idle and state != null and !state.?.repository,
                 .refresh => idle,
@@ -103,7 +103,7 @@ pub const Plugin = struct {
         const repo = self.open(editor) orelse return;
         switch (target) {
             .status => try editor.showPanel("git"),
-            .status_item => |row| switch (@as(StatusRow, @enumFromInt(row.item))) {
+            .status_item => |row| switch (@as(StatusRow, @fromBackingInt(@intCast(row.item)))) {
                 .open_panel => try editor.showPanel("git"),
                 .fetch => self.runMenu(repo, .fetch),
                 .pull => self.runMenu(repo, .pull),
@@ -111,7 +111,7 @@ pub const Plugin = struct {
                 .refresh => repo.refresh(),
             },
             .menu_item => |row| {
-                const chosen: MenuRow = @enumFromInt(row.item);
+                const chosen: MenuRow = @fromBackingInt(@intCast(row.item));
                 switch (chosen) {
                     .open_panel => {},
                     .commit => self.panel.open(.changes),

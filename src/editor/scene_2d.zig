@@ -190,7 +190,7 @@ pub const Scene2d = struct {
             for (position[0..2]) |*value| value.* = @round(value.* / step) * step;
         }
         var text: [160]u8 = undefined;
-        const zon = std.fmt.bufPrintZ(&text, ".{{ {d}, {d}, {d} }}", .{ position[0], position[1], position[2] }) catch return;
+        const zon = std.fmt.bufPrintSentinel(&text, ".{{ {d}, {d}, {d} }}", .{ position[0], position[1], position[2] }, 0) catch return;
         _ = target.game.writeField(target.app, move.entity, component, 0, zon);
     }
 };

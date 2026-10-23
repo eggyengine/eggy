@@ -109,7 +109,7 @@ pub fn AssetRef(comptime kind: AssetKind) type {
             const root = @import("root");
             if (comptime @hasDecl(root, "eggy_asset_ids")) {
                 if (root.eggy_asset_ids.find(project_path)) |entry| {
-                    if (kind != .any and entry.kind != @intFromEnum(kind)) return error.WrongAssetKind;
+                    if (kind != .any and entry.kind != @backingInt(kind)) return error.WrongAssetKind;
                     return fromId(entry.id);
                 }
             }
@@ -178,8 +178,8 @@ test "asset references retain identities instead of their authoring paths" {
     try std.testing.expectEqual(@as(usize, asset_id.key_len), image.key().len);
     try std.testing.expectEqual(image.id(), (try AssetRef(.image).parse(image.key())).id());
     try std.testing.expectEqualStrings("000000000000002a", AssetRef(.image).fromId(42).key());
-    try std.testing.expectError(error.PathTooLong, AssetRef(.any).parse("x" ** (max_path_len + 1)));
-    try std.testing.expectEqual(@as(usize, asset_id.key_len), (try AssetRef(.any).parse("x" ** max_path_len)).key().len);
+    try std.testing.expectError(error.PathTooLong, AssetRef(.any).parse(&@as([max_path_len + 1]u8, @splat('x'))));
+    try std.testing.expectEqual(@as(usize, asset_id.key_len), (try AssetRef(.any).parse(&@as([max_path_len]u8, @splat('x')))).key().len);
     for ([_][]const u8{ "/ship.png", "../ship.png", "art/../ship.png", "art\\ship.png", "C:/ship.png", "art//ship.png" }) |path| {
         try std.testing.expectError(error.InvalidPath, AssetRef(.image).parse(path));
     }

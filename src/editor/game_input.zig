@@ -121,7 +121,7 @@ fn pressBillboard(app: *eggy.App, local: eggy.Event, view: ?eggy.camera.View, vi
 }
 
 fn buttonBit(button: sdl.mouse.Button) u32 {
-    const value = @intFromEnum(button);
+    const value = @backingInt(button);
     return if (value > 0 and value <= 32) @as(u32, 1) << @intCast(value - 1) else 0;
 }
 

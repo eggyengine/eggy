@@ -22,6 +22,7 @@
 //!         },
 //!     }
 const std = @import("std");
+const zon_file = @import("zon.zig");
 const asset_id = @import("id.zig");
 const Kind = @import("kind.zig").Kind;
 const descriptor = @import("descriptor.zig");
@@ -149,7 +150,7 @@ pub const Snapshot = struct {
     }
 
     fn parse(gpa: std.mem.Allocator, scratch: std.mem.Allocator, text: [:0]const u8) !Snapshot {
-        const disk = std.zon.parse.fromSliceAlloc(Disk, scratch, text, null, .{}) catch |err| switch (err) {
+        const disk = zon_file.parse(Disk, scratch, text, .{}) catch |err| switch (err) {
             error.OutOfMemory => return error.OutOfMemory,
             error.ParseZon => return error.InvalidCatalog,
         };
