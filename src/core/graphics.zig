@@ -300,7 +300,16 @@ pub const Graphics = struct {
     /// try graphics.endFrame(frame);
     /// ```
     pub fn beginFrame(self: *Graphics) !Frame {
-        return self.surface.beginFrame();
+        const before = self.surface.extent;
+        try self.surface.matchWindowShape(self.queue);
+        const frame = try self.surface.beginFrame();
+        // The swapchain can come back another size than asked for (Android rebuilds it when the
+        // screen turns), so the scene's targets follow the image it draws into.
+        if (!std.meta.eql(before, frame.extent)) {
+            try self.queue.waitIdle();
+            try self.preview.resize(self.device, frame.extent);
+        }
+        return frame;
     }
 
     /// Finish and present a frame from `beginFrame`.
@@ -344,7 +353,10 @@ pub const Surface = struct {
     submitted: u64 = 0,
     /// Signalled when drawing into swapchain image i finishes; its present waits on it.
     render_done: [max_swapchain_images]vit.Semaphore,
+    /// The swapchain's images' size, which the platform can choose over `requested` (Android
+    /// sizes it from the display), and the window pixel size it was last asked to match.
     extent: vit.Extent2D,
+    requested: vit.Extent2D,
     present_modes: std.enums.EnumSet(render.PresentMode),
 
     /// A swapchain for `window`; with `color_format`, one whose format renders as it.
@@ -390,7 +402,7 @@ pub const Surface = struct {
             .image_count = 2,
             .composite_alpha = caps.composite_alpha[0],
         });
-        return .{ .swapchain = swapchain, .slots = slots, .gpu_done = gpu_done, .render_done = render_done, .extent = extent, .present_modes = present_modes };
+        return .{ .swapchain = swapchain, .slots = slots, .gpu_done = gpu_done, .render_done = render_done, .extent = imageExtent(swapchain, extent), .requested = extent, .present_modes = present_modes };
     }
 
     /// Free the swapchain. The GPU must be done with it (`queue.waitIdle`).
@@ -419,10 +431,25 @@ pub const Surface = struct {
     pub fn syncSize(self: *Surface, queue: vit.Queue, window: sdl_adapter.Sdl3Window) !void {
         // A minimized window has no pixels; keep the old swapchain until it comes back.
         const requested = try pixelExtent(window) orelse return;
-        if (requested.width == self.extent.width and requested.height == self.extent.height) return;
+        if (std.meta.eql(requested, self.requested)) return;
         try queue.waitIdle();
         try self.swapchain.resize(requested);
-        self.extent = requested;
+        self.requested = requested;
+        self.extent = imageExtent(self.swapchain, requested);
+    }
+
+    /// Ask for the window's size again while the swapchain is the other way round from it.
+    /// While an Android screen turns, the surface briefly reports its old orientation, and a
+    /// swapchain the backend rebuilt then keeps it; once the surface settles, this corrects it.
+    /// Host-only, outside an active frame; waits for idle when it resizes.
+    /// ponytail: retries every frame until the surface settles; back off if a device never does.
+    pub fn matchWindowShape(self: *Surface, queue: vit.Queue) !void {
+        const wanted = self.requested;
+        if (wanted.width == wanted.height) return;
+        if ((wanted.width > wanted.height) == (self.extent.width > self.extent.height)) return;
+        try queue.waitIdle();
+        try self.swapchain.resize(wanted);
+        self.extent = imageExtent(self.swapchain, wanted);
     }
 
     /// Start a frame: wait for its slot, acquire a swapchain image, and clear it to black. Record
@@ -451,7 +478,8 @@ pub const Surface = struct {
         try cmd.barrier(&.{.{ .texture_view = .{ .view = acquired.view, .before = .present, .after = .color_attachment } }});
         try cmd.beginRenderPass(.{ .color_attachments = &.{.{ .view = acquired.view, .load_op = .clear, .store_op = .store, .clear_value = .{ .r = 0, .g = 0, .b = 0, .a = 1 } }} });
         cmd.endRenderPass();
-        return .{ .cmd = cmd, .target = acquired.view, .extent = self.swapchain.info().extent, .render_done = self.render_done[acquired.index] };
+        self.extent = imageExtent(self.swapchain, self.extent);
+        return .{ .cmd = cmd, .target = acquired.view, .extent = self.extent, .render_done = self.render_done[acquired.index] };
     }
 
     /// Finish `frame`: submit its commands to `queue` and present the image once they have run.
@@ -519,6 +547,12 @@ const FrameSlot = struct {
 };
 
 /// The window's drawable size in pixels, or null while it has none.
+/// The size of `swapchain`'s images, or `fallback` from a backend that doesn't say.
+fn imageExtent(swapchain: vit.Swapchain, fallback: vit.Extent2D) vit.Extent2D {
+    const extent = swapchain.info().extent;
+    return if (extent.width == 0 or extent.height == 0) fallback else extent;
+}
+
 fn pixelExtent(window: sdl_adapter.Sdl3Window) !?vit.Extent2D {
     const width, const height = try window.window.getSizeInPixels();
     if (width == 0 or height == 0) return null;

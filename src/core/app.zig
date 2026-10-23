@@ -20,6 +20,7 @@ const GraphicsSettingsUi = @import("game_ui/graphics_settings.zig").GraphicsSett
 const ui_scenes = @import("ui_scenes/ui_scenes.zig");
 
 const web = builtin.os.tag == .emscripten;
+const android = builtin.abi.isAndroid();
 const width = 900;
 const height = 675;
 
@@ -97,13 +98,18 @@ pub const App = struct {
             graphics_control.State{};
         errdefer options.deinit();
 
+        // Android games start in landscape (either way round, as the user's rotation lock allows)
+        // and fill the screen, the status and navigation bars hidden until swiped in.
+        // ponytail: landscape only; add a project setting when a game wants portrait.
+        if (android) try sdl3.hints.set(.orientations, "LandscapeLeft LandscapeRight");
+
         // On Windows the window stays hidden until the renderer is ready.
         var window: sdl_adapter.Sdl3Window = .init(try sdl3.video.Window.init(title, options.requested.width, options.requested.height, .{
             .vulkan = !web,
             .resizable = true,
             .high_pixel_density = true,
             .hidden = builtin.os.tag == .windows,
-            .fullscreen = options.requested.window_mode == .borderless,
+            .fullscreen = android or options.requested.window_mode == .borderless,
         }));
         errdefer window.deinit();
         const input_backend = try InputBackend.init(gpa);
@@ -112,8 +118,8 @@ pub const App = struct {
         var graphics = (if (has_override) Graphics.initWithSettings(gpa, window, options.requested) else Graphics.initWithDefaults(gpa, window, options.requested)) catch |err| blk: {
             if (options.store == null or !options.store.?.has_override) return err;
             options.recover(err);
-            try window.window.setFullscreen(options.requested.window_mode == .borderless);
-            if (options.requested.window_mode == .windowed) try window.window.setSize(options.requested.width, options.requested.height);
+            try window.window.setFullscreen(android or options.requested.window_mode == .borderless);
+            if (!android and options.requested.window_mode == .windowed) try window.window.setSize(options.requested.width, options.requested.height);
             break :blk try Graphics.initWithDefaults(gpa, window, options.requested);
         };
         errdefer graphics.deinit();
