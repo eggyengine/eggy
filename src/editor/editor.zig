@@ -304,6 +304,8 @@ pub fn Editor(comptime project: type) type {
             // Nerd Font icons for the characters the faces lack in private-use areas, in both.
             try context.font.setSymbolsFont(@embedFile("symbols_font"));
             try mono.setSymbolsFont(@embedFile("symbols_font"));
+            // Colour emoji from the system's font, where one is installed; '?' otherwise.
+            _ = context.font.loadSystemEmoji(process_init.io);
             var console_ui = ui.Context.initWithFont(gpa, context.font);
             errdefer console_ui.deinit();
             var hierarchy_ui = ui.Context.initWithFont(gpa, context.font);
