@@ -10,8 +10,8 @@
             .lazy = true,
         },
         .sdl3 = .{
-            .url = "git+https://codeberg.org/7Games/zig-sdl3?ref=master#666331118c8f7d8a03ea633d79a343c34dc32b84",
-            .hash = "sdl3-0.2.3-NmT1Q1QDKgACd5t_PNSG08lcOCX25qaRYZjUmXPTVBY_",
+            .url = "git+https://github.com/eggyengine/zig-sdl3#2a9dd9d1619465f7e1636a59610df0680a6865c0",
+            .hash = "sdl3-0.2.3-NmT1Q5QDKgDxnXbpAqG3QS216p0peNKlJKGhvJSELJs3",
         },
         .vitellus = .{
             .url = "git+https://github.com/eggyengine/vitellus#06040fd54d34d11c661d44b45ede0b29c674cab6",
