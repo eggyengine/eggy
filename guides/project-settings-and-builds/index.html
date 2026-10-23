@@ -4,8 +4,8 @@
 <meta charset="UTF-8">
 <meta name="generator" content="Docusaurus v3.10.2">
 <title data-rh="true">Build and distribute a game | Eggy</title><meta data-rh="true" name="viewport" content="width=device-width,initial-scale=1"><meta data-rh="true" name="twitter:card" content="summary_large_image"><meta data-rh="true" property="og:url" content="https://eggyengine.github.io/eggy/guides/project-settings-and-builds"><meta data-rh="true" property="og:locale" content="en"><meta data-rh="true" name="docusaurus_locale" content="en"><meta data-rh="true" name="docsearch:language" content="en"><meta data-rh="true" name="docusaurus_version" content="current"><meta data-rh="true" name="docusaurus_tag" content="docs-default-current"><meta data-rh="true" name="docsearch:version" content="current"><meta data-rh="true" name="docsearch:docusaurus_tag" content="docs-default-current"><meta data-rh="true" property="og:title" content="Build and distribute a game | Eggy"><meta data-rh="true" name="description" content="Build a standalone runtime, select its startup scene, and export the directory or ZIP"><meta data-rh="true" property="og:description" content="Build a standalone runtime, select its startup scene, and export the directory or ZIP"><link data-rh="true" rel="icon" href="/eggy/img/icon.svg"><link data-rh="true" rel="canonical" href="https://eggyengine.github.io/eggy/guides/project-settings-and-builds"><link data-rh="true" rel="alternate" href="https://eggyengine.github.io/eggy/guides/project-settings-and-builds" hreflang="en"><link data-rh="true" rel="alternate" href="https://eggyengine.github.io/eggy/guides/project-settings-and-builds" hreflang="x-default"><script data-rh="true" type="application/ld+json">{"@context":"https://schema.org","@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"How-to guides","item":"https://eggyengine.github.io/eggy/how-to"},{"@type":"ListItem","position":2,"name":"Build and distribute a game","item":"https://eggyengine.github.io/eggy/guides/project-settings-and-builds"}]}</script><link rel="stylesheet" href="/eggy/assets/css/styles.888f8311.css">
-<script src="/eggy/assets/js/runtime~main.3f6c9882.js" defer="defer"></script>
-<script src="/eggy/assets/js/main.557ac555.js" defer="defer"></script>
+<script src="/eggy/assets/js/runtime~main.9c24569e.js" defer="defer"></script>
+<script src="/eggy/assets/js/main.8bdb8feb.js" defer="defer"></script>
 </head>
 <body>
 <svg style="display: none;"><defs>
@@ -40,7 +40,7 @@ the runtime and desktop editor without opening either one.</p>
 them and the scene the game starts in above. It asks for that scene first only when the
 project has no default scene; changing it there changes the default. Each platform offers:</p>
 <ul>
-<li class=""><strong>Architecture</strong>: x86-64 or ARM64 for Windows, Linux and Android, Apple silicon or Intel
+<li class=""><strong>Architecture</strong>: x86-64 or ARM64 for Windows and Linux, Apple silicon or Intel
 for macOS.</li>
 <li class=""><strong>C library</strong>, for Linux: glibc for most desktop distributions, or musl for Alpine and
 other small systems. A musl build has no screen reader support and can&#x27;t compile shaders
@@ -69,7 +69,9 @@ target triples. To skip prompts, supply the answers:</p>
 selection. Web and Android exports set up missing SDKs automatically; see
 <a class="" href="/eggy/guides/editor-cli#targets-and-sdks">Targets and SDKs</a>.</p>
 <h3 class="anchor anchorTargetStickyNavbar_Vzrq" id="export-for-web-or-android">Export for Web or Android<a href="#export-for-web-or-android" class="hash-link" aria-label="Direct link to Export for Web or Android" title="Direct link to Export for Web or Android" translate="no">​</a></h3>
-<p>Choose <strong>Web</strong> or <strong>Android</strong> in File &gt; Export, or use:</p>
+<p>Choose <strong>Web</strong> in File &gt; Export. Android comes from the <strong>Android</strong> plugin, which ships
+with Eggy: install it in Edit &gt; Plugins..., and <strong>Android</strong> joins the platforms in File &gt;
+Export. Or use:</p>
 <div class="language-sh codeBlockContainer_Ckt0 theme-code-block" style="--prism-color:#bfc7d5;--prism-background-color:#292d3e"><div class="codeBlockContent_QJqH"><pre tabindex="0" class="prism-code language-sh codeBlock_bY9V thin-scrollbar" style="color:#bfc7d5;background-color:#292d3e"><code class="codeBlockLines_e6Vv"><div class="token-line" style="color:#bfc7d5"><span class="token plain">zig build </span><span class="token builtin class-name" style="color:rgb(255, 203, 107)">export</span><span class="token plain"> </span><span class="token parameter variable" style="color:rgb(191, 199, 213)">-Dtarget</span><span class="token operator" style="color:rgb(137, 221, 255)">=</span><span class="token plain">wasm32-emscripten</span><br></div><div class="token-line" style="color:#bfc7d5"><span class="token plain">zig build </span><span class="token builtin class-name" style="color:rgb(255, 203, 107)">export</span><span class="token plain"> </span><span class="token parameter variable" style="color:rgb(191, 199, 213)">-Dtarget</span><span class="token operator" style="color:rgb(137, 221, 255)">=</span><span class="token plain">aarch64-linux-android.35</span><br></div></code></pre></div></div>
 <p>Python 3.12 or newer is required for automatic setup. The first export downloads
 official tools into Eggy&#x27;s SDK cache; later exports reuse them. Setup output and
@@ -83,14 +85,20 @@ The page shows the game across the whole browser window, with a progress bar whi
 downloads and any error that stops it shown over the game. Serve the folder from a web
 server (any static host, such as GitHub Pages, works): browsers won&#x27;t load the <code>.data</code>
 file from a page opened straight from disk.</p>
+<p>For Android, pick the <strong>Android version</strong>: the oldest Android the game runs on, from
+Android 13 (API 33) to Android 16 (API 36), Android 15 (API 35) unless you set another in
+Edit &gt; Preferences under Android. The number after <code>android.</code> in <code>-Dtarget</code> is the same API
+level. Pick ARM64 for phones and tablets, or x86-64 for emulators.</p>
 <p>Android export currently requires a Linux x86-64 or macOS host, <code>sh</code>, and <code>patch</code>.
-It installs missing Android command-line tools, API 35, build-tools 36.0.0, NDK
-27.1.12297006 and, if no JDK is installed, Temurin JDK 17. <strong>Starting an Android
+It installs missing Android command-line tools, the platform for the API level chosen,
+build-tools 36.0.0, an NDK (27.1.12297006, or 30.0.16248370 for API 36) and, if no JDK is
+installed, Temurin JDK 17. <strong>Starting an Android
 export accepts Google&#x27;s Android SDK licenses.</strong> An existing <code>ANDROID_HOME</code> or
 <code>ANDROID_SDK_ROOT</code> is reused; <code>JAVA_HOME</code>, <code>JDK_HOME</code>, or <code>javac</code> on PATH selects
 an installed JDK. The setup may need several gigabytes of disk space.</p>
 <p>The Android result is <code>zig-out/export/&lt;name&gt;-aarch64-linux-android-test.apk</code>.
-Install it on an Android 15+ device with Vulkan 1.3, for example with
+Install it on a device running the Android version chosen or later, with Vulkan 1.3, for
+example with
 <code>adb install -r &lt;file&gt;.apk</code>. Its scene, converted models and textures are inside
 the APK. The runtime pauses rendering when backgrounded and recreates its surface
 when foregrounded.</p>

@@ -4,8 +4,8 @@
 <meta charset="UTF-8">
 <meta name="generator" content="Docusaurus v3.10.2">
 <title data-rh="true">Assets, scenes, and packaging | Eggy</title><meta data-rh="true" name="viewport" content="width=device-width,initial-scale=1"><meta data-rh="true" name="twitter:card" content="summary_large_image"><meta data-rh="true" property="og:url" content="https://eggyengine.github.io/eggy/explanation/assets-and-scenes"><meta data-rh="true" property="og:locale" content="en"><meta data-rh="true" name="docusaurus_locale" content="en"><meta data-rh="true" name="docsearch:language" content="en"><meta data-rh="true" name="docusaurus_version" content="current"><meta data-rh="true" name="docusaurus_tag" content="docs-default-current"><meta data-rh="true" name="docsearch:version" content="current"><meta data-rh="true" name="docsearch:docusaurus_tag" content="docs-default-current"><meta data-rh="true" property="og:title" content="Assets, scenes, and packaging | Eggy"><meta data-rh="true" name="description" content="A resource reference identifies a project file. Loading that reference produces"><meta data-rh="true" property="og:description" content="A resource reference identifies a project file. Loading that reference produces"><link data-rh="true" rel="icon" href="/eggy/img/icon.svg"><link data-rh="true" rel="canonical" href="https://eggyengine.github.io/eggy/explanation/assets-and-scenes"><link data-rh="true" rel="alternate" href="https://eggyengine.github.io/eggy/explanation/assets-and-scenes" hreflang="en"><link data-rh="true" rel="alternate" href="https://eggyengine.github.io/eggy/explanation/assets-and-scenes" hreflang="x-default"><script data-rh="true" type="application/ld+json">{"@context":"https://schema.org","@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"Explanation","item":"https://eggyengine.github.io/eggy/explanation"},{"@type":"ListItem","position":2,"name":"Assets, scenes, and packaging","item":"https://eggyengine.github.io/eggy/explanation/assets-and-scenes"}]}</script><link rel="stylesheet" href="/eggy/assets/css/styles.888f8311.css">
-<script src="/eggy/assets/js/runtime~main.3f6c9882.js" defer="defer"></script>
-<script src="/eggy/assets/js/main.557ac555.js" defer="defer"></script>
+<script src="/eggy/assets/js/runtime~main.9c24569e.js" defer="defer"></script>
+<script src="/eggy/assets/js/main.8bdb8feb.js" defer="defer"></script>
 </head>
 <body>
 <svg style="display: none;"><defs>
@@ -22,10 +22,12 @@ IDs through moves, renames, and trash and restore; copies receive new IDs. Keep 
 in version control with the assets. Projects from older versions have <code>&lt;file&gt;.eggy</code>
 descriptors beside their resources: the editor moves them into the catalog when it opens the
 project, then deletes them.</p>
-<p>A model file opens in the Assets panel into its geometry (<code>Skeleton</code> when the model has
-animation clips, else <code>Static</code>) and one entry for each of its clips. Those entries have IDs
-of their own, so a reference field can name a single clip, but they are not files: they
-can&#x27;t be renamed, moved, or deleted.</p>
+<p>A model file opens in the Assets panel into its geometry (<code>Skeletal</code> when the model has
+animation clips, else <code>Static</code>), one entry for each of its clips, and one image for each
+texture its materials use (<code>Material 1</code> and on). Those entries have IDs of their own, so a
+reference field can name a single clip or texture, but they are not files: they can&#x27;t be
+renamed, moved, or deleted. Drag a material onto a folder (or right-click it and choose
+<strong>Extract as PNG</strong>) to save its texture there as a PNG you can edit in any image editor.</p>
 <p>The editor refreshes model and image imports after changes. Packaging converts models
 to <code>.eggmodel</code> and decoded images to <code>.eggtexture</code>, copies other resources unchanged,
 and names the packaged files after their IDs in <code>data/</code>. Game code refers to assets by
