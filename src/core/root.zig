@@ -68,6 +68,7 @@ pub const lighting = @import("lighting.zig");
 pub const SceneLight = lighting.SceneLight;
 pub const particles = @import("particles.zig");
 pub const network = @import("network.zig");
+pub const mobile = @import("mobile/mobile.zig");
 pub const navigation = @import("navigation.zig");
 pub const storage = @import("storage.zig");
 pub const localization = @import("localization.zig");
@@ -85,6 +86,7 @@ pub const UiBillboard = ui_scenes.UiBillboard;
 
 test {
     _ = @import("log/log.zig");
+    _ = @import("mobile/mobile.zig");
     _ = @import("log/crash_report.zig");
     _ = @import("capabilities_test.zig");
     _ = editor;

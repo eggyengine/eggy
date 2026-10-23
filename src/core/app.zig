@@ -21,6 +21,7 @@ const ui_scenes = @import("ui_scenes/ui_scenes.zig");
 
 const web = builtin.os.tag == .emscripten;
 const android = builtin.abi.isAndroid();
+const mobile_zig = @import("mobile/mobile.zig");
 const width = 900;
 const height = 675;
 
@@ -65,6 +66,8 @@ pub const App = struct {
     debug_draw: @import("debug_draw.zig").DebugDraw = .{},
     profiling: @import("profiling.zig").Profiling = .{},
     graphics_options: graphics_control.State = .{},
+    /// The motion sensors and vibrator `mobile()` has opened.
+    mobile_state: mobile_zig.State = .{},
 
     /// Host entry point: open SDL video/gamepads, a 900x675 logical-point window, GPU and world.
     /// `process_init` must outlive the returned owner; `title` is null-terminated UTF-8.
@@ -89,7 +92,8 @@ pub const App = struct {
 
     fn initConfigured(process_init: *const std.process.Init, title: [:0]const u8, config: ?GraphicsConfig) !App {
         const gpa = process_init.gpa;
-        const init_flags = sdl3.InitFlags{ .video = true, .gamepad = true };
+        // Phones and tablets also get their motion sensors and vibrator (see `mobile`).
+        const init_flags = sdl3.InitFlags{ .video = true, .gamepad = true, .sensor = mobile_zig.is_mobile, .haptic = mobile_zig.is_mobile };
         try sdl3.init(init_flags);
         errdefer sdl3.quit(init_flags);
         var options = if (config) |value|
@@ -176,6 +180,7 @@ pub const App = struct {
         self.preference_values.deinit();
         self.graphics.deinit();
         self.graphics_options.deinit();
+        self.mobile_state.deinit();
         self.window.deinit();
         sdl3.quit(self.init_flags);
         sdl3.shutdown();
@@ -233,6 +238,17 @@ pub const App = struct {
     /// ```
     pub fn uiScenes(self: *App) ui_scenes.UiScenes {
         return .{ .state = &self.ui_scenes };
+    }
+
+    /// Borrow the device's phone and tablet features: the safe area, orientation, vibration,
+    /// motion, battery and more (see `eggy.mobile`). Main thread only; don't keep it past the App.
+    ///
+    /// ```zig
+    /// const safe = try app.mobile().safeArea();
+    /// app.mobile().vibrate(0.5, 30) catch {};
+    /// ```
+    pub fn mobile(self: *App) mobile_zig.Mobile {
+        return .{ .window = self.window.window, .state = &self.mobile_state };
     }
 
     /// Borrow active-camera controls; selection changes apply to the next scene draw.
