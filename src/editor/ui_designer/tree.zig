@@ -15,14 +15,15 @@ const entity_tree = @import("../entities/tree.zig");
 const Row = entity_tree.Row;
 const Document = @import("document.zig").Document;
 
-/// The kinds of node Add makes, before the plugins' widgets.
-const palette = [_]struct { label: []const u8, node: Node }{
-    .{ .label = "Panel", .node = .{ .name = "panel", .layout = .{ .width = .{ .px = 200 }, .height = .{ .px = 120 }, .padding = .{ .left = 12, .top = 12, .right = 12, .bottom = 12 }, .gap = 8 }, .look = .{ .background = .{ .theme = .card }, .radius = 8 } } },
-    .{ .label = "Text", .node = .{ .name = "text", .widget = .{ .text = .{} } } },
-    .{ .label = "Image", .node = .{ .name = "image", .widget = .{ .image = .{} }, .layout = .{ .width = .{ .px = 64 }, .height = .{ .px = 64 } } } },
-    .{ .label = "Button", .node = .{ .name = "button", .widget = .{ .button = .{} }, .layout = .{ .padding = .{ .left = 16, .top = 8, .right = 16, .bottom = 8 } } } },
-    .{ .label = "Progress bar", .node = .{ .name = "bar", .widget = .{ .progress = .{} }, .layout = .{ .width = .{ .px = 200 }, .height = .{ .px = 12 } } } },
-    .{ .label = "UI scene", .node = .{ .name = "part", .widget = .{ .scene = .{} }, .layout = .{ .width = .{ .px = 200 }, .height = .{ .px = 100 } } } },
+/// The kinds of node Add makes, before the plugins' widgets, each with its Nerd Font icon
+/// (Material Design, as components' icons are).
+const palette = [_]struct { icon: []const u8, label: []const u8, node: Node }{
+    .{ .icon = "\u{f14fc}", .label = "Panel", .node = .{ .name = "panel", .layout = .{ .width = .{ .px = 200 }, .height = .{ .px = 120 }, .padding = .{ .left = 12, .top = 12, .right = 12, .bottom = 12 }, .gap = 8 }, .look = .{ .background = .{ .theme = .card }, .radius = 8 } } },
+    .{ .icon = "\u{f0284}", .label = "Text", .node = .{ .name = "text", .widget = .{ .text = .{} } } },
+    .{ .icon = "\u{f0976}", .label = "Image", .node = .{ .name = "image", .widget = .{ .image = .{} }, .layout = .{ .width = .{ .px = 64 }, .height = .{ .px = 64 } } } },
+    .{ .icon = "\u{f12a8}", .label = "Button", .node = .{ .name = "button", .widget = .{ .button = .{} }, .layout = .{ .padding = .{ .left = 16, .top = 8, .right = 16, .bottom = 8 } } } },
+    .{ .icon = "\u{f1a03}", .label = "Progress bar", .node = .{ .name = "bar", .widget = .{ .progress = .{} }, .layout = .{ .width = .{ .px = 200 }, .height = .{ .px = 12 } } } },
+    .{ .icon = "\u{f0a1d}", .label = "UI scene", .node = .{ .name = "part", .widget = .{ .scene = .{} }, .layout = .{ .width = .{ .px = 200 }, .height = .{ .px = 100 } } } },
 };
 
 /// The kinds menu's items have ids from here, palette first, then the plugins' widgets.
@@ -174,8 +175,9 @@ pub const Tree = struct {
         const adding = self.adding orelse return false;
         const arena = context.builder().allocator;
         var choices: std.ArrayList(ui.widgets.Choice) = .empty;
-        for (palette, 0..) |entry, i| choices.append(arena, .{ .id = kind_id_base + @as(u32, @intCast(i)), .label = entry.label }) catch return false;
-        for (widgets, palette.len..) |widget, i| choices.append(arena, .{ .id = kind_id_base + @as(u32, @intCast(i)), .label = widget.title }) catch break;
+        // Each row its icon then its name; plugin widgets take the puzzle piece components without an icon have.
+        for (palette, 0..) |entry, i| choices.append(arena, .{ .id = kind_id_base + @as(u32, @intCast(i)), .label = iconLabel(arena, entry.icon, entry.label) }) catch return false;
+        for (widgets, palette.len..) |widget, i| choices.append(arena, .{ .id = kind_id_base + @as(u32, @intCast(i)), .label = iconLabel(arena, eggy.components.default_icon, widget.title) }) catch break;
 
         // Kept inside the page, as the Hierarchy's menu is.
         const width: f32 = @min(200, context.viewport.w);
@@ -206,6 +208,11 @@ pub const Tree = struct {
         return false;
     }
 };
+
+/// `label` after `icon`, for a menu row (allocated in `arena`; the bare label if that fails).
+fn iconLabel(arena: std.mem.Allocator, icon: []const u8, label: []const u8) []const u8 {
+    return std.fmt.allocPrint(arena, "{s}  {s}", .{ icon, label }) catch label;
+}
 
 /// Whether `at` is on one of the kinds menu's items, by last frame's layout.
 fn onKindsMenu(context: *const ui.Context, at: ui.Vec2) bool {
@@ -308,4 +315,20 @@ test "dropping a row beside the root puts the node inside it" {
     // "late" (paint order 2) goes before the root: first among the root's children.
     try std.testing.expect(tree.apply(&document, .{ .move = .{ .entity = .init(2, 0), .place = .{ .before = .init(0, 0) } } }, .{ .x = 0, .y = 0 }));
     try std.testing.expectEqualStrings("late", document.scene().root.children[0].name);
+}
+
+test "every kind in the Add menu has an icon the symbols font draws" {
+    var context = try ui.Context.init(std.testing.allocator);
+    defer context.deinit();
+    try context.font.setSymbolsFont(@embedFile("symbols_font"));
+    const strike = context.font.strike(14);
+    const missing = strike.glyph('?');
+    var icons: [palette.len + 1][]const u8 = undefined;
+    for (palette, icons[0..palette.len]) |entry, *icon| icon.* = entry.icon;
+    icons[palette.len] = eggy.components.default_icon;
+    for (icons) |icon| {
+        var i: usize = 0;
+        const glyph = context.font.next(strike, icon, &i);
+        try std.testing.expect(!std.meta.eql(glyph, missing) and glyph.w > 0);
+    }
 }
