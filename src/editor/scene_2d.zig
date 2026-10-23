@@ -263,3 +263,16 @@ test "panning drags the world with the pointer, and the grid thins out when zoom
     view.height_m = 400;
     try std.testing.expect(view.gridStep() > near_step);
 }
+
+test "a click picks the entity under the pointer through the flat view" {
+    var view = Scene2d{ .area = .{ .x = 0, .y = 0, .w = 400, .h = 200 }, .shown = true };
+    view.panBy(-100, 0);
+    // Panned to x = 6 m; at 12 m over 200 px, 50 px right of the middle is 3 m further, on the cube.
+    const cube = eggy.mesh.Drawable{ .model = .{ .{ 1, 0, 0, 0 }, .{ 0, 1, 0, 0 }, .{ 0, 0, 1, 0 }, .{ 9, 0, 0, 1 } }, .color = .{ 1, 1, 1, 1 }, .shape = .cube, .entity_id = 4, .entity_generation = 0 };
+    var models = eggy.model_cache.ModelCache.init(std.testing.allocator, undefined);
+    var ui_scenes = eggy.ui_scenes.State{ .gpa = std.testing.allocator };
+    const over = view.worldAt(.{ .x = 250, .y = 100 });
+    try std.testing.expectApproxEqAbs(@as(f32, 9), over[0], 1e-4);
+    try std.testing.expectEqual(@as(u32, 4), scene_view.picking.pick(&.{cube}, &models, &ui_scenes, .{}, view.view(), view.area, .{ .x = 250, .y = 100 }).?.id);
+    try std.testing.expect(scene_view.picking.pick(&.{cube}, &models, &ui_scenes, .{}, view.view(), view.area, .{ .x = 100, .y = 100 }) == null);
+}

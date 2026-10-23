@@ -41,7 +41,6 @@ pub const Preview = struct {
     /// The scene's images, in the designer page's font.
     images: ui_scenes.cache.Images,
     drag: ?Drag = null,
-    last_active: u32 = 0,
     /// Where the scene was last drawn, and at what scale, for drops.
     shown: ?struct { viewport: ui.Rect, scale: f32 } = null,
 
@@ -85,21 +84,22 @@ pub const Preview = struct {
             nameTag(context, item.node.name, item.rect, viewport);
         };
 
-        // A press picks the node under it; holding a pinned node drags it.
-        const active = context.active;
-        defer self.last_active = active;
+        // A press picks the node under it, and holding a pinned node drags it. A click pressed and
+        // let go between two frames picks it too. (The hit boxes are plain elements, so weeoui's
+        // `active`, which its own widgets set, never names them.)
+        const pressed_on = if (context.pressed_down) if (context.press) |press| press.widget else 0 else 0;
         for (built.placed, built.ids) |item, id| {
-            if (id == 0 or id != active) continue;
+            if (id == 0) continue;
             const index = item.index orelse continue;
-            if (self.last_active != active) {
+            if (id == pressed_on) {
                 outcome.picked = index;
                 if (item.node.layout.anchor) |anchor| if (index != 0) {
                     self.drag = .{ .index = index, .pointer = context.pointer, .offset = anchor.offset, .scale = scale };
                 };
-            }
+            } else if (context.activated(id)) outcome.picked = index;
         }
         if (self.drag) |drag| {
-            if (active == 0) {
+            if (!context.pointer_held) {
                 self.drag = null;
                 outcome.dropped = true;
             } else if (dragged(document, drag)) |node| {
@@ -178,4 +178,32 @@ fn drawGrid(canvas: *ui.Canvas, rect: ui.Rect, grid: Grid) !void {
         const alpha: f32 = if ((line * every) % 5 == 0) 0.6 else 0.25;
         try canvas.rectAlpha(.{ .x = rect.x, .y = rect.y + @as(f32, @floatFromInt(line)) * step, .w = rect.w, .h = 1 }, grid.color, alpha);
     }
+}
+
+test "clicking a node in the preview picks it, even pressed and let go between two frames" {
+    const gpa = std.testing.allocator;
+    var document = try Document.init(gpa, "resources/hud.ui.zon", "", ui_scene.template);
+    defer document.deinit();
+    var state = ui_scenes.State{ .gpa = gpa };
+    defer state.deinit();
+    var context = try ui.Context.init(gpa);
+    defer context.deinit();
+    var preview = Preview{ .images = .{ .gpa = gpa } };
+    defer preview.deinit();
+    const viewport = ui.Rect{ .x = 0, .y = 0, .w = 800, .h = 600 };
+
+    // Lay it out once, then click inside the template's title, 32 design pixels in from the top left.
+    context.newFrame(viewport);
+    _ = preview.build(&context, &document, &state, .{}, viewport, 0);
+    _ = try context.render();
+    const shown = preview.shown.?;
+    const at = ui.Vec2{ .x = shown.viewport.x + 40 * shown.scale, .y = shown.viewport.y + 44 * shown.scale };
+    context.handle(.{ .pointer_move = at });
+    context.handle(.{ .pointer_down = .{ .position = at, .button = .left, .clicks = 1 } });
+    context.handle(.{ .pointer_up = .{ .position = at, .button = .left } });
+
+    context.newFrame(viewport);
+    const outcome = preview.build(&context, &document, &state, .{}, viewport, 0);
+    _ = try context.render();
+    try std.testing.expectEqual(@as(?u32, 1), outcome.picked);
 }
