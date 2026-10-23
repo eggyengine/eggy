@@ -26,7 +26,7 @@ Code both executables need belongs in `eggy`; keep it free of editor-only depend
 
 ## README Files
 
-Every `README.md` in this repository and its submodules is off limits to agents. Do not create, edit, reformat, or delete one unless a human explicitly asks for that change, and then change only what they asked for. Never update a README as a side effect of other work, even to document something you just built: put that in code comments, doc comments, or this file instead, and mention in your reply that the README may need a human's update.
+Every `README.md` in this repository and its submodules is off limits to agents, with one exception: the review note every pull request adds to the repository's root `README.md` (see Pull Request Guidelines). Do not create, edit, reformat, or delete one unless a human explicitly asks for that change, and then change only what they asked for. Never update a README as a side effect of other work, even to document something you just built: put that in code comments, doc comments, or this file instead, and mention in your reply that the README may need a human's update.
 
 When a human does ask for a README change, keep it short and clean. Write for the people who use the project. No changelogs, no implementation details, no status notes, and no repeated content.
 
@@ -140,11 +140,11 @@ Keep each commit focused on one change. When you bump a submodule pointer, name 
 
 Pull requests should describe the behavior changed, list the commands run, link an issue when applicable, and include a screenshot or recording for visible rendering changes. Call out submodule revision changes explicitly.
 
-**Agents must put this note at the top of the README.md file for each pull request opened:**
+**Agents must write this note into the repository's root `README.md` file, at the very top, as a commit on the pull request's branch, for every pull request they open.** It goes in the file itself, so it shows in the pull request's diff; putting it only in the pull request's description does not count:
 
 ```markdown
 > [!NOTE]
 > By removing this, you prove that the code has been reviewed by human.
 ```
 
-Agents must never remove, reword, or hide this note, and never open a pull request without it. Only a human reviewer removes it, once they have reviewed the code.
+Agents must never remove, reword, or hide this note, and never open a pull request without it in `README.md`. Only a human reviewer removes it from `README.md`, once they have reviewed the code.
