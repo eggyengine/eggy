@@ -1,6 +1,7 @@
-//! What UI scenes are drawn from, loaded once: parsed `.ui.zon`s (`Scenes`) and decoded images
-//! packed into a font's color atlas (`Images`), GIFs with every frame. Both load through the
-//! executable's resources on first use and remember failures until told to forget.
+//! What UI scenes are drawn from, loaded once: parsed `.ui.zon`s (`Scenes`), and what draws into
+//! one font's atlas (`Images`): decoded images, GIFs with every frame, and the fonts text nodes
+//! chose. All load through the executable's resources on first use and remember failures until
+//! told to forget.
 const std = @import("std");
 const ui = @import("weeoui");
 const assets = @import("eggy_assets");
@@ -72,26 +73,41 @@ pub const Scenes = struct {
 
 const Frame = @typeInfo(@FieldType(ui.Image, "frames")).pointer.child;
 
-/// Images by asset key, each frame packed into one font's color atlas. When the font changes
-/// (`get` is given another), everything loads again into the new one.
+/// Images by asset key, each frame packed into one font's atlas, and text nodes' fonts by asset
+/// key, drawing into the same atlas (`ui.Font.initCompanion`). When the font changes (`get` or
+/// `textFont` is given another), everything loads again into the new one.
 pub const Images = struct {
     gpa: std.mem.Allocator,
     font: ?*ui.Font = null,
     /// Null where the image couldn't be loaded (logged once).
     entries: std.StringHashMapUnmanaged(?*ui.Image) = .empty,
+    /// Null where the font couldn't be loaded (logged once).
+    fonts: std.StringHashMapUnmanaged(?*TextFont) = .empty,
+
+    /// A font file's bytes and the companion face reading them.
+    const TextFont = struct { bytes: [:0]u8, face: ui.Font };
+
+    /// The pixel sizes a text font is rasterized at up front; others snap to the nearest and scale.
+    // ponytail: coarse sizes keep each font to about a tenth of the atlas; add sizes if large text in a custom font looks soft.
+    const text_font_sizes = [_]u8{ 12, 14, 16, 18, 20, 24, 28, 32, 40, 48, 64 };
 
     pub fn deinit(self: *Images) void {
         self.forgetAll();
         self.entries.deinit(self.gpa);
+        self.fonts.deinit(self.gpa);
+    }
+
+    /// Start over in `font`'s atlas if it isn't the one everything was loaded into.
+    fn useAtlasOf(self: *Images, font: *ui.Font) void {
+        if (self.font == font) return;
+        self.forgetAll();
+        self.font = font;
     }
 
     /// The image with asset `key` in `font`'s atlas, loaded through `resources` the first time.
     pub fn get(self: *Images, resources: Resources, font: *ui.Font, key: []const u8) ?*const ui.Image {
         if (key.len == 0) return null;
-        if (self.font != font) {
-            self.forgetAll();
-            self.font = font;
-        }
+        self.useAtlasOf(font);
         if (self.entries.get(key)) |entry| return entry;
         const loaded = self.load(resources, font, key) catch |err| blk: {
             log.err("cannot load image {s} for UI: {t}", .{ key, err });
@@ -111,6 +127,44 @@ pub const Images = struct {
         return .{ @floatFromInt(image.width), @floatFromInt(image.height) };
     }
 
+    /// The font file with asset `key` as a face drawing into `font`'s atlas, loaded through
+    /// `resources` the first time; null for an empty key or a font that can't be loaded, which
+    /// is logged once (text then draws in `font`).
+    pub fn textFont(self: *Images, resources: Resources, font: *ui.Font, key: []const u8) ?*const ui.Font {
+        if (key.len == 0) return null;
+        self.useAtlasOf(font);
+        if (self.fonts.get(key)) |entry| return if (entry) |loaded| &loaded.face else null;
+        const loaded = self.loadFont(resources, font, key) catch |err| blk: {
+            log.err("cannot load font {s} for UI: {t}", .{ key, err });
+            break :blk null;
+        };
+        const owned_key = self.gpa.dupe(u8, key) catch return self.discardFont(loaded);
+        self.fonts.put(self.gpa, owned_key, loaded) catch {
+            self.gpa.free(owned_key);
+            return self.discardFont(loaded);
+        };
+        return if (loaded) |made| &made.face else null;
+    }
+
+    fn loadFont(self: *Images, resources: Resources, font: *ui.Font, key: []const u8) !*TextFont {
+        const bytes = try resources.read(self.gpa, try AssetRef(.any).parse(key));
+        errdefer self.gpa.free(bytes);
+        const made = try self.gpa.create(TextFont);
+        errdefer self.gpa.destroy(made);
+        // The face reads `bytes` for as long as it lives, so they move into `made` with it.
+        made.* = .{ .bytes = bytes, .face = try ui.Font.initCompanion(self.gpa, bytes, font, &text_font_sizes) };
+        return made;
+    }
+
+    fn discardFont(self: *Images, loaded: ?*TextFont) ?*const ui.Font {
+        if (loaded) |made| {
+            made.face.deinit();
+            self.gpa.free(made.bytes);
+            self.gpa.destroy(made);
+        }
+        return null;
+    }
+
     fn load(self: *Images, resources: Resources, font: *ui.Font, key: []const u8) !*ui.Image {
         var texture = try resources.loadImage(self.gpa, try AssetRef(.image).parse(key));
         defer texture.deinit(self.gpa);
@@ -126,15 +180,20 @@ pub const Images = struct {
         return null;
     }
 
-    /// Load the image with `key` again when next asked for: its file changed.
+    /// Load the image or font with `key` again when next asked for: its file changed.
     pub fn forget(self: *Images, key: []const u8) void {
-        const removed = self.entries.fetchRemove(key) orelse return;
-        self.gpa.free(removed.key);
-        _ = self.discard(removed.value);
+        if (self.entries.fetchRemove(key)) |removed| {
+            self.gpa.free(removed.key);
+            _ = self.discard(removed.value);
+        }
+        if (self.fonts.fetchRemove(key)) |removed| {
+            self.gpa.free(removed.key);
+            _ = self.discardFont(removed.value);
+        }
     }
 
-    /// Load every image again when next asked for. The atlas keeps the old sprites (see
-    /// `ui.Font.addSprite`).
+    /// Load every image and font again when next asked for. The atlas keeps the old sprites and
+    /// glyphs (see `ui.Font.addSprite`).
     pub fn forgetAll(self: *Images) void {
         var it = self.entries.iterator();
         while (it.next()) |entry| {
@@ -142,6 +201,12 @@ pub const Images = struct {
             _ = self.discard(entry.value_ptr.*);
         }
         self.entries.clearRetainingCapacity();
+        var fonts = self.fonts.iterator();
+        while (fonts.next()) |entry| {
+            self.gpa.free(entry.key_ptr.*);
+            _ = self.discardFont(entry.value_ptr.*);
+        }
+        self.fonts.clearRetainingCapacity();
     }
 };
 

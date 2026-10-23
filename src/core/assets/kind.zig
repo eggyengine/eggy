@@ -21,6 +21,8 @@ pub const Kind = enum(u8) {
     animation,
     /// A UI scene (`.ui.zon`): a HUD, a menu, a billboard's face, or a part of another.
     ui,
+    /// A TrueType or OpenType font, which UI scenes draw text with.
+    font,
 
     /// The kind of the file at `path`; `any` for a kind Eggy doesn't know.
     /// Does not inspect the filesystem or infer folders. Ordinary extensions ignore case;
@@ -42,6 +44,7 @@ pub const Kind = enum(u8) {
             .{ &.{ ".png", ".jpg", ".jpeg", ".gif", ".svg", ".bmp", ".webp" }, .image },
             .{ &.{ ".wav", ".ogg", ".mp3", ".flac" }, .audio },
             .{ &.{ ".glb", ".gltf", ".obj", ".fbx", ".dae", ".3ds", ".ply", ".stl" }, .model },
+            .{ &.{ ".ttf", ".otf" }, .font },
         };
         for (kinds) |entry| for (entry[0]) |known| {
             if (std.ascii.eqlIgnoreCase(extension, known)) return entry[1];
@@ -84,6 +87,7 @@ test "a file's kind comes from its name" {
     try std.testing.expectEqual(Kind.material, Kind.of("art/metal.material.zon"));
     try std.testing.expectEqual(Kind.animation, Kind.of("art/walk.clip.zon"));
     try std.testing.expectEqual(Kind.ui, Kind.of("ui/hud.ui.zon"));
+    try std.testing.expectEqual(Kind.font, Kind.of("ui/Title.OTF"));
     try std.testing.expect(Kind.isTexture("art/Wood.PNG"));
     try std.testing.expect(!Kind.isTexture("art/logo.svg"));
 }

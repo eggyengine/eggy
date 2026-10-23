@@ -232,10 +232,13 @@ pub const Sources = struct {
     entity: ecs.EntityId,
 
     pub fn layoutSources(self: *Sources) layout.Sources {
-        return .{ .font = self.font, .context = self, .scene = scene, .image_size = imageSize, .override = override };
+        return .{ .font = self.font, .context = self, .scene = scene, .image_size = imageSize, .override = override, .text_font = textFont };
     }
     pub fn imageSource(self: *Sources) paint.ImageSource {
         return .{ .context = self, .get = image };
+    }
+    pub fn fontSource(self: *Sources) paint.FontSource {
+        return .{ .context = self, .get = textFont };
     }
     fn scene(context: *anyopaque, key: []const u8) ?*const ui_scene.UiScene {
         const self: *Sources = @ptrCast(@alignCast(context));
@@ -248,6 +251,10 @@ pub const Sources = struct {
     fn image(context: *anyopaque, key: []const u8) ?*const ui.Image {
         const self: *Sources = @ptrCast(@alignCast(context));
         return self.images.get(self.resources, self.font, key);
+    }
+    fn textFont(context: *anyopaque, key: []const u8) ?*const ui.Font {
+        const self: *Sources = @ptrCast(@alignCast(context));
+        return self.images.textFont(self.resources, self.font, key);
     }
     fn override(context: *anyopaque, name: []const u8) ?*const Override {
         const self: *Sources = @ptrCast(@alignCast(context));

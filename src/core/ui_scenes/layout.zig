@@ -29,6 +29,13 @@ pub const Sources = struct {
     image_size: *const fn (context: *anyopaque, key: []const u8) ?[2]f32,
     /// What code changed about the nodes named `name`, if anything.
     override: *const fn (context: *anyopaque, name: []const u8) ?*const Override,
+    /// The font file with asset `key`, for a text node that chose one; null for `font`.
+    text_font: *const fn (context: *anyopaque, key: []const u8) ?*const ui.Font,
+
+    /// The font a text node with font `key` draws in.
+    pub fn fontFor(self: Sources, key: []const u8) *const ui.Font {
+        return self.text_font(self.context, key) orelse self.font;
+    }
 
     /// Sources with no nested scenes, images or overrides, for tests and plain previews.
     pub fn plain(font: *const ui.Font) Sources {
@@ -42,8 +49,11 @@ pub const Sources = struct {
             fn override(_: *anyopaque, _: []const u8) ?*const Override {
                 return null;
             }
+            fn textFont(_: *anyopaque, _: []const u8) ?*const ui.Font {
+                return null;
+            }
         };
-        return .{ .font = font, .context = undefined, .scene = none.scene, .image_size = none.imageSize, .override = none.override };
+        return .{ .font = font, .context = undefined, .scene = none.scene, .image_size = none.imageSize, .override = none.override, .text_font = none.textFont };
     }
 };
 
@@ -214,11 +224,12 @@ const Engine = struct {
             .panel => .{ 0, 0 },
             .text => |text| blk: {
                 const value = if (override) |o| o.text orelse text.value else text.value;
+                const face = self.sources.fontFor(text.font);
                 if (text.wrap) {
-                    const width = width_hint orelse @min(font.measure(value, text.size), avail[0]);
-                    break :blk .{ width, font.wrappedHeight(value, text.size, width) };
+                    const width = width_hint orelse @min(face.measure(value, text.size), avail[0]);
+                    break :blk .{ width, face.wrappedHeight(value, text.size, width) };
                 }
-                break :blk .{ font.measure(value, text.size), text.size * line_height };
+                break :blk .{ face.measure(value, text.size), text.size * line_height };
             },
             .button => |button| .{ font.measure(if (override) |o| o.text orelse button.label else button.label, button.size), button.size * line_height },
             .image => |image| blk: {

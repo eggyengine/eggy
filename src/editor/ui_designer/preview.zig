@@ -207,3 +207,39 @@ test "clicking a node in the preview picks it, even pressed and let go between t
     _ = try context.render();
     try std.testing.expectEqual(@as(?u32, 1), outcome.picked);
 }
+
+test "a text node is laid out and painted in the font it chose" {
+    const gpa = std.testing.allocator;
+    var font = try ui.Font.init(gpa, ui.default_font);
+    defer font.deinit();
+    var mono = try ui.Font.initCompanion(gpa, @embedFile("mono_font"), &font, &.{16});
+    defer mono.deinit();
+    const fonts = struct {
+        fn get(context: *anyopaque, key: []const u8) ?*const ui.Font {
+            return if (std.mem.eql(u8, key, "mono")) @ptrCast(@alignCast(context)) else null;
+        }
+    };
+    var sources = ui_scenes.layout.Sources.plain(&font);
+    sources.context = &mono;
+    sources.text_font = fonts.get;
+    var children = [_]ui_scene.Node{
+        .{ .name = "plain", .widget = .{ .text = .{ .value = "iiii" } } },
+        .{ .name = "mono", .widget = .{ .text = .{ .value = "iiii", .font = "mono" } } },
+    };
+    const scene = ui_scene.UiScene{ .root = .{ .layout = .{ .width = .fill, .height = .fill }, .children = &children } };
+    var arena = std.heap.ArenaAllocator.init(gpa);
+    defer arena.deinit();
+    const placed = try ui_scenes.layout.place(arena.allocator(), &scene, sources, .{ .x = 0, .y = 0, .w = 400, .h = 300 }, 1);
+
+    // A monospace "i" is as wide as any letter, so the text in it is wider.
+    try std.testing.expectApproxEqAbs(mono.measure("iiii", 16), placed[2].rect.w, 0.01);
+    try std.testing.expect(placed[2].rect.w > placed[1].rect.w);
+
+    // Painting draws the node in it and gives the canvas its own font back.
+    const vertices = try gpa.alloc(ui.Vertex, 4096);
+    defer gpa.free(vertices);
+    var canvas = ui.Canvas.init(vertices, &font);
+    try ui_scenes.paint.paint(&canvas, .{ .placed = placed, .scale = 1, .fonts = .{ .context = &mono, .get = fonts.get } });
+    try std.testing.expect(canvas.font == &font);
+    try std.testing.expect(canvas.len > 0);
+}

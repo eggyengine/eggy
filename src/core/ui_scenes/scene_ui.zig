@@ -50,6 +50,7 @@ const Painting = struct {
         var frame = self.frame;
         var sources = self.sources;
         frame.images = sources.imageSource();
+        frame.fonts = sources.fontSource();
         try paint.paint(canvas, frame);
     }
 };

@@ -226,8 +226,8 @@ pub const Designer = struct {
         return properties.dropAt(context, at, dragged);
     }
 
-    /// `dragged` let go at `at` over the UI Designer: an image or UI scene becomes a node pinned
-    /// there, under the root. Returns whether it did.
+    /// `dragged` let go at `at` over the UI Designer: an image, a UI scene, or a font (as text in
+    /// it) becomes a node pinned there, under the root. Returns whether it did.
     pub fn dropOnPreview(self: *Designer, env: Env, at: ui.Vec2, dragged: Dragged) bool {
         const document = if (self.document) |*open_one| open_one else return false;
         const preview = if (self.preview) |*made| made else return false;
@@ -242,6 +242,7 @@ pub const Designer = struct {
         const node: ui_scene.Node = switch (reference.kind) {
             .image => .{ .name = name, .widget = .{ .image = .{ .image = key } }, .layout = .{ .width = .{ .px = 64 }, .height = .{ .px = 64 }, .anchor = pinned } },
             .ui => .{ .name = name, .widget = .{ .scene = .{ .scene = key } }, .layout = .{ .width = .{ .px = 200 }, .height = .{ .px = 100 }, .anchor = pinned } },
+            .font => .{ .name = name, .widget = .{ .text = .{ .value = name, .size = 32, .font = key } }, .layout = .{ .anchor = pinned } },
             else => return false,
         };
         document.select(&.{});

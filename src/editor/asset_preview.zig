@@ -21,6 +21,8 @@ const Shown = union(enum) {
     nothing,
     image: []const u8,
     ui_scene: []const u8,
+    /// A font, by asset key: a sample of text in it.
+    font: []const u8,
     model,
     text,
     /// A file it can't show, described.
@@ -116,6 +118,7 @@ pub const AssetPreview = struct {
             .nothing => {},
             .image => |key| self.image(context, request, key, height),
             .ui_scene => |key| self.uiScene(context, request, key, height),
+            .font => |key| self.fontSample(context, request, key),
             .model => self.model.build(context, .{ .path = path, .assets = request.assets, .app = request.app, .time_ms = request.time_ms, .height = height }),
             .text => self.text.add(context, self.contents.items, self.version, height),
             .described => |note| {
@@ -168,6 +171,7 @@ pub const AssetPreview = struct {
         const extension = std.fs.path.extension(path);
         if (kind == .image and key.len > 0 and eggy.assets.Kind.isTexture(path)) return .{ .image = key };
         if (kind == .ui and key.len > 0) return .{ .ui_scene = key };
+        if (kind == .font and key.len > 0) return .{ .font = key };
         if (kind == .folder) return .{ .described = "A folder: open it in Assets to see what it holds." };
         if (kind == .model) return .model;
         if (kind == .audio) return .{ .described = "A sound. Eggy can't play sounds yet, so it can't be listened to here." };
@@ -191,6 +195,18 @@ pub const AssetPreview = struct {
         };
         if (shown == .text and self.contents.items.len < self.size) return std.fmt.allocPrint(arena, "{s}, {s} (the first {d} KB shown)", .{ kind, size, max_text_bytes / 1024 }) catch size;
         return std.fmt.allocPrint(arena, "{s}, {s}", .{ kind, size }) catch size;
+    }
+
+    /// A pangram and the alphabet in the font with `key`, from large to small.
+    fn fontSample(self: *AssetPreview, context: *ui.Context, request: Request, key: []const u8) void {
+        const face = self.images.textFont(request.app.resources(), context.font, key) orelse {
+            context.muted("This font couldn't be loaded: see the Console.");
+            return;
+        };
+        const width = context.contentWidth();
+        var height: f32 = 0;
+        for (font_samples) |sample| height += face.wrappedHeight(sample.text, sample.size, width) + font_sample_gap;
+        context.element(context.builder().node(0, .{ .width = width, .height = height }, .{ .custom = .{ .context = face, .draw = drawFontSample } }, &.{}) catch return);
     }
 
     /// The image fit to the panel's width and `height`, over a checkerboard; a GIF plays.
@@ -257,6 +273,29 @@ fn sizeText(buffer: []u8, bytes: u64) []const u8 {
 }
 
 // Grey squares under an image, so its see-through parts show as see-through.
+/// What a font's preview shows, largest first.
+const font_samples = [_]struct { text: []const u8, size: f32 }{
+    .{ .text = "Aa Bb Cc 123", .size = 40 },
+    .{ .text = "The quick brown fox jumps over the lazy dog", .size = 24 },
+    .{ .text = "ABCDEFGHIJKLMNOPQRSTUVWXYZ abcdefghijklmnopqrstuvwxyz 0123456789 !?&", .size = 16 },
+    .{ .text = "The quick brown fox jumps over the lazy dog", .size = 12 },
+};
+const font_sample_gap: f32 = 8;
+
+/// Each sample, wrapped to the box, one under the other, in the font `context` points to.
+fn drawFontSample(context: *const anyopaque, c: *ui.Canvas, r: ui.Rect) anyerror!void {
+    const face: *const ui.Font = @ptrCast(@alignCast(context));
+    const panel_font = c.font;
+    defer c.font = panel_font;
+    c.font = face;
+    var y = r.y;
+    for (font_samples) |sample| {
+        const height = face.wrappedHeight(sample.text, sample.size, r.w);
+        try c.textWrappedIn(.{ .x = r.x, .y = y, .w = r.w, .h = height }, sample.text, sample.size, c.theme.foreground);
+        y += height + font_sample_gap;
+    }
+}
+
 fn drawCheckerboard(_: *const anyopaque, c: *ui.Canvas, r: ui.Rect) anyerror!void {
     const square: f32 = 8;
     try c.rect(r, .{ 0.8, 0.8, 0.8 });

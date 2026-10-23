@@ -110,6 +110,8 @@ pub const Text = struct {
     alignment: TextAlign = .start,
     /// Break onto more lines to fit the node's width.
     wrap: bool = false,
+    /// A TTF or OTF file's asset key; empty for the scene's font (its theme's, else Eggy's).
+    font: []const u8 = "",
 };
 
 pub const Fit = enum {
@@ -327,6 +329,7 @@ fn cloneNode(arena: std.mem.Allocator, node: Node) std.mem.Allocator.Error!Node 
         .text => |text| .{ .text = blk: {
             var value = text;
             value.value = try arena.dupe(u8, text.value);
+            value.font = try arena.dupe(u8, text.font);
             break :blk value;
         } },
         .image => |image| .{ .image = .{ .image = try arena.dupe(u8, image.image), .fit = image.fit } },

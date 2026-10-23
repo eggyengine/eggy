@@ -119,7 +119,7 @@ pub const Properties = struct {
             if (self.beginCard(context, .widget, kind_labels[@intFromEnum(std.meta.activeTag(node.widget))], "")) {
                 changed = switch (node.widget) {
                     .panel => false,
-                    .text => |*text| self.fieldsOf(context, ui_scene.Text, .{}, text, .widget, document, request, control),
+                    .text => |*text| self.fieldsOf(context, ui_scene.Text, .{ .assets = &.{.{ "font", .font }} }, text, .widget, document, request, control),
                     .image => |*image| self.fieldsOf(context, ui_scene.Image, .{ .assets = &.{.{ "image", .image }} }, image, .widget, document, request, control),
                     .button => |*button| self.fieldsOf(context, ui_scene.Button, .{}, button, .widget, document, request, control),
                     .progress => |*progress| self.fieldsOf(context, ui_scene.Progress, .{}, progress, .widget, document, request, control),
@@ -152,7 +152,7 @@ pub const Properties = struct {
             }
             endCard(context);
             if (self.beginCard(context, .theme, "Theme", "Eggy's dark or light, with your own colours and font")) {
-                changed = self.fieldsOf(context, ui_scene.Theme, .{ .assets = &.{.{ "font", .any }}, .colours = true }, &scene.theme, .theme, document, request, control) or changed;
+                changed = self.fieldsOf(context, ui_scene.Theme, .{ .assets = &.{.{ "font", .font }}, .colours = true }, &scene.theme, .theme, document, request, control) or changed;
             }
             endCard(context);
         }
@@ -355,11 +355,12 @@ const AnchorCell = struct {
 };
 
 test "a view turns asset keys into references and names a theme's colours, field for field" {
-    const ThemeView = View(ui_scene.Theme, .{ .assets = &.{.{ "font", .any }}, .colours = true });
+    const ThemeView = View(ui_scene.Theme, .{ .assets = &.{.{ "font", .font }}, .colours = true });
     const infos = eggy.components.Registry(&.{ThemeView}, &.{"ui"}).infos[0].fields;
     try std.testing.expectEqual(std.meta.fields(ui_scene.Theme).len, infos.len);
     try std.testing.expectEqualStrings("background_color", infos[1].name);
     // An optional colour's inner value is still a colour.
     try std.testing.expectEqual(eggy.components.PartKind.color, infos[1].parts[1].kind);
     try std.testing.expectEqual(eggy.components.PartKind.asset, infos[infos.len - 1].parts[0].kind);
+    try std.testing.expectEqual(eggy.assets.Kind.font, infos[infos.len - 1].parts[0].accepts);
 }

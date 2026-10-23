@@ -22,7 +22,8 @@ in the **UI Designer** panel, and change what it shows from your game's code.
 - **UI Designer** shows the scene at the size picked in its toolbar: its design size, a
   common monitor or a phone. Click a node to select it, and drag a pinned node to move it.
   The **Grid** switch shows lines every 10 design pixels, and drags snap to them while it is
-  on. Drop an image or a UI scene from Assets onto it to add it there.
+  on. Drop an image or a UI scene from Assets onto it to add it there. Drop a font to add
+  text in that font.
 - **UI Properties** shows the selected node's settings, the way the Inspector shows a
   component's: what the node shows, its layout and its look. Drag numbers to change them,
   and drop images, fonts and UI scenes from Assets onto their slots. With the root selected
@@ -55,8 +56,12 @@ pixel per screen point, and so on.
 
 Colors can name one of the theme's colors (**primary**, **card**, **muted**...) or be your
 own. The scene's theme starts from Eggy's dark or light theme. You can replace any of its
-colors, its corner radius and its font (any TTF or OTF in your project). Nodes that use
-theme colors follow it.
+colors, its corner radius and its font. Nodes that use theme colors follow it.
+
+Fonts are assets: put a TTF or OTF file in your project's `resources` (or drag it into the
+Assets panel) and it shows there as a font. Drop it on the theme's **Font** to use it for the
+whole scene, or on a text node's **Font** to use it for that text alone. Leave a text node's
+font empty to use the scene's.
 
 A node's look also takes a background image. Its **Slice** insets make it a nine-slice,
 so the corners stay sharp at any size. The look also sets a border, rounded corners,
@@ -126,7 +131,10 @@ for animation. See [Plugin hooks](../reference/plugin-hooks.md#ui-widgets).
 
 ## Limits
 
-- Billboards use Eggy's font and ignore the theme's font.
+- Billboards use Eggy's font and ignore the theme's font. A text node's own font works on
+  them.
+- Text in a font of its own is sharpest at 12 to 64 pixels. Between those sizes it is
+  scaled from the nearest one, and above 64 pixels it gets softer.
 - A screen scene's theme font becomes the whole game UI's font while it shows.
 - Images are scaled with nearest-neighbour filtering.
 - A click reaches a billboard's button even through something standing in front of it, and

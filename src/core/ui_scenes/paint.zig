@@ -60,12 +60,25 @@ pub const ImageSource = struct {
     }.get };
 };
 
+/// Text nodes' fonts by asset key, drawing into the canvas's font's atlas; null for the canvas's font.
+pub const FontSource = struct {
+    context: *anyopaque,
+    get: *const fn (context: *anyopaque, key: []const u8) ?*const ui.Font,
+
+    pub const none = FontSource{ .context = undefined, .get = struct {
+        fn get(_: *anyopaque, _: []const u8) ?*const ui.Font {
+            return null;
+        }
+    }.get };
+};
+
 /// Everything a paint needs beyond the canvas, for one frame.
 pub const Frame = struct {
     placed: []const Placed,
     /// Viewport units per design pixel, as the scene was laid out with.
     scale: f32,
     images: ImageSource = .none,
+    fonts: FontSource = .none,
     widgets: WidgetPainter = .none,
     /// For GIFs: milliseconds of a steady clock.
     time_ms: u64 = 0,
@@ -151,6 +164,10 @@ fn paintNode(canvas: *ui.Canvas, frame: Frame, themes: *Themes, index: usize) !u
             const color = colorOf(text.color, theme) orelse withAlpha(theme.foreground, 1);
             const start = canvas.len;
             const alignment: ui.Canvas.TextAlign = @enumFromInt(@intFromEnum(text.alignment));
+            // In the node's own font, if it chose one, as layout measured it.
+            const scene_font = canvas.font;
+            defer canvas.font = scene_font;
+            if (frame.fonts.get(frame.fonts.context, text.font)) |face| canvas.font = face;
             if (text.wrap) {
                 try canvas.textWrappedInAligned(content, value, text.size * scale, rgb(color), alignment);
             } else {

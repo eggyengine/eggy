@@ -19,6 +19,8 @@ pub const Kind = enum {
     ui,
     /// A model file, which opens into its geometry and clips (`eggy.assets.subassets`).
     model,
+    /// A TrueType or OpenType font, for UI scenes' text.
+    font,
 
     /// What a file is, by its name.
     /// This editor classification inspects suffixes only; it never opens the file.
@@ -32,7 +34,11 @@ pub const Kind = enum {
         if (std.mem.endsWith(u8, name, ".material.zon")) return .material;
         if (std.mem.endsWith(u8, name, ".clip.zon")) return .animation;
         if (std.mem.endsWith(u8, name, eggy.assets.ui_scene.extension)) return .ui;
-        if (eggy.assets.Kind.of(name) == .model) return .model;
+        switch (eggy.assets.Kind.of(name)) {
+            .model => return .model,
+            .font => return .font,
+            else => {},
+        }
         const extension = std.fs.path.extension(name);
         const kinds = [_]struct { []const []const u8, Kind }{
             .{ &.{".zig"}, .code },
