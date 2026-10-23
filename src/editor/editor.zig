@@ -69,6 +69,7 @@ const animation_dock = @import("animation_dock/animation_dock.zig");
 const ui_designer = @import("ui_designer/ui_designer.zig");
 const AssetPreview = @import("asset_preview.zig").AssetPreview;
 const Scene2d = @import("scene_2d.zig").Scene2d;
+const tab_views = @import("tab_views.zig");
 /// The Preferences section File > Project Settings opens.
 const project_section = "Project";
 
@@ -164,6 +165,8 @@ pub fn Editor(comptime project: type) type {
         scene_2d_ui: ui.Context,
         /// The 2D Scene panel: its camera, grid and dragging.
         scene_2d: Scene2d = .{},
+        /// Each tab's own Scene camera, 2D view and UI scene, swapped in as its copy goes live.
+        tab_views: tab_views.TabViews = .{},
         animation: animation_dock.Dock = .{},
         asset_icons: AssetIcons,
         console: Console,
@@ -478,6 +481,7 @@ pub fn Editor(comptime project: type) type {
             self.hierarchy_ui.deinit();
             self.assets_ui.deinit();
             self.ui_designer.deinit(self.gpa);
+            self.tab_views.deinit(self.gpa);
             self.ui_designer_ui.deinit();
             self.ui_tree_ui.deinit();
             self.ui_properties_ui.deinit();
@@ -554,6 +558,8 @@ pub fn Editor(comptime project: type) type {
             // selection's gizmo over it.
             self.syncSceneInstances();
             self.entity_editor.forgetDead(&self.app);
+            // The tab shown last frame decides whose Scene camera, 2D view and UI scene are in use.
+            self.followTabs();
             const look: scene_view.SceneView.Look = if (!self.play_mode.playing()) .editing else if (self.workspace.simulating) .simulating else .playing;
             self.scene_view.update(self.sceneTarget(), if (self.workspace.placed.scene) |placed| placed.rect else null, look);
             self.workspace.scene_overlay = self.scene_view.overlay();
@@ -1023,11 +1029,13 @@ pub fn Editor(comptime project: type) type {
                 .open_scene, .create_scene => self.openSceneStep(action) catch |err| std.log.err("cannot open the scene: {t}", .{err}),
                 .open_ui_scene => |path| {
                     const env = self.uiDesignerEnv() orelse return;
+                    // The UI tab first, so the scene opens in its Designer rather than going aside.
+                    self.workspace.showUiDesigner() catch |err| std.log.err("cannot show the UI Designer: {t}", .{err});
+                    self.followTabs();
                     self.ui_designer.open(env, path) catch |err| {
                         std.log.err("cannot open UI scene {s}: {t}", .{ path, err });
                         return self.workspace.toast("Couldn't open the UI scene: see the Console");
                     };
-                    self.workspace.showUiDesigner() catch |err| std.log.err("cannot show the UI Designer: {t}", .{err});
                 },
                 .open_input_map => |path| self.openInputMap(path) catch |err| {
                     std.log.err("cannot open input map {s}: {t}", .{ path, err });
@@ -3038,6 +3046,12 @@ pub fn Editor(comptime project: type) type {
         }
 
         /// What the Scene panel works on; null without the game's library.
+        /// Make the copies in the tab shown live, and put their views in use.
+        fn followTabs(self: *Self) void {
+            self.workspace.followShownTab();
+            self.tab_views.follow(self.gpa, self.workspace.live, &self.scene_view, &self.scene_2d, &self.ui_designer, self.uiDesignerEnv());
+        }
+
         fn sceneTarget(self: *Self) ?scene_view.Target {
             const game = if (self.game) |*loaded| loaded else return null;
             return .{
@@ -3094,6 +3108,9 @@ test {
     _ = @import("assets/png_writer.zig");
     _ = @import("tab_bar.zig");
     _ = @import("workspace_tabs.zig");
+    _ = @import("tab_drag.zig");
+    _ = @import("tab_views.zig");
+    _ = @import("no_tabs.zig");
     _ = @import("assets/creation.zig");
     _ = @import("input_settings.zig");
     _ = @import("game_input.zig");

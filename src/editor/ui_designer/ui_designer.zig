@@ -92,6 +92,19 @@ pub const Designer = struct {
         document.path = path;
     }
 
+    /// The project-relative path of the UI scene open, if one is; borrowed until it changes.
+    pub fn openPath(self: *const Designer) ?[]const u8 {
+        return if (self.document) |document| document.path else null;
+    }
+
+    /// Close the UI scene open, if one is, for another UI tab's. Its edits are on disk already:
+    /// they wait only while a drag holds them, and a drag ends before the tab can change.
+    pub fn close(self: *Designer) void {
+        if (self.document) |*document| document.deinit();
+        self.document = null;
+        self.dirty = false;
+    }
+
     /// The file at `path` is gone: close it if it is the open one.
     pub fn deleted(self: *Designer, path: []const u8) void {
         const document = if (self.document) |*open_one| open_one else return;

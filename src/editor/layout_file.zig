@@ -26,7 +26,8 @@ const Saved = struct {
     z_counter: u32,
     /// The workspace's tabs, each a tree of `nodes`; none in a file from before tabs.
     tabs: [workspace_tabs.max_tabs]?workspace_tabs.Tab = @splat(null),
-    active_tab: u8 = 0,
+    /// Null when no tab is shown: the main window is empty.
+    active_tab: ?u8 = 0,
     /// The plugin panels (by title) this user has had: one closed stays closed, rather than
     /// docking again as new.
     seen_panels: []const []const u8 = &.{},
@@ -114,7 +115,7 @@ pub fn arrangement(layout: *const dock.DockSpace, tabs: *const Tabs) u64 {
     };
     // Nor which tab is shown: switching tabs isn't a step to undo.
     var plain_tabs = tabs.*;
-    plain_tabs.active = 0;
+    plain_tabs.active = null;
     plain.root = 0xFF;
     return fingerprint(&plain, &plain_tabs, &.{});
 }
@@ -149,7 +150,8 @@ fn apply(saved: Saved, layout: *dock.DockSpace, tabs: *Tabs) void {
     layout.z_counter = saved.z_counter;
     layout.drag = .none;
     layout.menu = 0xFF;
-    // A file from before tabs has one: the main window's layout.
+    // A file from before tabs has one: the main window's layout. One saved with none has an
+    // empty main window, which makes a tab only to drop it.
     tabs.* = if (saved.tabs[0] == null) .init(layout) else .{ .list = saved.tabs, .active = saved.active_tab };
     tabs.prune(layout);
 }
@@ -263,6 +265,6 @@ test "tabs are kept with the layout, and undoing brings a closed one back" {
     var restored_tabs = Tabs.init(&restored_layout);
     try std.testing.expect(restore(gpa, text, &restored_layout, &restored_tabs));
     try std.testing.expectEqual(@as(usize, 2), restored_tabs.count());
-    try std.testing.expectEqual(@as(u8, 1), restored_tabs.active);
+    try std.testing.expectEqual(@as(?u8, 1), restored_tabs.active);
     try std.testing.expectEqual(@as(?usize, 1), restored_tabs.ofPanel(&restored_layout, 2));
 }
