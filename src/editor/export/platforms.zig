@@ -90,7 +90,6 @@ pub fn title(platform: Platform) []const u8 {
         .macos => "macOS",
         .linux => "Linux",
         .web => "Web",
-        .android => "Android",
     };
 }
 
@@ -104,7 +103,6 @@ pub fn note(platform: Platform) []const u8 {
             "A folder with the game, and a ZIP of it. Building from another system needs a macOS SDK.",
         .linux => "A folder with the game, and a ZIP of it, for Linux on the architecture and C library chosen.",
         .web => "A page and its files for a web server. Sets up emsdk if needed, or uses $EMSDK or ~/emsdk.",
-        .android => "A test-signed APK for Android 15 and later, with Vulkan 1.3. Sets up the Android SDK, NDK and JDK if needed. Not for store release.",
     };
 }
 
@@ -112,16 +110,8 @@ pub fn note(platform: Platform) []const u8 {
 pub fn architectures(platform: Platform) []const Architecture {
     return switch (platform) {
         .web => &.{.x86_64},
-        .windows, .linux, .android => &.{ .x86_64, .aarch64 },
+        .windows, .linux => &.{ .x86_64, .aarch64 },
         .macos => &.{ .aarch64, .x86_64 },
-    };
-}
-
-/// Why this computer can't build for `platform`, or null when it can.
-pub fn unavailable(platform: Platform) ?[]const u8 {
-    return switch (platform) {
-        .android => if (builtin.os.tag == .macos or (builtin.os.tag == .linux and builtin.cpu.arch == .x86_64)) null else "Export for Android from macOS, or Linux on x86-64: the Android tools Eggy sets up run there.",
-        .windows, .macos, .linux, .web => null,
     };
 }
 
@@ -155,11 +145,10 @@ pub fn target(platform: Platform, settings: Settings) []const u8 {
         .web => "wasm32-emscripten",
         .windows => if (settings.architecture == .aarch64) "aarch64-windows-gnu" else "x86_64-windows-gnu",
         .macos => if (settings.architecture == .aarch64) "aarch64-macos" else "x86_64-macos",
-        .android => if (settings.architecture == .aarch64) "aarch64-linux-android.35" else "x86_64-linux-android.35",
     };
 }
 
-/// Whether `platform`'s export is a folder that can be zipped (not a page or an APK).
+/// Whether `platform`'s export is a folder that can be zipped (not a page).
 pub fn zips(platform: Platform) bool {
     return platform == .windows or platform == .macos or platform == .linux;
 }

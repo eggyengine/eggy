@@ -19,10 +19,14 @@ pub const Kind = enum(u8) {
     material,
     /// An authored animation clip (`.clip.zon`).
     animation,
+    /// A UI scene (`.ui.zon`): a HUD, a menu, a billboard's face, or a part of another.
+    ui,
+    /// A TrueType or OpenType font, which UI scenes draw text with.
+    font,
 
     /// The kind of the file at `path`; `any` for a kind Eggy doesn't know.
     /// Does not inspect the filesystem or infer folders. Ordinary extensions ignore case;
-    /// the compound `.scene.zon`, `.inmap.zon`, `.material.zon` and `.clip.zon` suffixes are case-sensitive.
+    /// the compound `.scene.zon`, `.inmap.zon`, `.material.zon`, `.clip.zon` and `.ui.zon` suffixes are case-sensitive.
     ///
     /// ```zig
     /// const kind = Kind.of("resources/ship.GLB"); // .model
@@ -32,6 +36,7 @@ pub const Kind = enum(u8) {
         if (std.mem.endsWith(u8, path, ".inmap.zon")) return .input_map;
         if (std.mem.endsWith(u8, path, ".material.zon")) return .material;
         if (std.mem.endsWith(u8, path, ".clip.zon")) return .animation;
+        if (std.mem.endsWith(u8, path, ".ui.zon")) return .ui;
         const extension = std.fs.path.extension(path);
         const kinds = [_]struct { []const []const u8, Kind }{
             .{ &.{".zig"}, .code },
@@ -39,6 +44,7 @@ pub const Kind = enum(u8) {
             .{ &.{ ".png", ".jpg", ".jpeg", ".gif", ".svg", ".bmp", ".webp" }, .image },
             .{ &.{ ".wav", ".ogg", ".mp3", ".flac" }, .audio },
             .{ &.{ ".glb", ".gltf", ".obj", ".fbx", ".dae", ".3ds", ".ply", ".stl" }, .model },
+            .{ &.{ ".ttf", ".otf" }, .font },
         };
         for (kinds) |entry| for (entry[0]) |known| {
             if (std.ascii.eqlIgnoreCase(extension, known)) return entry[1];
@@ -80,6 +86,8 @@ test "a file's kind comes from its name" {
     try std.testing.expectEqual(Kind.input_map, Kind.of("input/player.inmap.zon"));
     try std.testing.expectEqual(Kind.material, Kind.of("art/metal.material.zon"));
     try std.testing.expectEqual(Kind.animation, Kind.of("art/walk.clip.zon"));
+    try std.testing.expectEqual(Kind.ui, Kind.of("ui/hud.ui.zon"));
+    try std.testing.expectEqual(Kind.font, Kind.of("ui/Title.OTF"));
     try std.testing.expect(Kind.isTexture("art/Wood.PNG"));
     try std.testing.expect(!Kind.isTexture("art/logo.svg"));
 }

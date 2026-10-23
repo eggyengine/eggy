@@ -16,19 +16,20 @@ const text_size: f32 = 12;
 const line_height = text_size * 1.5;
 const padding: f32 = 10;
 
-/// A clickable terminal line, sharing the output view's monospace face and severity colours.
+/// A clickable terminal line, sharing the output view's monospace face and severity colours,
+/// with `level` (when not info) marked down its left edge.
 /// Its text and paint state live for the builder's frame; long lines wrap at whole characters.
 /// Editor Console helper: `id == 0` makes a noninteractive label; otherwise it is a button
 /// whose expanded/highlight state follows `selected`. Borrowed text/font must survive drawing;
 /// the returned element/state belong to `b.allocator`. Allocation errors propagate.
 ///
 /// ```zig
-/// const line = try terminal_view.messageLine(b, mono, context.idFor("message-1"), "error: broken", false);
+/// const line = try terminal_view.messageLine(b, mono, context.idFor("message-1"), "error: broken", .err, false);
 /// context.element(line);
 /// ```
-pub fn messageLine(b: ui.Layout.Builder, mono: *const ui.Font, id: u32, text: []const u8, selected: bool) !*ui.Layout.Element {
+pub fn messageLine(b: ui.Layout.Builder, mono: *const ui.Font, id: u32, text: []const u8, level: ?std.log.Level, selected: bool) !*ui.Layout.Element {
     const state = try b.allocator.create(MessageLine);
-    state.* = .{ .mono = mono, .id = id, .text = text, .selected = selected };
+    state.* = .{ .mono = mono, .id = id, .text = text, .level = level, .selected = selected };
     const element = try b.node(id, .{}, .{ .custom = .{ .context = state, .measure = MessageLine.measure, .draw = MessageLine.draw } }, &.{});
     element.accessibility = .{ .role = if (id == 0) .label else .button, .label = text, .expanded = if (id == 0) null else selected };
     if (id != 0) element.cursor = .pointer;
@@ -41,7 +42,7 @@ pub fn messageLine(b: ui.Layout.Builder, mono: *const ui.Font, id: u32, text: []
 /// or allocation error without owning the scroll state.
 ///
 /// ```zig
-/// const line = try terminal_view.messageLine(b, mono, 0, "No messages.", false);
+/// const line = try terminal_view.messageLine(b, mono, 0, "No messages.", null, false);
 /// context.element(try terminal_view.messageList(b, context.contentWidth(), 240, &scroll, &.{line}));
 /// ```
 pub fn messageList(b: ui.Layout.Builder, width: f32, height: f32, scroll: *ui.Layout.ScrollState, lines: []const *ui.Layout.Element) !*ui.Layout.Element {
@@ -57,10 +58,21 @@ pub fn messageList(b: ui.Layout.Builder, width: f32, height: f32, scroll: *ui.La
     return element;
 }
 
+/// The colour a log level's word is drawn in, which marks its messages elsewhere too.
+pub fn levelColor(level: std.log.Level) ui.Color {
+    return switch (level) {
+        .err => red,
+        .warn => amber,
+        .info => blue,
+        .debug => grey,
+    };
+}
+
 const MessageLine = struct {
     mono: *const ui.Font,
     id: u32,
     text: []const u8,
+    level: ?std.log.Level,
     selected: bool,
 
     fn columns(self: *const MessageLine, width: f32) usize {
@@ -84,7 +96,15 @@ const MessageLine = struct {
             c.clip = previous_clip;
             c.font = previous_font;
         }
-        if (self.selected or (self.id != 0 and c.hot_id == self.id)) try c.rectAlpha(r, c.theme.primary, if (self.selected) 0.2 else 0.1);
+        // The chosen line is tinted and marked in the accent, one under the pointer only lifted;
+        // errors, warnings and debug chatter keep their colour down the left edge.
+        if (self.selected) {
+            try c.rectAlpha(r, c.theme.primary, 0.08);
+        } else if (self.id != 0 and c.hot_id == self.id) try c.rectAlpha(r, foreground, 0.04);
+        const edge = ui.Rect{ .x = r.x + 3, .y = r.y + 3, .w = 2, .h = @max(0, r.h - 6) };
+        if (self.selected) {
+            try c.roundRect(edge, c.theme.primary, 1);
+        } else if (self.level) |level| if (level != .info) try c.roundRect(edge, levelColor(level), 1);
         const count = self.columns(r.w);
         const char_width = self.mono.measure("M", text_size);
         var start: usize = 0;

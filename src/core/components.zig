@@ -535,9 +535,10 @@ fn partsOf(comptime T: type, comptime name: [:0]const u8) []const Part {
                     child_types = &.{@typeInfo(Type).array.child};
                     child_names = &.{""};
                 },
+                // What an optional holds keeps its name, so `tint_color: ?[4]f32` is still a colour.
                 .optional => {
                     child_types = &.{@typeInfo(Type).optional.child};
-                    child_names = &.{""};
+                    child_names = &.{names[next]};
                 },
                 .@"struct", .@"union" => for (std.meta.fields(Type)) |field| {
                     child_types = child_types ++ &[_]type{field.type};

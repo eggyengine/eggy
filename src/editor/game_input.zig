@@ -60,14 +60,16 @@ pub const State = struct {
     /// window width/height in points; it converts to viewport-local coordinates.
     /// The host decides which events belong here. `game` supplies `uiEvent(app,event) bool`
     /// and `event(app,event) void`; gameplay only receives declined input while `running`.
+    /// While running, a left press the UI declined goes to the billboard button under it, seen
+    /// through `view` (the game's camera), before gameplay.
     /// Relative mouse capture bypasses pointer UI so hidden movement cannot hover or consume it.
     /// Touch allocation and input-backend errors propagate; zero-sized viewports are ignored.
     ///
     /// ```zig
     /// // Host has already checked Scene focus/capture and event window ownership.
-    /// try state.route(app, game, event, scene_rect, window_points, play_mode.running());
+    /// try state.route(app, game, event, scene_rect, window_points, play_mode.running(), view);
     /// ```
-    pub fn route(self: *State, app: *eggy.App, game: anytype, event: eggy.Event, viewport: eggy.ui.Rect, window_points: [2]f32, running: bool) !void {
+    pub fn route(self: *State, app: *eggy.App, game: anytype, event: eggy.Event, viewport: eggy.ui.Rect, window_points: [2]f32, running: bool, view: ?eggy.camera.View) !void {
         if (eggy.game_ui.syntheticTouchMouse(event)) return;
         if (viewport.w <= 0 or viewport.h <= 0) return;
         const local = eggy.game_ui.localEvent(event, viewport, window_points);
@@ -95,7 +97,7 @@ pub const State = struct {
         }
         const relative_pointer = self.relative_mouse and at != null and !eggy.game_ui.isTouchInput(local);
         const consumed = if (!relative_pointer) if (app.ui_layer) |layer| layer.handle(local, true) else false else false;
-        if (!relative_pointer and (consumed or game.uiEvent(app, local))) {
+        if (!relative_pointer and (consumed or game.uiEvent(app, local) or (running and try pressBillboard(app, local, view, viewport)))) {
             app.input.suppress(local);
             return;
         }
@@ -105,6 +107,18 @@ pub const State = struct {
         } else app.input.suppress(local);
     }
 };
+
+/// Press the button of a billboard under a left click at viewport-local `local`, seen through
+/// `view`. Returns whether one was pressed.
+fn pressBillboard(app: *eggy.App, local: eggy.Event, view: ?eggy.camera.View, viewport: eggy.ui.Rect) !bool {
+    const down = switch (local) {
+        .mouse_button_down => |down| down,
+        else => return false,
+    };
+    const seen_from = view orelse return false;
+    if (down.button != .left or app.ui_scenes.billboard_count == 0) return false;
+    return eggy.ui_scenes.billboards.press(&app.ui_scenes, app.resources(), seen_from, .{ viewport.w, viewport.h }, .{ down.x, down.y });
+}
 
 fn buttonBit(button: sdl.mouse.Button) u32 {
     const value = @intFromEnum(button);
@@ -140,11 +154,11 @@ test "custom UI consumption withholds both gameplay polling and event hooks" {
     var state = State{ .focused = true };
     const event = eggy.Event{ .key_down = .{ .common = undefined, .id = null, .scancode = .w, .key = .w, .mod = .{}, .raw = 0, .down = true, .repeat = false } };
     const viewport = eggy.ui.Rect{ .x = 100, .y = 50, .w = 300, .h = 200 };
-    try state.route(&app, &game, event, viewport, .{ 500, 300 }, true);
+    try state.route(&app, &game, event, viewport, .{ 500, 300 }, true, null);
     try std.testing.expect(!app.input.held(.w));
     try std.testing.expectEqual(@as(usize, 0), game.events);
     game.consumed = false;
-    try state.route(&app, &game, event, viewport, .{ 500, 300 }, true);
+    try state.route(&app, &game, event, viewport, .{ 500, 300 }, true, null);
     try std.testing.expect(app.input.pressed(.w));
     try std.testing.expectEqual(@as(usize, 1), game.events);
     state.cancel(&app);
@@ -178,7 +192,7 @@ test "Scene touch ownership follows exact contacts outside the viewport and clea
     var state = State{};
     defer state.deinit(gpa);
     const finger = sdl.events.TouchFinger{ .common = undefined, .id = .{ .value = 1 }, .finger_id = .{ .value = 2 }, .x = 0.5, .y = 0.5, .dx = 0, .dy = 0, .pressure = 1 };
-    try state.route(&app, &game, .{ .finger_down = finger }, .{ .x = 100, .y = 50, .w = 300, .h = 200 }, .{ 500, 300 }, true);
+    try state.route(&app, &game, .{ .finger_down = finger }, .{ .x = 100, .y = 50, .w = 300, .h = 200 }, .{ 500, 300 }, true, null);
     try std.testing.expect(state.ownsTouch(.{ .finger_motion = finger }));
     var other = finger;
     other.finger_id.value = 3;
@@ -213,8 +227,8 @@ test "relative capture keeps tracking outside the viewport without hovering or c
         .y_rel = -250,
     } };
     const viewport = eggy.ui.Rect{ .x = 100, .y = 50, .w = 300, .h = 200 };
-    try state.route(&app, &game, motion, viewport, .{ 1200, 800 }, true);
-    try state.route(&app, &game, motion, viewport, .{ 1200, 800 }, true);
+    try state.route(&app, &game, motion, viewport, .{ 1200, 800 }, true, null);
+    try state.route(&app, &game, motion, viewport, .{ 1200, 800 }, true, null);
     try std.testing.expectEqual([2]f32{ 800, -500 }, app.input.mouse_delta);
     try std.testing.expect(state.pointer_in_scene);
     try std.testing.expectEqual(@as(usize, 0), game.ui_events);
@@ -222,7 +236,7 @@ test "relative capture keeps tracking outside the viewport without hovering or c
 
     state.mouse_captured = false;
     state.relative_mouse = false;
-    try state.route(&app, &game, motion, viewport, .{ 1200, 800 }, true);
+    try state.route(&app, &game, motion, viewport, .{ 1200, 800 }, true, null);
     try std.testing.expect(!state.pointer_in_scene);
     try std.testing.expectEqual(@as(usize, 1), game.ui_events);
     try std.testing.expectEqual(@as(usize, 2), game.events);

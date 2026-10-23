@@ -6,6 +6,61 @@ const terminal_view = @import("terminal_view.zig");
 const diagnostic = @import("diagnostic.zig");
 const restyle = @import("page_style.zig").restyle;
 
+/// The level chips, in the order they sit in the toolbar.
+const level_chips = [_]struct { level: std.log.Level, label: []const u8 }{
+    .{ .level = .err, .label = "Errors" },
+    .{ .level = .warn, .label = "Warnings" },
+    .{ .level = .info, .label = "Info" },
+    .{ .level = .debug, .label = "Debug" },
+};
+const chip_height: f32 = 26;
+const chip_padding: f32 = 10;
+const chip_gap: f32 = 6;
+const chip_text_size: f32 = 12;
+const dot_size: f32 = 7;
+
+/// A level chip's paint state, for the frame it is drawn in.
+const LevelChip = struct {
+    id: u32,
+    label: []const u8,
+    count: []const u8,
+    color: ui.Color,
+    shown: bool,
+
+    fn draw(context: *const anyopaque, c: *ui.Canvas, r: ui.Rect) anyerror!void {
+        const self: *const LevelChip = @ptrCast(@alignCast(context));
+        const theme = c.theme;
+        const radius = r.h / 2;
+        // Filled in the level's colour while shown, outlined while hidden, lifted under the pointer.
+        if (self.shown) try c.roundRectAlpha(r, self.color, radius, 0.14) else try c.roundRectStroke(r, theme.border, radius, 1);
+        if (c.hot_id == self.id) try c.roundRectAlpha(r, theme.foreground, radius, 0.06);
+        const dot = ui.Rect{ .x = r.x + chip_padding, .y = r.y + (r.h - dot_size) / 2, .w = dot_size, .h = dot_size };
+        if (self.shown) try c.roundRect(dot, self.color, dot_size / 2) else try c.roundRectStroke(dot, self.color, dot_size / 2, 1.2);
+        // The name, then the count after it, quieter.
+        const label_x = dot.x + dot_size + chip_gap;
+        const label_w = c.font.measure(self.label, chip_text_size);
+        try c.textIn(.{ .x = label_x, .y = r.y, .w = label_w + 1, .h = r.h }, self.label, chip_text_size, if (self.shown) theme.foreground else theme.muted_foreground, .start);
+        try c.textIn(.{ .x = label_x + label_w + chip_gap, .y = r.y, .w = r.x + r.w - (label_x + label_w + chip_gap), .h = r.h }, self.count, chip_text_size, theme.muted_foreground, .start);
+    }
+};
+
+const grip_height: f32 = 10;
+const min_detail_height: f32 = 60;
+const min_list_height: f32 = 60;
+
+/// The resize bar's paint state: a short rounded grip, in the accent while held or hovered.
+const Grip = struct {
+    id: u32,
+    held: bool,
+
+    fn draw(context: *const anyopaque, c: *ui.Canvas, r: ui.Rect) anyerror!void {
+        const self: *const Grip = @ptrCast(@alignCast(context));
+        const lit = self.held or c.hot_id == self.id;
+        const bar = ui.Rect{ .x = r.x + (r.w - 36) / 2, .y = r.y + (r.h - 3) / 2, .w = 36, .h = 3 };
+        try c.roundRect(bar, if (lit) c.theme.primary else c.theme.border, 1.5);
+    }
+};
+
 const Filtered = struct { log: u64, levels: [4]bool, query_hash: u64, hidden: u64 };
 
 pub const Console = struct {
@@ -24,6 +79,9 @@ pub const Console = struct {
     shown: console_log.Messages = .{},
     counts: console_log.Snapshot = .{ .shown = 0, .total = 0 },
     filtered: ?Filtered = null,
+    /// How tall the details are, as last dragged; and the drag in progress, from where it began.
+    detail_height: f32 = 220,
+    resizing: ?struct { pointer_y: f32, height: f32 } = null,
 
     /// Create the editor Console's lazy filter/selection state; `mono` is borrowed
     /// until `deinit` and must be a loaded font before the first `build`.
@@ -69,29 +127,13 @@ pub const Console = struct {
     fn buildPage(self: *Console, context: *ui.Context, project_dir: ?[]const u8) !?diagnostic.Location {
         self.terminal.area = null;
         const arena = context.builder().allocator;
-        // The filter across the top, with Clear beside it.
-        context.begin(.row);
-        _ = context.textInput("Filter", &self.query, "Filter messages");
-        restyle(context, .{ .grow = 1 });
-        if (context.buttonVariant("Clear", .outline)) {
-            console_log.clear();
-            self.hidden.clearRetainingCapacity();
-            self.hidden_version +%= 1;
-            self.selected = null;
-        }
-        context.end();
-        restyle(context, .{ .direction = .row, .gap = 8, .align_items = .center });
-
         // Filtering whole entries keeps source context visible even when Info is switched off.
         try self.refresh();
-        // Levels on the left; what is shown, and the way back to hidden messages, on the right.
+
+        // One toolbar: the levels shown, the filter, what is shown of the log, and its actions.
         context.begin(.row);
-        _ = context.checkbox("Errors", &self.levels[@intFromEnum(std.log.Level.err)]);
-        _ = context.checkbox("Warnings", &self.levels[@intFromEnum(std.log.Level.warn)]);
-        _ = context.checkbox("Info", &self.levels[@intFromEnum(std.log.Level.info)]);
-        _ = context.checkbox("Debug", &self.levels[@intFromEnum(std.log.Level.debug)]);
-        context.begin(.row);
-        context.end();
+        for (level_chips) |chip| try self.levelChip(context, chip.level, chip.label);
+        _ = context.textInput("Filter", &self.query, "Filter messages");
         restyle(context, .{ .grow = 1 });
         context.muted(try std.fmt.allocPrint(arena, "{d} of {d}", .{ self.counts.shown, self.counts.total }));
         if (self.hidden.count() > 0 and context.buttonVariant(try std.fmt.allocPrint(arena, "Show {d} hidden", .{self.hidden.count()}), .ghost)) {
@@ -100,14 +142,22 @@ pub const Console = struct {
             try self.refresh();
         }
         if (context.buttonVariant("Copy shown", .ghost)) terminal_view.copyToClipboard(self.shown.text.items);
+        if (context.buttonVariant("Clear", .ghost)) {
+            console_log.clear();
+            self.hidden.clearRetainingCapacity();
+            self.hidden_version +%= 1;
+            self.selected = null;
+        }
         context.end();
-        restyle(context, .{ .direction = .row, .gap = 12, .align_items = .center });
+        restyle(context, .{ .direction = .row, .gap = 6, .align_items = .center });
 
-        const available = @max(120, context.viewport.h - 158);
-        const detail_height = @min(220, available * 0.5);
-        try self.messageRows(context, if (self.selected != null) @max(60, available - detail_height - 44) else available);
+        // The list takes what the details, dragged to the height wanted, leave of the page.
+        const available = @max(120, context.viewport.h - 114);
+        const detail_height = std.math.clamp(self.detail_height, min_detail_height, @max(min_detail_height, available - 44 - grip_height - min_list_height));
+        try self.messageRows(context, if (self.selected != null) @max(min_list_height, available - detail_height - 44 - grip_height) else available);
         var source: ?diagnostic.Location = null;
         if (self.selectedEntry()) |entry| {
+            try self.resizeGrip(context, detail_height);
             context.begin(.row);
             if (project_dir) |dir| if (diagnostic.projectSource(self.shown.text.items[entry.start..entry.end], dir)) |at| {
                 const label = try std.fmt.allocPrint(arena, "Open {s}:{d}:{d}", .{ at.path, at.line, at.column });
@@ -130,6 +180,27 @@ pub const Console = struct {
         return source;
     }
 
+    /// The bar between the list and the details: dragging it up or down makes the details
+    /// taller or shorter, from `shown_height` (their height this frame).
+    fn resizeGrip(self: *Console, context: *ui.Context, shown_height: f32) !void {
+        const b = context.builder();
+        const id = context.idFor("console-details-resize");
+        // A press on it holds the pointer, as weeoui's sliders do, until the button is let go.
+        if (context.pressed_down) if (context.press) |press| if (press.widget == id) {
+            context.active = id;
+            self.resizing = .{ .pointer_y = context.pointer.y, .height = shown_height };
+        };
+        if (context.active != id) self.resizing = null;
+        if (self.resizing) |start| self.detail_height = @max(min_detail_height, start.height + start.pointer_y - context.pointer.y);
+
+        const grip = try b.allocator.create(Grip);
+        grip.* = .{ .id = id, .held = self.resizing != null };
+        const element = try b.node(id, .{ .width = context.contentWidth(), .height = grip_height }, .{ .custom = .{ .context = grip, .draw = Grip.draw } }, &.{});
+        element.accessibility = .{ .role = .slider, .label = "Resize message details", .numeric_value = shown_height };
+        element.cursor = .ns_resize;
+        context.element(element);
+    }
+
     fn refresh(self: *Console) !void {
         const now = Filtered{ .log = console_log.changes(), .levels = self.levels, .query_hash = std.hash.Wyhash.hash(0, self.query.text()), .hidden = self.hidden_version };
         if (self.filtered != null and std.meta.eql(self.filtered.?, now)) return;
@@ -141,7 +212,10 @@ pub const Console = struct {
     fn messageRows(self: *Console, context: *ui.Context, height: f32) !void {
         const b = context.builder();
         var lines: std.ArrayList(*ui.Layout.Element) = .empty;
-        if (self.shown.entries.items.len == 0) try lines.append(b.allocator, try terminal_view.messageLine(b, self.terminal.mono, 0, "No matching messages.", false));
+        if (self.shown.entries.items.len == 0) {
+            const empty = if (self.counts.total == 0) "Nothing has been logged yet." else "No messages match. Clear the filter or turn on more levels.";
+            try lines.append(b.allocator, try terminal_view.messageLine(b, self.terminal.mono, 0, empty, null, false));
+        }
         for (self.shown.entries.items) |entry| {
             const id = context.idFor(try std.fmt.allocPrint(b.allocator, "console-message-{d}", .{entry.id}));
             if (context.activated(id)) {
@@ -152,9 +226,26 @@ pub const Console = struct {
                 self.scroll.following_messages = false;
             }
             const summary = self.shown.text.items[entry.start..entry.summary_end];
-            try lines.append(b.allocator, try terminal_view.messageLine(b, self.terminal.mono, id, summary, self.selected == entry.id));
+            try lines.append(b.allocator, try terminal_view.messageLine(b, self.terminal.mono, id, summary, entry.level, self.selected == entry.id));
         }
         context.element(try terminal_view.messageList(b, context.contentWidth(), height, &self.scroll, lines.items));
+    }
+
+    /// A pill that shows or hides `level`'s messages: a dot in the level's colour, its name and
+    /// how many there are; filled while they are shown, hollow while hidden.
+    fn levelChip(self: *Console, context: *ui.Context, level: std.log.Level, label: []const u8) !void {
+        const b = context.builder();
+        const id = context.idFor(try std.fmt.allocPrint(b.allocator, "console-level-{t}", .{level}));
+        const shown = &self.levels[@intFromEnum(level)];
+        if (context.activated(id)) shown.* = !shown.*;
+        const count = try std.fmt.allocPrint(b.allocator, "{d}", .{self.counts.per_level[@intFromEnum(level)]});
+        const chip = try b.allocator.create(LevelChip);
+        chip.* = .{ .id = id, .label = label, .count = count, .color = terminal_view.levelColor(level), .shown = shown.* };
+        const width = chip_padding * 2 + dot_size + chip_gap + context.font.measure(label, chip_text_size) + chip_gap + context.font.measure(count, chip_text_size);
+        const element = try b.node(id, .{ .width = width, .height = chip_height }, .{ .custom = .{ .context = chip, .draw = LevelChip.draw } }, &.{});
+        element.accessibility = .{ .role = .checkbox, .label = try std.fmt.allocPrint(b.allocator, "{s} ({s})", .{ label, count }), .description = if (shown.*) "shown" else "hidden" };
+        element.cursor = .pointer;
+        context.element(element);
     }
 
     fn selectedEntry(self: *const Console) ?console_log.Entry {
@@ -251,4 +342,50 @@ test "console summaries expand, link to project source, hide and restore through
     _ = try context.render();
     try std.testing.expectEqual(@as(usize, 1), console.counts.shown);
     try std.testing.expectEqual(@as(usize, 0), console.hidden.count());
+}
+
+test "dragging the grip above the details makes them taller, and letting go stops it" {
+    defer console_log.clear();
+    console_log.logFn(.err, .default, "broken\n    source context", .{});
+    var context = try ui.Context.init(std.testing.allocator);
+    defer context.deinit();
+    var console = Console.init(std.testing.allocator, context.font);
+    defer console.deinit();
+    const viewport = ui.Rect{ .x = 0, .y = 0, .w = 640, .h = 600 };
+    try console.refresh();
+    console.selected = console.shown.entries.items[0].id;
+    context.newFrame(viewport);
+    _ = console.build(&context, null);
+    _ = try context.render();
+    const grip = gripId(context.last_root.?).?;
+
+    // Pressed on the grip, then moved 50 up while held: the details grow by 50.
+    context.newFrame(viewport);
+    context.pointer = .{ .x = 320, .y = 300 };
+    context.pressed_down = true;
+    context.pointer_held = true;
+    context.press = .{ .at = context.pointer, .widget = grip };
+    _ = console.build(&context, null);
+    _ = try context.render();
+    context.newFrame(viewport);
+    context.pointer.y = 250;
+    _ = console.build(&context, null);
+    _ = try context.render();
+    try std.testing.expectEqual(@as(f32, 270), console.detail_height);
+
+    // Let go, and moving no longer resizes.
+    context.newFrame(viewport);
+    context.active = 0;
+    context.pointer_held = false;
+    context.pointer.y = 100;
+    _ = console.build(&context, null);
+    _ = try context.render();
+    try std.testing.expectEqual(@as(f32, 270), console.detail_height);
+}
+
+/// The id of the details' resize grip in a rendered tree, found by its label.
+fn gripId(root: *const ui.Layout.Element) ?u32 {
+    if (root.accessibility.label) |label| if (std.mem.eql(u8, label, "Resize message details")) return root.id;
+    for (root.children) |child| if (gripId(child)) |found| return found;
+    return null;
 }

@@ -60,6 +60,7 @@ pub const Plugin = struct {
 | `editorCommand` | Invokes a declared View-menu command. `command` is the zero-based index in this type's `editor_commands`. |
 | `exportUi` | Builds extra settings in File > Export for the platform shown, whichever it is. See [Export platforms](#export-platforms). |
 | `exportArgs` | Adds `zig build export` arguments when an export starts, for whichever platform. |
+| `uiWidget` | Draws one of the type's `ui_widgets` in a UI scene node. See [UI widgets](#ui-widgets). |
 
 Keep the parameter order and return types above, including error unions on hooks that
 currently cannot fail. `init` has no `self`; it constructs the instance. Use `_` for
@@ -92,6 +93,7 @@ keeps running. See [Diagnose and handle errors](../how-to/handle-errors.md).
 | `pub const editor_status_items = [_]eggy.plugins.EditorStatusItem{...};` | Buttons and menus on the bottom status bar, paired with `editorBarAction` |
 | `pub const editor_file_types = [_]eggy.plugins.EditorFileType{...};` | Templates in both Assets New menus |
 | `pub const export_platforms = [_]eggy.plugins.ExportPlatform{...};` | Platforms in File > Export, paired with `exportUi` and `exportArgs` |
+| `pub const ui_widgets = [_]eggy.plugins.UiWidget{...};` | Widgets in the UI Designer's palette, paired with `uiWidget` |
 
 Disabling a plugin skips its instance and hooks. Its component types and preferences
 remain known so scene and setting values are retained. The game is always enabled.
@@ -121,6 +123,24 @@ Reference slots accept matching entities/files by drag-and-drop; the x clears a 
 `EntityRef(T)` requires component `T`, `EntityRef(void)` accepts any entity, and
 `AssetRef(kind)` accepts the named file kind. Reference fields also work inside tagged
 unions. See [Find entities safely](../how-to/render-scene.md#find-entities-safely).
+
+## UI widgets
+
+A plugin's `ui_widgets` appear in the UI Designer's palette, after the built-in nodes. A UI
+scene names one `<plugin>/<key>`, so keys must not contain `/`. Eggy calls `uiWidget` with
+the widget's index and a borrowed `eggy.plugins.UiWidgetDraw`:
+
+| Field | Meaning |
+| --- | --- |
+| `canvas` | The canvas to draw on, valid for the call |
+| `rect` | The node's box, in the canvas's units |
+| `value` | The node's **Value** text, for the widget to read as it likes |
+| `scale` | Canvas units per design pixel |
+| `time_ms` | A steady clock, for animation |
+
+It runs for screens, billboards and the designer's preview, including while the plugin is
+not playing. An error is logged once, and the node is left empty. A disabled plugin's widgets
+draw nothing. See [Build HUDs and billboards with UI scenes](../guides/ui-scenes.md).
 
 ## Top bar and status bar
 
@@ -264,12 +284,18 @@ start scene, the chosen optimization and ZIP choice, and every enabled plugin's
 fails.
 
 `ExportTarget` says which platform the hook is for: `builtin` is Eggy's
-`windows`, `macos`, `linux`, `web` or `android`, else null. `own` is the index in this
+`windows`, `macos`, `linux` or `web`, else null. `own` is the index in this
 plugin's `export_platforms` when this plugin declared it. `target` is the `-Dtarget`
 with the architecture chosen, or `native` for Linux, which builds for this computer.
 `exportUi` runs every frame the window shows the platform. Keep its choices in the
 instance. A rebuild of the game's code restarts the instance and resets them, so keep
 lasting choices in `Preferences`.
+
+A platform whose target depends on its settings (an architecture or OS version picked in
+`exportUi`) calls `args.buildFor("aarch64-linux-android.33")` in `exportArgs` to build for
+that instead of its `target`. Set `.zips = false` on a platform whose export is a single
+file, such as an installer or an APK, to hide the ZIP choice. Eggy's Android plugin
+(`plugins/android/`) does both.
 
 `key` is scoped to the published plugin name and duplicate keys fail compilation.
 A disabled plugin's platforms stay listed but can't export.

@@ -717,7 +717,7 @@ const Draw = struct {
 };
 
 /// Open a row for a part: its label, `depth` in, then its control's column (`endRow` closes both).
-fn labelledRow(context: *ui.Context, label: []const u8, depth: u32) void {
+pub fn labelledRow(context: *ui.Context, label: []const u8, depth: u32) void {
     context.begin(.row);
     context.text(label);
     page_style.smallText(context, 13);
@@ -726,7 +726,7 @@ fn labelledRow(context: *ui.Context, label: []const u8, depth: u32) void {
 }
 
 /// Close the row `labelledRow` opened.
-fn endRow(context: *ui.Context, width: f32) void {
+pub fn endRow(context: *ui.Context, width: f32) void {
     context.end();
     restyle(context, .{ .width = width, .align_items = .end });
     context.end();

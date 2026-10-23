@@ -2,8 +2,8 @@
 //! every file in `resources/` its identity, and the providers that load by identity what the
 //! scene's caches ask for, straight from the project's files (models through assimp with the
 //! import settings the catalog keeps, images through stb_image, both in `eggy_model_import`).
-//! A model file opens into virtual children (`eggy.assets.subassets`): its geometry and one
-//! entry for each animation clip it holds, which exist only as identities and are read by
+//! A model file opens into virtual children (`eggy.assets.subassets`): its geometry, one
+//! entry for each animation clip it holds and one image for each texture its materials use, which exist only as identities and are read by
 //! importing the model again. (The runtime loads what packaging made of them instead.)
 const std = @import("std");
 const eggy = @import("eggy");
@@ -155,7 +155,7 @@ pub const ProjectAssets = struct {
     /// folders, files outside `resources/` and children not expanded. The name borrows `path`.
     ///
     /// ```zig
-    /// const reference = project_assets.referenceAt("resources/ship.glb/Skeleton") orelse return;
+    /// const reference = project_assets.referenceAt("resources/ship.glb/Skeletal") orelse return;
     /// ```
     pub fn referenceAt(self: *ProjectAssets, path: []const u8) ?Reference {
         self.acquire();
@@ -258,7 +258,7 @@ pub const ProjectAssets = struct {
                 break :blk &.{};
             };
             defer imported.deinit(self.gpa);
-            break :blk assets.subassets.list(self.gpa, source.id, source.path, imported.rig.clips) catch |err| {
+            break :blk assets.subassets.list(self.gpa, source.id, source.path, imported.rig.clips, imported.textures.len) catch |err| {
                 failure = err;
                 break :blk &.{};
             };
@@ -405,7 +405,7 @@ pub const ProjectAssets = struct {
         var imported = try self.importModel(gpa, source);
         defer imported.deinit(gpa);
         // The file may have changed since it was expanded: find the clip by identity again.
-        const listed = try assets.subassets.list(gpa, source.id, source.path, imported.rig.clips);
+        const listed = try assets.subassets.list(gpa, source.id, source.path, imported.rig.clips, imported.textures.len);
         defer assets.subassets.free(gpa, listed);
         const index = for (listed) |child| {
             if (child.id == id) break child.clip_index orelse return error.ConvertedResource;
@@ -428,6 +428,24 @@ pub const ProjectAssets = struct {
         return imported;
     }
 
+    /// The texture child `id` of a model, imported again; the caller owns it.
+    pub fn modelTexture(self: *ProjectAssets, gpa: std.mem.Allocator, id: assets.Id) !assets.Texture {
+        const source = try self.holder(id);
+        defer source.deinit(self.gpa);
+        var imported = try self.importModel(gpa, source);
+        defer imported.deinit(gpa);
+        // The file may have changed since it was expanded: find the texture by identity again.
+        const listed = try assets.subassets.list(gpa, source.id, source.path, imported.rig.clips, imported.textures.len);
+        defer assets.subassets.free(gpa, listed);
+        const index = for (listed) |child| {
+            if (child.id == id) break child.texture_index orelse return error.UnsupportedImageFormat;
+        } else return error.FileNotFound;
+        // Hand this one over, leaving an empty texture for `deinit` to free.
+        const texture = imported.textures[index];
+        imported.textures[index] = .{ .width = 0, .height = 0, .pixels = &.{} };
+        return texture;
+    }
+
     fn importModel(self: *ProjectAssets, gpa: std.mem.Allocator, source: Source) !assets.Model {
         const full_path = try std.fs.path.joinZ(gpa, &.{ self.project_dir, source.path });
         defer gpa.free(full_path);
@@ -439,7 +457,8 @@ pub const ProjectAssets = struct {
 
     fn loadImage(context: *anyopaque, gpa: std.mem.Allocator, key: []const u8) !assets.Texture {
         const self: *ProjectAssets = @ptrCast(@alignCast(context));
-        const found = (try self.fileOf(gpa, try assets.id.parse(key))) orelse return error.FileNotFound;
+        const id = try assets.id.parse(key);
+        const found = (try self.fileOf(gpa, id)) orelse return self.modelTexture(gpa, id);
         defer gpa.free(found.path);
         if (assets.package.Conversion.of(found.path) != .texture) return error.UnsupportedImageFormat;
         const full_path = try std.fs.path.joinZ(gpa, &.{ self.project_dir, found.path });
@@ -464,12 +483,12 @@ test "a model opens into its geometry and clips, whose ids survive a move but no
     defer arena_state.deinit();
     const arena = arena_state.allocator();
 
-    // A model with a clip opens into a Skeleton and the clip, both without files.
+    // A model with a clip opens into a Skeletal model and the clip, both without files.
     const opened = try project.children(arena, "resources/face.gltf");
     try std.testing.expectEqual(@as(usize, 2), opened.len);
-    try std.testing.expectEqualStrings("resources/face.gltf/Skeleton", opened[0].path);
+    try std.testing.expectEqualStrings("resources/face.gltf/Skeletal", opened[0].path);
     try std.testing.expectEqualStrings("resources/face.gltf/smile", opened[1].path);
-    const skeleton = project.referenceAt("resources/face.gltf/Skeleton").?;
+    const skeleton = project.referenceAt("resources/face.gltf/Skeletal").?;
     try std.testing.expectEqual(assets.Kind.model, skeleton.kind);
     const smile = project.referenceAt("resources/face.gltf/smile").?;
     try std.testing.expectEqual(assets.Kind.animation, smile.kind);

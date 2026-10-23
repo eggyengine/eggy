@@ -19,7 +19,7 @@ EMSCRIPTEN_VERSION = "4.0.14"
 EMSDK_COMMIT = "4.0.14"
 EMSDK_SHA256 = "24142f5506a99dab75b18ccecf2e3a23b4e243fa6fac1b6c20b2081bb4fbc8c5"
 ANDROID_TOOLS = "13114758"
-ANDROID_PACKAGES = ("platforms;android-35", "build-tools;36.0.0", "ndk;27.1.12297006")
+ANDROID_BUILD_TOOLS = "36.0.0"
 JDK_RELEASE = "jdk-17.0.16+8"
 
 
@@ -168,7 +168,8 @@ def java_home(cache):
     return root / "Contents/Home" if sys.platform == "darwin" else root
 
 
-def android(cache, explicit):
+def android(cache, explicit, api=35, ndk="27.1.12297006"):
+    """Install the Android platform for API level `api` and NDK `ndk` (the build picks both)."""
     if sys.platform not in ("linux", "darwin"):
         raise RuntimeError("Android export currently needs a Linux or macOS host (SDL's Android build uses sh and patch)")
     if platform.machine() not in ("x86_64", "AMD64", "arm64", "aarch64") or (
@@ -199,9 +200,9 @@ def android(cache, explicit):
         shutil.rmtree(stage)
     env = dict(os.environ, ANDROID_HOME=str(root), ANDROID_SDK_ROOT=str(root), JAVA_HOME=str(jdk), JDK_HOME=str(jdk))
     required = (
-        root / "platforms/android-35/android.jar",
-        root / "build-tools/36.0.0/apksigner",
-        root / "ndk/27.1.12297006/source.properties",
+        root / f"platforms/android-{api}/android.jar",
+        root / f"build-tools/{ANDROID_BUILD_TOOLS}/apksigner",
+        root / f"ndk/{ndk}/source.properties",
     )
     if not all(item.exists() for item in required):
         say("Installing Android SDK packages; exporting accepts Google's Android SDK licenses.")
@@ -211,7 +212,8 @@ def android(cache, explicit):
         with license_log.open("w") as output:
             subprocess.run([str(manager), f"--sdk_root={root}", "--licenses"], env=env,
                            input=b"y\n" * 100, stdout=output, stderr=subprocess.STDOUT, check=True)
-        run([manager, f"--sdk_root={root}", *ANDROID_PACKAGES], env=env, input=b"y\n" * 100)
+        packages = (f"platforms;android-{api}", f"build-tools;{ANDROID_BUILD_TOOLS}", f"ndk;{ndk}")
+        run([manager, f"--sdk_root={root}", *packages], env=env, input=b"y\n" * 100)
     if not all(item.exists() for item in required):
         raise RuntimeError("Android SDK installation is incomplete")
     say(f"Using Android SDK: {root}; JDK: {jdk}")
@@ -223,6 +225,8 @@ def main():
     parser.add_argument("platform", choices=("web", "android"))
     parser.add_argument("--root")
     parser.add_argument("--result", required=True)
+    parser.add_argument("--android-api", type=int, default=35)
+    parser.add_argument("--ndk", default="27.1.12297006")
     args = parser.parse_args()
     cache = default_cache().resolve()
     cache.mkdir(parents=True, exist_ok=True)
@@ -247,7 +251,7 @@ def main():
                     if error.errno not in (errno.EACCES, errno.EAGAIN, errno.EDEADLK):
                         raise
                     time.sleep(1)
-        result = web(cache, args.root) if args.platform == "web" else android(cache, args.root)
+        result = web(cache, args.root) if args.platform == "web" else android(cache, args.root, args.android_api, args.ndk)
         Path(args.result).write_text(json.dumps(result), encoding="utf-8")
 
 

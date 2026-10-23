@@ -2,13 +2,15 @@
 //! of the whole project, folders opening in place; as a grid it is one folder's tiles, with a
 //! path to climb back up. A filter searches every folder by name. A scene (`.scene.zon`) opens
 //! with a double-click, a code or text file opens in the code editor chosen in Preferences, and
-//! any other file shows in the system's file manager. A right-click opens a menu (open, rename,
+//! any other file (or a model's part) shows in the Asset Preview, in a window of its own. A right-click opens a menu (open, rename,
 //! duplicate, delete, copy path, show in the file manager, and new folders and scenes); F2
 //! renames and Delete deletes the selected entry.
 //!
 //! A model file opens, in the list or (double-clicked) in the grid, into what it holds: its
-//! geometry and one entry for each animation clip. Those have no files of their own, so they
-//! can be selected and dragged onto reference fields, but not renamed, moved or deleted.
+//! geometry, one entry for each animation clip and one image for each material's texture. Those
+//! have no files of their own, so they can be selected and dragged onto reference fields, but
+//! not renamed, moved or deleted. A material dragged onto a folder (or extracted from its menu)
+//! is saved there as a PNG, to edit outside Eggy.
 //!
 //! Dragging an entry works as in the Hierarchy: onto a folder it moves there (the editor copies
 //! it instead with Ctrl held), and onto the zone below the files it moves up, to the project (or
@@ -40,6 +42,8 @@ pub const Action = union(enum) {
     create_folder: []const u8,
     create_file: struct { folder: []const u8, file_type: eggy.plugins.EditorFileType },
     open_input_map: []const u8,
+    /// Open this UI scene in the UI Designer.
+    open_ui_scene: []const u8,
     rename: struct { path: []const u8, name: []const u8 },
     duplicate: []const u8,
     /// Move this into the project's trash.
@@ -50,6 +54,10 @@ pub const Action = union(enum) {
     reveal: []const u8,
     /// Open this code or text file in the code editor people chose.
     open_code: []const u8,
+    /// Show the selected entry (`path`) in the Asset Preview, popped out into a window.
+    preview: []const u8,
+    /// Save the model's material texture at virtual `path` as a PNG in `folder`.
+    extract: struct { path: []const u8, folder: []const u8 },
     /// Move (or copy) `path` into `folder` ("" for the project).
     move_into: struct { path: []const u8, folder: []const u8 },
 };
@@ -57,7 +65,7 @@ pub const Action = union(enum) {
 /// What an event routed to the panel did: whether the panel used it, and the action it led to.
 pub const Handled = struct { used: bool, action: ?Action = null };
 
-const MenuItem = enum(u32) { open, rename, duplicate, delete, copy_path, reveal, new_files };
+const MenuItem = enum(u32) { open, rename, duplicate, delete, copy_path, reveal, extract, new_files };
 const menu_id_base: u32 = item_id_base - 32;
 const creation_id_base: u32 = 0x6E00_0000;
 const menu_root_id: u32 = menu_id_base - 8;
@@ -118,7 +126,7 @@ pub const AssetsPanel = struct {
     renaming: ?struct { path: []u8, edit: NameEdit, started: bool = false, field_id: u32 = 0 } = null,
     /// A press on an entry, which becomes a drag once it moves: the entry's path (owned), and
     /// where it would go if let go now.
-    drag: ?struct { path: []u8, from: ui.Vec2, moving: bool = false, target: Target = .none, virtual: bool = false } = null,
+    drag: ?struct { path: []u8, from: ui.Vec2, moving: bool = false, target: Target = .none, virtual: bool = false, kind: listing.Kind = .file } = null,
     /// What the listing was read for, to tell when to read it again.
     read_for: struct { view: View = .list, filter: std.ArrayList(u8) = .empty, folder: std.ArrayList(u8) = .empty, expanded: usize = 0 } = .{},
 
@@ -202,14 +210,17 @@ pub const AssetsPanel = struct {
     /// Where a drag of `path` would go with the pointer at `at`: the folder there, or the zone's
     /// folder, unless that is `path` itself, inside it, or where it already is.
     fn targetAt(self: *const AssetsPanel, context: *const ui.Context, at: ui.Vec2, path: []const u8) Target {
-        // What lives inside a model can't be moved out of it.
-        if (self.drag) |drag| if (drag.virtual) return .none;
+        // What lives inside a model can't be moved out of it, but a material's texture can be
+        // saved out into any folder.
+        const extracting = if (self.drag) |drag| drag.virtual else false;
+        if (self.drag) |drag| if (drag.virtual and drag.kind != .image) return .none;
         const over_zone = if (context.last_bounds.get(up_zone_id)) |zone| zone.rect.contains(at.x, at.y) else false;
         const folder = if (over_zone) self.upFolder() else blk: {
             const item = self.itemAt(context, at) orelse return .none;
             if (item.entry.kind != .folder) return .none;
             break :blk item.entry.path;
         };
+        if (extracting) return .{ .folder = folder };
         if (std.mem.eql(u8, folder, path)) return .none;
         if (std.mem.startsWith(u8, folder, path) and folder.len > path.len and folder[path.len] == '/') return .inside_itself;
         if (std.mem.eql(u8, folder, listing.parentOf(path))) return .already_there;
@@ -398,6 +409,7 @@ pub const AssetsPanel = struct {
                 };
                 // The action's text must outlive the drag: keep it with the menu's.
                 const arena = self.menu_arena.allocator();
+                if (drag.virtual) return .{ .used = true, .action = .{ .extract = .{ .path = arena.dupe(u8, drag.path) catch return .{ .used = true }, .folder = arena.dupe(u8, folder) catch return .{ .used = true } } } };
                 return .{ .used = true, .action = .{ .move_into = .{ .path = arena.dupe(u8, drag.path) catch return .{ .used = true }, .folder = arena.dupe(u8, folder) catch return .{ .used = true } } } };
             },
             else => return .{ .used = false },
@@ -417,10 +429,10 @@ pub const AssetsPanel = struct {
             var entry: ?listing.Entry = null;
             if (item) |found| {
                 self.select(found.entry.path, found.entry.virtual);
-                // Nothing can be done to what is inside a model, from here.
-                if (found.entry.virtual) return .{ .used = true };
+                // Of what is inside a model, only a material's texture has something to do: extract it.
+                if (found.entry.virtual and found.entry.kind != .image) return .{ .used = true };
                 const arena = self.menu_arena.allocator();
-                entry = .{ .path = arena.dupe(u8, found.entry.path) catch return .{ .used = true }, .name = "", .kind = found.entry.kind };
+                entry = .{ .path = arena.dupe(u8, found.entry.path) catch return .{ .used = true }, .name = "", .kind = found.entry.kind, .virtual = found.entry.virtual };
             }
             self.menu = .{ .at = down.position, .entry = entry };
             return .{ .used = true };
@@ -428,21 +440,22 @@ pub const AssetsPanel = struct {
         if (down.button == .left and down.clicks < 2) if (self.itemAt(context, down.position)) |pressed| {
             self.endDrag();
             if (self.gpa.dupe(u8, pressed.entry.path)) |path| {
-                self.drag = .{ .path = path, .from = down.position, .virtual = pressed.entry.virtual };
+                self.drag = .{ .path = path, .from = down.position, .virtual = pressed.entry.virtual, .kind = pressed.entry.kind };
             } else |_| {}
         };
         if (down.button != .left or down.clicks < 2) return .{ .used = false };
         self.endDrag();
         const item = self.itemAt(context, down.position) orelse return .{ .used = false };
         const entry = item.entry;
-        if (entry.virtual) return .{ .used = true };
+        if (entry.virtual) return .{ .used = true, .action = .{ .preview = entry.path } };
         return switch (entry.kind) {
             .model => blk: {
                 if (self.view == .grid and self.filter.text().len == 0) self.enter(entry.path);
-                break :blk .{ .used = true };
+                break :blk .{ .used = true, .action = .{ .preview = entry.path } };
             },
             .scene => .{ .used = true, .action = .{ .open_scene = entry.path } },
             .input_map => .{ .used = true, .action = .{ .open_input_map = entry.path } },
+            .ui => .{ .used = true, .action = .{ .open_ui_scene = entry.path } },
             .folder => blk: {
                 if (self.view == .grid and self.filter.text().len == 0) {
                     self.enter(entry.path);
@@ -451,7 +464,7 @@ pub const AssetsPanel = struct {
                 break :blk .{ .used = false }; // the list opens folders with one press
             },
             .code, .text, .material, .animation => .{ .used = true, .action = .{ .open_code = entry.path } },
-            else => .{ .used = true, .action = .{ .reveal = entry.path } },
+            else => .{ .used = true, .action = .{ .preview = entry.path } },
         };
     }
 
@@ -562,7 +575,10 @@ pub const AssetsPanel = struct {
             return null;
         };
         if (menu.new_only) return self.newMenu(context, new_items, menu.at, self.newFilesFolder());
-        if (menu.entry) |entry| {
+        if (menu.entry) |entry| if (entry.virtual) {
+            add(&choices, context, .extract, "Extract as PNG");
+            add(&choices, context, .copy_path, "Copy path");
+        } else {
             if (entry.kind == .scene or entry.kind == .input_map or entry.kind == .code or entry.kind == .text or entry.kind == .material or entry.kind == .animation) add(&choices, context, .open, "Open");
             add(&choices, context, .rename, "Rename");
             add(&choices, context, .duplicate, "Duplicate");
@@ -570,7 +586,9 @@ pub const AssetsPanel = struct {
             add(&choices, context, .copy_path, "Copy path");
             add(&choices, context, .reveal, "Show in file manager");
         } else add(&choices, context, .reveal, "Show in file manager");
-        choices.append(arena, .{ .id = menu_id_base + @intFromEnum(MenuItem.new_files), .label = "New", .kind = .submenu }) catch |err| {
+        // New files go in a folder, which a model's part isn't.
+        const in_model = if (menu.entry) |entry| entry.virtual else false;
+        if (!in_model) choices.append(arena, .{ .id = menu_id_base + @intFromEnum(MenuItem.new_files), .label = "New", .kind = .submenu }) catch |err| {
             context.err = err;
             return null;
         };
@@ -606,6 +624,7 @@ pub const AssetsPanel = struct {
                 .open => switch (menu.entry.?.kind) {
                     .scene => .{ .open_scene = menu.entry.?.path },
                     .input_map => .{ .open_input_map = menu.entry.?.path },
+                    .ui => .{ .open_ui_scene = menu.entry.?.path },
                     else => .{ .open_code = menu.entry.?.path },
                 },
                 .rename => blk: {
@@ -616,12 +635,14 @@ pub const AssetsPanel = struct {
                 .delete => .{ .delete = menu.entry.?.path },
                 .copy_path => .{ .copy_path = menu.entry.?.path },
                 .reveal => .{ .reveal = if (menu.entry) |entry| entry.path else self.folder.items },
+                // Beside the model it came from.
+                .extract => .{ .extract = .{ .path = menu.entry.?.path, .folder = listing.parentOf(listing.parentOf(menu.entry.?.path)) } },
                 .new_files => unreachable,
             };
         };
         const new_id = menu_id_base + @intFromEnum(MenuItem.new_files);
         const new_row = if (context.last_bounds.get(new_id)) |bound| bound.rect else ui.Rect{ .x = at.x, .y = at.y + height - 37, .w = width, .h = 32 };
-        if (new_row.contains(context.pointer.x, context.pointer.y)) self.menu.?.new_open = true;
+        if (!in_model and new_row.contains(context.pointer.x, context.pointer.y)) self.menu.?.new_open = true;
         if (self.menu.?.new_open) {
             for (popup.children) |child| if (child.id == new_id) {
                 child.accessibility.expanded = true;
@@ -856,9 +877,15 @@ fn opensInList(entry: listing.Entry) bool {
     return !entry.virtual and (entry.kind == .folder or entry.kind == .model);
 }
 
-/// A model's child as the panel lists it: geometry or a clip, named by the last part of its path.
+/// A model's child as the panel lists it: geometry, a clip or a material's texture, named by the
+/// last part of its path.
 fn virtualEntry(child: eggy.assets.subassets.Child) listing.Entry {
-    return .{ .path = child.path, .name = std.fs.path.basename(child.path), .kind = if (child.kind == .model) .model else .animation, .virtual = true };
+    const kind: listing.Kind = switch (child.kind) {
+        .model => .model,
+        .image => .image,
+        else => .animation,
+    };
+    return .{ .path = child.path, .name = std.fs.path.basename(child.path), .kind = kind, .virtual = true };
 }
 
 /// Where a drag would go if let go now: into a folder, or nowhere and why.
@@ -991,7 +1018,7 @@ test "a model opens in the list and the grid into entries that have no file" {
     var panel = AssetsPanel.init(gpa);
     defer panel.deinit();
 
-    // Closed, the model is one entry; open, its Skeleton and clip follow it, one level in.
+    // Closed, the model is one entry; open, its Skeletal model and clip follow it, one level in.
     panel.view = .list;
     panel.toggle("resources");
     panel.refresh(fixture.path, &project, 0);
@@ -1001,7 +1028,7 @@ test "a model opens in the list and the grid into entries that have no file" {
     panel.read_at_ms = null;
     panel.refresh(fixture.path, &project, 0);
     try std.testing.expectEqual(@as(usize, 4), panel.shown.len);
-    try std.testing.expectEqualStrings("Skeleton", panel.shown[2].entry.name);
+    try std.testing.expectEqualStrings("Skeletal", panel.shown[2].entry.name);
     try std.testing.expect(panel.shown[2].entry.virtual and panel.shown[2].depth == 2);
     try std.testing.expectEqual(listing.Kind.animation, panel.shown[3].entry.kind);
     try std.testing.expectEqualStrings("resources", listing.folderOf(panel.shown[3].entry));

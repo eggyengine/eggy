@@ -57,6 +57,8 @@ test "the game's library loads, runs, swaps for a fresh copy, and unloads cleanl
     app.storage = .{};
     app.debug_draw = .{};
     app.draw2d = .{ .gpa = gpa };
+    app.ui_scenes = .{ .gpa = gpa };
+    defer app.ui_scenes.deinit();
     defer app.draw2d.deinit();
     app.profiling = .{};
     var resource_context: u8 = 0;
@@ -181,6 +183,8 @@ test "typed actions and game UI cross the real ABI and undo after library replac
     app.storage = .{};
     app.debug_draw = .{};
     app.draw2d = .{ .gpa = gpa };
+    app.ui_scenes = .{ .gpa = gpa };
+    defer app.ui_scenes.deinit();
     defer app.draw2d.deinit();
     app.profiling = .{};
     var resource_context: u8 = 0;

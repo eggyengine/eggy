@@ -109,7 +109,9 @@ pub fn clear() void {
     _ = @atomicRmw(u64, &version, .Add, 1, .release);
 }
 
-pub const Snapshot = struct { shown: usize, total: usize };
+/// How many messages a snapshot shows, how many there are, and how many of each level (indexed
+/// by `std.log.Level`, whatever the filter).
+pub const Snapshot = struct { shown: usize, total: usize, per_level: [4]usize = .{ 0, 0, 0, 0 } };
 
 /// The messages `filter` shows, joined, into `out` (replacing what it held, allocating with
 /// `allocator`); and how many there were in all.
@@ -130,7 +132,9 @@ pub fn snapshot(allocator: std.mem.Allocator, out: *Messages, filter: Filter) !S
     out.text.clearRetainingCapacity();
     out.entries.clearRetainingCapacity();
     var shown: usize = 0;
+    var per_level: [4]usize = .{ 0, 0, 0, 0 };
     for (entries.items) |entry| {
+        per_level[@intFromEnum(entry.level)] += 1;
         if (!filter.levels[@intFromEnum(entry.level)]) continue;
         if (filter.hidden) |hidden| if (hidden.contains(entry.id)) continue;
         const line = text.items[entry.start..entry.end];
@@ -146,7 +150,7 @@ pub fn snapshot(allocator: std.mem.Allocator, out: *Messages, filter: Filter) !S
         });
         shown += 1;
     }
-    return .{ .shown = shown, .total = entries.items.len };
+    return .{ .shown = shown, .total = entries.items.len, .per_level = per_level };
 }
 
 /// Drop the oldest half of the messages. The mutex must be held.
@@ -174,6 +178,8 @@ test "the log keeps messages and filters them by level and text" {
     defer out.deinit(std.testing.allocator);
     const all = try snapshot(std.testing.allocator, &out, .{});
     try std.testing.expectEqual(@as(usize, 3), all.total);
+    // Each level is counted, even the debug messages the default filter leaves out.
+    try std.testing.expectEqual([4]usize{ 0, 1, 1, 1 }, all.per_level);
     try std.testing.expectEqualStrings("info(projects): opened Space Game\nwarning: slow frame\n", out.text.items);
     _ = try snapshot(std.testing.allocator, &out, .{ .levels = .{ false, true, false, false } });
     try std.testing.expectEqualStrings("warning: slow frame\n", out.text.items);

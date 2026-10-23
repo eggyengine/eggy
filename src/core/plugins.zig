@@ -77,6 +77,13 @@
 //!     pub fn exportUi(self: *Self, platform: eggy.plugins.ExportTarget, editor: *eggy.editor.Context, ui: *eggy.ui.Context) !void
 //!     pub fn exportArgs(self: *Self, platform: eggy.plugins.ExportTarget, args: *eggy.plugins.ExportArgs) !void
 //!
+//! Widgets of its own for UI scenes (`.ui.zon`): the UI Designer offers each in its palette, and
+//! a node showing one asks the plugin to draw it in its box, with the node's `value` text to
+//! read as it likes. Widgets are named `<plugin>/<key>` in files:
+//!
+//!     pub const ui_widgets = [_]eggy.plugins.UiWidget{.{ .key = "minimap", .title = "Minimap" }};
+//!     pub fn uiWidget(self: *Self, widget: usize, draw: eggy.plugins.UiWidgetDraw) !void
+//!
 //! Eggy's own components (`builtin_components`: `Transform`, `Mesh`, which the scene draws, and
 //! `Camera`, which the runtime looks through, and `SceneInstance`, a scene file made under an
 //! entity, `Animator`, which plays clips) are listed first in every project, owned by `eggy`.
@@ -101,12 +108,14 @@ const preferences = @import("preferences.zig");
 const components = @import("components.zig");
 const EditorContext = @import("editor_api/editor_api.zig").Context;
 const DrawContext = @import("game_ui/game_ui.zig").DrawContext;
+const ui_scenes = @import("ui_scenes/ui_scenes.zig");
 
 /// The components every project has, before its plugins' own.
-pub const builtin_components = .{ @import("transform.zig").Transform, @import("mesh.zig").Mesh, @import("camera.zig").Camera, @import("scene_instance.zig").SceneInstance, @import("material.zig").Material, @import("lighting.zig").SceneLight, @import("lighting.zig").Environment, @import("animation.zig").Animator };
+pub const builtin_components = .{ @import("transform.zig").Transform, @import("mesh.zig").Mesh, @import("camera.zig").Camera, @import("scene_instance.zig").SceneInstance, @import("material.zig").Material, @import("lighting.zig").SceneLight, @import("lighting.zig").Environment, @import("animation.zig").Animator, ui_scenes.UiScreen, ui_scenes.UiBillboard };
 
 /// Eggy's own platforms in File > Export, in the order it lists them.
-pub const BuiltinPlatform = enum(u8) { windows, macos, linux, web, android };
+/// Android comes from the Android plugin (`plugins/android/`), as a platform of its own.
+pub const BuiltinPlatform = enum(u8) { windows, macos, linux, web };
 
 /// A platform a plugin adds to File > Export (see `export_platforms` above). Its identity is
 /// scoped to the published plugin.
@@ -120,6 +129,9 @@ pub const ExportPlatform = struct {
     /// Its icon in the platform list: PNG bytes, 48 pixels square, drawn as they are. Empty for a
     /// generic package icon.
     icon_png: []const u8 = "",
+    /// Whether its export is a folder File > Export can also zip; false for one that is a single
+    /// file already, such as an installer or an APK.
+    zips: bool = true,
 };
 
 /// The platform File > Export shows or exports for, as `exportUi` and `exportArgs` see it.
@@ -137,6 +149,8 @@ pub const ExportTarget = struct {
 pub const ExportArgs = struct {
     arena: std.mem.Allocator,
     list: std.ArrayList([]const u8) = .empty,
+    /// The `-Dtarget` to build for instead of the platform's own, set by `buildFor`.
+    target: ?[]const u8 = null,
 
     /// Add a copy of `arg`. Allocation failure propagates.
     ///
@@ -145,6 +159,18 @@ pub const ExportArgs = struct {
     /// ```
     pub fn add(self: *ExportArgs, arg: []const u8) !void {
         try self.list.append(self.arena, try self.arena.dupe(u8, arg));
+    }
+
+    /// Build for `target` instead of the platform's own `target`: for a plugin's own platform
+    /// whose target depends on what `exportUi` offers (an architecture, an OS version). Only
+    /// the platform's own plugin should call it; the last call wins. Allocation failure
+    /// propagates.
+    ///
+    /// ```zig
+    /// try args.buildFor("aarch64-linux-android.33"); // Inside an exportArgs hook.
+    /// ```
+    pub fn buildFor(self: *ExportArgs, target: []const u8) !void {
+        self.target = try self.arena.dupe(u8, target);
     }
 };
 
@@ -271,6 +297,23 @@ pub const EditorFileType = struct {
     contents: []const u8 = "",
 };
 
+/// A widget a plugin adds to UI scenes. In the Set's metadata the key is `<plugin>/<key>`.
+pub const UiWidget = struct {
+    key: [:0]const u8,
+    title: [:0]const u8,
+};
+
+/// What `uiWidget` draws: its node's box on `canvas` (in the canvas's units), the node's `value`
+/// text, how many canvas units a design pixel is, and a steady clock for animating. Borrowed
+/// for the call.
+pub const UiWidgetDraw = struct {
+    canvas: *ui.Canvas,
+    rect: ui.Rect,
+    value: []const u8,
+    scale: f32,
+    time_ms: u64,
+};
+
 /// `items` with each key made `<owner>/<key>`; rows need a title and a key unique in their menu.
 fn identifiedItems(comptime owner: []const u8, comptime items: []const EditorMenuItem) []const EditorMenuItem {
     comptime {
@@ -390,6 +433,21 @@ pub fn Set(comptime types: anytype, comptime keys: []const [:0]const u8) type {
         };
 
         /// File templates copied by the editor before a game library can be unloaded.
+        /// Every plugin's `ui_widgets`, keys made `<plugin>/<key>`, in plugin order.
+        pub const ui_widgets: []const UiWidget = blk: {
+            var all: []const UiWidget = &.{};
+            for (list, keys) |T, key| if (@hasDecl(T, "ui_widgets")) {
+                if (!@hasDecl(T, "uiWidget")) @compileError("a plugin with ui_widgets needs a uiWidget hook");
+                for (T.ui_widgets) |widget| {
+                    if (widget.key.len == 0 or widget.title.len == 0 or std.mem.indexOfScalar(u8, widget.key, '/') != null) @compileError("UI widgets need a title and a key without /");
+                    const identity = std.fmt.comptimePrint("{s}/{s}", .{ key, widget.key });
+                    for (all) |previous| if (std.mem.eql(u8, previous.key, identity)) @compileError("duplicate UI widget key");
+                    all = all ++ .{UiWidget{ .key = identity, .title = widget.title }};
+                }
+            };
+            break :blk all;
+        };
+
         pub const editor_file_types: []const EditorFileType = blk: {
             var all: []const EditorFileType = &.{};
             for (list, keys) |T, key| if (@hasDecl(T, "editor_file_types")) {
@@ -550,7 +608,43 @@ pub fn Set(comptime types: anytype, comptime keys: []const [:0]const u8) type {
         /// try plugins.gameUi(app, &overlay.context);
         /// ```
         pub fn gameUi(self: *Self, app: *App, context: *ui.Context) !void {
+            try ui_scenes.buildScreens(&app.ui_scenes, app.resources(), context, app.ui_layer, context.time_ms);
             inline for (list, 0..) |T, i| if (@hasDecl(T, "gameUi") and self.enabled[i]) try self.instances[i].gameUi(app, context);
+        }
+
+        /// Find this frame's UI screens and billboards in `app`'s world, drawing plugins'
+        /// widgets with this set. Host-only, once per frame before drawing; the set must stay
+        /// where it is until the world resets.
+        ///
+        /// ```zig
+        /// plugins.gatherUiScenes(app);
+        /// if (plugins.hasGameUi() or app.ui_scenes.screen_count != 0) try plugins.gameUi(app, &layer.context);
+        /// ```
+        pub fn gatherUiScenes(self: *Self, app: *App) void {
+            ui_scenes.gatherInto(&app.world, &app.ui_scenes, .{ .context = self, .paint = paintUiWidget });
+        }
+
+        // Dispatch a UI scene's plugin widget to the plugin that declares it; false for none, or
+        // when its hook failed (logged once).
+        fn paintUiWidget(context: ?*anyopaque, request: *const ui_scenes.WidgetRequest) callconv(.c) bool {
+            const self: *Self = @ptrCast(@alignCast(context.?));
+            const Reported = struct {
+                var failed = false;
+            };
+            inline for (list, keys, 0..) |T, key, i| if (comptime @hasDecl(T, "ui_widgets")) {
+                inline for (T.ui_widgets, 0..) |widget, w| {
+                    if (std.mem.eql(u8, request.key(), key ++ "/" ++ widget.key)) {
+                        if (!self.enabled[i]) return false;
+                        self.instances[i].uiWidget(w, .{ .canvas = request.canvas, .rect = request.area(), .value = request.value(), .scale = request.scale, .time_ms = request.time_ms }) catch |err| {
+                            if (!Reported.failed) std.log.err("UI widget {s} failed: {t}", .{ request.key(), err });
+                            Reported.failed = true;
+                            return false;
+                        };
+                        return true;
+                    }
+                }
+            };
+            return false;
         }
 
         /// Custom rendering outside a pass; the engine still owns frame submission.

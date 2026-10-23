@@ -134,7 +134,7 @@ pub const TextureCache = struct {
     /// textures.release(paint);
     /// ```
     pub fn make(self: *TextureCache, texture: assets.Texture, label: []const u8) !Gpu {
-        var chain = try mipmaps.Chain.init(self.gpa, texture.width, texture.height, texture.pixels, self.settings.mipmaps);
+        var chain = try mipmaps.Chain.init(self.gpa, texture.width, texture.height, texture.frame(0), self.settings.mipmaps);
         defer chain.deinit(self.gpa);
         const made = try vit.Texture.init(self.device, .{
             .label = label,

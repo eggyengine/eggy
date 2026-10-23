@@ -14,7 +14,7 @@ const L = ui.Layout;
 const sdl3 = eggy.sdl_adapter.sdl;
 const HotGame = @import("../hot_reload/hot_reload.zig").HotGame;
 const gizmo = @import("gizmo.zig");
-const picking = @import("picking.zig");
+pub const picking = @import("picking.zig");
 const orientation = @import("orientation.zig");
 const game_camera = @import("game_camera.zig");
 const light_direction = @import("light_direction.zig");
@@ -380,7 +380,7 @@ pub const SceneView = struct {
                     target.selected.* = instanceRoot(target, light);
                     return true;
                 }
-                target.selected.* = instanceRoot(target, picking.pick(self.drawn, &target.app.graphics.models, self.view, area, at));
+                target.selected.* = instanceRoot(target, picking.pick(self.drawn, &target.app.graphics.models, &target.app.ui_scenes, target.app.resources(), self.view, area, at));
                 return true;
             },
             .mouse_motion => |motion| {
@@ -414,18 +414,18 @@ pub const SceneView = struct {
         }
     }
 
-    /// The entity whose mesh is under `at` on the panel at `scene`, as last drawn; null over
+    /// The entity whose mesh or billboard is under `at` on the panel at `scene`, as last drawn; null over
     /// nothing.
     /// Editor-only: positive scene dimensions and matching UI coordinates are required;
     /// `drawn` must still refer to valid current-frame drawables. Returns the mesh id directly,
     /// without remapping instance roots or mutating selection; cache bounds are borrowed.
     ///
     /// ```zig
-    /// const entity = scene_view.entityAt(&graphics.models, scene, pointer);
-    /// // Updated SceneView and live Graphics/model cache.
+    /// const entity = scene_view.entityAt(app, scene, pointer);
+    /// // Updated SceneView and live App.
     /// ```
-    pub fn entityAt(self: *const SceneView, models: *const eggy.model_cache.ModelCache, scene: ui.Rect, at: ui.Vec2) ?eggy.ecs.EntityId {
-        return picking.pick(self.drawn, models, self.view, scene, at);
+    pub fn entityAt(self: *const SceneView, app: *eggy.App, scene: ui.Rect, at: ui.Vec2) ?eggy.ecs.EntityId {
+        return picking.pick(self.drawn, &app.graphics.models, &app.ui_scenes, app.resources(), self.view, scene, at);
     }
 
     /// Where something let go at `at` on the panel at `scene` goes: on the ground (y = 0) under
@@ -489,7 +489,7 @@ fn startDrag(target: Target, layout: gizmo.Layout, handle: gizmo.Handle, at: ui.
 }
 
 /// Three numbers, `.{ x, y, z }` in ZON; null when `text` isn't that.
-fn parseVector(text: []const u8) ?[3]f32 {
+pub fn parseVector(text: []const u8) ?[3]f32 {
     var source: [160]u8 = undefined;
     const terminated = std.fmt.bufPrintZ(&source, "{s}", .{text}) catch return null;
     // ZON's parser needs room for its syntax tree, as the Inspector's does.
@@ -505,7 +505,7 @@ fn transformIndex(game: *const HotGame) ?usize {
 
 /// What a click on `entity` selects: the outermost scene instance it was made under, as its
 /// entities come from the instance's file and edits to them aren't kept; else itself.
-fn instanceRoot(target: Target, entity: ?eggy.ecs.EntityId) ?eggy.ecs.EntityId {
+pub fn instanceRoot(target: Target, entity: ?eggy.ecs.EntityId) ?eggy.ecs.EntityId {
     var picked = entity orelse return null;
     const component = target.game.builtinComponent("SceneInstance") orelse return picked;
     var above = target.app.world.getParent(picked);

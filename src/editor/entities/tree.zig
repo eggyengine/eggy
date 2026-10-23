@@ -39,27 +39,33 @@ pub const Row = struct {
 pub fn collect(arena: std.mem.Allocator, world: *ecs.World, roots: []const ecs.EntityId, access: ?eggy.scene.Access, filter: []const u8) ![]const Row {
     var rows: std.ArrayList(Row) = .empty;
     for (roots) |entity| try addSubtree(arena, &rows, world, access, entity, 0);
+    return narrow(arena, rows.items, filter);
+}
+
+/// `rows` (in tree order, from any source) narrowed by `filter` as `collect` does, with their
+/// guide lines worked out. Rows and guide lines live in `arena`; `rows` may be changed.
+pub fn narrow(arena: std.mem.Allocator, rows: []Row, filter: []const u8) ![]const Row {
     const query = std.mem.trim(u8, filter, " ");
-    if (query.len == 0) return guides(arena, rows.items);
+    if (query.len == 0) return guides(arena, rows);
 
     // Keep the matches and every row above one at a lower depth: its ancestors.
-    const keep = try arena.alloc(bool, rows.items.len);
+    const keep = try arena.alloc(bool, rows.len);
     @memset(keep, false);
-    for (rows.items, 0..) |row, i| {
+    for (rows, 0..) |row, i| {
         if (!matches(row, query)) continue;
         keep[i] = true;
         var depth = row.depth;
         var j = i;
         while (depth > 0 and j > 0) {
             j -= 1;
-            if (rows.items[j].depth < depth) {
+            if (rows[j].depth < depth) {
                 keep[j] = true;
-                depth = rows.items[j].depth;
+                depth = rows[j].depth;
             }
         }
     }
     var kept: std.ArrayList(Row) = .empty;
-    for (rows.items, keep) |row, wanted| if (wanted) try kept.append(arena, row);
+    for (rows, keep) |row, wanted| if (wanted) try kept.append(arena, row);
     return guides(arena, kept.items);
 }
 

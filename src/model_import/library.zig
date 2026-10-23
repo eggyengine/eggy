@@ -68,6 +68,7 @@ export fn eggy_import_model(path: [*:0]const u8, scale: f32, out: *Bytes) bool {
 /// ```
 export fn eggy_decode_image(path: [*:0]const u8, out: *Bytes) bool {
     failure = null;
+    if (decodeGif(path, out)) |decoded| return decoded;
     var width: c_int = 0;
     var height: c_int = 0;
     var channels: c_int = 0;
@@ -75,6 +76,37 @@ export fn eggy_decode_image(path: [*:0]const u8, out: *Bytes) bool {
     defer c.stbi_image_free(pixels);
     const size: usize = @intCast(width * height * 4);
     return serialize(assets.texture.write, assets.Texture{ .width = @intCast(width), .height = @intCast(height), .pixels = pixels[0..size] }, out);
+}
+
+/// Decode the GIF at `path` with every frame into `out`, as `eggy_decode_image` does; null when
+/// the file isn't a GIF (or can't be read), for the still-image decoder to try.
+fn decodeGif(path: [*:0]const u8, out: *Bytes) ?bool {
+    const file = c.fopen(path, "rb") orelse return null;
+    defer _ = c.fclose(file);
+    var magic: [4]u8 = undefined;
+    if (c.fread(&magic, 1, magic.len, file) != magic.len or !std.mem.eql(u8, &magic, "GIF8")) return null;
+    if (c.fseek(file, 0, c.SEEK_END) != 0) return null;
+    const length = c.ftell(file);
+    if (length <= 0 or length > std.math.maxInt(c_int) or c.fseek(file, 0, c.SEEK_SET) != 0) return null;
+    const bytes = gpa.alloc(u8, @intCast(length)) catch return fail("out of memory");
+    defer gpa.free(bytes);
+    if (c.fread(bytes.ptr, 1, bytes.len, file) != bytes.len) return fail("the file can't be read");
+
+    var delays: [*c]c_int = null;
+    var width: c_int = 0;
+    var height: c_int = 0;
+    var frames: c_int = 0;
+    var channels: c_int = 0;
+    const pixels = c.stbi_load_gif_from_memory(bytes.ptr, @intCast(bytes.len), &delays, &width, &height, &frames, &channels, 4) orelse return fail(c.stbi_failure_reason());
+    defer c.stbi_image_free(pixels);
+    defer if (delays != null) c.stbi_image_free(delays);
+    const count: usize = @intCast(@max(frames, 1));
+    // Browsers show GIF delays under 20 ms as 100 ms; so do we.
+    const frame_delays = gpa.alloc(u32, if (count > 1) count else 0) catch return fail("out of memory");
+    defer gpa.free(frame_delays);
+    for (frame_delays, 0..) |*delay, i| delay.* = if (delays == null or delays[i] < 20) 100 else @intCast(delays[i]);
+    const size: usize = @as(usize, @intCast(width * height * 4)) * count;
+    return serialize(assets.texture.write, assets.Texture{ .width = @intCast(width), .height = @intCast(height), .pixels = pixels[0..size], .frame_delays_ms = frame_delays }, out);
 }
 
 /// Free what `eggy_import_model` or `eggy_decode_image` put in `bytes`.

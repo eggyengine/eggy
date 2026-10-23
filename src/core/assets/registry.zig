@@ -53,13 +53,13 @@ pub const Builder = struct {
         var registry = Builder{ .gpa = std.testing.allocator };
         defer registry.deinit();
         try registry.claim(42);
-        var temporary = "resources/rat.glb/Skeleton".*;
+        var temporary = "resources/rat.glb/Skeletal".*;
         try registry.add(.{ .path = &temporary, .id = 42, .kind = .model, .converted = true });
         @memset(&temporary, '?');
         var output: std.Io.Writer.Allocating = .init(std.testing.allocator);
         defer output.deinit();
         try registry.write(&output.writer);
-        try std.testing.expect(std.mem.indexOf(u8, output.written(), "resources/rat.glb/Skeleton") != null);
+        try std.testing.expect(std.mem.indexOf(u8, output.written(), "resources/rat.glb/Skeletal") != null);
     }
 
     /// Emit a self-contained Zig module, used by executable and game-library roots.
@@ -98,7 +98,7 @@ test "compiled aliases reject collisions and inconsistent kinds" {
     const source = Entry{ .path = "resources/rat.glb", .id = 42, .kind = .model, .converted = true };
     try registry.add(source);
     try registry.add(source);
-    try registry.add(.{ .path = "resources/rat.glb/Skeleton", .id = 42, .kind = .model, .converted = true });
+    try registry.add(.{ .path = "resources/rat.glb/Skeletal", .id = 42, .kind = .model, .converted = true });
     try std.testing.expectError(error.InconsistentAssetKind, registry.add(.{ .path = "other", .id = 42, .kind = .animation, .converted = false }));
     try registry.claim(7);
     try std.testing.expectError(error.AmbiguousAssetPath, registry.add(.{ .path = source.path, .id = 7, .kind = .model, .converted = true }));

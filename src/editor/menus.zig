@@ -57,6 +57,10 @@ pub const Command = enum(u32) {
     documentation,
     report_issue,
     show_logs,
+    new_tab,
+    new_tab_3d,
+    new_tab_2d,
+    new_tab_ui,
 };
 /// Window menu items: `window_item_first` + panel id.
 const window_item_first: u32 = first_id + 0x200;
@@ -138,6 +142,12 @@ pub const Menubar = struct {
                 .{ .id = @intFromEnum(Command.open_project), .label = "Open Project...", .shortcut = "Ctrl+O" },
             .{ .id = @intFromEnum(Command.open_project_folder), .label = "Open Project Folder", .disabled = !project.open },
             .{ .id = @intFromEnum(Command.save), .label = "Save", .shortcut = "Ctrl+S" },
+            .{ .kind = .separator },
+            .{ .id = @intFromEnum(Command.new_tab), .label = "New Tab...", .shortcut = "Ctrl+T" },
+            .{ .id = @intFromEnum(Command.new_tab_3d), .label = "New 3D Scene Tab" },
+            .{ .id = @intFromEnum(Command.new_tab_2d), .label = "New 2D Scene Tab" },
+            .{ .id = @intFromEnum(Command.new_tab_ui), .label = "New UI Scene Tab" },
+            .{ .kind = .separator },
             .{ .id = @intFromEnum(Command.export_game), .label = "Export...", .disabled = !project.open },
             .{ .id = @intFromEnum(Command.project_settings), .label = "Project Settings...", .disabled = !project.open },
             .{ .kind = .separator },

@@ -12,6 +12,7 @@ const MeshRenderer = mesh_renderer.MeshRenderer;
 const Grid = @import("grid.zig").Grid;
 const Settings = @import("render_settings.zig").Settings;
 const Resolve = @import("scene_resolve.zig").Resolve;
+const billboards = @import("ui_scenes/billboards.zig");
 
 const Vertex = extern struct {
     position: [2]f32,
@@ -45,6 +46,10 @@ pub const Preview = struct {
     meshes: MeshRenderer,
     grid: Grid,
     world_draw: @import("world_draw.zig").Renderer,
+    /// Made the first time a frame has billboards, on `device` with `texture_layout`.
+    billboards: ?billboards.Renderer = null,
+    device: vit.Device,
+    texture_layout: vit.BindGroupLayout,
 
     /// The backdrop and meshes for a target in `format` at `extent`, painting with textures
     /// bound as `texture_layout` describes (`TextureCache.layout`).
@@ -141,6 +146,8 @@ pub const Preview = struct {
             .meshes = meshes,
             .grid = grid,
             .world_draw = world_draw,
+            .device = device,
+            .texture_layout = texture_layout,
         };
     }
 
@@ -177,6 +184,7 @@ pub const Preview = struct {
         if (self.resolve) |*resolve| resolve.deinit();
         self.grid.deinit();
         self.world_draw.deinit();
+        if (self.billboards) |*painter| painter.deinit();
         self.meshes.deinit();
         self.depth_view.deinit();
         self.depth.deinit();
@@ -217,7 +225,8 @@ pub const Preview = struct {
         const scissor = previewScissor(scene, clip, window, extent) orelse return;
         try self.meshes.prepare(cmd, drawables, sources);
         try self.meshes.renderShadow(cmd, drawables, sources, view, scene.w / scene.h, self.settings);
-        try self.world_draw.prepare(sources.world_draw, sources.textures, view, scene.w / scene.h, srgb);
+        const panels = if (sources.ui_billboards) |frame| try billboardPanelsOf(self, cmd, frame, view) else &.{};
+        try self.world_draw.prepare(sources.world_draw, panels, sources.textures, view, scene.w / scene.h, srgb);
         const transform = SceneUniforms{
             .screen = .{
                 2 * (scene.x + scene.w / 2) / window.w - 1,
@@ -265,6 +274,13 @@ pub const Preview = struct {
         cmd.endRenderPass();
     }
 };
+
+// Billboards' UI scenes painted for this pass, outside it.
+fn billboardPanelsOf(self: *Preview, cmd: vit.CommandBuffer, frame: *const billboards.Frame, view: camera.View) ![]const @import("world_draw.zig").Panel {
+    if (frame.billboards.len == 0) return &.{};
+    if (self.billboards == null) self.billboards = try billboards.Renderer.init(std.heap.c_allocator, self.device, self.texture_layout);
+    return self.billboards.?.prepare(cmd, frame, view);
+}
 
 /// The build compiles the Slang shaders to WGSL for the web and SPIR-V elsewhere.
 /// Host shader adapter: wraps those compiled `code` bytes without compiling source here.

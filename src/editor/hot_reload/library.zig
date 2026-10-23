@@ -74,6 +74,11 @@ const file_types = blk: {
     };
     break :blk list;
 };
+const ui_widgets = blk: {
+    var list: [Plugins.ui_widgets.len]api.UiWidget = undefined;
+    for (&list, Plugins.ui_widgets) |*widget, source| widget.* = .{ .key = source.key.ptr, .title = source.title.ptr };
+    break :blk list;
+};
 const export_platforms = blk: {
     var list: [Plugins.export_platforms.len]api.ExportPlatform = undefined;
     for (&list, Plugins.export_platforms) |*platform, source| platform.* = .{
@@ -179,6 +184,9 @@ const game = api.Game{
     .write_name = writeName,
     .gather_meshes = gatherMeshes,
     .gather_lights = gatherLights,
+    .gather_ui_scenes = gatherUiScenes,
+    .ui_widgets = &ui_widgets,
+    .ui_widget_count = ui_widgets.len,
     .world_matrix = worldMatrix,
     .find_camera = findCamera,
     .animation_preview_begin = animationPreviewBegin,
@@ -462,6 +470,10 @@ fn gatherLights(world: *anyopaque, out: *eggy.lighting.Frame) callconv(.c) bool 
     recovered(.scene_lights);
     eggy.lighting.reportInvalid(frame, &invalid_lights_reported);
     return true;
+}
+
+fn gatherUiScenes(state_ptr: *anyopaque, app_ptr: *anyopaque) callconv(.c) void {
+    stateOf(state_ptr).plugins.gatherUiScenes(appOf(app_ptr));
 }
 
 /// How many invalid lights were last reported, so the warning comes once per change.

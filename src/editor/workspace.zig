@@ -1,6 +1,7 @@
 //! The editor's windows: the main window's drawn title bar holding the menus (as in Weeoui's
-//! gallery) over dockable panels, and one tree per panel popped out into its own OS window.
-//! Builds and draws each window's tree, and routes each window's input to the menus and dock.
+//! gallery) over the workspace's tabs of dockable panels, and one tree per panel or tab popped
+//! out into its own OS window. Builds and draws each window's tree, and routes each window's
+//! input to the menus, tabs and dock.
 const std = @import("std");
 const eggy = @import("eggy");
 const weeoui_sdl3 = @import("weeoui_sdl3");
@@ -19,6 +20,10 @@ const simulate_button = @import("simulate_button.zig");
 const scene_view = @import("scene_view/scene_view.zig");
 const hit_test = eggy.ui_hit_test;
 const reload_button = @import("reload_button.zig");
+const workspace_tabs = @import("workspace_tabs.zig");
+const tab_bar = @import("tab_bar.zig");
+const tab_drag = @import("tab_drag.zig");
+const no_tabs = @import("no_tabs.zig");
 const Panel = panels.Panel;
 /// Eggy's version, from its `build.zig.zon`.
 const eggy_version = @import("build_options").version;
@@ -150,6 +155,18 @@ const titlebar_first: u32 = 0x5400_0000;
 
 pub const Workspace = struct {
     dock: dock.DockSpace,
+    /// The layouts side by side in the main window, each a tree of `dock`.
+    tabs: workspace_tabs.Tabs = .{},
+    /// The tab bar's popup open: the "+" menu, or a tab's menu.
+    tab_popup: tab_bar.Popup = .none,
+    /// A tab pressed on the bar while the pointer is still down, dragged once it moves.
+    tab_press: ?tab_drag.TabDrag = null,
+    /// The bar's tab something carried rests on, shown after a moment.
+    spring: tab_drag.SpringLoad = .{},
+    /// Which copy of the Scene, 2D Scene and UI Designer is drawn (one per tab can be open), and
+    /// the main window's tree they last followed.
+    live: panels.Live = .{},
+    followed_root: u8 = 0xFF,
     menubar: menus.Menubar = .{},
     /// The desktop's title bar button order and style, for the main title bar and floating panels.
     buttons: titlebar.Layout,
@@ -340,10 +357,11 @@ pub const Workspace = struct {
                 };
             }
             if (self.dock.nodeOf(id) != null or known) continue;
-            self.dock.add(id, @intFromEnum(Panel.inspector), .center) catch |err| std.log.warn("cannot dock the game's panel {s}: {t}", .{ shown[i].title, err });
+            const inspector = panels.copyId(.inspector, self.live.inspector);
+            self.dock.add(id, if (self.dock.nodeOf(inspector) != null) inspector else null, .center) catch |err| std.log.warn("cannot dock the game's panel {s}: {t}", .{ shown[i].title, err });
             added = true;
         }
-        if (added) _ = self.dock.activate(dock.first_id + @intFromEnum(Panel.inspector));
+        if (added) _ = self.dock.activate(dock.first_id + panels.copyId(.inspector, self.live.inspector));
     }
 
     fn seenPanel(self: *const Workspace, title: []const u8) bool {
@@ -351,29 +369,49 @@ pub const Workspace = struct {
         return false;
     }
 
-    /// The default arrangement: hierarchy left, inspector right (plugin panels as tabs beside it),
-    /// console, assets and animation below the scene.
+    /// The default arrangement: hierarchy left, inspector right (the Asset Preview and plugin panels
+    /// as tabs beside it),
+    /// console, assets and animation below the scene. The UI Designer opens on its own
+    /// (`showUiDesigner`).
     fn resetLayout(self: *Workspace) !void {
         self.dock = dock.DockSpace.init();
         self.dock.buttons = self.buttons;
-        try self.dock.add(@intFromEnum(Panel.scene), null, .center);
-        try self.dock.add(@intFromEnum(Panel.hierarchy), @intFromEnum(Panel.scene), .left);
-        self.splitRatio(.hierarchy, 0.2);
-        try self.dock.add(@intFromEnum(Panel.inspector), @intFromEnum(Panel.scene), .right);
-        self.splitRatio(.inspector, 0.72);
-        try self.dock.add(@intFromEnum(Panel.console), @intFromEnum(Panel.scene), .bottom);
-        self.splitRatio(.console, 0.7);
-        try self.dock.add(@intFromEnum(Panel.assets), @intFromEnum(Panel.console), .center);
-        try self.dock.add(@intFromEnum(Panel.animation), @intFromEnum(Panel.console), .center);
+        self.tabs = .init(&self.dock);
+        self.live = .{};
+        self.followed_root = 0xFF;
+        try self.addScenePreset(0);
+        try self.dock.add(@intFromEnum(Panel.asset_preview), @intFromEnum(Panel.inspector), .center);
         for (self.plugin_panels, 0..) |panel, i| try self.dock.add(panels.pluginId(panel, i), @intFromEnum(Panel.inspector), .center);
-        // The Inspector's and the Console's tabs in front.
+        // The Inspector's tab back in front of those that joined it.
         _ = self.dock.activate(dock.first_id + @intFromEnum(Panel.inspector));
-        _ = self.dock.activate(dock.first_id + @intFromEnum(Panel.console));
     }
 
-    /// Size the split that `panel`'s stack was just added to: `ratio` of it goes to the first side.
-    fn splitRatio(self: *Workspace, panel: Panel, ratio: f32) void {
-        const stack = self.dock.nodeOf(@intFromEnum(panel)) orelse return;
+    /// The panels a 3D tab opens with, each its own copy.
+    pub const scene_preset = [_]Panel{ .scene, .hierarchy, .inspector, .console, .assets, .animation };
+
+    /// Lay out a 3D tab around copy `copy` of the Scene: the Hierarchy on its left, the Inspector
+    /// on its right, and the Console, Assets and Animation below it, all copy `copy`. Lands in
+    /// the main window's largest stack, so open and show the tab first.
+    fn addScenePreset(self: *Workspace, copy: u8) !void {
+        const scene = panels.copyId(.scene, copy);
+        const inspector = panels.copyId(.inspector, copy);
+        const console = panels.copyId(.console, copy);
+        try self.dock.add(scene, null, .center);
+        try self.dock.add(panels.copyId(.hierarchy, copy), scene, .left);
+        self.splitRatio(panels.copyId(.hierarchy, copy), 0.2);
+        try self.dock.add(inspector, scene, .right);
+        self.splitRatio(inspector, 0.72);
+        try self.dock.add(console, scene, .bottom);
+        self.splitRatio(console, 0.7);
+        try self.dock.add(panels.copyId(.assets, copy), console, .center);
+        try self.dock.add(panels.copyId(.animation, copy), console, .center);
+        // The Scene's, the Inspector's and the Console's tabs in front.
+        for ([_]u32{ scene, inspector, console }) |id| _ = self.dock.activate(dock.first_id + id);
+    }
+
+    /// Size the split that panel `id`'s stack was just added to: `ratio` of it goes to the first side.
+    fn splitRatio(self: *Workspace, id: u32, ratio: f32) void {
+        const stack = self.dock.nodeOf(id) orelse return;
         const parent = self.dock.nodes[stack].parent;
         if (parent < self.dock.nodes.len) self.dock.nodes[parent].ratio = ratio;
     }
@@ -388,6 +426,7 @@ pub const Workspace = struct {
     /// ```
     pub fn windowTitle(self: *const Workspace, index: usize) [:0]const u8 {
         const window = self.dock.windows[index] orelse return "Panel";
+        if (self.tabs.ofRoot(window.root)) |tab| return self.tabTitleZ(tab);
         const node = self.dock.nodes[window.root];
         if (node.count == 0) return "Panel";
         return panels.panelTitle(node.panels[node.active], self.plugin_panels);
@@ -408,10 +447,12 @@ pub const Workspace = struct {
     pub fn build(self: *Workspace, viewport: ui.Rect, window_viewports: [dock.max_windows]?ui.Rect, font: *const ui.Font) !void {
         // Read the hovered menu item before the trees it's found in go away.
         const hot = if (self.pointer_slot == main_slot) self.controlAt(main_slot, self.pointer.x, self.pointer.y) else 0;
+        self.springLoad();
         self.roots = @splat(null);
         self.placed = .{};
         _ = self.arena.reset(.retain_capacity);
         const b = L.Builder{ .allocator = self.arena.allocator() };
+        self.followShownTab();
 
         // The main window: menus on the drawn title bar (untitled; the OS still names the window
         // for the taskbar), or under the system's; panels below.
@@ -438,12 +479,15 @@ pub const Workspace = struct {
             break :blk menubar;
         };
         const bar_height = if (self.custom_frame) titlebar.height else widgets.window_menubar_height;
-        const dock_rect = ui.Rect{ .x = viewport.x, .y = viewport.y + bar_height, .w = viewport.w, .h = @max(0, viewport.h - bar_height - status_height) };
-        const docked = try self.dock.build(b, .main, dock_rect, panels.Provider{ .placements = &self.placed, .slot = main_slot, .plugin_panels = self.plugin_panels, .scene_overlay = &self.scene_overlay });
+        const tabs = try self.tabBar(b, viewport.w, font, hot);
+        const top_height = bar_height + tab_bar.height;
+        const dock_rect = ui.Rect{ .x = viewport.x, .y = viewport.y + top_height, .w = viewport.w, .h = @max(0, viewport.h - top_height - status_height) };
+        const docked = try self.dock.build(b, .main, dock_rect, panels.Provider{ .placements = &self.placed, .slot = main_slot, .plugin_panels = self.plugin_panels, .scene_overlay = &self.scene_overlay, .live = self.live });
         const play = try play_button.element(b, self.playing, viewport.x, viewport.w, bar_height);
         const status = try self.statusBar(b, viewport.w, font);
         var main_children: std.ArrayList(*L.Element) = .empty;
-        try main_children.appendSlice(b.allocator, &.{ top_bar, docked, status, play });
+        try main_children.appendSlice(b.allocator, &.{ top_bar, tabs, docked, status, play });
+        if (self.tabs.active == null) try main_children.append(b.allocator, try no_tabs.element(b, dock_rect, hot));
         const reload = if (self.project != null) try reload_button.element(b, self.build_state == .ready, viewport.x, viewport.w, bar_height) else null;
         if (reload) |button| try main_children.append(b.allocator, button);
         const pause = if (self.playing) try pause_button.element(b, self.paused, viewport.x, viewport.w, bar_height) else null;
@@ -472,7 +516,7 @@ pub const Workspace = struct {
             const area = window_viewport orelse continue;
             if (self.dock.windows[i] == null) continue;
             const slot = windowSlot(i);
-            const tree = try self.dock.build(b, .{ .window = @intCast(i) }, area, panels.Provider{ .placements = &self.placed, .slot = slot, .plugin_panels = self.plugin_panels, .scene_overlay = &self.scene_overlay });
+            const tree = try self.dock.build(b, .{ .window = @intCast(i) }, area, panels.Provider{ .placements = &self.placed, .slot = slot, .plugin_panels = self.plugin_panels, .scene_overlay = &self.scene_overlay, .live = self.live });
             tree.layout(area, font);
             self.roots[slot] = tree;
         }
@@ -633,6 +677,11 @@ pub const Workspace = struct {
         /// Draw `vertices[0..scene_at]`, then the scene texture into the Scene panel, then the
         /// rest, so whatever covers the Scene panel (menus, floating panels) stays on top.
         scene_at: usize,
+        /// Just after the Asset Preview page's UI, where its model is drawn; null when that
+        /// page isn't in this window.
+        asset_preview_at: ?usize = null,
+        /// Where each page's UI starts in `vertices`; null for pages not in this window.
+        page_starts: [panels.max_pages]?usize = @splat(null),
     };
 
     /// Paint window `slot`'s tree from the last `build`: its background, panels and popups, with
@@ -696,20 +745,24 @@ pub const Workspace = struct {
         self.vertices.clearRetainingCapacity();
         try self.vertices.ensureTotalCapacity(gpa, total);
         var scene_at: ?usize = null;
+        var asset_preview_at: ?usize = null;
+        var page_starts: [panels.max_pages]?usize = @splat(null);
         var from: usize = 0;
         for (splices[0..count]) |splice| {
             if (self.placed.scene_mark) |mark| if (scene_at == null and mark < splice.at) {
                 scene_at = self.vertices.items.len + (mark - from);
             };
             self.vertices.appendSliceAssumeCapacity(shell[from..splice.at]);
+            page_starts[splice.page] = self.vertices.items.len;
             self.vertices.appendSliceAssumeCapacity(pages[splice.page]);
+            if (splice.page == panels.asset_preview_page) asset_preview_at = self.vertices.items.len;
             from = splice.at;
         }
         if (self.placed.scene_mark) |mark| if (scene_at == null) {
             scene_at = self.vertices.items.len + (mark - from);
         };
         self.vertices.appendSliceAssumeCapacity(shell[from..]);
-        return .{ .vertices = self.vertices.items, .scene_at = scene_at orelse self.vertices.items.len };
+        return .{ .vertices = self.vertices.items, .scene_at = scene_at orelse self.vertices.items.len, .asset_preview_at = asset_preview_at, .page_starts = page_starts };
     }
 
     /// Route an input event from window `slot`, in that window's coordinates.
@@ -729,6 +782,10 @@ pub const Workspace = struct {
                 self.pointer = p;
                 self.pointer_slot = slot;
                 if (slot == main_slot and self.menubar.hover(self.controlAt(slot, p.x, p.y))) return .handled;
+                if (slot == main_slot) if (self.tab_press) |*pressed| {
+                    self.dragTab(pressed, p);
+                    return .handled;
+                };
                 // Tabs only drag within the main window; pop-outs' coordinates are their own.
                 if (slot != main_slot or !self.dock.dragging()) return .ignored;
                 self.dock.dragTo(p.x, p.y);
@@ -738,11 +795,32 @@ pub const Workspace = struct {
                 self.pointer = down.position;
                 self.pointer_slot = slot;
                 const id = self.controlAt(slot, down.position.x, down.position.y);
+                // A press anywhere closes the tab bar's popup, unless it is on one of its rows.
+                const tab_action = if (slot == main_slot) tab_bar.actionOf(id) else null;
+                const popup_was = self.tab_popup;
+                if (tab_action == null or down.button != .left) self.tab_popup = .none;
                 switch (down.button) {
-                    .middle => return if (self.dock.closeTab(id)) .handled else .ignored,
-                    .right => return .ignored,
+                    .middle => {
+                        if (tab_action) |action| if (action == .show) {
+                            self.closeTab(action.show);
+                            return .handled;
+                        };
+                        return if (self.dock.closeTab(id)) .handled else .ignored;
+                    },
+                    .right => {
+                        if (tab_action) |action| if (action == .show) {
+                            self.tab_popup = .{ .tab = action.show };
+                            return .handled;
+                        };
+                        return .ignored;
+                    },
                     .left => {},
                 }
+                if (tab_action) |action| {
+                    self.runTabAction(action, popup_was, down.position);
+                    return .handled;
+                }
+                if (popup_was != .none) return .handled;
                 if (slot == main_slot) {
                     if (titlebarButton(id)) |button| return .{ .window = button };
                     if (id == reload_button.id) return .reload;
@@ -763,11 +841,31 @@ pub const Workspace = struct {
                     if (self.menubar.press(id, self.plugin_bars)) |action| return self.run(action);
                 }
                 if (scene_view.toolbar.buttonOf(id)) |button| return .{ .scene_button = button };
+                if (no_tabs.kindOf(id)) |kind| {
+                    self.openTab(kind);
+                    return .handled;
+                }
+                // A copy of a panel shown elsewhere is shown here instead.
+                if (panels.showHereOf(id)) |copy| if (self.live.of(copy.panel)) |live| {
+                    live.* = copy.copy;
+                    return .handled;
+                };
                 if (self.dock.press(id, down.position.x, down.position.y)) return .handled;
                 return if (self.dock.dismissMenu()) .handled else .ignored;
             },
             .pointer_up => |up| {
+                if (slot == main_slot) if (self.tab_press) |pressed| {
+                    self.tab_press = null;
+                    self.dropTab(pressed, up.position);
+                    return .handled;
+                };
                 if (slot != main_slot or !self.dock.dragging()) return .ignored;
+                // A panel let go over the tab bar goes into that tab, or a new one.
+                if (self.draggedPanel()) |panel| if (self.roots[main_slot]) |root| if (tab_bar.dropAt(root, self.tabs.count(), up.position.x, up.position.y)) |drop| {
+                    self.dock.drag = .none;
+                    self.dropPanel(panel, drop);
+                    return .handled;
+                };
                 self.dock.release(up.position.x, up.position.y);
                 return .handled;
             },
@@ -782,6 +880,18 @@ pub const Workspace = struct {
                 // The menus' shortcuts.
                 if (key.key == .f12 and !key.repeat) return .toggle_devtools;
                 if (key.repeat or !(key.modifiers.control or key.modifiers.super)) return .ignored;
+                // Ctrl+Tab and Ctrl+Shift+Tab step through the tabs; Ctrl+T offers a new one.
+                if (key.key == .tab) {
+                    const count = self.tabs.count();
+                    if (count == 0) return .handled;
+                    const step: usize = if (key.modifiers.shift) count - 1 else 1;
+                    self.tabs.show(&self.dock, ((self.tabs.active orelse 0) + step) % count);
+                    return .handled;
+                }
+                if (key.key == .t) {
+                    self.tab_popup = if (self.tab_popup == .choose) .none else .choose;
+                    return .handled;
+                }
                 const command: menus.Command = switch (key.key) {
                     .n => .new_project,
                     .o => .open_project,
@@ -829,6 +939,10 @@ pub const Workspace = struct {
                 .undo => return .undo,
                 .redo => return .redo,
                 .reset_layout => self.resetLayout() catch |err| std.log.warn("cannot reset the layout: {t}", .{err}),
+                .new_tab => self.tab_popup = .choose,
+                .new_tab_3d => self.openTab(.scene_3d),
+                .new_tab_2d => self.openTab(.scene_2d),
+                .new_tab_ui => self.openTab(.ui),
                 .about => return .about,
                 .documentation => help_menu.openUrl(help_menu.documentation_url),
                 .report_issue => help_menu.openUrl(help_menu.issues_url),
@@ -852,8 +966,278 @@ pub const Workspace = struct {
         return error.NoSuchPanel;
     }
 
+    /// Open built-in `panel` and bring its tab forward, docking it beside the Scene if it was
+    /// closed.
+    pub fn showPanel(self: *Workspace, panel: Panel) !void {
+        const id = if (self.live.of(panel)) |live| panels.copyId(panel, live.*) else @intFromEnum(panel);
+        if (self.tabs.ofPanel(&self.dock, id)) |tab| if (self.tabs.windowOf(&self.dock, tab) == null) self.tabs.show(&self.dock, tab);
+        const scene = panels.copyId(.scene, self.live.scene);
+        if (self.dock.nodeOf(id) == null) try self.dock.add(id, if (self.dock.nodeOf(scene) != null) scene else null, .center);
+        _ = self.dock.activate(ui.dock.first_id + id);
+    }
+
+    /// Show the Asset Preview in an OS window of its own, popping it out of wherever it is
+    /// docked (opening it first if it was closed). Closing the window docks it back home.
+    pub fn previewInWindow(self: *Workspace) !void {
+        const id = @intFromEnum(Panel.asset_preview);
+        if (self.dock.nodeOf(id)) |stack| if (std.meta.activeTag(self.dock.hostOf(stack)) == .window and self.dock.nodes[stack].count == 1) return;
+        if (self.dock.nodeOf(id) == null) try self.showPanel(.asset_preview);
+        try self.dock.detach(id);
+    }
+
+    /// Show the tab holding the live UI Designer, or open a UI tab when it isn't docked in one.
+    /// Call `followShownTab` before working with the Designer, so it is that tab's.
+    pub fn showUiDesigner(self: *Workspace) !void {
+        const designer = panels.copyId(.ui_designer, self.live.ui);
+        if (self.tabs.ofPanel(&self.dock, designer)) |tab| return self.tabs.show(&self.dock, tab);
+        if (self.dock.nodeOf(designer) != null) return;
+        try self.newTab(.ui);
+    }
+
+    /// File > New Tab, the tab bar's "+" and Ctrl+T: a new tab of `kind`.
+    fn openTab(self: *Workspace, kind: workspace_tabs.Kind) void {
+        self.newTab(kind) catch |err| {
+            self.toast("Couldn't open the tab: too many tabs or panels");
+            std.log.warn("cannot open a {t} tab: {t}", .{ kind, err });
+        };
+    }
+
+    /// Open a new tab of `kind`, shown, with its own copy of the panels it is for: the 3D preset
+    /// (`addScenePreset`), a 2D Scene, or the UI Designer with its tree on the left and
+    /// properties on the right.
+    fn newTab(self: *Workspace, kind: workspace_tabs.Kind) !void {
+        switch (kind) {
+            .scene_3d => {
+                const copy = try self.freeCopy(&scene_preset);
+                _ = try self.tabs.open(&self.dock, .scene_3d);
+                try self.addScenePreset(copy);
+            },
+            .scene_2d => {
+                const copy = try self.freeCopy(&.{.scene_2d});
+                _ = try self.tabs.open(&self.dock, .scene_2d);
+                try self.dock.add(panels.copyId(.scene_2d, copy), null, .center);
+            },
+            .ui => {
+                const copy = try self.freeCopy(&.{ .ui_designer, .ui_tree, .ui_properties });
+                _ = try self.tabs.open(&self.dock, .ui);
+                const designer = panels.copyId(.ui_designer, copy);
+                try self.dock.add(designer, null, .center);
+                try self.dock.add(panels.copyId(.ui_tree, copy), designer, .left);
+                self.splitRatio(panels.copyId(.ui_tree, copy), 0.2);
+                try self.dock.add(panels.copyId(.ui_properties, copy), designer, .right);
+                self.splitRatio(panels.copyId(.ui_properties, copy), 0.72);
+            },
+            .panels => {},
+        }
+    }
+
+    /// The first copy number none of `group`'s panels have open, for a new tab's.
+    fn freeCopy(self: *const Workspace, group: []const Panel) !u8 {
+        copies: for (0..panels.max_copies) |copy| {
+            for (group) |panel| if (self.dock.nodeOf(panels.copyId(panel, @intCast(copy))) != null) continue :copies;
+            return @intCast(copy);
+        }
+        return error.TooManyCopies;
+    }
+
+    /// Close tab `index` and the panels in it, unless it is pinned. Edit > Undo brings it back.
+    pub fn closeTab(self: *Workspace, index: usize) void {
+        const tab = self.tabs.list[index] orelse return;
+        if (tab.pinned) return self.toast("Unpin the tab to close it");
+        self.tabs.close(&self.dock, index);
+    }
+
+    /// Pop tab `index` out into an OS window, or bring it back when it is out.
+    fn popOutTab(self: *Workspace, index: usize) void {
+        if (self.tabs.windowOf(&self.dock, index) != null) return self.tabs.show(&self.dock, index);
+        const area = self.dock.viewport;
+        self.tabs.popOut(&self.dock, index, .{ @max(480, area.w * 0.7), @max(360, area.h * 0.8) }) catch {
+            self.toast("Too many windows are open to pop out another");
+        };
+    }
+
+    /// The OS window `index` was closed: a tab in it goes back to the tab bar, and panels go
+    /// back to where they were.
+    pub fn closeWindow(self: *Workspace, index: usize) void {
+        const window = self.dock.windows[index] orelse return;
+        if (self.tabs.ofRoot(window.root) != null) {
+            self.dock.windows[index] = null;
+            return;
+        }
+        self.dock.redock(.{ .window = @intCast(index) });
+    }
+
+    /// Carry out a press on the tab bar; `popup` is what was open when it came.
+    fn runTabAction(self: *Workspace, action: tab_bar.Action, popup: tab_bar.Popup, at: ui.Vec2) void {
+        self.tab_popup = .none;
+        switch (action) {
+            .show => |index| {
+                self.tabs.show(&self.dock, index);
+                self.tab_press = .{ .root = self.tabs.list[index].?.root, .from = at };
+            },
+            .close => |index| self.closeTab(index),
+            .choose => self.tab_popup = if (popup == .choose) .none else .choose,
+            .open => |kind| self.openTab(kind),
+            .pin_open_menu => if (popup == .tab) if (self.tabs.list[popup.tab]) |tab| self.tabs.setPinned(popup.tab, !tab.pinned),
+            .pop_out => if (popup == .tab) self.popOutTab(popup.tab),
+            .close_open_menu => if (popup == .tab) self.closeTab(popup.tab),
+        }
+    }
+
+    /// The panel carried by a tab drag under way, if any.
+    fn draggedPanel(self: *const Workspace) ?u32 {
+        return switch (self.dock.drag) {
+            .tab => |carried| if (carried.started) carried.panel else null,
+            else => null,
+        };
+    }
+
+    /// Put `panel` into the tab `drop` says, or a new one named after it, and show that tab.
+    fn dropPanel(self: *Workspace, panel: u32, drop: tab_bar.Drop) void {
+        const index = switch (drop) {
+            .tab => |index| index,
+            .new => blk: {
+                const was = self.tabs.active;
+                const made = self.tabs.open(&self.dock, .panels) catch {
+                    self.toast("Too many tabs are open for another");
+                    return;
+                };
+                if (was) |shown| self.tabs.show(&self.dock, shown);
+                break :blk made;
+            },
+        };
+        const stack = self.tabs.stackOf(&self.dock, index) orelse return;
+        self.dock.move(panel, stack, .center) catch |err| return std.log.warn("cannot move panel {d} to tab {d}: {t}", .{ panel, index, err });
+        self.tabs.prune(&self.dock);
+        if (self.tabs.ofPanel(&self.dock, panel)) |shown| self.tabs.show(&self.dock, shown);
+    }
+
+    /// A tab carried from the bar moved to `at`. Over another tab's layout (not its own, and not
+    /// when it is pinned, which stays a tab), its first panel is carried as a dock drag, so the
+    /// dock shows where its panels would go; anywhere else, nothing is.
+    fn dragTab(self: *Workspace, pressed: *tab_drag.TabDrag, at: ui.Vec2) void {
+        if (!pressed.moveTo(at)) return;
+        const carried = self.tabs.ofRoot(pressed.root) orelse {
+            self.tab_press = null;
+            self.dock.drag = .none;
+            return;
+        };
+        const on_bar = if (self.roots[main_slot]) |root| tab_bar.dropAt(root, self.tabs.count(), at.x, at.y) != null else false;
+        const own_shown = self.tabs.isShown(carried);
+        if (on_bar or own_shown or self.tabs.list[carried].?.pinned) {
+            self.dock.drag = .none;
+            return;
+        }
+        var buffer: [64 * 16]u32 = undefined;
+        const carried_panels = self.tabs.panelsOf(&self.dock, carried, &buffer);
+        if (carried_panels.len == 0) return;
+        if (std.meta.activeTag(self.dock.drag) != .tab) self.dock.drag = .{ .tab = .{ .panel = carried_panels[0], .x = pressed.from.x, .y = pressed.from.y, .started = true } };
+        self.dock.dragTo(at.x, at.y);
+    }
+
+    /// Let go of a tab carried from the bar at `at`: into another tab's layout its panels dock
+    /// where the dock's targets say, onto the bar it moves to that place, and pulled well below
+    /// the bar over its own layout it pops out into a window.
+    fn dropTab(self: *Workspace, pressed: tab_drag.TabDrag, at: ui.Vec2) void {
+        if (!pressed.started) return;
+        const carried = self.tabs.ofRoot(pressed.root) orelse return;
+        if (std.meta.activeTag(self.dock.drag) == .tab) {
+            var buffer: [64 * 16]u32 = undefined;
+            const carried_panels = self.tabs.panelsOf(&self.dock, carried, &buffer);
+            self.dock.release(at.x, at.y);
+            if (carried_panels.len > 0) tab_drag.follow(&self.dock, carried_panels[0], carried_panels[1..]);
+            self.tabs.prune(&self.dock);
+            return;
+        }
+        if (self.roots[main_slot]) |root| if (tab_bar.dropAt(root, self.tabs.count(), at.x, at.y)) |drop| {
+            self.tabs.reorder(carried, switch (drop) {
+                .tab => |index| index,
+                .new => self.tabs.count() - 1,
+            });
+            return;
+        };
+        if (at.y - pressed.from.y > 2 * tab_bar.height) self.popOutTab(carried);
+    }
+
+    /// Something carried (a tab, or a dock panel) resting on a tab of the bar shows that tab.
+    fn springLoad(self: *Workspace) void {
+        const root = self.roots[main_slot] orelse return;
+        const carrying = (self.tab_press != null and self.tab_press.?.started) or self.draggedPanel() != null;
+        const over = if (carrying and self.pointer_slot == main_slot) tab_bar.tabAt(root, self.tabs.count(), self.pointer.x, self.pointer.y) else null;
+        if (self.spring.hover(over, self.time_ms)) |index| self.tabs.show(&self.dock, index);
+    }
+
+    /// Keep the tabs in step with the dock, make the copies in the tab shown live when the main
+    /// window shows another tree, and hand a closed live copy's place to one still open.
+    pub fn followShownTab(self: *Workspace) void {
+        self.tabs.prune(&self.dock);
+        if (self.dock.root != self.followed_root) {
+            self.followed_root = self.dock.root;
+            var buffer: [64 * 16]u32 = undefined;
+            if (self.tabs.active) |active| for (self.tabs.panelsOf(&self.dock, active, &buffer)) |id| {
+                const found = panels.copyOf(id) orelse continue;
+                if (self.live.of(found.panel)) |live| live.* = found.copy;
+            };
+        }
+        for (panels.live_panels) |panel| {
+            const live = self.live.of(panel).?;
+            if (self.dock.nodeOf(panels.copyId(panel, live.*)) != null) continue;
+            for (0..panels.max_copies) |copy| if (self.dock.nodeOf(panels.copyId(panel, @intCast(copy))) != null) {
+                live.* = @intCast(copy);
+                break;
+            };
+        }
+    }
+
+    /// Tab `index`'s name: its kind's, or for panels dragged onto the bar, its first panel's.
+    fn tabTitleZ(self: *const Workspace, index: usize) [:0]const u8 {
+        const tab = self.tabs.list[index] orelse return "Tab";
+        if (tab.kind != .panels) return tab.kind.title();
+        var at = tab.root;
+        while (self.dock.nodes[at].kind == .split) at = self.dock.nodes[at].first;
+        const node = self.dock.nodes[at];
+        return if (node.count > 0) panels.panelTitle(node.panels[0], self.plugin_panels) else tab.kind.title();
+    }
+
+    /// The tab bar as it looks this frame; `hot` is the control under the pointer.
+    fn tabBar(self: *const Workspace, b: L.Builder, width: f32, font: *const ui.Font, hot: u32) !*L.Element {
+        const count = self.tabs.count();
+        const titles = try b.allocator.alloc([]const u8, count);
+        const popped = try b.allocator.alloc(bool, count);
+        const pinned = try b.allocator.alloc(bool, count);
+        for (titles, popped, pinned, 0..) |*title, *out, *pin, i| {
+            title.* = self.tabTitleZ(i);
+            out.* = self.tabs.windowOf(&self.dock, i) != null;
+            pin.* = self.tabs.list[i].?.pinned;
+        }
+        // A panel carried over the bar lands in a tab or a new one; a tab carried along it, in a place.
+        const carried_tab = if (self.tab_press) |pressed| if (pressed.started) self.tabs.ofRoot(pressed.root) else null else null;
+        const carried = self.draggedPanel() != null and carried_tab == null;
+        const over_bar = (carried or carried_tab != null) and self.pointer_slot == main_slot;
+        const drop = if (over_bar) if (self.roots[main_slot]) |root| tab_bar.dropAt(root, count, self.pointer.x, self.pointer.y) else null else null;
+        return tab_bar.element(b, width, font, .{
+            .titles = titles,
+            .active = self.tabs.active,
+            .popped = popped,
+            .pinned = pinned,
+            .popup = self.tab_popup,
+            .drop = drop,
+            .dragging = carried,
+            .carried = if (carried_tab) |index| @intCast(index) else null,
+            .hot = hot,
+        });
+    }
+
+    /// Window > a panel: close it when open; else open it, a Scene, 2D Scene or the UI Designer's
+    /// in a new tab of its own.
     fn togglePanel(self: *Workspace, panel: u32) void {
         if (self.dock.nodeOf(panel) != null) return self.dock.remove(panel);
+        switch (std.enums.fromInt(Panel, panel) orelse .inspector) {
+            .ui_designer, .ui_tree, .ui_properties => return self.openTab(.ui),
+            .scene_2d => return self.openTab(.scene_2d),
+            .scene => return self.openTab(.scene_3d),
+            else => {},
+        }
         self.dock.add(panel, null, .center) catch |err| std.log.warn("cannot reopen panel {d}: {t}", .{ panel, err });
     }
 
@@ -905,10 +1289,144 @@ fn testWorkspace() !Workspace {
     return Workspace.init(std.testing.allocator, titlebar.Layout.default(.linux), &test_plugin_panels);
 }
 
-test "the default layout docks every panel" {
+test "the default layout docks every panel but the UI Designer's and the 2D Scene" {
     var workspace = try testWorkspace();
     defer workspace.deinit();
-    for (std.enums.values(Panel)) |panel| try std.testing.expect(workspace.dock.nodeOf(@intFromEnum(panel)) != null);
+    for (std.enums.values(Panel)) |panel| {
+        const own_tab = panel == .ui_designer or panel == .ui_tree or panel == .ui_properties or panel == .scene_2d;
+        try std.testing.expectEqual(!own_tab, workspace.dock.nodeOf(@intFromEnum(panel)) != null);
+    }
+}
+
+test "every new tab is a tab of its own, and the copy of its panel in the tab shown goes live" {
+    var workspace = try testWorkspace();
+    defer workspace.deinit();
+    // The UI Designer's three open together in a UI tab, shown.
+    _ = workspace.run(.{ .toggle_panel = @intFromEnum(Panel.ui_properties) });
+    const ui_tab = workspace.tabs.ofKind(.ui).?;
+    try std.testing.expect(workspace.tabs.isShown(ui_tab));
+    for ([_]Panel{ .ui_designer, .ui_tree, .ui_properties }) |panel| {
+        try std.testing.expectEqual(@as(?usize, ui_tab), workspace.tabs.ofPanel(&workspace.dock, @intFromEnum(panel)));
+    }
+    // Another UI tab, two 2D tabs and another 3D tab each have their own copy.
+    _ = workspace.run(.{ .command = .new_tab_ui });
+    workspace.followShownTab();
+    try std.testing.expect(workspace.tabs.isShown(workspace.tabs.ofPanel(&workspace.dock, panels.copyId(.ui_tree, 1)).?));
+    _ = workspace.run(.{ .command = .new_tab_2d });
+    _ = workspace.run(.{ .command = .new_tab_2d });
+    workspace.followShownTab();
+    try std.testing.expect(workspace.tabs.isShown(workspace.tabs.ofPanel(&workspace.dock, panels.copyId(.scene_2d, 1)).?));
+    _ = workspace.run(.{ .command = .new_tab_3d });
+    try std.testing.expectEqual(@as(usize, 6), workspace.tabs.count());
+    workspace.followShownTab();
+    try std.testing.expectEqual(@as(u8, 1), workspace.live.scene);
+    try std.testing.expectEqual(@as(u8, 1), workspace.live.scene_2d);
+    // The new 3D tab has the 3D preset of its own: the Hierarchy left of its Scene, the Inspector
+    // right, and the Console, Assets and Animation below; those copies are the live ones.
+    const three_d = workspace.tabs.active.?;
+    for (Workspace.scene_preset) |panel| try std.testing.expectEqual(@as(?usize, three_d), workspace.tabs.ofPanel(&workspace.dock, panels.copyId(panel, 1)));
+    try std.testing.expectEqual(workspace.dock.nodeOf(panels.copyId(.console, 1)).?, workspace.dock.nodeOf(panels.copyId(.assets, 1)).?);
+    try std.testing.expectEqual(@as(u8, 1), workspace.live.inspector);
+    try std.testing.expectEqual(@as(u8, 1), workspace.live.ui);
+    // Back on the first tab, its Scene is the live one again.
+    workspace.tabs.show(&workspace.dock, 0);
+    workspace.followShownTab();
+    try std.testing.expectEqual(@as(u8, 0), workspace.live.scene);
+}
+
+test "a tab carried onto another, rested there and let go on its tabs docks between them" {
+    var workspace = try testWorkspace();
+    defer workspace.deinit();
+    var font = try ui.Font.init(std.testing.allocator, ui.default_font);
+    defer font.deinit();
+    const viewport = ui.Rect{ .x = 0, .y = 0, .w = 1400, .h = 800 };
+    const inspector = @intFromEnum(Panel.inspector);
+    const console = @intFromEnum(Panel.console);
+    // The Inspector in a tab of its own, shown.
+    workspace.dropPanel(inspector, .new);
+    try workspace.build(viewport, @splat(null), &font);
+    try std.testing.expectEqual(@as(?usize, 1), workspace.tabs.ofPanel(&workspace.dock, inspector));
+    try std.testing.expect(workspace.tabs.isShown(1));
+
+    // Carry its tab onto the 3D tab and rest there until the 3D tab shows.
+    const root = workspace.roots[main_slot].?;
+    const carried = tab_bar.tabBounds(root, 1).?.center();
+    const three_d = tab_bar.tabBounds(root, 0).?.center();
+    _ = workspace.handle(main_slot, .{ .pointer_down = .{ .position = carried, .button = .left, .clicks = 1 } });
+    _ = workspace.handle(main_slot, .{ .pointer_move = three_d });
+    try workspace.build(viewport, @splat(null), &font);
+    workspace.time_ms += tab_drag.spring_ms;
+    try workspace.build(viewport, @splat(null), &font);
+    try std.testing.expect(workspace.tabs.isShown(0));
+
+    // Let go on the Console's tabs, just past the Console's own: before Assets. The dock notes
+    // where its tabs are as it paints them, which a test doesn't.
+    const stack = &workspace.dock.nodes[workspace.dock.nodeOf(console).?];
+    try std.testing.expectEqual(@as(u32, @intFromEnum(Panel.assets)), stack.panels[1]);
+    for (stack.panels[0..stack.count], 0..) |panel, i| {
+        const tab = workspace.roots[main_slot].?.find(ui.dock.first_id + panel).?.bounds;
+        stack.tab_spans[i] = .{ tab.x, tab.x + tab.w };
+    }
+    const drop = ui.Vec2{ .x = stack.tab_spans[0][1] - 2, .y = stack.rect.y + 6 };
+    _ = workspace.handle(main_slot, .{ .pointer_move = drop });
+    _ = workspace.handle(main_slot, .{ .pointer_up = .{ .position = drop, .button = .left } });
+    const joined = workspace.dock.nodes[workspace.dock.nodeOf(inspector).?];
+    try std.testing.expectEqual(workspace.dock.nodeOf(console).?, workspace.dock.nodeOf(inspector).?);
+    try std.testing.expectEqual(inspector, joined.panels[1]);
+    // The emptied tab goes.
+    workspace.followShownTab();
+    try std.testing.expectEqual(@as(usize, 1), workspace.tabs.count());
+}
+
+test "closing every tab leaves the main window empty, and a new tab fills it" {
+    var workspace = try testWorkspace();
+    defer workspace.deinit();
+    var font = try ui.Font.init(std.testing.allocator, ui.default_font);
+    defer font.deinit();
+    const viewport = ui.Rect{ .x = 0, .y = 0, .w = 1400, .h = 800 };
+    workspace.closeTab(0);
+    try workspace.build(viewport, @splat(null), &font);
+    try std.testing.expectEqual(@as(usize, 0), workspace.tabs.count());
+    try std.testing.expect(workspace.dock.nodeOf(@intFromEnum(Panel.scene)) == null);
+    // It says how to open one.
+    const hasText = struct {
+        fn f(element: *const L.Element, value: []const u8) bool {
+            if (element.paint_kind == .text and std.mem.eql(u8, element.paint_kind.text.value, value)) return true;
+            for (element.children) |child| if (f(child, value)) return true;
+            return false;
+        }
+    }.f;
+    try std.testing.expect(hasText(workspace.roots[main_slot].?, "Open a tab"));
+
+    // Its 3D Scene row opens a 3D tab.
+    const row = workspace.roots[main_slot].?.find(0x5700_0000 + @as(u32, @intFromEnum(workspace_tabs.Kind.scene_3d))).?;
+    try std.testing.expectEqual(Outcome.handled, workspace.handle(main_slot, .{ .pointer_down = .{ .position = row.bounds.center(), .button = .left, .clicks = 1 } }));
+    try workspace.build(viewport, @splat(null), &font);
+    try std.testing.expectEqual(@as(usize, 1), workspace.tabs.count());
+    try std.testing.expect(workspace.placed.scene != null);
+}
+
+test "a pinned tab can't be closed until it is unpinned" {
+    var workspace = try testWorkspace();
+    defer workspace.deinit();
+    workspace.tabs.setPinned(0, true);
+    workspace.closeTab(0);
+    try std.testing.expectEqual(@as(usize, 1), workspace.tabs.count());
+    workspace.tabs.setPinned(0, false);
+    workspace.closeTab(0);
+    try std.testing.expectEqual(@as(usize, 0), workspace.tabs.count());
+}
+
+test "previewing an asset pops the Asset Preview out into a window, once" {
+    var workspace = try testWorkspace();
+    defer workspace.deinit();
+    workspace.dock.os_windows = true;
+    const id = @intFromEnum(Panel.asset_preview);
+    try workspace.previewInWindow();
+    const host = workspace.dock.hostOf(workspace.dock.nodeOf(id).?);
+    try std.testing.expect(std.meta.activeTag(host) == .window);
+    try workspace.previewInWindow();
+    try std.testing.expect(std.meta.eql(host, workspace.dock.hostOf(workspace.dock.nodeOf(id).?)));
 }
 
 test "the Window menu closes and reopens a panel" {

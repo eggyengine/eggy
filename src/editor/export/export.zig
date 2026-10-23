@@ -308,7 +308,6 @@ pub const ExportWindow = struct {
         context.end();
         restyle(context, .{ .direction = .row, .gap = 14, .align_items = .center });
 
-        if (shown.unavailable) |why| context.alert("Not from this computer", why, false);
         if (self.problem) |why| context.alert("Couldn't export", why, true);
 
         // Eggy's settings for it.
@@ -341,7 +340,7 @@ pub const ExportWindow = struct {
                 rows.end(context);
             }
         } else {
-            rows.begin(context, "Target", "The Zig target the plugin builds it for.");
+            rows.begin(context, "Target", "The Zig target the plugin builds it for, unless its settings pick another.");
             context.text(shown.target);
             rows.end(context);
         }
@@ -356,7 +355,7 @@ pub const ExportWindow = struct {
             _ = context.toggle("##this cpu", &settings.this_cpu);
             rows.end(context);
         }
-        if (self.selected == .plugin or platforms.zips(self.selected.builtin)) {
+        if (if (self.selected == .plugin) shown.zips else platforms.zips(self.selected.builtin)) {
             rows.begin(context, "ZIP archive", "Also pack the game's folder into a ZIP, to hand out.");
             _ = context.toggle("##zip", &settings.zip);
             rows.end(context);
@@ -399,8 +398,7 @@ pub const ExportWindow = struct {
         context.end();
         restyle(context, .{ .grow = 1 });
         if (context.buttonVariant("Close", .outline)) self.closing = true;
-        const shown = self.shownPlatform(game);
-        if (shown.unavailable == null and context.button("Export")) self.start(game);
+        if (context.button("Export")) self.start(game);
         page_style.endRow(context);
         context.end();
         restyle(context, .{ .height = footer_height, .gap = page_gap });
@@ -488,7 +486,7 @@ pub const ExportWindow = struct {
                     std.fmt.allocPrint(arena, "-Dscene={s}", .{scene}) catch return self.fail(error.OutOfMemory),
                     std.fmt.allocPrint(arena, "-Dexport-optimize={t}", .{settings.optimize.mode()}) catch return self.fail(error.OutOfMemory),
                 }) catch return self.fail(error.OutOfMemory);
-                if (!settings.zip) list.append(arena, "-Dexport-zip=false") catch return self.fail(error.OutOfMemory);
+                if (shown.zips and !settings.zip) list.append(arena, "-Dexport-zip=false") catch return self.fail(error.OutOfMemory);
                 break :blk list;
             },
         };
@@ -507,6 +505,10 @@ pub const ExportWindow = struct {
             };
         }
         args.appendSlice(arena, plugin_args.list.items) catch return self.fail(error.OutOfMemory);
+        // A plugin platform may build for a target its settings pick; `-Dtarget` comes first.
+        if (self.selected == .plugin) if (plugin_args.target) |target| {
+            args.items[0] = std.fmt.allocPrint(arena, "-Dtarget={s}", .{target}) catch return self.fail(error.OutOfMemory);
+        };
 
         const folders = job_zig.editorFolders(self.gpa) catch |err| return self.fail(err);
         defer self.gpa.free(folders.resources_dir);
@@ -523,7 +525,7 @@ pub const ExportWindow = struct {
     }
 
     /// What the window shows of the selected platform.
-    const Shown = struct { title: []const u8, note: []const u8, target: []const u8, icon_png: []const u8 = "", unavailable: ?[]const u8 = null };
+    const Shown = struct { title: []const u8, note: []const u8, target: []const u8, icon_png: []const u8 = "", zips: bool = true };
 
     fn shownPlatform(self: *ExportWindow, game: ?*HotGame) Shown {
         return switch (self.selected) {
@@ -531,11 +533,10 @@ pub const ExportWindow = struct {
                 .title = platforms.title(platform),
                 .note = platforms.note(platform),
                 .target = platforms.target(platform, self.settings[@intFromEnum(platform)]),
-                .unavailable = platforms.unavailable(platform),
             },
             .plugin => {
                 const platform = game.?.export_platforms[self.pluginIndex(game).?];
-                return .{ .title = platform.title, .note = platform.note, .target = platform.target, .icon_png = platform.icon_png };
+                return .{ .title = platform.title, .note = platform.note, .target = platform.target, .icon_png = platform.icon_png, .zips = platform.zips };
             },
         };
     }

@@ -31,6 +31,8 @@ pub fn Runtime(comptime project: type) type {
         data: ?*packaged_assets.Data,
         /// How many invalid lights were last reported (`eggy.lighting.reportInvalid`).
         invalid_lights_reported: u32 = 0,
+        /// This frame's billboards, which graphics borrows while drawing.
+        billboards: eggy.ui_scenes.billboards.Frame = undefined,
 
         const Self = @This();
 
@@ -83,6 +85,7 @@ pub fn Runtime(comptime project: type) type {
                 app.graphics.models.loader = packaged.models();
                 app.graphics.textures.loader = packaged.textures();
                 app.resource_provider = packaged.resources();
+                if (@hasDecl(project, "icon")) setWindowIcon(gpa, packaged, app.window.window, project.icon);
             }
             app.scene_access = eggy.scene.registryAccess(Plugins.Components);
             app.graphics.materials.resources = app.resources();
@@ -112,6 +115,17 @@ pub fn Runtime(comptime project: type) type {
                 .app = app,
                 .data = data,
             };
+        }
+
+        /// Give `window` the project's icon, the packaged image `key` (its first frame); one that
+        /// can't be loaded or set leaves the default, having said why.
+        fn setWindowIcon(gpa: std.mem.Allocator, data: *packaged_assets.Data, window: sdl3.video.Window, key: []const u8) void {
+            const loader = data.textures();
+            var texture = loader.load(loader.context, gpa, key) catch |err| return std.log.warn("cannot load the game's icon: {t}", .{err});
+            defer texture.deinit(gpa);
+            const surface = sdl3.surface.Surface.initFrom(texture.width, texture.height, .array_rgba_32, texture.frame(0)) catch |err| return std.log.warn("cannot use the game's icon: {t}", .{err});
+            defer surface.deinit();
+            window.setIcon(surface) catch |err| std.log.warn("cannot set the game's icon: {t}", .{err});
         }
 
         /// Put the scene at `path` (from `files`) into `world`; a scene that can't be read leaves
@@ -171,13 +185,19 @@ pub fn Runtime(comptime project: type) type {
             self.app.input.endFrame();
             self.app.graphics.lights = try eggy.lighting.gather(&self.app.world);
             eggy.lighting.reportInvalid(self.app.graphics.lights, &self.invalid_lights_reported);
+            // UI scenes on entities: screens over the view, billboards in the scene.
+            self.plugins.gatherUiScenes(&self.app);
+            const ui_time_ms = sdl3.timer.getMillisecondsSinceInit();
+            self.billboards = .{ .state = &self.app.ui_scenes, .resources = self.app.resources(), .billboards = self.app.ui_scenes.shownBillboards(), .time_ms = ui_time_ms };
+            self.app.graphics.ui_billboards = &self.billboards;
+            const has_ui = self.plugins.hasGameUi() or self.app.ui_scenes.screen_count != 0;
             const frame = try self.app.graphics.beginFrame();
             // Through the game's camera; without one, there is nothing to see it from.
             if (eggy.camera.find(&self.app.world)) |view| {
                 const drawn = try eggy.mesh.gatherAlloc(self.gpa, &self.app.world);
                 defer self.gpa.free(drawn);
                 try self.app.graphics.drawScene(frame, drawn, view);
-            } else if (!self.plugins.hasGameUi() and !self.plugins.hasDraw()) {
+            } else if (!has_ui and !self.plugins.hasDraw()) {
                 if (self.notice == null) self.notice = try eggy.Notice.init(self.gpa, &self.app.graphics);
                 try self.notice.?.draw(frame, "No camera available");
             }
@@ -193,10 +213,10 @@ pub fn Runtime(comptime project: type) type {
                     .frame_slot = self.app.graphics.surface.slot,
                 };
                 try self.plugins.draw(&self.app, draw);
-                if (self.plugins.hasGameUi() or self.app.graphics_settings_ui.isOpen()) {
+                if (has_ui or self.app.graphics_settings_ui.isOpen()) {
                     const layer = try self.app.gameUi();
-                    layer.begin(draw, sdl3.timer.getMillisecondsSinceInit());
-                    if (self.plugins.hasGameUi()) try self.plugins.gameUi(&self.app, &layer.context);
+                    layer.begin(draw, ui_time_ms);
+                    if (has_ui) try self.plugins.gameUi(&self.app, &layer.context);
                     self.app.graphics_settings_ui.draw(&self.app, &layer.context);
                     if (try layer.render(draw)) self.app.input.cancel();
                     try layer.syncClipboard();
@@ -238,13 +258,25 @@ pub fn Runtime(comptime project: type) type {
             self.app.input.viewport_points = .{ @floatFromInt(width), @floatFromInt(height) };
             if (eggy.game_ui.isTouchInput(curr_event) and (width == 0 or height == 0)) return .run;
             const consumed = if (self.app.ui_layer) |layer| layer.handle(curr_event, false) else false;
-            if (eggy.game_ui.isInput(curr_event) and (consumed or try self.plugins.uiEvent(&self.app, curr_event))) {
+            if (eggy.game_ui.isInput(curr_event) and (consumed or try self.plugins.uiEvent(&self.app, curr_event) or try self.pressBillboard(curr_event, .{ @floatFromInt(width), @floatFromInt(height) }))) {
                 self.app.input.suppress(curr_event);
                 return .run;
             }
             try self.app.input.handle(curr_event);
             try self.plugins.event(&self.app, curr_event);
             return .run;
+        }
+
+        /// Press a billboard's button under a left click, seen through the game's camera
+        /// across the window (`viewport_points`). Returns whether one was pressed.
+        fn pressBillboard(self: *Self, curr_event: sdl3.events.Event, viewport_points: [2]f32) !bool {
+            const down = switch (curr_event) {
+                .mouse_button_down => |down| down,
+                else => return false,
+            };
+            if (down.button != .left or self.app.ui_scenes.billboard_count == 0) return false;
+            const view = eggy.camera.find(&self.app.world) orelse return false;
+            return eggy.ui_scenes.billboards.press(&self.app.ui_scenes, self.app.resources(), view, viewport_points, .{ down.x, down.y });
         }
     };
 }
