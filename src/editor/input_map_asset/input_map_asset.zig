@@ -95,7 +95,7 @@ pub const View = struct {
 
     /// Add the control the new-control row describes; a refusal shows as `last_error`.
     fn addControl(self: *View, document: *Document) void {
-        document.addControl(self.new_name.text(), @enumFromInt(self.new_kind)) catch |err| {
+        document.addControl(self.new_name.text(), @fromBackingInt(@intCast(self.new_kind))) catch |err| {
             self.last_error = err;
             return;
         };
@@ -110,7 +110,7 @@ pub const View = struct {
         const control = document.state.controls.values()[index];
         if (self.loaded_control != index) {
             try self.control_name.set(control.name);
-            self.control_kind = @intFromEnum(control.kind);
+            self.control_kind = @backingInt(control.kind);
             self.loaded_control = index;
         }
         context.separator();
@@ -130,7 +130,7 @@ pub const View = struct {
         const edited = if (rename)
             document.renameControl(index, self.control_name.text())
         else if (retype)
-            document.setKind(index, @enumFromInt(self.control_kind))
+            document.setKind(index, @fromBackingInt(@intCast(self.control_kind)))
         else if (remove)
             document.removeControl(index)
         else

@@ -380,10 +380,10 @@ pub const Workspace = struct {
         self.live = .{};
         self.followed_root = 0xFF;
         try self.addScenePreset(0);
-        try self.dock.add(@intFromEnum(Panel.asset_preview), @intFromEnum(Panel.inspector), .center);
-        for (self.plugin_panels, 0..) |panel, i| try self.dock.add(panels.pluginId(panel, i), @intFromEnum(Panel.inspector), .center);
+        try self.dock.add(@backingInt(Panel.asset_preview), @backingInt(Panel.inspector), .center);
+        for (self.plugin_panels, 0..) |panel, i| try self.dock.add(panels.pluginId(panel, i), @backingInt(Panel.inspector), .center);
         // The Inspector's tab back in front of those that joined it.
-        _ = self.dock.activate(dock.first_id + @intFromEnum(Panel.inspector));
+        _ = self.dock.activate(dock.first_id + @backingInt(Panel.inspector));
     }
 
     /// The panels a 3D tab opens with, each its own copy.
@@ -655,7 +655,7 @@ pub const Workspace = struct {
         };
         // The menus sharing the bar take presses instead of dragging the window.
         var controls: ?ui.Rect = null;
-        for (std.enums.values(menus.Menu)) |menu| if (root.find(@intFromEnum(menu))) |trigger| {
+        for (std.enums.values(menus.Menu)) |menu| if (root.find(@backingInt(menu))) |trigger| {
             const r = trigger.bounds;
             controls = if (controls) |so_far| .{ .x = so_far.x, .y = so_far.y, .w = r.x + r.w - so_far.x, .h = so_far.h } else r;
         };
@@ -969,7 +969,7 @@ pub const Workspace = struct {
     /// Open built-in `panel` and bring its tab forward, docking it beside the Scene if it was
     /// closed.
     pub fn showPanel(self: *Workspace, panel: Panel) !void {
-        const id = if (self.live.of(panel)) |live| panels.copyId(panel, live.*) else @intFromEnum(panel);
+        const id = if (self.live.of(panel)) |live| panels.copyId(panel, live.*) else @backingInt(panel);
         if (self.tabs.ofPanel(&self.dock, id)) |tab| if (self.tabs.windowOf(&self.dock, tab) == null) self.tabs.show(&self.dock, tab);
         const scene = panels.copyId(.scene, self.live.scene);
         if (self.dock.nodeOf(id) == null) try self.dock.add(id, if (self.dock.nodeOf(scene) != null) scene else null, .center);
@@ -979,7 +979,7 @@ pub const Workspace = struct {
     /// Show the Asset Preview in an OS window of its own, popping it out of wherever it is
     /// docked (opening it first if it was closed). Closing the window docks it back home.
     pub fn previewInWindow(self: *Workspace) !void {
-        const id = @intFromEnum(Panel.asset_preview);
+        const id = @backingInt(Panel.asset_preview);
         if (self.dock.nodeOf(id)) |stack| if (std.meta.activeTag(self.dock.hostOf(stack)) == .window and self.dock.nodes[stack].count == 1) return;
         if (self.dock.nodeOf(id) == null) try self.showPanel(.asset_preview);
         try self.dock.detach(id);
@@ -1294,7 +1294,7 @@ test "the default layout docks every panel but the UI Designer's and the 2D Scen
     defer workspace.deinit();
     for (std.enums.values(Panel)) |panel| {
         const own_tab = panel == .ui_designer or panel == .ui_tree or panel == .ui_properties or panel == .scene_2d;
-        try std.testing.expectEqual(!own_tab, workspace.dock.nodeOf(@intFromEnum(panel)) != null);
+        try std.testing.expectEqual(!own_tab, workspace.dock.nodeOf(@backingInt(panel)) != null);
     }
 }
 
@@ -1302,11 +1302,11 @@ test "every new tab is a tab of its own, and the copy of its panel in the tab sh
     var workspace = try testWorkspace();
     defer workspace.deinit();
     // The UI Designer's three open together in a UI tab, shown.
-    _ = workspace.run(.{ .toggle_panel = @intFromEnum(Panel.ui_properties) });
+    _ = workspace.run(.{ .toggle_panel = @backingInt(Panel.ui_properties) });
     const ui_tab = workspace.tabs.ofKind(.ui).?;
     try std.testing.expect(workspace.tabs.isShown(ui_tab));
     for ([_]Panel{ .ui_designer, .ui_tree, .ui_properties }) |panel| {
-        try std.testing.expectEqual(@as(?usize, ui_tab), workspace.tabs.ofPanel(&workspace.dock, @intFromEnum(panel)));
+        try std.testing.expectEqual(@as(?usize, ui_tab), workspace.tabs.ofPanel(&workspace.dock, @backingInt(panel)));
     }
     // Another UI tab, two 2D tabs and another 3D tab each have their own copy.
     _ = workspace.run(.{ .command = .new_tab_ui });
@@ -1340,8 +1340,8 @@ test "a tab carried onto another, rested there and let go on its tabs docks betw
     var font = try ui.Font.init(std.testing.allocator, ui.default_font);
     defer font.deinit();
     const viewport = ui.Rect{ .x = 0, .y = 0, .w = 1400, .h = 800 };
-    const inspector = @intFromEnum(Panel.inspector);
-    const console = @intFromEnum(Panel.console);
+    const inspector = @backingInt(Panel.inspector);
+    const console = @backingInt(Panel.console);
     // The Inspector in a tab of its own, shown.
     workspace.dropPanel(inspector, .new);
     try workspace.build(viewport, @splat(null), &font);
@@ -1362,7 +1362,7 @@ test "a tab carried onto another, rested there and let go on its tabs docks betw
     // Let go on the Console's tabs, just past the Console's own: before Assets. The dock notes
     // where its tabs are as it paints them, which a test doesn't.
     const stack = &workspace.dock.nodes[workspace.dock.nodeOf(console).?];
-    try std.testing.expectEqual(@as(u32, @intFromEnum(Panel.assets)), stack.panels[1]);
+    try std.testing.expectEqual(@as(u32, @backingInt(Panel.assets)), stack.panels[1]);
     for (stack.panels[0..stack.count], 0..) |panel, i| {
         const tab = workspace.roots[main_slot].?.find(ui.dock.first_id + panel).?.bounds;
         stack.tab_spans[i] = .{ tab.x, tab.x + tab.w };
@@ -1387,7 +1387,7 @@ test "closing every tab leaves the main window empty, and a new tab fills it" {
     workspace.closeTab(0);
     try workspace.build(viewport, @splat(null), &font);
     try std.testing.expectEqual(@as(usize, 0), workspace.tabs.count());
-    try std.testing.expect(workspace.dock.nodeOf(@intFromEnum(Panel.scene)) == null);
+    try std.testing.expect(workspace.dock.nodeOf(@backingInt(Panel.scene)) == null);
     // It says how to open one.
     const hasText = struct {
         fn f(element: *const L.Element, value: []const u8) bool {
@@ -1399,7 +1399,7 @@ test "closing every tab leaves the main window empty, and a new tab fills it" {
     try std.testing.expect(hasText(workspace.roots[main_slot].?, "Open a tab"));
 
     // Its 3D Scene row opens a 3D tab.
-    const row = workspace.roots[main_slot].?.find(0x5700_0000 + @as(u32, @intFromEnum(workspace_tabs.Kind.scene_3d))).?;
+    const row = workspace.roots[main_slot].?.find(0x5700_0000 + @as(u32, @backingInt(workspace_tabs.Kind.scene_3d))).?;
     try std.testing.expectEqual(Outcome.handled, workspace.handle(main_slot, .{ .pointer_down = .{ .position = row.bounds.center(), .button = .left, .clicks = 1 } }));
     try workspace.build(viewport, @splat(null), &font);
     try std.testing.expectEqual(@as(usize, 1), workspace.tabs.count());
@@ -1421,7 +1421,7 @@ test "previewing an asset pops the Asset Preview out into a window, once" {
     var workspace = try testWorkspace();
     defer workspace.deinit();
     workspace.dock.os_windows = true;
-    const id = @intFromEnum(Panel.asset_preview);
+    const id = @backingInt(Panel.asset_preview);
     try workspace.previewInWindow();
     const host = workspace.dock.hostOf(workspace.dock.nodeOf(id).?);
     try std.testing.expect(std.meta.activeTag(host) == .window);
@@ -1432,7 +1432,7 @@ test "previewing an asset pops the Asset Preview out into a window, once" {
 test "the Window menu closes and reopens a panel" {
     var workspace = try testWorkspace();
     defer workspace.deinit();
-    const console = @intFromEnum(Panel.console);
+    const console = @backingInt(Panel.console);
     _ = workspace.run(.{ .toggle_panel = console });
     try std.testing.expect(workspace.dock.nodeOf(console) == null);
     _ = workspace.run(.{ .toggle_panel = console });
@@ -1448,7 +1448,7 @@ test "File > Quit asks the editor to quit" {
 test "a popped-out panel's window is titled after it" {
     var workspace = try testWorkspace();
     defer workspace.deinit();
-    try workspace.dock.detach(@intFromEnum(Panel.console));
+    try workspace.dock.detach(@backingInt(Panel.console));
     const index = for (workspace.dock.windows, 0..) |window, i| {
         if (window != null) break i;
     } else return error.NoWindow;
@@ -1458,7 +1458,7 @@ test "a popped-out panel's window is titled after it" {
 test "plugin panels dock as tabs beside the Inspector, which stays in front" {
     var workspace = try testWorkspace();
     defer workspace.deinit();
-    const inspector = @intFromEnum(Panel.inspector);
+    const inspector = @backingInt(Panel.inspector);
     try std.testing.expectEqual(workspace.dock.nodeOf(inspector), workspace.dock.nodeOf(panels.plugin_first));
     try std.testing.expect(workspace.dock.isVisible(inspector));
     try workspace.dock.detach(panels.plugin_first);
@@ -1543,13 +1543,13 @@ test "every menu trigger and row is hit where it is drawn" {
     const viewport = ui.Rect{ .x = 0, .y = 0, .w = 1400, .h = 800 };
     for (std.enums.values(menus.Menu)) |menu| {
         if (menu == .more) continue;
-        workspace.menubar.open = @intFromEnum(menu);
+        workspace.menubar.open = @backingInt(menu);
         try workspace.build(viewport, @splat(null), &font);
         const root = workspace.roots[main_slot].?;
-        const trigger = root.find(@intFromEnum(menu)).?;
-        try std.testing.expectEqual(@intFromEnum(menu), workspace.controlAt(main_slot, trigger.bounds.center().x, trigger.bounds.center().y));
+        const trigger = root.find(@backingInt(menu)).?;
+        try std.testing.expectEqual(@backingInt(menu), workspace.controlAt(main_slot, trigger.bounds.center().x, trigger.bounds.center().y));
         // Pressable across the bar's height, not just over its label.
-        try std.testing.expectEqual(@intFromEnum(menu), workspace.controlAt(main_slot, trigger.bounds.center().x, 2));
+        try std.testing.expectEqual(@backingInt(menu), workspace.controlAt(main_slot, trigger.bounds.center().x, 2));
         if (menu != .view) try std.testing.expect(try expectRowsHit(&workspace, root) > 0);
     }
 }
@@ -1567,7 +1567,7 @@ fn expectRowsHit(workspace: *const Workspace, element: *const L.Element) !usize 
 test "the game's panels follow it across swaps, and the Inspector stays in front" {
     var workspace = try testWorkspace();
     defer workspace.deinit();
-    const inspector = @intFromEnum(Panel.inspector);
+    const inspector = @backingInt(Panel.inspector);
     const two = [_]eggy.plugins.EditorPanel{ .{ .title = "Stats" }, .{ .title = "Level" } };
     workspace.setPluginPanels(&two);
     try std.testing.expect(workspace.dock.nodeOf(panels.plugin_first + 1) != null);

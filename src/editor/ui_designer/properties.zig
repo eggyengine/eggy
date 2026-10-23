@@ -3,6 +3,7 @@
 //! layout and its look; with the root selected, the scene's size and theme follow. Image, font
 //! and UI scene fields are slots that take a file dragged from Assets.
 const std = @import("std");
+const zon_file = @import("eggy").assets.zon;
 const eggy = @import("eggy");
 const ui = eggy.ui;
 const ui_scene = eggy.assets.ui_scene;
@@ -36,7 +37,7 @@ pub const Properties = struct {
     gpa: std.mem.Allocator,
     values: FieldEditor,
     texts: Fields,
-    folded: std.EnumSet(Card) = .initEmpty(),
+    folded: std.EnumSet(Card) = .empty,
     /// The node shown last, by paint order: typing and dragging stop when another is selected.
     shown: ?u32 = null,
     /// A file dropped on a slot, set on the next build: the slot's card and field, and the
@@ -96,7 +97,7 @@ pub const Properties = struct {
             changed = context.toggle("##ui node visible", &node.visible) or changed;
             field_editor.endRow(context, control);
             field_editor.labelledRow(context, "Shows", 0);
-            var kind: usize = @intFromEnum(std.meta.activeTag(node.widget));
+            var kind: usize = @backingInt(std.meta.activeTag(node.widget));
             if (context.select("##ui node kind", &kind_labels, &kind)) {
                 node.widget = switch (kind) {
                     0 => .panel,
@@ -116,7 +117,7 @@ pub const Properties = struct {
 
         // What it shows, unless it is a plain panel.
         if (node.widget != .panel) {
-            if (self.beginCard(context, .widget, kind_labels[@intFromEnum(std.meta.activeTag(node.widget))], "")) {
+            if (self.beginCard(context, .widget, kind_labels[@backingInt(std.meta.activeTag(node.widget))], "")) {
                 changed = switch (node.widget) {
                     .panel => false,
                     .text => |*text| self.fieldsOf(context, ui_scene.Text, .{ .assets = &.{.{ "font", .font }} }, text, .widget, document, request, control),
@@ -188,25 +189,26 @@ pub const Properties = struct {
         const infos = comptime eggy.components.Registry(&.{View(T, options)}, &.{"ui"}).infos[0].fields;
         const frame = context.builder().allocator;
         var changed = false;
-        inline for (std.meta.fields(T), 0..) |field, i| {
+        const info = @typeInfo(T).@"struct";
+        inline for (info.field_names, info.field_types, 0..) |name, Field, i| {
             const parts = infos[i].parts;
-            if (comptime skipped(options, field.name)) {
+            if (comptime skipped(options, name)) {
                 // Drawn elsewhere, or not for people to change.
-            } else if (field.type == []const u8 and parts[0].kind != .asset) {
-                field_editor.labelledRow(context, field_editor.displayName(frame, field.name), 0);
-                if (self.texts.text(context, std.fmt.comptimePrint("##ui {t} {s}", .{ card, field.name }), @field(value.*, field.name), "")) |typed| {
-                    @field(value.*, field.name) = document.arena().dupe(u8, typed) catch @field(value.*, field.name);
+            } else if (Field == []const u8 and parts[0].kind != .asset) {
+                field_editor.labelledRow(context, field_editor.displayName(frame, name), 0);
+                if (self.texts.text(context, std.fmt.comptimePrint("##ui {t} {s}", .{ card, name }), @field(value.*, name), "")) |typed| {
+                    @field(value.*, name) = document.arena().dupe(u8, typed) catch @field(value.*, name);
                     changed = true;
                 }
                 field_editor.endRow(context, control);
             } else blk: {
                 var zon: std.Io.Writer.Allocating = .init(frame);
-                std.zon.stringify.serialize(@field(value.*, field.name), .{ .whitespace = false }, &zon.writer) catch break :blk;
-                const shown: ?[]const u8 = if (parts[0].kind != .asset) null else if (request.assets) |assets| assets.label(frame, keyOf(@field(value.*, field.name))) else keyOf(@field(value.*, field.name));
+                std.zon.stringify.serialize(@field(value.*, name), .{ .whitespace = false }, &zon.writer) catch break :blk;
+                const shown: ?[]const u8 = if (parts[0].kind != .asset) null else if (request.assets) |assets| assets.label(frame, keyOf(@field(value.*, name))) else keyOf(@field(value.*, name));
                 var typed = self.values.fieldRows(context, .{
-                    .component = @intFromEnum(card),
+                    .component = @backingInt(card),
                     .field = i,
-                    .label = field_editor.displayName(frame, field.name),
+                    .label = field_editor.displayName(frame, name),
                     .parts = parts,
                     .text = zon.written(),
                     .shown = shown,
@@ -214,13 +216,13 @@ pub const Properties = struct {
                     .dragging = request.dragging,
                     .assets = request.assets,
                 });
-                if (self.dropped) |drop| if (drop.card == @intFromEnum(card) and drop.field == i) {
+                if (self.dropped) |drop| if (drop.card == @backingInt(card) and drop.field == i) {
                     typed = drop.text;
                 };
                 // A value that doesn't read as the field's type is left as it was.
                 const text = typed orelse break :blk;
-                const source = frame.dupeZ(u8, text) catch break :blk;
-                @field(value.*, field.name) = std.zon.parse.fromSliceAlloc(field.type, document.arena(), source, null, .{}) catch break :blk;
+                const source = frame.dupeSentinel(u8, text, 0) catch break :blk;
+                @field(value.*, name) = zon_file.parse(Field, document.arena(), source, .{}) catch break :blk;
                 changed = true;
             }
         }
@@ -286,13 +288,13 @@ const ViewOptions = struct {
 /// `T` as the Inspector's controls should read it, field for field in the same order: asset keys
 /// as references, colours named as colours, skipped fields as nothing.
 fn View(comptime T: type, comptime options: ViewOptions) type {
-    const fields = std.meta.fields(T);
-    var names: [fields.len][]const u8 = undefined;
-    var types: [fields.len]type = undefined;
-    for (fields, &names, &types) |field, *name, *Type| {
-        name.* = if (options.colours and field.type == ?[4]f32) field.name ++ "_color" else field.name;
-        Type.* = if (skipped(options, field.name)) void else field.type;
-        for (options.assets) |asset| if (std.mem.eql(u8, asset[0], field.name)) {
+    const info = @typeInfo(T).@"struct";
+    var names: [info.field_names.len][]const u8 = undefined;
+    var types: [info.field_names.len]type = undefined;
+    for (info.field_names, info.field_types, &names, &types) |field_name, Field, *name, *Type| {
+        name.* = if (options.colours and Field == ?[4]f32) field_name ++ "_color" else field_name;
+        Type.* = if (skipped(options, field_name)) void else Field;
+        for (options.assets) |asset| if (std.mem.eql(u8, asset[0], field_name)) {
             Type.* = eggy.AssetRef(asset[1]);
         };
     }
@@ -357,7 +359,7 @@ const AnchorCell = struct {
 test "a view turns asset keys into references and names a theme's colours, field for field" {
     const ThemeView = View(ui_scene.Theme, .{ .assets = &.{.{ "font", .font }}, .colours = true });
     const infos = eggy.components.Registry(&.{ThemeView}, &.{"ui"}).infos[0].fields;
-    try std.testing.expectEqual(std.meta.fields(ui_scene.Theme).len, infos.len);
+    try std.testing.expectEqual(@typeInfo(ui_scene.Theme).@"struct".field_names.len, infos.len);
     try std.testing.expectEqualStrings("background_color", infos[1].name);
     // An optional colour's inner value is still a colour.
     try std.testing.expectEqual(eggy.components.PartKind.color, infos[1].parts[1].kind);

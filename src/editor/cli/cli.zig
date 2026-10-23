@@ -77,7 +77,7 @@ pub fn run(original_process: *const std.process.Init) !void {
                 },
                 .{
                     .name = "export",
-                    .description = .{ .one_line = "Export a project's ReleaseFast game as a folder and ZIP." },
+                    .description = .{ .one_line = "Export a project's optimized (fast) game as a folder and ZIP." },
                     .options = &.{
                         .{ .long_name = "project", .help = "Project directory (default: current directory)", .value_ref = runner.mkRef(&context.export_game.project), .value_name = "DIR" },
                         .{ .long_name = "scene", .help = "Startup scene path (default: eggy.zon's default_scene)", .value_ref = runner.mkRef(&context.export_game.scene), .value_name = "PATH" },

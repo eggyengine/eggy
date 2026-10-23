@@ -108,7 +108,7 @@ pub const Data = struct {
         const root = @import("root");
         if (comptime @hasDecl(root, "eggy_asset_ids")) {
             if (root.eggy_asset_ids.findId(try eggy.assets.id.parse(path))) |entry| {
-                if (entry.kind != @intFromEnum(eggy.assets.Kind.image)) return error.WrongAssetKind;
+                if (entry.kind != @backingInt(eggy.assets.Kind.image)) return error.WrongAssetKind;
                 if (!entry.converted) return error.UnsupportedImageFormat;
             }
         }
@@ -155,7 +155,7 @@ pub const Data = struct {
         var key: [eggy.assets.id.key_len]u8 = undefined;
         const canonical = eggy.assets.id.key(&key, try eggy.assets.id.parse(name));
         var path_buffer: [128]u8 = undefined;
-        const path = try std.fmt.bufPrintZ(&path_buffer, "data/{s}", .{canonical});
+        const path = try std.fmt.bufPrintSentinel(&path_buffer, "data/{s}", .{canonical}, 0);
         // SDL reads Android's AssetManager or Emscripten's preloaded filesystem.
         const stream = sdl3.c.SDL_IOFromFile(path, "rb") orelse return error.AssetNotFound;
         defer _ = sdl3.c.SDL_CloseIO(stream);

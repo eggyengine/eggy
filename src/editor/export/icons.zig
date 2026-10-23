@@ -27,9 +27,7 @@ pub const Icons = struct {
     /// ```
     pub fn load(gpa: std.mem.Allocator, font: *ui.Font) Icons {
         var self = Icons{ .gpa = gpa, .font = font };
-        inline for (std.meta.fields(platforms.Platform)) |field| {
-            self.builtins[field.value] = loadTinted(gpa, font, field.name);
-        }
+        inline for (comptime std.enums.values(platforms.Platform)) |platform| self.builtins[@backingInt(platform)] = loadTinted(gpa, font, @tagName(platform));
         self.package = loadTinted(gpa, font, "plugin");
         self.folder_icon = .{
             .on_dark = ui.Image.load(gpa, font, @embedFile("../assets/icons/folder-on-dark.png")) catch null,
@@ -53,7 +51,7 @@ pub const Icons = struct {
 
     /// Eggy's `platform`, tinted for `theme`, as layout paint; nothing where it didn't load.
     pub fn builtin(self: *const Icons, platform: platforms.Platform, theme: ui.Theme) ui.Layout.Paint {
-        return paintTinted(self.builtins[@intFromEnum(platform)], theme);
+        return paintTinted(self.builtins[@backingInt(platform)], theme);
     }
 
     /// A folder, tinted for `theme`, as layout paint.

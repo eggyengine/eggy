@@ -11,7 +11,7 @@ can use. The game and reusable plugins use the same hooks.
 
 ## Before you start
 
-Use a Zig 0.16 game package that already calls `eggy.addGame`.
+Use a Zig 0.17 game package that already calls `eggy.addGame`.
 [Set up a project](set-up-project.md) if you need one. A reusable plugin belongs in
 `src/root.zig` as `pub const Plugin`; game-only behavior can stay in `pub const Game`
 in `src/main.zig`.

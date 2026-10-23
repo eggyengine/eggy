@@ -11,7 +11,7 @@ The same steps work through terminal prompts or supplied arguments.
 ## Before you start
 
 Have an Eggy editor installation, including its resources, and a terminal in the parent
-directory where you want the project. Eggy uses Zig 0.16. If you use zvm, put its `bin`
+directory where you want the project. Eggy uses Zig 0.17. If you use zvm, put its `bin`
 directory first on `PATH`.
 
 The commands below use `eggy_editor`. Replace that with the path to your installed

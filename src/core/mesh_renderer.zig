@@ -301,7 +301,7 @@ pub const MeshRenderer = struct {
         cmd.setVertexBuffer(0, self.vertices, 0);
         cmd.setIndexBuffer(self.indices, .uint32, 0);
         cmd.setBindGroup(1, (own orelse sources.textures.white).group, &.{});
-        const range = self.ranges[@intFromEnum(drawable.shape)];
+        const range = self.ranges[@backingInt(drawable.shape)];
         cmd.drawIndexed(range.index_count, count, range.first_index, 0, first);
         sources.stats.draw_calls += 1;
         sources.stats.triangles += @as(u64, range.index_count / 3) * count;
@@ -386,7 +386,7 @@ fn posedKey(drawable: mesh.Drawable) u64 {
 }
 
 fn sourceOrder(a: mesh.Drawable, b: mesh.Drawable) std.math.Order {
-    const a_file = a.modelFile() orelse return if (b.modelFile() != null) .lt else std.math.order(@intFromEnum(a.shape), @intFromEnum(b.shape));
+    const a_file = a.modelFile() orelse return if (b.modelFile() != null) .lt else std.math.order(@backingInt(a.shape), @backingInt(b.shape));
     const b_file = b.modelFile() orelse return .gt;
     return std.mem.order(u8, a_file, b_file);
 }

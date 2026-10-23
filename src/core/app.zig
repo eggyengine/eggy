@@ -28,7 +28,7 @@ const height = 675;
 /// Owns SDL, one window, the `Graphics` that draws into it, and the game's ECS `world`.
 pub const App = struct {
     window: sdl_adapter.Sdl3Window,
-    /// What Zig 0.16 hands `main` (`std.process.Init`): the command line, the environment
+    /// What Zig hands `main` (`std.process.Init`): the command line, the environment
     /// (`environ_map`), the process arena, allocator and `Io`. Valid for the whole run.
     process_init: *const std.process.Init,
     init_flags: sdl3.InitFlags,

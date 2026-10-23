@@ -410,7 +410,7 @@ test "a scene that was never opened has its paths turned into ids, and nothing e
 
     // Asset leaves (also in arrays, with or without `resources/`) became ids; the label stayed text.
     const saved = try setup.read("resources/level.scene.zon");
-    var parsed = try Scene.parse(setup.gpa, try arena.dupeZ(u8, saved));
+    var parsed = try Scene.parse(setup.gpa, try arena.dupeSentinel(u8, saved, 0));
     defer parsed.deinit();
     const fields = parsed.entities[0].components[0].fields;
     const expected_name = try std.fmt.allocPrint(arena, "\"{s}\"", .{wood_key});
@@ -442,7 +442,7 @@ test "a bare clip name is read against the model of the same entity" {
     const made = try plan(setup.gpa, arena, setup.io, setup.fixture.dir, &setup.project, test_types);
     try std.testing.expectEqual(@as(?[]const u8, null), made.problem);
     try std.testing.expectEqual(@as(usize, 1), made.rewrites.len);
-    var parsed = try Scene.parse(setup.gpa, try arena.dupeZ(u8, made.rewrites[0].text));
+    var parsed = try Scene.parse(setup.gpa, try arena.dupeSentinel(u8, made.rewrites[0].text, 0));
     defer parsed.deinit();
     const smile = setup.project.referenceAt("resources/face.gltf/smile").?;
     const expected = try std.fmt.allocPrint(arena, "\"{s}\"", .{smile.key()});

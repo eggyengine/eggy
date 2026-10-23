@@ -109,8 +109,8 @@ fn addSubtree(arena: std.mem.Allocator, rows: *std.ArrayList(Row), world: *ecs.W
 }
 
 fn matches(row: Row, query: []const u8) bool {
-    if (std.ascii.indexOfIgnoreCase(row.name, query) != null) return true;
-    for (row.components) |name| if (std.ascii.indexOfIgnoreCase(name, query) != null) return true;
+    if (std.ascii.findIgnoreCase(row.name, query) != null) return true;
+    for (row.components) |name| if (std.ascii.findIgnoreCase(name, query) != null) return true;
     return false;
 }
 

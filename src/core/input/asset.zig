@@ -1,5 +1,6 @@
 //! Complete input maps stored as `.inmap.zon` resources.
 const std = @import("std");
+const zon_file = @import("eggy_assets").zon;
 const t = @import("types.zig");
 const bindings = @import("bindings.zig");
 const resolution = @import("resolution.zig");
@@ -43,7 +44,7 @@ pub const File = struct {
     /// const file = try File.parse(arena.allocator(), ".{ .controls = .{} }");
     /// ```
     pub fn parse(arena: std.mem.Allocator, source: [:0]const u8) !File {
-        const saved = try std.zon.parse.fromSliceAlloc(Saved, arena, source, null, .{});
+        const saved = try zon_file.parse(Saved, arena, source, .{});
         const controls = try arena.alloc(Control, saved.controls.len);
         for (controls, saved.controls) |*control, source_control| {
             const mappings = try arena.alloc(t.Binding, source_control.bindings.len);
@@ -149,7 +150,7 @@ test "input-map assets round-trip multiple sources and timed/chord triggers" {
     var text: std.Io.Writer.Allocating = .init(std.testing.allocator);
     defer text.deinit();
     try file.write(&text.writer);
-    const source = try arena.allocator().dupeZ(u8, text.written());
+    const source = try arena.allocator().dupeSentinel(u8, text.written(), 0);
     const copy = try File.parse(arena.allocator(), source);
     try std.testing.expectEqual(@as(i32, 3), copy.priority);
     try std.testing.expectEqual(@as(usize, 4), copy.controls.len);

@@ -5,6 +5,7 @@
 //! keep in a section of its own (`.eggy_metadata` on Linux), which `readelf -p .eggy_metadata`
 //! shows.
 const std = @import("std");
+const package_root = @import("package_root.zig");
 const project = @import("../core/project.zig");
 
 /// Name and value pairs, in the order they are kept.
@@ -42,7 +43,7 @@ pub fn iconPath(b: *std.Build) ?[]const u8 {
 }
 
 fn readConfig(b: *std.Build) ?project.Config {
-    const source = b.build_root.handle.readFileAllocOptions(b.graph.io, project.file_name, b.allocator, .limited(1 << 20), .of(u8), 0) catch return null;
+    const source = package_root.open(b).readFileAllocOptions(b.graph.io, project.file_name, b.allocator, .limited(1 << 20), .of(u8), 0) catch return null;
     return project.parse(b.allocator, source) catch null;
 }
 
@@ -127,8 +128,8 @@ pub fn icoFrom(b: *std.Build, engine: *std.Build, texture: std.Build.LazyPath) s
         .root_module = engine.createModule(.{
             .root_source_file = engine.path("src/build/ico.zig"),
             .target = host,
-            .optimize = .ReleaseFast,
-            .imports = &.{.{ .name = "eggy_assets", .module = @import("models.zig").assetsModule(engine, host, .ReleaseFast) }},
+            .optimize = .fast,
+            .imports = &.{.{ .name = "eggy_assets", .module = @import("models.zig").assetsModule(engine, host, .fast) }},
         }),
     });
     const run = b.addRunArtifact(tool);

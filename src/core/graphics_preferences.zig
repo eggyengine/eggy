@@ -1,5 +1,6 @@
 //! Atomic per-user graphics overrides, separate from game saves and shipped project defaults.
 const std = @import("std");
+const zon_file = @import("eggy_assets").zon;
 const builtin = @import("builtin");
 const render = @import("render_settings.zig");
 const web = @import("web_storage.zig");
@@ -42,9 +43,11 @@ pub const Store = struct {
             else => return err,
         };
         defer self.gpa.free(bytes);
-        const source = try self.gpa.dupeZ(u8, bytes);
+        const source = try self.gpa.dupeSentinel(u8, bytes, 0);
         defer self.gpa.free(source);
-        const envelope = try std.zon.parse.fromSlice(Envelope, self.gpa, source, null, .{});
+        var arena: std.heap.ArenaAllocator = .init(self.gpa);
+        defer arena.deinit();
+        const envelope = try zon_file.parse(Envelope, arena.allocator(), source, .{});
         if (envelope.version != 1) return error.UnsupportedGraphicsSettingsVersion;
         try envelope.settings.validateValues();
         self.has_override = true;

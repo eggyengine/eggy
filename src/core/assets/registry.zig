@@ -71,7 +71,7 @@ pub const Builder = struct {
         );
         for (self.entries.items) |entry| {
             try writer.print("    .{{ .path = \"{f}\", .id = 0x{x}, .kind = {d}, .converted = {} }},\n", .{
-                std.zig.fmtString(entry.path), entry.id, @intFromEnum(entry.kind), entry.converted,
+                std.zig.fmtString(entry.path), entry.id, @backingInt(entry.kind), entry.converted,
             });
         }
         try writer.writeAll(

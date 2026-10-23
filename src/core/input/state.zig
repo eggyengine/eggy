@@ -19,7 +19,7 @@ pub const State = struct {
     overrides: config.Overrides,
     persistence: ?config.Persistence = null,
     rumble: ?Rumble = null,
-    buttons: types.Buttons = .{ .keys = .initEmpty(), .mouse = .initEmpty() },
+    buttons: types.Buttons = .{ .keys = .empty, .mouse = .empty },
     time_s: f64 = 0,
     revision: u64 = 0,
     configuration_revision: u64 = 0,
@@ -98,13 +98,13 @@ pub const State = struct {
     pub fn resetRun(self: *State) void {
         self.configuration_revision +%= 1;
         self.forgetControls();
-        self.buttons = .{ .keys = .initEmpty(), .mouse = .initEmpty() };
+        self.buttons = .{ .keys = .empty, .mouse = .empty };
         self.contacts.clearRetainingCapacity();
         self.time_s = 0;
         for (self.devices.values()) |*device| {
             device.game = device.raw;
-            device.game.buttons_pressed = .initEmpty();
-            device.game.buttons_released = .initEmpty();
+            device.game.buttons_pressed = .empty;
+            device.game.buttons_released = .empty;
         }
     }
     /// Host-only: parse and install a complete sentinel-terminated controls configuration.
@@ -226,7 +226,7 @@ pub const State = struct {
                 if (input.count < response.count) return error.BufferTooSmall;
                 if (response.count != 0) {
                     const ids: [*]types.Controller = @ptrCast(@alignCast(input.output.?));
-                    for (self.devices.keys(), 0..) |id, i| ids[i] = @enumFromInt(id);
+                    for (self.devices.keys(), 0..) |id, i| ids[i] = @fromBackingInt(@intCast(id));
                 }
             },
             .controller_state => output(types.ControllerState, input.output).* = (self.devices.get(input.device) orelse return error.ControllerDisconnected).game,
@@ -518,8 +518,8 @@ pub const State = struct {
     }
     fn endFrame(self: *State) void {
         for (self.devices.values()) |*device| {
-            device.game.buttons_pressed = .initEmpty();
-            device.game.buttons_released = .initEmpty();
+            device.game.buttons_pressed = .empty;
+            device.game.buttons_released = .empty;
         }
         for (self.controls.values()) |*control| {
             control.value.pressed = false;

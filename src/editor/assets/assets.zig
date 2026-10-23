@@ -503,7 +503,7 @@ pub const AssetsPanel = struct {
     /// The button that shows the files as `view` (a list or a grid), lit while they are.
     fn viewButton(self: *AssetsPanel, context: *ui.Context, icons: *const Icons, view: View) void {
         const b = context.builder();
-        const id = view_id_base + @intFromEnum(view);
+        const id = view_id_base + @backingInt(view);
         if (context.activated(id)) self.view = view;
         const icon: Icon = if (view == .list) .list else .grid;
         const element = b.node(id, .{ .width = 24, .height = 24, .padding = .{ .left = 4, .right = 4, .top = 4, .bottom = 4 } }, highlight(b.allocator, id, self.view == view, false), &.{
@@ -565,7 +565,7 @@ pub const AssetsPanel = struct {
         var choices: std.ArrayList(ui.widgets.MenuItem) = .empty;
         const add = struct {
             fn f(list: *std.ArrayList(ui.widgets.MenuItem), ui_context: *ui.Context, item: MenuItem, label: []const u8) void {
-                list.append(ui_context.builder().allocator, .{ .id = menu_id_base + @intFromEnum(item), .label = label }) catch |err| {
+                list.append(ui_context.builder().allocator, .{ .id = menu_id_base + @backingInt(item), .label = label }) catch |err| {
                     ui_context.err = err;
                 };
             }
@@ -588,7 +588,7 @@ pub const AssetsPanel = struct {
         } else add(&choices, context, .reveal, "Show in file manager");
         // New files go in a folder, which a model's part isn't.
         const in_model = if (menu.entry) |entry| entry.virtual else false;
-        if (!in_model) choices.append(arena, .{ .id = menu_id_base + @intFromEnum(MenuItem.new_files), .label = "New", .kind = .submenu }) catch |err| {
+        if (!in_model) choices.append(arena, .{ .id = menu_id_base + @backingInt(MenuItem.new_files), .label = "New", .kind = .submenu }) catch |err| {
             context.err = err;
             return null;
         };
@@ -615,12 +615,12 @@ pub const AssetsPanel = struct {
         context.element(popup);
 
         for (choices.items) |choice| if (context.activated(choice.id)) {
-            if (choice.id == menu_id_base + @intFromEnum(MenuItem.new_files)) {
+            if (choice.id == menu_id_base + @backingInt(MenuItem.new_files)) {
                 self.menu.?.new_open = true;
                 break;
             }
             self.menu = null;
-            return switch (@as(MenuItem, @enumFromInt(choice.id - menu_id_base))) {
+            return switch (@as(MenuItem, @fromBackingInt(@intCast(choice.id - menu_id_base)))) {
                 .open => switch (menu.entry.?.kind) {
                     .scene => .{ .open_scene = menu.entry.?.path },
                     .input_map => .{ .open_input_map = menu.entry.?.path },
@@ -640,7 +640,7 @@ pub const AssetsPanel = struct {
                 .new_files => unreachable,
             };
         };
-        const new_id = menu_id_base + @intFromEnum(MenuItem.new_files);
+        const new_id = menu_id_base + @backingInt(MenuItem.new_files);
         const new_row = if (context.last_bounds.get(new_id)) |bound| bound.rect else ui.Rect{ .x = at.x, .y = at.y + height - 37, .w = width, .h = 32 };
         if (!in_model and new_row.contains(context.pointer.x, context.pointer.y)) self.menu.?.new_open = true;
         if (self.menu.?.new_open) {
@@ -793,7 +793,7 @@ pub const AssetsPanel = struct {
         while (searched < folders.items.len and searched < max_searched and out.items.len < max_found) : (searched += 1) {
             for (try listing.list(arena, io, project, folders.items[searched])) |entry| {
                 if (entry.kind == .folder) try folders.append(arena, entry.path);
-                if (std.ascii.indexOfIgnoreCase(entry.name, self.filter.text()) != null) try out.append(arena, .{ .entry = entry, .depth = 0 });
+                if (std.ascii.findIgnoreCase(entry.name, self.filter.text()) != null) try out.append(arena, .{ .entry = entry, .depth = 0 });
             }
         }
     }

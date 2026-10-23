@@ -192,12 +192,12 @@ pub fn hit(gizmo: Layout, pointer: ui.Vec2) ?Handle {
         .rotate => null,
     };
     if (gizmo.hasMove()) for (0..3) |axis| {
-        if (gizmo.plane_shown[axis] and insideQuad(pointer, gizmo.planes[axis])) return .{ .plane = @enumFromInt(axis) };
+        if (gizmo.plane_shown[axis] and insideQuad(pointer, gizmo.planes[axis])) return .{ .plane = @fromBackingInt(@intCast(axis)) };
     };
     var best: ?Handle = null;
     var best_distance: f32 = reach_pt;
     for (0..3) |axis| {
-        const which: Axis = @enumFromInt(axis);
+        const which: Axis = @fromBackingInt(@intCast(axis));
         if (gizmo.axis_shown[axis] and gizmo.tool != .rotate) {
             const distance = segmentDistance(pointer, gizmo.origin, gizmo.tips[axis]);
             if (distance < best_distance) {
@@ -266,7 +266,7 @@ pub const Drag = struct {
         const moved = sub2(pointer, self.from);
         switch (self.handle) {
             .arrow => |which| {
-                const axis = @intFromEnum(which);
+                const axis = @backingInt(which);
                 var metres = self.alongAxis(axis, moved) * self.gizmo.world_length;
                 if (snapping) metres = snapTo(metres, snap.move_m);
                 return self.moveBy(scale(self.gizmo.axes[axis], metres));
@@ -287,7 +287,7 @@ pub const Drag = struct {
                 return .{ .field = .rotation_deg, .value = self.turnBy(degrees) };
             },
             .scale_axis => |which| {
-                const axis = @intFromEnum(which);
+                const axis = @backingInt(which);
                 var value = self.start.scale;
                 value[axis] = @max(0.001, value[axis] * (1 + self.alongAxis(axis, moved)));
                 if (snapping) value[axis] = @max(snap.scale, snapTo(value[axis], snap.scale));
@@ -322,7 +322,7 @@ pub const Drag = struct {
                 break :blk std.fmt.bufPrint(buffer, "{d:.1}°", .{degrees}) catch "";
             },
             .arrow, .plane, .screen_move => std.fmt.bufPrint(buffer, "{d:.2} m", .{length(eggy.camera.sub(change.value, self.start.position))}) catch "",
-            .scale_axis => |which| std.fmt.bufPrint(buffer, "×{d:.2}", .{change.value[@intFromEnum(which)] / @max(0.0001, self.start.scale[@intFromEnum(which)])}) catch "",
+            .scale_axis => |which| std.fmt.bufPrint(buffer, "×{d:.2}", .{change.value[@backingInt(which)] / @max(0.0001, self.start.scale[@backingInt(which)])}) catch "",
             .uniform => std.fmt.bufPrint(buffer, "×{d:.2}", .{change.value[0] / @max(0.0001, self.start.scale[0])}) catch "",
         };
     }
@@ -338,9 +338,9 @@ pub const Drag = struct {
         const turned = switch (self.handle) {
             // About one of the entity's own axes: turned within its own space.
             .ring => |which| if (self.gizmo.space == .local)
-                rotation.mul(start, rotation.aboutAxis(unit(@intFromEnum(which)), degrees))
+                rotation.mul(start, rotation.aboutAxis(unit(@backingInt(which)), degrees))
             else
-                rotation.mul(rotation.aboutAxis(self.parentAxis(unit(@intFromEnum(which))), degrees), start),
+                rotation.mul(rotation.aboutAxis(self.parentAxis(unit(@backingInt(which))), degrees), start),
             .screen_ring => rotation.mul(rotation.aboutAxis(self.parentAxis(scale(self.gizmo.view.forward, -1)), degrees), start),
             else => start,
         };
@@ -364,7 +364,7 @@ pub const Drag = struct {
         // Screen y points down, so a turn that looks counter-clockwise has a falling angle; an
         // axis pointing away from the camera is seen from behind.
         const towards_camera = switch (self.handle) {
-            .ring => |which| !self.gizmo.flipped[@intFromEnum(which)],
+            .ring => |which| !self.gizmo.flipped[@backingInt(which)],
             else => true,
         };
         return if (towards_camera) -turned else turned;
@@ -381,7 +381,7 @@ pub const Drag = struct {
     /// The normal of the plane a plane or screen move slides on.
     fn planeNormal(self: Drag) ?[3]f32 {
         return switch (self.handle) {
-            .plane => |which| self.gizmo.axes[@intFromEnum(which)],
+            .plane => |which| self.gizmo.axes[@backingInt(which)],
             .screen_move => self.gizmo.view.forward,
             else => null,
         };
@@ -429,10 +429,10 @@ const Drawing = struct {
         // The view's ring, then each axis's ring (front half), planes, lines and their tips.
         if (gizmo.tool == .rotate) try polyline(c, &gizmo.screen_ring, null, 2, self.colorOf(.screen_ring, neutral));
         if (gizmo.hasRotate()) for (0..3) |axis| {
-            try polyline(c, &gizmo.rings[axis], &gizmo.ring_front[axis], 2.5, self.colorOf(.{ .ring = @enumFromInt(axis) }, axis_colors[axis]));
+            try polyline(c, &gizmo.rings[axis], &gizmo.ring_front[axis], 2.5, self.colorOf(.{ .ring = @fromBackingInt(@intCast(axis)) }, axis_colors[axis]));
         };
         if (gizmo.hasMove()) for (0..3) |axis| if (gizmo.plane_shown[axis]) {
-            const color = self.colorOf(.{ .plane = @enumFromInt(axis) }, axis_colors[axis]);
+            const color = self.colorOf(.{ .plane = @fromBackingInt(@intCast(axis)) }, axis_colors[axis]);
             const quad = gizmo.planes[axis];
             const fill = [4]f32{ color[0], color[1], color[2], 0.35 };
             try c.triangle(.{ pair(quad[0]), pair(quad[1]), pair(quad[2]) }, .{ fill, fill, fill });
@@ -440,7 +440,7 @@ const Drawing = struct {
             for (0..4) |i| try line(c, quad[i], quad[(i + 1) % 4], 1.2, color);
         };
         if (gizmo.tool != .rotate) for (0..3) |axis| if (gizmo.axis_shown[axis]) {
-            const handle: Handle = if (gizmo.tool == .scale) .{ .scale_axis = @enumFromInt(axis) } else .{ .arrow = @enumFromInt(axis) };
+            const handle: Handle = if (gizmo.tool == .scale) .{ .scale_axis = @fromBackingInt(@intCast(axis)) } else .{ .arrow = @fromBackingInt(@intCast(axis)) };
             const color = self.colorOf(handle, axis_colors[axis]);
             try line(c, gizmo.origin, gizmo.tips[axis], 2.5, color);
             if (gizmo.tool == .scale) try box(c, gizmo.tips[axis], 5, color) else try arrowHead(c, gizmo.origin, gizmo.tips[axis], color);

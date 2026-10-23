@@ -171,7 +171,7 @@ const Source = struct {
     fn read(context: *anyopaque, gpa: std.mem.Allocator, key: []const u8) ![:0]u8 {
         _ = key;
         const self: *Source = @ptrCast(@alignCast(context));
-        return gpa.dupeZ(u8, self.bytes);
+        return gpa.dupeSentinel(u8, self.bytes, 0);
     }
     fn model(_: *anyopaque, _: std.mem.Allocator, _: []const u8) !assets.Model {
         return error.Unsupported;

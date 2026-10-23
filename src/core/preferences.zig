@@ -16,6 +16,7 @@
 //!
 //! Fields are bools, integers, floats or enums, each with a default.
 const std = @import("std");
+const zon_file = @import("eggy_assets").zon;
 
 /// A field's kind, as the Preferences window edits it.
 pub const Kind = enum(u8) { bool, int, float, @"enum" };
@@ -56,12 +57,12 @@ pub fn manifest(comptime T: type, comptime key: [:0]const u8) Manifest {
 const typeMarker = @import("type_marker.zig").of;
 
 fn fieldsOf(comptime T: type) []const Field {
-    const struct_fields = @typeInfo(T).@"struct".fields;
-    var fields: [struct_fields.len]Field = undefined;
-    for (struct_fields, &fields) |struct_field, *field| {
-        const default = struct_field.defaultValue() orelse @compileError("preference `" ++ struct_field.name ++ "` needs a default");
-        field.* = .{ .name = struct_field.name, .kind = undefined, .default = undefined };
-        switch (@typeInfo(struct_field.type)) {
+    const info = @typeInfo(T).@"struct";
+    var fields: [info.field_names.len]Field = undefined;
+    for (info.field_names, info.field_types, info.field_attrs, &fields) |name, FieldType, attrs, *field| {
+        const default = attrs.defaultValue(FieldType) orelse @compileError("preference `" ++ name ++ "` needs a default");
+        field.* = .{ .name = name, .kind = undefined, .default = undefined };
+        switch (@typeInfo(FieldType)) {
             .bool => {
                 field.kind = .bool;
                 field.default = if (default) "true" else "false";
@@ -74,18 +75,15 @@ fn fieldsOf(comptime T: type) []const Field {
                 field.kind = .float;
                 field.default = std.fmt.comptimePrint("{d}", .{default});
             },
-            .@"enum" => |info| {
+            .@"enum" => |enum_info| {
                 field.kind = .@"enum";
                 field.default = "." ++ @tagName(default);
-                var options: [info.fields.len][:0]const u8 = undefined;
-                for (info.fields, &options) |tag, *option| option.* = tag.name;
-                const frozen = options;
-                field.options = &frozen;
+                field.options = enum_info.field_names;
             },
-            else => @compileError("preference `" ++ struct_field.name ++ "` must be a bool, integer, float or enum"),
+            else => @compileError("preference `" ++ name ++ "` must be a bool, integer, float or enum"),
         }
-        if (@hasDecl(T, "descriptions") and @hasField(@TypeOf(T.descriptions), struct_field.name)) {
-            field.description = @field(T.descriptions, struct_field.name);
+        if (@hasDecl(T, "descriptions") and @hasField(@TypeOf(T.descriptions), name)) {
+            field.description = @field(T.descriptions, name);
         }
     }
     const frozen = fields;
@@ -176,8 +174,8 @@ pub const Store = struct {
         var result: T = .{};
         for (self.layers) |layer| {
             const values = layer.get(key) orelse continue;
-            inline for (@typeInfo(T).@"struct".fields) |field| if (values.get(field.name)) |text| {
-                if (parseField(T, field.name, text)) |value| @field(result, field.name) = value;
+            inline for (@typeInfo(T).@"struct".field_names) |name| if (values.get(name)) |text| {
+                if (parseField(T, name, text)) |value| @field(result, name) = value;
             };
         }
         return result;
@@ -191,7 +189,7 @@ pub const Store = struct {
     /// const explicit_volume = store.literal(.project, "game", "volume");
     /// ```
     pub fn literal(self: *const Store, layer: Layer, key: []const u8, field: []const u8) ?[]const u8 {
-        const values = self.layers[@intFromEnum(layer)].get(key) orelse return null;
+        const values = self.layers[@backingInt(layer)].get(key) orelse return null;
         return values.get(field);
     }
 
@@ -205,7 +203,7 @@ pub const Store = struct {
     /// ```
     pub fn set(self: *Store, layer: Layer, key: []const u8, field: []const u8, value: ?[]const u8) !void {
         const allocator = self.arena.allocator();
-        const entry = try self.layers[@intFromEnum(layer)].getOrPut(allocator, key);
+        const entry = try self.layers[@backingInt(layer)].getOrPut(allocator, key);
         if (!entry.found_existing) {
             entry.key_ptr.* = try allocator.dupe(u8, key);
             entry.value_ptr.* = .empty;
@@ -228,17 +226,17 @@ pub const Store = struct {
     /// ```
     pub fn read(self: *Store, layer: Layer, key: []const u8, source: [:0]const u8) !void {
         const gpa = self.arena.child_allocator;
-        var ast = try std.zig.Ast.parse(gpa, source, .zon);
+        var ast = try std.zig.Ast.parse(gpa, source, .{ .mode = .zon });
         defer ast.deinit(gpa);
         const zoir = try std.zig.ZonGen.generate(gpa, ast, .{});
         defer zoir.deinit(gpa);
         if (zoir.hasCompileErrors()) return error.ParseZon;
-        if (self.layers[@intFromEnum(layer)].getPtr(key)) |values| values.clearRetainingCapacity();
-        switch (std.zig.Zoir.Node.Index.root.get(zoir)) {
+        if (self.layers[@backingInt(layer)].getPtr(key)) |values| values.clearRetainingCapacity();
+        switch (std.zig.Zoir.Node.Index.root.get(&zoir)) {
             .empty_literal => {},
             .struct_literal => |fields| for (fields.names, 0..) |name, i| {
-                const value: std.zig.Zoir.Node.Index = @enumFromInt(@intFromEnum(fields.vals.start) + i);
-                try self.set(layer, key, name.get(zoir), ast.getNodeSource(value.getAstNode(zoir)));
+                const value: std.zig.Zoir.Node.Index = @fromBackingInt(@intCast(@backingInt(fields.vals.start) + i));
+                try self.set(layer, key, name.get(&zoir), ast.getNodeSource(value.getAstNode(&zoir)));
             },
             else => return error.ParseZon,
         }
@@ -255,7 +253,7 @@ pub const Store = struct {
     /// ```
     pub fn write(self: *const Store, layer: Layer, key: []const u8, writer: *std.Io.Writer) !void {
         try writer.writeAll(".{\n");
-        if (self.layers[@intFromEnum(layer)].get(key)) |values| {
+        if (self.layers[@backingInt(layer)].get(key)) |values| {
             var it = values.iterator();
             while (it.next()) |entry| try writer.print("    .{f} = {s},\n", .{ std.zig.fmtId(entry.key_ptr.*), entry.value_ptr.* });
         }
@@ -266,10 +264,10 @@ pub const Store = struct {
 /// `literal` parsed as field `name` of `T`; null if it isn't one.
 fn parseField(comptime T: type, comptime name: []const u8, literal: []const u8) ?@FieldType(T, name) {
     var source_buffer: [512]u8 = undefined;
-    const source = std.fmt.bufPrintZ(&source_buffer, ".{{ .{f} = {s} }}", .{ std.zig.fmtId(name), literal }) catch return null;
+    const source = std.fmt.bufPrintSentinel(&source_buffer, ".{{ .{f} = {s} }}", .{ std.zig.fmtId(name), literal }, 0) catch return null;
     var scratch: [16 * 1024]u8 = undefined;
     var fba = std.heap.FixedBufferAllocator.init(&scratch);
-    const parsed = std.zon.parse.fromSlice(T, fba.allocator(), source, null, .{}) catch return null;
+    const parsed = zon_file.parse(T, fba.allocator(), source, .{}) catch return null;
     return @field(parsed, name);
 }
 
@@ -317,7 +315,7 @@ test "values written out read back the same" {
     defer out.deinit();
     try store.write(.project, "game", &out.writer);
     try std.testing.expectEqualStrings(".{\n    .volume = 0.3,\n    .difficulty = .easy,\n}\n", out.written());
-    const written = try std.testing.allocator.dupeZ(u8, out.written());
+    const written = try std.testing.allocator.dupeSentinel(u8, out.written(), 0);
     defer std.testing.allocator.free(written);
     var again = Store.init(std.testing.allocator);
     defer again.deinit();

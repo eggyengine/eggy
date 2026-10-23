@@ -3,6 +3,7 @@
 //! the Eggy codebase being developed on this machine, and pointing a project's `build.zig.zon`
 //! at one of those.
 const std = @import("std");
+const zon_file = @import("eggy").assets.zon;
 
 /// Files in the engines folder: the newest engine unpacked (see `markLatest`), and the Eggy
 /// codebase being developed on this machine (see `markDeveloper`).
@@ -200,7 +201,7 @@ fn readManifest(arena: std.mem.Allocator, io: std.Io, project: std.Io.Dir) ![:0]
 
 fn parseDependencyPath(arena: std.mem.Allocator, manifest: [:0]const u8) !?[]const u8 {
     const Manifest = struct { dependencies: struct { eggy: struct { path: ?[]const u8 = null } = .{} } = .{} };
-    const parsed = std.zon.parse.fromSliceAlloc(Manifest, arena, manifest, null, .{ .ignore_unknown_fields = true }) catch return error.UnreadableManifest;
+    const parsed = zon_file.parse(Manifest, arena, manifest, .{ .ignore_unknown_fields = true }) catch return error.UnreadableManifest;
     return parsed.dependencies.eggy.path;
 }
 

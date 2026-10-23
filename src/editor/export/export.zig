@@ -111,7 +111,7 @@ pub const ExportWindow = struct {
         self.findScenes();
         // The macOS SDK this computer was last given, in any project.
         var sdk_buffer: [512]u8 = undefined;
-        if (sdk_location.load(&sdk_buffer)) |path| self.settings[@intFromEnum(platforms.Platform.macos)].sdk.set(path) catch {};
+        if (sdk_location.load(&sdk_buffer)) |path| self.settings[@backingInt(platforms.Platform.macos)].sdk.set(path) catch {};
         return self;
     }
 
@@ -256,10 +256,9 @@ pub const ExportWindow = struct {
         context.muted("Platforms");
         smallText(context, 12);
         restyle(context, .{ .padding = .{ .left = 8, .bottom = 4 } });
-        inline for (std.meta.fields(platforms.Platform)) |field| {
-            const platform: platforms.Platform = @enumFromInt(field.value);
+        inline for (comptime std.enums.values(platforms.Platform)) |platform| {
             const shown = self.selected == .builtin and self.selected.builtin == platform;
-            if (self.sidebarItem(context, platforms.title(platform), "builtin " ++ field.name, self.icons.builtin(platform, context.theme), shown)) self.select(.{ .builtin = platform });
+            if (self.sidebarItem(context, platforms.title(platform), "builtin " ++ @tagName(platform), self.icons.builtin(platform, context.theme), shown)) self.select(.{ .builtin = platform });
         }
         if (game) |loaded| for (loaded.export_platforms) |platform| {
             const shown = self.selected == .plugin and std.mem.eql(u8, self.selected.plugin, platform.key);
@@ -331,8 +330,8 @@ pub const ExportWindow = struct {
             }
             if (platform == .linux) {
                 rows.begin(context, "C library", "glibc for most desktop Linux; musl for Alpine and other small systems.");
-                var libc: usize = @intFromEnum(settings.libc);
-                if (context.select("##libc", &platforms.Libc.labels, &libc)) settings.libc = @enumFromInt(libc);
+                var libc: usize = @backingInt(settings.libc);
+                if (context.select("##libc", &platforms.Libc.labels, &libc)) settings.libc = @fromBackingInt(@intCast(libc));
                 if (platforms.libcNote(settings.libc)) |why| {
                     context.muted(why);
                     page_style.noteText(context);
@@ -346,8 +345,8 @@ pub const ExportWindow = struct {
         }
 
         rows.begin(context, "Optimize for", "Speed suits a release. Debugging keeps debug info and safety checks, and runs slower.");
-        var optimize: usize = @intFromEnum(settings.optimize);
-        if (context.select("##optimize", &platforms.Optimize.labels, &optimize)) settings.optimize = @enumFromInt(optimize);
+        var optimize: usize = @backingInt(settings.optimize);
+        if (context.select("##optimize", &platforms.Optimize.labels, &optimize)) settings.optimize = @fromBackingInt(@intCast(optimize));
         rows.end(context);
 
         if (self.selected == .builtin and platforms.buildsForThisCpu(self.selected.builtin, settings.*)) {
@@ -367,7 +366,7 @@ pub const ExportWindow = struct {
             _ = context.textInput("##macos sdk", &settings.sdk, default);
             restyle(context, .{ .grow = 1 });
             if (self.folderButton(context, "Choose the macOS SDK folder")) {
-                const start_in = arena.dupeZ(u8, self.macSdk(arena) orelse default) catch null;
+                const start_in = arena.dupeSentinel(u8, self.macSdk(arena) orelse default, 0) catch null;
                 sdl3.dialog.showOpenFolder(ExportWindow, pickedSdk, self, self.window.popout.window.window, start_in, false);
             }
             page_style.endRow(context);
@@ -532,7 +531,7 @@ pub const ExportWindow = struct {
             .builtin => |platform| .{
                 .title = platforms.title(platform),
                 .note = platforms.note(platform),
-                .target = platforms.target(platform, self.settings[@intFromEnum(platform)]),
+                .target = platforms.target(platform, self.settings[@backingInt(platform)]),
             },
             .plugin => {
                 const platform = game.?.export_platforms[self.pluginIndex(game).?];
@@ -543,7 +542,7 @@ pub const ExportWindow = struct {
 
     fn shownSettings(self: *ExportWindow) *platforms.Settings {
         return switch (self.selected) {
-            .builtin => |platform| &self.settings[@intFromEnum(platform)],
+            .builtin => |platform| &self.settings[@backingInt(platform)],
             .plugin => &self.plugin_settings,
         };
     }
@@ -560,7 +559,7 @@ pub const ExportWindow = struct {
     /// The shown platform as plugins number it: Eggy's first, then theirs.
     fn platformIndex(self: *const ExportWindow, game: ?*HotGame) usize {
         return switch (self.selected) {
-            .builtin => |platform| @intFromEnum(platform),
+            .builtin => |platform| @backingInt(platform),
             .plugin => platforms.count + self.pluginIndex(game).?,
         };
     }
@@ -590,7 +589,7 @@ pub const ExportWindow = struct {
     fn pickedSdk(self: ?*ExportWindow, files: ?[]const [*:0]const u8, _: ?usize, failed: bool) void {
         const chosen = files orelse return;
         if (failed or chosen.len == 0) return;
-        const copy = std.heap.c_allocator.dupeZ(u8, std.mem.span(chosen[0])) catch return;
+        const copy = std.heap.c_allocator.dupeSentinel(u8, std.mem.span(chosen[0]), 0) catch return;
         if (self.?.picked_sdk.swap(copy.ptr, .acq_rel)) |old| std.heap.c_allocator.free(std.mem.span(old));
     }
 
@@ -599,19 +598,19 @@ pub const ExportWindow = struct {
         const path = self.picked_sdk.swap(null, .acq_rel) orelse return;
         const chosen = std.mem.span(path);
         defer std.heap.c_allocator.free(chosen);
-        self.settings[@intFromEnum(platforms.Platform.macos)].sdk.set(chosen[0..@min(chosen.len, 512)]) catch {};
+        self.settings[@backingInt(platforms.Platform.macos)].sdk.set(chosen[0..@min(chosen.len, 512)]) catch {};
         self.rememberSdk();
     }
 
     /// Keep the macOS SDK field's path for the next Export window; an empty field forgets it.
     fn rememberSdk(self: *ExportWindow) void {
         if (!platforms.needs_macos_sdk) return;
-        sdk_location.save(std.mem.trim(u8, self.settings[@intFromEnum(platforms.Platform.macos)].sdk.text(), " "));
+        sdk_location.save(std.mem.trim(u8, self.settings[@backingInt(platforms.Platform.macos)].sdk.text(), " "));
     }
 
     /// The macOS SDK to build with: the one typed, else `~/SDKs`.
     fn macSdk(self: *ExportWindow, arena: std.mem.Allocator) ?[]const u8 {
-        const typed = std.mem.trim(u8, self.settings[@intFromEnum(platforms.Platform.macos)].sdk.text(), " ");
+        const typed = std.mem.trim(u8, self.settings[@backingInt(platforms.Platform.macos)].sdk.text(), " ");
         return if (typed.len > 0) sdk_location.expandHome(arena, typed) else platforms.defaultMacSdk(arena);
     }
 

@@ -67,7 +67,7 @@ pub const Textures = struct {
         if (self.embedded(named)) |texture| return decodeEmbedded(texture);
         // A file beside the model.
         var buffer: [std.fs.max_path_bytes]u8 = undefined;
-        const file = std.fmt.bufPrintZ(&buffer, "{s}/{s}", .{ self.dir, named }) catch return null;
+        const file = std.fmt.bufPrintSentinel(&buffer, "{s}/{s}", .{ self.dir, named }, 0) catch return null;
         var width: c_int = 0;
         var height: c_int = 0;
         var channels: c_int = 0;

@@ -52,12 +52,12 @@ pub const Input = struct {
     /// Host-owned services; copied snapshots never own device handles or binding allocations.
     backend: ?protocol.Bridge = null,
     viewport_points: [2]f32 = .{ 1, 1 },
-    keys_held: KeySet = .initEmpty(),
-    keys_pressed: KeySet = .initEmpty(),
-    keys_released: KeySet = .initEmpty(),
-    buttons_held: std.EnumSet(MouseButton) = .initEmpty(),
-    buttons_pressed: std.EnumSet(MouseButton) = .initEmpty(),
-    buttons_released: std.EnumSet(MouseButton) = .initEmpty(),
+    keys_held: KeySet = .empty,
+    keys_pressed: KeySet = .empty,
+    keys_released: KeySet = .empty,
+    buttons_held: std.EnumSet(MouseButton) = .empty,
+    buttons_pressed: std.EnumSet(MouseButton) = .empty,
+    buttons_released: std.EnumSet(MouseButton) = .empty,
     /// Where the pointer is in the window, in points from its top left corner.
     mouse_position: [2]f32 = .{ 0, 0 },
     /// How far it moved this frame, in points (right and down are positive).
@@ -155,7 +155,7 @@ pub const Input = struct {
     /// ```
     pub fn controllerState(self: *const Input, device: Controller) !ControllerState {
         var state: ControllerState = undefined;
-        _ = try self.send(.{ .operation = .controller_state, .device = @intFromEnum(device), .output = &state });
+        _ = try self.send(.{ .operation = .controller_state, .device = @backingInt(device), .output = &state });
         return state;
     }
     /// Strengths are 0..1; zero both strengths to stop rumble. Calls stay on the host thread.
@@ -169,7 +169,7 @@ pub const Input = struct {
     pub fn rumble(self: *const Input, device: Controller, low: f32, high: f32, duration_s: f32) !void {
         if (!std.math.isFinite(low) or !std.math.isFinite(high) or low < 0 or low > 1 or high < 0 or high > 1) return error.InvalidRumble;
         if (!std.math.isFinite(duration_s) or duration_s < 0 or @as(f64, duration_s) * 1000 > std.math.maxInt(u32)) return error.InvalidDuration;
-        _ = try self.send(.{ .operation = .rumble, .device = @intFromEnum(device), .low = @intFromFloat(@round(low * 65535)), .high = @intFromFloat(@round(high * 65535)), .duration_ms = @intFromFloat(@as(f64, duration_s) * 1000) });
+        _ = try self.send(.{ .operation = .rumble, .device = @backingInt(device), .low = @intFromFloat(@round(low * 65535)), .high = @intFromFloat(@round(high * 65535)), .duration_ms = @intFromFloat(@as(f64, duration_s) * 1000) });
     }
     /// Count tracked contacts, including contacts ended/cancelled until this frame ends.
     /// Requires the host bridge on its owning thread; no allocation is performed.
@@ -238,22 +238,21 @@ pub const Input = struct {
     /// try input.registerFileMap(FilePlayer, "game/player", file);
     /// ```
     pub fn registerFileMap(self: *Input, comptime Mapping: type, owner: []const u8, file: asset.File) !void {
-        const fields = @typeInfo(Mapping.Control).@"enum".fields;
-        if (file.controls.len != fields.len) return error.InputMapControlsMismatch;
-        var defaults: [fields.len]ControlBinding(Mapping.Control) = undefined;
-        inline for (fields, &defaults) |field, *entry| {
+        const tags = comptime std.enums.values(Mapping.Control);
+        if (file.controls.len != tags.len) return error.InputMapControlsMismatch;
+        var defaults: [tags.len]ControlBinding(Mapping.Control) = undefined;
+        inline for (tags, &defaults) |tag, *entry| {
             const control = for (file.controls) |candidate| {
-                if (std.mem.eql(u8, candidate.name, field.name)) break candidate;
+                if (std.mem.eql(u8, candidate.name, @tagName(tag))) break candidate;
             } else return error.InputMapControlsMismatch;
-            entry.* = .{ .control = @field(Mapping.Control, field.name), .kind = control.kind, .trigger = control.trigger, .bindings = control.bindings };
+            entry.* = .{ .control = tag, .kind = control.kind, .trigger = control.trigger, .bindings = control.bindings };
         }
         try self.registerType(Mapping.Control, marker.of(Mapping), owner, &defaults, file.priority, file.enabled, file.consume);
     }
     fn registerType(self: *Input, comptime Controls: type, type_id: usize, owner: []const u8, defaults: []const ControlBinding(Controls), priority: i32, enabled: bool, consume: bool) !void {
-        const fields = @typeInfo(Controls).@"enum".fields;
-        var definitions: [fields.len]types.ControlDefinition = undefined;
-        inline for (fields, 0..) |field, i| {
-            const control = @field(Controls, field.name);
+        const tags = comptime std.enums.values(Controls);
+        var definitions: [tags.len]types.ControlDefinition = undefined;
+        inline for (tags, 0..) |control, i| {
             var bindings: []const Binding = &.{};
             var value_kind: Kind = .button;
             var trigger: Trigger = .immediate;
@@ -265,7 +264,7 @@ pub const Input = struct {
                 trigger = entry.trigger;
                 found = true;
             };
-            definitions[i] = .{ .tag = controlId(control).tag, .name = field.name, .kind = value_kind, .trigger = trigger, .bindings = bindings };
+            definitions[i] = .{ .tag = controlId(control).tag, .name = @tagName(control), .kind = value_kind, .trigger = trigger, .bindings = bindings };
         }
         const registration = types.Registration{ .type_marker = type_id, .owner = owner, .priority = priority, .enabled = enabled, .consume = consume, .controls = &definitions };
         _ = try self.send(.{ .operation = .register_controls, .data = &registration });
@@ -491,10 +490,10 @@ pub const Input = struct {
     /// input.endFrame();
     /// ```
     pub fn endFrame(self: *Input) void {
-        self.keys_pressed = .initEmpty();
-        self.keys_released = .initEmpty();
-        self.buttons_pressed = .initEmpty();
-        self.buttons_released = .initEmpty();
+        self.keys_pressed = .empty;
+        self.keys_released = .empty;
+        self.buttons_pressed = .empty;
+        self.buttons_released = .empty;
         self.mouse_delta = .{ 0, 0 };
         self.wheel = 0;
         self.notify(.end_frame);
@@ -510,9 +509,9 @@ pub const Input = struct {
     /// ```
     pub fn releaseAll(self: *Input) void {
         self.keys_released.setUnion(self.keys_held);
-        self.keys_held = .initEmpty();
+        self.keys_held = .empty;
         self.buttons_released.setUnion(self.buttons_held);
-        self.buttons_held = .initEmpty();
+        self.buttons_held = .empty;
         self.notify(.release_all);
     }
 
@@ -731,12 +730,12 @@ fn controlId(control: anytype) types.ControlId {
         if (@bitSizeOf(@typeInfo(T).@"enum".tag_type) > 64) @compileError("control enum tags must fit in 64 bits");
     }
     const Tag = @typeInfo(T).@"enum".tag_type;
-    const tag: u64 = if (@typeInfo(Tag).int.signedness == .signed) @bitCast(@as(i64, @intFromEnum(control))) else @intCast(@intFromEnum(control));
+    const tag: u64 = if (@typeInfo(Tag).int.signedness == .signed) @bitCast(@as(i64, @backingInt(control))) else @intCast(@backingInt(control));
     return .{ .type_marker = marker.of(T), .tag = tag };
 }
 
 fn index(key: Key) ?usize {
-    const at: usize = @intCast(@intFromEnum(key));
+    const at: usize = @intCast(@backingInt(key));
     return if (at < key_count) at else null;
 }
 

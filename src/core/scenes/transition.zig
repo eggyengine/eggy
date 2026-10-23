@@ -90,8 +90,8 @@ test "replacement reads fail without losing a pending or current scene" {
     const Source = struct {
         fn read(_: *anyopaque, gpa: std.mem.Allocator, path: []const u8) ![:0]u8 {
             if (std.mem.eql(u8, path, AssetRef(.scene).init("missing.scene.zon").key())) return error.FileNotFound;
-            if (std.mem.eql(u8, path, AssetRef(.scene).init("invalid.scene.zon").key())) return gpa.dupeZ(u8, "broken");
-            return gpa.dupeZ(u8, ".{ .entities = .{} }");
+            if (std.mem.eql(u8, path, AssetRef(.scene).init("invalid.scene.zon").key())) return gpa.dupeSentinel(u8, "broken", 0);
+            return gpa.dupeSentinel(u8, ".{ .entities = .{} }", 0);
         }
         fn model(_: *anyopaque, _: std.mem.Allocator, _: []const u8) !assets.Model {
             return error.NotPackaged;

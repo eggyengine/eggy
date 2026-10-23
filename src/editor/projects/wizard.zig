@@ -122,7 +122,7 @@ pub const Wizard = struct {
         if (context.buttonVariant("Cancel", .ghost)) return .cancel;
         if (self.step != .name and context.buttonVariant("Back", .outline)) {
             self.problem = null;
-            self.step = @enumFromInt(@intFromEnum(self.step) - 1);
+            self.step = @fromBackingInt(@intCast(@backingInt(self.step) - 1));
         }
         switch (self.step) {
             .name, .location => if (context.button("Next")) self.next(),
@@ -134,7 +134,7 @@ pub const Wizard = struct {
     /// Move on if this step's fields are good, else say what's wrong.
     fn next(self: *Wizard) void {
         self.problem = self.check();
-        if (self.problem == null) self.step = @enumFromInt(@intFromEnum(self.step) + 1);
+        if (self.problem == null) self.step = @fromBackingInt(@intCast(@backingInt(self.step) + 1));
     }
 
     fn check(self: *Wizard) ?[]const u8 {
@@ -170,7 +170,7 @@ pub const Wizard = struct {
     fn pickedFolder(self: ?*Wizard, files: ?[]const [*:0]const u8, _: ?usize, failed: bool) void {
         const chosen = files orelse return;
         if (failed or chosen.len == 0) return;
-        const copy = std.heap.c_allocator.dupeZ(u8, std.mem.span(chosen[0])) catch return;
+        const copy = std.heap.c_allocator.dupeSentinel(u8, std.mem.span(chosen[0]), 0) catch return;
         if (self.?.picked.swap(copy.ptr, .acq_rel)) |old| std.heap.c_allocator.free(std.mem.span(old));
     }
 };

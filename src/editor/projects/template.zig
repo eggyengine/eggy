@@ -182,7 +182,7 @@ test "project names must be plain identifiers" {
     try std.testing.expectError(error.NameNotIdentifier, validateName("space game"));
     try std.testing.expectError(error.NameNotIdentifier, validateName("2d_game"));
     try std.testing.expectError(error.NameNotIdentifier, validateName("const"));
-    try std.testing.expectError(error.NameTooLong, validateName("a" ** 33));
+    try std.testing.expectError(error.NameTooLong, validateName(&@as([33]u8, @splat('a'))));
 }
 
 test "fingerprint ids skip the values Zig reserves" {

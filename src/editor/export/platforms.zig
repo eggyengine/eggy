@@ -6,7 +6,7 @@ const eggy = @import("eggy");
 const ui = eggy.ui;
 
 pub const Platform = eggy.plugins.BuiltinPlatform;
-pub const count = std.meta.fields(Platform).len;
+pub const count = @typeInfo(Platform).@"enum".field_names.len;
 
 /// The processor a game is built for.
 pub const Architecture = enum {
@@ -30,12 +30,12 @@ pub const Optimize = enum {
 
     pub const labels = [_][]const u8{ "Speed", "Size", "Speed, with safety checks", "Debugging" };
 
-    pub fn mode(optimize: Optimize) std.builtin.OptimizeMode {
+    pub fn mode(optimize: Optimize) std.builtin.Optimize {
         return switch (optimize) {
-            .speed => .ReleaseFast,
-            .size => .ReleaseSmall,
-            .safety => .ReleaseSafe,
-            .debugging => .Debug,
+            .speed => .fast,
+            .size => .small,
+            .safety => .safe,
+            .debugging => .debug,
         };
     }
 };
@@ -74,7 +74,7 @@ pub const Settings = struct {
     pub fn defaults() [count]Settings {
         var all: [count]Settings = undefined;
         for (&all, 0..) |*settings, i| {
-            const platform: Platform = @enumFromInt(i);
+            const platform: Platform = @fromBackingInt(@intCast(i));
             const choices = architectures(platform);
             const host_index = if (platform == this_system) std.mem.indexOfScalar(Architecture, choices, hostArchitecture()) orelse 0 else 0;
             settings.* = .{ .architecture = choices[host_index] };
@@ -192,7 +192,7 @@ test "settings become zig build export arguments" {
     defer arena.deinit();
     const settings = Settings{ .architecture = .aarch64, .optimize = .size, .zip = false };
     const args = try exportArgs(arena.allocator(), .macos, settings, "resources/main.scene.zon", "/sdk");
-    const expected = [_][]const u8{ "-Dtarget=aarch64-macos", "-Dscene=resources/main.scene.zon", "-Dexport-optimize=ReleaseSmall", "-Dexport-zip=false", "--sysroot", "/sdk" };
+    const expected = [_][]const u8{ "-Dtarget=aarch64-macos", "-Dscene=resources/main.scene.zon", "-Dexport-optimize=small", "-Dexport-zip=false", "--sysroot", "/sdk" };
     try std.testing.expectEqual(expected.len, args.items.len);
     for (expected, args.items) |want, got| try std.testing.expectEqualStrings(want, got);
 }

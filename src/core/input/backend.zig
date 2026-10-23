@@ -49,12 +49,8 @@ pub const Backend = struct {
 
     fn read(device: sdl.gamepad.Gamepad) !types.ControllerState {
         var state = types.ControllerState{ .rumble_supported = (try device.getProperties()).rumble orelse false };
-        inline for (std.meta.fields(sdl.gamepad.Button)) |field| {
-            snapshots.setButton(&state, @field(sdl.gamepad.Button, field.name), device.getButton(@field(sdl.gamepad.Button, field.name)), false);
-        }
-        inline for (std.meta.fields(sdl.gamepad.Axis)) |field| {
-            snapshots.setAxis(&state, @field(sdl.gamepad.Axis, field.name), device.getAxis(@field(sdl.gamepad.Axis, field.name)));
-        }
+        inline for (comptime std.enums.values(sdl.gamepad.Button)) |button| snapshots.setButton(&state, button, device.getButton(button), false);
+        inline for (comptime std.enums.values(sdl.gamepad.Axis)) |axis| snapshots.setAxis(&state, axis, device.getAxis(axis));
         return state;
     }
     fn open(self: *Backend, id: u32) !void {
@@ -130,7 +126,7 @@ test "SDL virtual gamepads hotplug, normalize state, route edges and receive rum
     defer joystick.deinit();
     var input = Input{ .backend = backend.state.interface() };
     while (sdl.events.poll()) |event| try backend.event(event);
-    const controller: types.Controller = @enumFromInt(id.value);
+    const controller: types.Controller = @fromBackingInt(@intCast(id.value));
     try std.testing.expect((try input.controllerState(controller)).rumble_supported);
     try joystick.setVirtualButton(0, true);
     try joystick.setVirtualAxis(0, -32768);

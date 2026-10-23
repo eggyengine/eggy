@@ -7,12 +7,12 @@ const history_zig = @import("../history.zig");
 const Source = struct {
     fn read(_: *anyopaque, gpa: std.mem.Allocator, path: []const u8) ![:0]u8 {
         if (!std.mem.eql(u8, path, eggy.AssetRef(.input_map).fromId(43).key())) return error.FileNotFound;
-        return gpa.dupeZ(u8,
+        return gpa.dupeSentinel(u8,
             \\.{ .controls = .{
             \\    .{ .name = "move", .kind = .vector, .bindings = .{ .{ .keys_2d = .{} } } },
             \\    .{ .name = "jump", .bindings = .{ .{ .key = .space } } },
             \\} }
-        );
+        , 0);
     }
     fn model(_: *anyopaque, _: std.mem.Allocator, _: []const u8) !eggy.assets.Model {
         return error.NotPackaged;
@@ -144,7 +144,7 @@ const ActionHost = struct {
     }
 
     fn apply(self: *ActionHost, step: *history_zig.Step, direction: eggy.Direction) !void {
-        const source = try self.history.gpa.dupeZ(u8, step.scene.value(direction));
+        const source = try self.history.gpa.dupeSentinel(u8, step.scene.value(direction), 0);
         defer self.history.gpa.free(source);
         var scene = try eggy.scene.Scene.parse(self.history.gpa, source);
         defer scene.deinit();

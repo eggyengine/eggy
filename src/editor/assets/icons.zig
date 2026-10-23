@@ -65,7 +65,7 @@ pub const Icon = enum {
     }
 };
 
-const count = std.meta.fields(Icon).len;
+const count = @typeInfo(Icon).@"enum".field_names.len;
 
 pub const Icons = struct {
     /// Each icon for dark themes, then for light ones; null where it didn't load.
@@ -82,11 +82,10 @@ pub const Icons = struct {
     /// ```
     pub fn load(gpa: std.mem.Allocator, font: *ui.Font) Icons {
         var self = Icons{};
-        inline for (std.meta.fields(Icon)) |field| {
-            const icon: Icon = @enumFromInt(field.value);
+        inline for (comptime std.enums.values(Icon)) |icon| {
             const name = comptime icon.lucideName();
-            self.on_dark[field.value] = ui.Image.load(gpa, font, @embedFile("icons/" ++ name ++ "-on-dark.png")) catch null;
-            self.on_light[field.value] = ui.Image.load(gpa, font, @embedFile("icons/" ++ name ++ "-on-light.png")) catch null;
+            self.on_dark[@backingInt(icon)] = ui.Image.load(gpa, font, @embedFile("icons/" ++ name ++ "-on-dark.png")) catch null;
+            self.on_light[@backingInt(icon)] = ui.Image.load(gpa, font, @embedFile("icons/" ++ name ++ "-on-light.png")) catch null;
         }
         return self;
     }
@@ -112,7 +111,7 @@ pub const Icons = struct {
     /// ```
     pub fn paint(self: *const Icons, icon: Icon, theme: ui.Theme) ui.Layout.Paint {
         const dark = (theme.background[0] + theme.background[1] + theme.background[2]) / 3 < 0.5;
-        const image = (if (dark) self.on_dark else self.on_light)[@intFromEnum(icon)] orelse return .none;
+        const image = (if (dark) self.on_dark else self.on_light)[@backingInt(icon)] orelse return .none;
         return .{ .image = image.frameAt(0) };
     }
 };

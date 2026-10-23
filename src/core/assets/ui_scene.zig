@@ -15,6 +15,7 @@
 //!         } },
 //!     }
 const std = @import("std");
+const zon_file = @import("zon.zig");
 
 /// The `.ui.zon` layout this build reads and writes; a file of another version is refused.
 pub const format_version: u32 = 1;
@@ -393,7 +394,7 @@ pub fn removeChild(arena: std.mem.Allocator, parent: *Node, index: usize) !Node 
 pub fn parse(gpa: std.mem.Allocator, source: [:0]const u8) !Parsed {
     var arena = std.heap.ArenaAllocator.init(gpa);
     errdefer arena.deinit();
-    const scene = try std.zon.parse.fromSliceAlloc(UiScene, arena.allocator(), source, null, .{});
+    const scene = try zon_file.parse(UiScene, arena.allocator(), source, .{});
     try scene.validate();
     return .{ .arena = arena, .scene = scene };
 }
@@ -437,7 +438,7 @@ test "the template parses, and a scene writes and reads back the same" {
     var text: std.Io.Writer.Allocating = .init(gpa);
     defer text.deinit();
     try parsed.scene.write(&text.writer);
-    const source = try gpa.dupeZ(u8, text.written());
+    const source = try gpa.dupeSentinel(u8, text.written(), 0);
     defer gpa.free(source);
     var again = try parse(gpa, source);
     defer again.deinit();

@@ -163,7 +163,7 @@ fn paintNode(canvas: *ui.Canvas, frame: Frame, themes: *Themes, index: usize) !u
             const value = if (item.override) |o| o.text orelse text.value else text.value;
             const color = colorOf(text.color, theme) orelse withAlpha(theme.foreground, 1);
             const start = canvas.len;
-            const alignment: ui.Canvas.TextAlign = @enumFromInt(@intFromEnum(text.alignment));
+            const alignment: ui.Canvas.TextAlign = @fromBackingInt(@intCast(@backingInt(text.alignment)));
             // In the node's own font, if it chose one, as layout measured it.
             const scene_font = canvas.font;
             defer canvas.font = scene_font;
@@ -219,8 +219,8 @@ fn paintNode(canvas: *ui.Canvas, frame: Frame, themes: *Themes, index: usize) !u
 /// The theme `theme` describes: Eggy's dark or light one with its replacements.
 pub fn resolveTheme(theme: ui_scene.Theme) ui.Theme {
     var resolved: ui.Theme = if (theme.base == .dark) ui.Theme.dark else .{};
-    inline for (std.meta.fields(ui_scene.ThemeColor)) |field| {
-        if (@field(theme, field.name)) |color| @field(resolved, field.name) = color[0..3].*;
+    inline for (@typeInfo(ui_scene.ThemeColor).@"enum".field_names) |name| {
+        if (@field(theme, name)) |color| @field(resolved, name) = color[0..3].*;
     }
     if (theme.radius) |radius| resolved.radius = radius;
     return resolved;

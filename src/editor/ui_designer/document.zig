@@ -32,7 +32,7 @@ pub const Document = struct {
     /// The document for `text`, the file at `path` (copied) with asset `key` (may be empty).
     /// Fails when `text` isn't a UI scene this build reads.
     pub fn init(gpa: std.mem.Allocator, path: []const u8, asset_key: []const u8, text: []const u8) !Document {
-        const source = try gpa.dupeZ(u8, text);
+        const source = try gpa.dupeSentinel(u8, text, 0);
         defer gpa.free(source);
         var parsed = try ui_scene.parse(gpa, source);
         errdefer parsed.deinit();
@@ -93,7 +93,7 @@ pub const Document = struct {
         if (std.mem.eql(u8, text, self.normal)) return null;
 
         // Parse the new text into a fresh arena, so the copy holds only what the file says.
-        const source = try self.gpa.dupeZ(u8, text);
+        const source = try self.gpa.dupeSentinel(u8, text, 0);
         defer self.gpa.free(source);
         var parsed = try ui_scene.parse(self.gpa, source);
         errdefer parsed.deinit();
@@ -114,7 +114,7 @@ pub const Document = struct {
     /// Show `text` instead (an undo or redo, or the file changed), keeping the selection when
     /// it still names a node.
     pub fn replace(self: *Document, text: []const u8) !void {
-        const source = try self.gpa.dupeZ(u8, text);
+        const source = try self.gpa.dupeSentinel(u8, text, 0);
         defer self.gpa.free(source);
         var parsed = try ui_scene.parse(self.gpa, source);
         errdefer parsed.deinit();

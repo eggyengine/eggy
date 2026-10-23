@@ -237,7 +237,7 @@ test "the registry lists each plugin, whether it is on, and its preferences" {
     // The runtime reads it back the same.
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
-    const source = try arena.allocator().dupeZ(u8, text.written());
+    const source = try arena.allocator().dupeSentinel(u8, text.written(), 0);
     const off = try eggy.plugins.parseOff(arena.allocator(), source);
     try std.testing.expectEqualStrings("example", off[0]);
 }

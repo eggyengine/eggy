@@ -14,7 +14,7 @@ The following subcommands run without a window or graphics device:
 | --- | --- |
 | `doctor` | Check the Zig toolchain and project dependencies; offer repairs |
 | `new` | Create a project and build its editor |
-| `export` | Package a ReleaseFast runtime as a directory and ZIP |
+| `export` | Package a `fast` runtime as a directory and ZIP |
 
 For a project-creation walkthrough, use [Set up a project](../how-to/set-up-project.md).
 For distribution steps, use [Build and distribute a game](../how-to/build-and-export.md).
@@ -120,10 +120,10 @@ Run these from the game's package directory. The package must call `eggy.addGame
 | `zig build run` | Editor on desktop; runtime in a browser on web |
 | `zig build run-runtime` | Standalone game |
 | `zig build runtime -Dscene=resources/scene/start.scene.zon` | Runtime with the selected startup scene |
-| `zig build export` | ReleaseFast runtime directory and ZIP under `zig-out/export/` |
+| `zig build export` | `fast` runtime directory and ZIP under `zig-out/export/` |
 
 `-Dtarget` selects the target and `-Doptimize` selects optimization for ordinary builds.
-Export builds the runtime in ReleaseFast unless `-Dexport-optimize` says otherwise, and
+Export builds the runtime optimized for `fast` unless `-Dexport-optimize` says otherwise, and
 skips the ZIP with `-Dexport-zip=false`. It needs a scene from `-Dscene` or
 `eggy.zon`'s `.default_scene`; it does not use the editor's last-open scene.
 See [Startup scene selection](project-configuration.md#startup-scene-selection).

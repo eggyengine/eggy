@@ -80,7 +80,7 @@ fn blocked(state: anytype, map_id: usize, source: Source) bool {
     return false;
 }
 fn keyHeld(state: anytype, map_id: usize, key: t.Key) bool {
-    return !blocked(state, map_id, .{ .key = key }) and state.buttons.keys.isSet(@intFromEnum(key));
+    return !blocked(state, map_id, .{ .key = key }) and state.buttons.keys.isSet(@backingInt(key));
 }
 fn axisValue(device: t.ControllerState, axis: sdl.gamepad.Axis) f32 {
     return switch (axis) {
@@ -97,7 +97,7 @@ fn axisRead(state: anytype, map_id: usize, device_id: u32, axis: sdl.gamepad.Axi
     return axisValue(state.devices.get(device_id).?.game, axis);
 }
 fn deviceMatches(selector: ?t.Controller, device_id: u32) bool {
-    return selector == null or @intFromEnum(selector.?) == device_id;
+    return selector == null or @backingInt(selector.?) == device_id;
 }
 
 fn rawValue(state: anytype, index: usize) t.Value {

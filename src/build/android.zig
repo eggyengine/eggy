@@ -42,7 +42,7 @@ pub fn addApp(b: *std.Build, engine: *std.Build, comptime android: type, root: *
     const app = b.addLibrary(.{ .name = "main", .linkage = .dynamic, .root_module = root, .use_llvm = true });
     const apk = sdk.createApk(.{
         .name = b.fmt("{s}-android-test", .{name}),
-        .api_level = @enumFromInt(api),
+        .api_level = @fromBackingInt(@intCast(api)),
         .build_tools_version = "36.0.0",
         .ndk_version = ndkFor(api),
     });
@@ -73,7 +73,7 @@ pub fn addApp(b: *std.Build, engine: *std.Build, comptime android: type, root: *
         .aarch64 => .arm64_v8a,
         .x86_64 => .x86_64,
         else => @panic("Android APK exports support aarch64 and x86_64"),
-    }, .{ .cwd_relative = b.getInstallPath(.{ .custom = "android" }, "libSDL3.so") });
+    }, b.graph.path(.install_prefix, "android/libSDL3.so"));
     apk.addAssetDirectory(resources.bundledDirectory(b, data));
     apk.addArtifact(app);
     const install = apk.addInstallApk();
@@ -95,12 +95,12 @@ fn prepareSdl(b: *std.Build, engine: *std.Build, root: *std.Build.Module) struct
         if (object == .other_step and std.mem.eql(u8, object.other_step.name, "SDL3")) break i;
     } else @panic("SDL3 library not found");
     const desktop = objects[index].other_step;
-    const source = desktop.step.owner.build_root.path orelse ".";
+    const source = desktop.step.owner.path("");
     // The patched SDL build omits installed SDL_main.h; callbacks translate its source header.
-    sdl.addIncludePath(.{ .cwd_relative = b.pathJoin(&.{ source, "include" }) });
+    sdl.addIncludePath(source.path(b, "include"));
     const vitellus = engine.dependency("vitellus", .{
         .target = target,
-        .optimize = root.optimize orelse .Debug,
+        .optimize = root.optimize orelse .debug,
         .dx12 = true,
         .enable_dxc = false,
         .enable_spirv_cross = false,
@@ -108,10 +108,12 @@ fn prepareSdl(b: *std.Build, engine: *std.Build, root: *std.Build.Module) struct
         .emsdk = engine.graph.environ_map.get("EMSDK") orelse b.pathJoin(&.{ engine.graph.environ_map.get("HOME") orelse "/", "emsdk" }),
         .enable_slang = false,
     });
-    const build_sdl = b.addSystemCommand(&.{ "python3", engine.path("src/build/android_sdl.py").getPath(b), source });
+    const build_sdl = b.addSystemCommand(&.{"python3"});
+    build_sdl.addFileArg(engine.path("src/build/android_sdl.py"));
+    build_sdl.addDirectoryArg(source);
     const out = build_sdl.addOutputDirectoryArg("sdl");
     build_sdl.addFileArg(vitellus.path("patches/sdl-android.patch"));
-    build_sdl.addArgs(&.{ b.graph.zig_exe, target.query.zigTriple(b.allocator) catch @panic("OOM"), @tagName(root.optimize orelse .Debug) });
+    build_sdl.addArgs(&.{ b.graph.zig_exe, target.query.zigTriple(b.allocator) catch @panic("OOM"), @tagName(root.optimize orelse .debug) });
     build_sdl.setName("build SDL3 for Android");
     const library = out.path(b, "lib/libSDL3.so");
     objects[index] = .{ .static_path = library };
@@ -136,7 +138,10 @@ fn makePic(app: *std.Build.Step.Compile, api: u32) void {
         const min_sdk = app.step.owner.fmt("{d}", .{api});
         module.addCMacro("__ANDROID_MIN_SDK_VERSION__", min_sdk);
         if (module.root_source_file) |source| if (source == .generated) {
-            if (source.generated.file.step.cast(std.Build.Step.TranslateC)) |translate_c| translate_c.defineCMacro("__ANDROID_MIN_SDK_VERSION__", min_sdk);
+            const step = app.step.owner.graph.generated_files.items[@backingInt(source.generated.index)];
+            if (step.cast(std.Build.Step.TranslateC)) |translate_c| translate_c.defineCMacro("__ANDROID_MIN_SDK_VERSION__", min_sdk);
+            // The translate-c package (zig-sdl3's headers) runs as a plain Run step, its clang flags last.
+            if (step.cast(std.Build.Step.Run)) |run| if (std.mem.startsWith(u8, run.step.name, "translate-c")) run.addArg(app.step.owner.fmt("-D__ANDROID_MIN_SDK_VERSION__={s}", .{min_sdk}));
         };
     };
 }

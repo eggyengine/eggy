@@ -752,7 +752,7 @@ fn processEnviron() std.process.Environ {
 /// What to tell someone when `err` stops the job.
 fn describe(err: anyerror) []const u8 {
     return switch (err) {
-        error.ZigNotFound => "Zig 0.16 isn't on your PATH. Install it, then try again.",
+        error.ZigNotFound => "Zig 0.17 isn't on your PATH. Install it, then try again.",
         error.BuildFailed => "The project's build failed. Its output is below.",
         error.ExportProcessGroupFailed => "The system could not isolate the export's processes for safe cancellation.",
         error.ProjectDirNotEmpty => "The project's folder isn't empty.",

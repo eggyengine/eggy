@@ -2,7 +2,7 @@
 
 ## Project Structure & Module Organization
 
-Eggy is a Zig 0.16 game engine that games use as a package: they `zig fetch` it, call `addGame` from their `build.zig`, and `@import("eggy")`. It publishes three modules:
+Eggy is a Zig 0.17 game engine that games use as a package: they `zig fetch` it, call `addGame` from their `build.zig`, and `@import("eggy")`. It publishes three modules:
 
 - `src/core/` (`eggy`, every platform): the engine games and plugins import. `app.zig` owns SDL, the window and `Graphics`; `graphics.zig` renders through Vitellus: `Graphics` owns the device and the main window's `Surface` (a swapchain and its frames in flight, each split into `beginFrame`/`endFrame`), and `addSurface` gives other windows their own; `viewport3d.zig` draws the 3D scene, which `Graphics.drawScene` puts across the window (the runtime) and `scene_texture.zig` renders offscreen for a panel (the editor's Scene); `plugins.zig` defines the plugin hooks and runs them; `entry.zig` provides the SDL main callbacks and fatal-error reporting both executables use, `log/` the desktop log (the level shown, set by `--log-level` or the editor's preference; a file per run under the data folder's `logs/`; and the crash report a fatal error or panic writes beside it), and `process_init.zig` the `std.process.Init` it hands `App` (`app.process_init`), since SDL's callbacks replace `main`. Shader sources live in `src/core/shaders/`.
 - `src/runtime/` (`eggy_runtime`, every platform including the web): `Runtime(project)` runs a game and its plugins.
@@ -43,7 +43,7 @@ When a human does ask for a README change, keep it short and clean. Write for th
 - `zig build run-runtime`: build and launch the runtime.
 - `zig build test`: run every test. `zig build test-core`, `test-runtime` and `test-editor` run one part's tests.
 - Add `--fork=src/vitellus --fork=src/weeoui --fork=src/humpty --fork=src/clutch` to any command to build against the local submodules instead of the pinned commits.
-- `.github/workflows/nightly.yml` builds `zig build all -Doptimize=ReleaseSafe` for Linux, Windows and macOS each night the default branch changed, kept as workflow artifacts (not releases).
+- `.github/workflows/nightly.yml` builds `zig build all -Doptimize=safe` for Linux, Windows and macOS each night the default branch changed, kept as workflow artifacts (not releases).
 - `zig build update-submodules`: fetch the latest configured submodule branches. Review and commit changed pointers before sharing them.
 
 ## Coding Style & Naming Conventions

@@ -12,6 +12,7 @@
 //!         } },
 //!     } }
 const std = @import("std");
+const zon_file = @import("eggy_assets").zon;
 const ecs = @import("clutch");
 const components = @import("components.zig");
 const Name = @import("name.zig").Name;
@@ -160,7 +161,7 @@ test "allocated scene reads own complete names and large fields" {
             const access = registryAccess(Registry);
             var world = ecs.World.init(std.testing.allocator);
             defer world.deinit();
-            const entity = try world.spawn(.{ Value{}, Name.init("A" ** Name.max_len) });
+            const entity = try world.spawn(.{ Value{}, Name.init(&@as([Name.max_len]u8, @splat('A'))) });
             const unnamed = try world.spawn(.{});
             try std.testing.expect(try access.nameAlloc(gpa, &world, unnamed) == null);
             try std.testing.expectError(error.NoComponent, access.readFieldAlloc(gpa, &world, unnamed, 0, 0));
@@ -175,7 +176,7 @@ test "allocated scene reads own complete names and large fields" {
             try std.testing.expectEqualStrings(expected, field);
             access.setName(&world, entity, "Changed");
             world.get(entity, Value).?.text[0] = 'y';
-            try std.testing.expectEqualStrings("A" ** Name.max_len, name);
+            try std.testing.expectEqualStrings(&@as([Name.max_len]u8, @splat('A')), name);
             try std.testing.expectEqualStrings(expected, field);
         }
     };
@@ -415,7 +416,7 @@ pub const Scene = struct {
                         continue;
                     };
                     var buffer: [components.max_field_bytes + 1]u8 = undefined;
-                    const text = std.fmt.bufPrintZ(&buffer, "{s}", .{field.value}) catch {
+                    const text = std.fmt.bufPrintSentinel(&buffer, "{s}", .{field.value}, 0) catch {
                         skipped += 1;
                         continue;
                     };
@@ -433,7 +434,7 @@ pub const Scene = struct {
                 continue;
             }
             var buffer: [64]u8 = undefined;
-            const text = std.fmt.bufPrintZ(&buffer, ".{{ .id = {d}, .generation = {d} }}", .{ made[ref.place].id, made[ref.place].generation }) catch unreachable;
+            const text = std.fmt.bufPrintSentinel(&buffer, ".{{ .id = {d}, .generation = {d} }}", .{ made[ref.place].id, made[ref.place].generation }, 0) catch unreachable;
             if (!access.writeField(world, ref.entity, ref.component, ref.field, text)) skipped += 1;
         }
         for (self.entities, made) |saved, entity| {
@@ -482,7 +483,7 @@ pub const Scene = struct {
         var self = Scene{ .arena = .init(gpa) };
         errdefer self.deinit();
         const arena = self.arena.allocator();
-        var ast = try std.zig.Ast.parse(gpa, source, .zon);
+        var ast = try std.zig.Ast.parse(gpa, source, .{ .mode = .zon });
         defer ast.deinit(gpa);
         const zoir = try std.zig.ZonGen.generate(gpa, ast, .{});
         defer zoir.deinit(gpa);
@@ -526,11 +527,11 @@ const SceneRef = struct { scene: usize };
 /// `text` (a field's ZON) as a `T`, if it is one; `T` holds no pointers.
 fn parseValue(comptime T: type, text: []const u8) ?T {
     var buffer: [256]u8 = undefined;
-    const source = std.fmt.bufPrintZ(&buffer, "{s}", .{text}) catch return null;
+    const source = std.fmt.bufPrintSentinel(&buffer, "{s}", .{text}, 0) catch return null;
     // The parse's own scratch.
     var scratch: [16 * 1024]u8 = undefined;
     var fba = std.heap.FixedBufferAllocator.init(&scratch);
-    return std.zon.parse.fromSlice(T, fba.allocator(), source, null, .{}) catch null;
+    return zon_file.parse(T, fba.allocator(), source, .{}) catch null;
 }
 
 /// The kind of field `name` of `info`; `.other` if it has none so named.
@@ -560,15 +561,15 @@ const Reader = struct {
         start: u32,
         len: u32,
         fn at(range: Range, i: usize) Index {
-            return @enumFromInt(range.start + @as(u32, @intCast(i)));
+            return @fromBackingInt(@intCast(range.start + @as(u32, @intCast(i))));
         }
     };
 
     /// Field `name` of struct literal `node`, if it has one.
     fn field(self: Reader, node: Index, name: []const u8) ?Index {
-        switch (node.get(self.zoir.*)) {
+        switch (node.get(self.zoir)) {
             .struct_literal => |fields| for (fields.names, 0..) |field_name, i| {
-                if (std.mem.eql(u8, field_name.get(self.zoir.*), name)) return @enumFromInt(@intFromEnum(fields.vals.start) + @as(u32, @intCast(i)));
+                if (std.mem.eql(u8, field_name.get(self.zoir), name)) return @fromBackingInt(@intCast(@backingInt(fields.vals.start) + @as(u32, @intCast(i))));
             },
             else => {},
         }
@@ -577,22 +578,22 @@ const Reader = struct {
 
     /// The elements of an array (or tuple) literal; null if `node` isn't one.
     fn items(self: Reader, node: Index) ?Range {
-        return switch (node.get(self.zoir.*)) {
+        return switch (node.get(self.zoir)) {
             .empty_literal => .{ .start = 0, .len = 0 },
-            .array_literal => |range| .{ .start = @intFromEnum(range.start), .len = range.len },
+            .array_literal => |range| .{ .start = @backingInt(range.start), .len = range.len },
             else => null,
         };
     }
 
     fn string(self: Reader, node: Index) ![]const u8 {
-        return switch (node.get(self.zoir.*)) {
+        return switch (node.get(self.zoir)) {
             .string_literal => |text| self.arena.dupe(u8, text),
             else => error.ParseZon,
         };
     }
 
     fn optionalIndex(self: Reader, node: Index) !?usize {
-        return switch (node.get(self.zoir.*)) {
+        return switch (node.get(self.zoir)) {
             .null => null,
             .int_literal => |int| switch (int) {
                 .small => |small| std.math.cast(usize, small) orelse error.ParseZon,
@@ -604,11 +605,11 @@ const Reader = struct {
 
     /// Each field of struct literal `node`, its value as ZON source.
     fn collectFields(self: Reader, node: Index, out: *std.ArrayList(Scene.Field)) !void {
-        switch (node.get(self.zoir.*)) {
+        switch (node.get(self.zoir)) {
             .empty_literal => {},
             .struct_literal => |fields| for (fields.names, 0..) |name, i| {
-                const value: Index = @enumFromInt(@intFromEnum(fields.vals.start) + @as(u32, @intCast(i)));
-                try out.append(self.arena, .{ .name = try self.arena.dupe(u8, name.get(self.zoir.*)), .value = try self.arena.dupe(u8, self.ast.getNodeSource(value.getAstNode(self.zoir.*))) });
+                const value: Index = @fromBackingInt(@intCast(@backingInt(fields.vals.start) + @as(u32, @intCast(i))));
+                try out.append(self.arena, .{ .name = try self.arena.dupe(u8, name.get(self.zoir)), .value = try self.arena.dupe(u8, self.ast.getNodeSource(value.getAstNode(self.zoir))) });
             },
             else => return error.ParseZon,
         }
@@ -638,7 +639,7 @@ test "a scene saves names, parents and fields, and reads back into a new world" 
     var text: std.Io.Writer.Allocating = .init(gpa);
     defer text.deinit();
     try scene.write(&text.writer);
-    const source = try gpa.dupeZ(u8, text.written());
+    const source = try gpa.dupeSentinel(u8, text.written(), 0);
     defer gpa.free(source);
     var read = try Scene.parse(gpa, source);
     defer read.deinit();

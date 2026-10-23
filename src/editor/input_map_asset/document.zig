@@ -27,7 +27,7 @@ pub const Document = struct {
         errdefer self.deinit();
         var arena = std.heap.ArenaAllocator.init(gpa);
         defer arena.deinit();
-        try self.replace(try File.parse(arena.allocator(), try arena.allocator().dupeZ(u8, source)));
+        try self.replace(try File.parse(arena.allocator(), try arena.allocator().dupeSentinel(u8, source, 0)));
         self.markSaved();
         return self;
     }

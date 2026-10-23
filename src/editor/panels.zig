@@ -62,7 +62,7 @@ const copy_first: u32 = 20;
 
 /// The dock id of `panel`'s copy `copy` (below `max_copies`); copy 0 is `panel`'s own id.
 pub fn copyId(panel: Panel, copy: u8) u32 {
-    if (copy == 0) return @intFromEnum(panel);
+    if (copy == 0) return @backingInt(panel);
     const slot = std.mem.indexOfScalar(Panel, &copyable, panel).?;
     return copy_first + (copy - 1) * @as(u32, copyable.len) + @as(u32, @intCast(slot));
 }
@@ -166,16 +166,16 @@ pub const first_plugin_page = 10;
 /// std.debug.assert(page == panels.inspector_page);
 /// ```
 pub fn pageOf(id: u32, plugin_panels: []const EditorPanel) ?usize {
-    if (id == @intFromEnum(Panel.inspector)) return inspector_page;
-    if (id == @intFromEnum(Panel.console)) return console_page;
-    if (id == @intFromEnum(Panel.hierarchy)) return hierarchy_page;
-    if (id == @intFromEnum(Panel.assets)) return assets_page;
-    if (id == @intFromEnum(Panel.animation)) return animation_page;
-    if (id == @intFromEnum(Panel.ui_designer)) return ui_designer_page;
-    if (id == @intFromEnum(Panel.ui_tree)) return ui_tree_page;
-    if (id == @intFromEnum(Panel.ui_properties)) return ui_properties_page;
-    if (id == @intFromEnum(Panel.asset_preview)) return asset_preview_page;
-    if (id == @intFromEnum(Panel.scene_2d)) return scene_2d_page;
+    if (id == @backingInt(Panel.inspector)) return inspector_page;
+    if (id == @backingInt(Panel.console)) return console_page;
+    if (id == @backingInt(Panel.hierarchy)) return hierarchy_page;
+    if (id == @backingInt(Panel.assets)) return assets_page;
+    if (id == @backingInt(Panel.animation)) return animation_page;
+    if (id == @backingInt(Panel.ui_designer)) return ui_designer_page;
+    if (id == @backingInt(Panel.ui_tree)) return ui_tree_page;
+    if (id == @backingInt(Panel.ui_properties)) return ui_properties_page;
+    if (id == @backingInt(Panel.asset_preview)) return asset_preview_page;
+    if (id == @backingInt(Panel.scene_2d)) return scene_2d_page;
     for (plugin_panels, 0..) |panel, index| if (pluginId(panel, index) == id) return first_plugin_page + index;
     return null;
 }
@@ -243,7 +243,7 @@ pub const Provider = struct {
         const placed = self.placements;
         if (!self.live.shows(id)) return showHere(b, id);
         // A live copy draws as the panel itself.
-        const panel = if (copyOf(id)) |found| @intFromEnum(found.panel) else id;
+        const panel = if (copyOf(id)) |found| @backingInt(found.panel) else id;
         if (pageOf(panel, self.plugin_panels)) |page| {
             placed.pages[page] = .{ .slot = self.slot, .rect = rect };
             return b.node(0, .{ .width = rect.w, .height = rect.h }, marker(&placed.page_marks[page]), &.{});
@@ -290,26 +290,26 @@ fn placeholder(b: L.Builder, message: []const u8) !*L.Element {
 
 test "pages are the Inspector, the Console, the Hierarchy, Assets, Animation, the UI Designer's three, the Asset Preview, the 2D Scene and the plugin panels, in that order" {
     const plugin_panels = [_]EditorPanel{ .{ .title = "Stats" }, .{ .title = "Level" } };
-    try std.testing.expectEqual(@as(?usize, 0), pageOf(@intFromEnum(Panel.inspector), &plugin_panels));
-    try std.testing.expectEqual(@as(?usize, 1), pageOf(@intFromEnum(Panel.console), &plugin_panels));
-    try std.testing.expectEqual(@as(?usize, 2), pageOf(@intFromEnum(Panel.hierarchy), &plugin_panels));
-    try std.testing.expectEqual(@as(?usize, 3), pageOf(@intFromEnum(Panel.assets), &plugin_panels));
-    try std.testing.expectEqual(@as(?usize, 4), pageOf(@intFromEnum(Panel.animation), &plugin_panels));
-    try std.testing.expectEqual(@as(?usize, 5), pageOf(@intFromEnum(Panel.ui_designer), &plugin_panels));
-    try std.testing.expectEqual(@as(?usize, 7), pageOf(@intFromEnum(Panel.ui_properties), &plugin_panels));
-    try std.testing.expectEqual(@as(?usize, 8), pageOf(@intFromEnum(Panel.asset_preview), &plugin_panels));
-    try std.testing.expectEqual(@as(?usize, 9), pageOf(@intFromEnum(Panel.scene_2d), &plugin_panels));
+    try std.testing.expectEqual(@as(?usize, 0), pageOf(@backingInt(Panel.inspector), &plugin_panels));
+    try std.testing.expectEqual(@as(?usize, 1), pageOf(@backingInt(Panel.console), &plugin_panels));
+    try std.testing.expectEqual(@as(?usize, 2), pageOf(@backingInt(Panel.hierarchy), &plugin_panels));
+    try std.testing.expectEqual(@as(?usize, 3), pageOf(@backingInt(Panel.assets), &plugin_panels));
+    try std.testing.expectEqual(@as(?usize, 4), pageOf(@backingInt(Panel.animation), &plugin_panels));
+    try std.testing.expectEqual(@as(?usize, 5), pageOf(@backingInt(Panel.ui_designer), &plugin_panels));
+    try std.testing.expectEqual(@as(?usize, 7), pageOf(@backingInt(Panel.ui_properties), &plugin_panels));
+    try std.testing.expectEqual(@as(?usize, 8), pageOf(@backingInt(Panel.asset_preview), &plugin_panels));
+    try std.testing.expectEqual(@as(?usize, 9), pageOf(@backingInt(Panel.scene_2d), &plugin_panels));
     try std.testing.expectEqual(@as(?usize, 11), pageOf(plugin_first + 1, &plugin_panels));
-    try std.testing.expectEqual(@as(?usize, null), pageOf(@intFromEnum(Panel.scene), &plugin_panels));
+    try std.testing.expectEqual(@as(?usize, null), pageOf(@backingInt(Panel.scene), &plugin_panels));
     try std.testing.expectEqualStrings("Level", panelTitle(plugin_first + 1, &plugin_panels));
-    try std.testing.expectEqualStrings("Console", panelTitle(@intFromEnum(Panel.console), &plugin_panels));
+    try std.testing.expectEqualStrings("Console", panelTitle(@backingInt(Panel.console), &plugin_panels));
 }
 
 test "a copy's id reads back as its panel and copy, clear of the built-in and plugin ids" {
-    try std.testing.expectEqual(@as(u32, @intFromEnum(Panel.scene)), copyId(.scene, 0));
+    try std.testing.expectEqual(@as(u32, @backingInt(Panel.scene)), copyId(.scene, 0));
     for (copyable) |panel| for (1..max_copies) |copy| {
         const id = copyId(panel, @intCast(copy));
-        try std.testing.expect(id > @intFromEnum(Panel.scene_2d) and id < plugin_first);
+        try std.testing.expect(id > @backingInt(Panel.scene_2d) and id < plugin_first);
         try std.testing.expectEqual(Copy{ .panel = panel, .copy = @intCast(copy) }, copyOf(id).?);
         try std.testing.expectEqualStrings(panel.title(), panelTitle(id, &.{}));
     };
@@ -321,6 +321,6 @@ test "only the live copy is drawn, and the UI Designer's three go live together"
     try std.testing.expect(live.shows(copyId(.scene, 2)));
     try std.testing.expect(!live.shows(copyId(.scene, 0)));
     try std.testing.expect(live.shows(copyId(.ui_tree, 1)) and live.shows(copyId(.ui_properties, 1)));
-    try std.testing.expect(live.shows(@intFromEnum(Panel.inspector)));
+    try std.testing.expect(live.shows(@backingInt(Panel.inspector)));
     try std.testing.expectEqual(Copy{ .panel = .scene, .copy = 2 }, showHereOf(show_here_first + copyId(.scene, 2)).?);
 }

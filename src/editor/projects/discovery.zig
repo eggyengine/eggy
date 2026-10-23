@@ -43,7 +43,7 @@ fn findAbove(gpa: std.mem.Allocator, io: std.Io, name: []const u8, start: []cons
     defer gpa.free(absolute);
     var candidate: []const u8 = absolute;
     while (true) {
-        if (try matches(gpa, io, name, candidate)) return try gpa.dupeZ(u8, candidate);
+        if (try matches(gpa, io, name, candidate)) return try gpa.dupeSentinel(u8, candidate, 0);
         const parent = std.fs.path.dirname(candidate) orelse return null;
         if (std.mem.eql(u8, parent, candidate)) return null;
         candidate = parent;

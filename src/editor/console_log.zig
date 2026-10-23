@@ -134,11 +134,11 @@ pub fn snapshot(allocator: std.mem.Allocator, out: *Messages, filter: Filter) !S
     var shown: usize = 0;
     var per_level: [4]usize = .{ 0, 0, 0, 0 };
     for (entries.items) |entry| {
-        per_level[@intFromEnum(entry.level)] += 1;
-        if (!filter.levels[@intFromEnum(entry.level)]) continue;
+        per_level[@backingInt(entry.level)] += 1;
+        if (!filter.levels[@backingInt(entry.level)]) continue;
         if (filter.hidden) |hidden| if (hidden.contains(entry.id)) continue;
         const line = text.items[entry.start..entry.end];
-        if (filter.query.len > 0 and std.ascii.indexOfIgnoreCase(line, filter.query) == null) continue;
+        if (filter.query.len > 0 and std.ascii.findIgnoreCase(line, filter.query) == null) continue;
         const start = out.text.items.len;
         try out.text.appendSlice(allocator, line);
         try out.entries.append(allocator, .{

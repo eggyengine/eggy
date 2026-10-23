@@ -297,7 +297,7 @@ fn animatedTriangle(raw: *anyopaque, gpa: std.mem.Allocator, key: []const u8) !a
     model.parts[0].morph_count = 1;
     model.rig.nodes = try gpa.dupe(assets.model.Node, &.{.{ .name = &.{} }});
     model.rig.nodes[0].name = try gpa.dupe(u8, "root");
-    model.rig.influences = try gpa.dupe(assets.model.Influence, &([_]assets.model.Influence{.{ .weights = .{ 1, 0, 0, 0 } }} ** 3));
+    model.rig.influences = try gpa.dupe(assets.model.Influence, &@as([3]assets.model.Influence, @splat(.{ .weights = .{ 1, 0, 0, 0 } })));
     model.rig.skins = try gpa.dupe(assets.model.Skin, &.{.{ .joints = &.{}, .inverse_bind = &.{} }});
     model.rig.skins[0].joints = try gpa.dupe(u32, &.{0});
     model.rig.skins[0].inverse_bind = try gpa.dupe([4][4]f32, &.{.{ .{ 1, 0, 0, 0 }, .{ 0, 1, 0, 0 }, .{ 0, 0, 1, 0 }, .{ 0, 0, 0, 1 } }});
@@ -329,7 +329,7 @@ fn importedAnimation(_: *anyopaque, gpa: std.mem.Allocator, key: []const u8) ![:
         .source_model = 42,
         .clip = .{ .name = "slide", .duration_s = 1, .tracks = &tracks },
     });
-    return gpa.dupeZ(u8, bytes.written());
+    return gpa.dupeSentinel(u8, bytes.written(), 0);
 }
 
 fn scenePixels(gpa: std.mem.Allocator, graphics: *Graphics, scene: *SceneTexture, drawables: []mesh.Drawable, view: camera.View) ![]u8 {

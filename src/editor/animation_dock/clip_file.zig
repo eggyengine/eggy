@@ -41,7 +41,7 @@ test "a clip's text is written, read back and parsed again" {
     defer gpa.free(back);
     try std.testing.expectEqualStrings(text, back);
 
-    const source = try gpa.dupeZ(u8, back);
+    const source = try gpa.dupeSentinel(u8, back, 0);
     defer gpa.free(source);
     const parsed = try eggy.assets.clip.parse(gpa, source);
     defer parsed.deinit(gpa);

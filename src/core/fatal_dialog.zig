@@ -2,10 +2,17 @@
 //! browser, Android, and Linux games built on another system (whose GTK the dialog can't link).
 const std = @import("std");
 const no_dialog = !@import("fatal_dialog_options").native_dialog;
-const nvd = if (no_dialog) struct {} else @cImport({
-    @cDefine("NVD_STATIC_LINKAGE", "1");
-    @cInclude("nvdialog.h");
-});
+// The part of nvdialog.h this calls, declared by hand rather than translated.
+const nvd = if (no_dialog) struct {} else struct {
+    const NVD_NO_ERROR = 0;
+    const NVD_ALREADY_INITIALIZED = 10;
+    const NVD_DIALOG_ERROR = 0x101;
+    extern fn nvd_init() c_int;
+    extern fn nvd_get_error() c_int;
+    extern fn nvd_dialog_box_new(title: [*:0]const u8, message: [*:0]const u8, kind: c_int) ?*anyopaque;
+    extern fn nvd_show_dialog(dialog: *anyopaque) void;
+    extern fn nvd_free_object(object: *anyopaque) void;
+};
 
 /// Log a fatal `stage` failure, appending optional borrowed backend diagnostics, then show it,
 /// naming `crash_report` (the report's path) when one was written. Desktop may block for a native
@@ -66,8 +73,8 @@ fn formatMessage(buffer: []u8, stage: []const u8, message: []const u8) [:0]u8 {
 test "fatal dialog preserves error context and bounds long messages" {
     var buffer: [80]u8 = undefined;
     try std.testing.expectEqualStrings("Fatal error during init:\nNoAdapter", formatMessage(&buffer, "init", "NoAdapter"));
-    const long = "A" ** 100;
-    const bounded = formatMessage(&buffer, "frame", long);
+    const long: [100]u8 = @splat('A');
+    const bounded = formatMessage(&buffer, "frame", &long);
     try std.testing.expectEqual(@as(usize, buffer.len - 1), bounded.len);
     try std.testing.expectEqual(@as(u8, 'A'), bounded[bounded.len - 1]);
 }

@@ -114,11 +114,12 @@ pub fn write(writer: *std.Io.Writer, config: Config) std.Io.Writer.Error!void {
 fn writeLine(writer: *std.Io.Writer, value: anytype) std.Io.Writer.Error!void {
     try writer.writeAll(".{");
     var first = true;
-    inline for (@typeInfo(@TypeOf(value)).@"struct".fields) |field| {
-        const field_value = @field(value, field.name);
-        const shown: ?@TypeOf(field_value) = if (field.defaultValue()) |default| if (std.meta.eql(field_value, default) or (@TypeOf(field_value) == []const u8 and std.mem.eql(u8, field_value, default))) null else field_value else field_value;
+    const info = @typeInfo(@TypeOf(value)).@"struct";
+    inline for (info.field_names, info.field_types, info.field_attrs) |name, FieldType, attrs| {
+        const field_value = @field(value, name);
+        const shown: ?FieldType = if (attrs.defaultValue(FieldType)) |default| if (std.meta.eql(field_value, default) or (@TypeOf(field_value) == []const u8 and std.mem.eql(u8, field_value, default))) null else field_value else field_value;
         if (shown) |kept| {
-            try writer.writeAll(if (first) " ." ++ field.name ++ " = " else ", ." ++ field.name ++ " = ");
+            try writer.writeAll(if (first) " ." ++ name ++ " = " else ", ." ++ name ++ " = ");
             first = false;
             switch (@TypeOf(kept)) {
                 []const u8 => try writer.print("\"{f}\"", .{std.zig.fmtString(kept)}),
@@ -143,7 +144,9 @@ fn writeLine(writer: *std.Io.Writer, value: anytype) std.Io.Writer.Error!void {
 /// const config = try parse(arena.allocator(), ".{ .name = \"game\", .title = \"Game\" }");
 /// ```
 pub fn parse(arena: std.mem.Allocator, source: [:0]const u8) !Config {
-    const config = try std.zon.parse.fromSliceAlloc(Config, arena, source, null, .{});
+    // Build scripts read this file too, so it can't use `eggy.assets.zon`.
+    var diagnostics: std.zon.parse.Diagnostics = undefined;
+    const config = try std.zon.parse.fromSlice(Config, .{ .gpa = arena, .arena = arena, .source = source, .diagnostics = &diagnostics });
     try config.graphics.validateValues();
     return config;
 }
@@ -197,7 +200,7 @@ test "eggy.zon written reads back the same, its metadata included" {
     };
     var text: std.Io.Writer.Allocating = .init(arena.allocator());
     try write(&text.writer, config);
-    const read = try parse(arena.allocator(), try arena.allocator().dupeZ(u8, text.written()));
+    const read = try parse(arena.allocator(), try arena.allocator().dupeSentinel(u8, text.written(), 0));
     try std.testing.expectEqualStrings(config.title, read.title);
     try std.testing.expectEqualStrings(config.default_scene.?, read.default_scene.?);
     try std.testing.expectEqualStrings(config.icon.?, read.icon.?);

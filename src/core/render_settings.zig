@@ -1,5 +1,6 @@
 //! Validated graphics preferences shared by projects, executable hosts and rendering.
 const std = @import("std");
+const zon_file = @import("eggy_assets").zon;
 const builtin = @import("builtin");
 
 pub const Backend = enum { auto, vulkan, dx12, webgpu };
@@ -42,7 +43,9 @@ pub const Scope = enum { editor, runtime };
 
 /// Read device-independent settings from a baked project value or an external configuration.
 pub fn parse(gpa: std.mem.Allocator, source: [:0]const u8) !Settings {
-    const settings = try std.zon.parse.fromSlice(Settings, gpa, source, null, .{});
+    var arena: std.heap.ArenaAllocator = .init(gpa);
+    defer arena.deinit();
+    const settings = try zon_file.parse(Settings, arena.allocator(), source, .{});
     try settings.validateValues();
     return settings;
 }
@@ -166,7 +169,7 @@ pub const Settings = struct {
         }
         while (supported.anisotropy > caps.max_anisotropy) supported.anisotropy /= 2;
         while (supported.shadow_quality != .off and supported.shadow_quality.resolution() > caps.max_shadow_resolution)
-            supported.shadow_quality = @enumFromInt(@intFromEnum(supported.shadow_quality) - 1);
+            supported.shadow_quality = @fromBackingInt(@intCast(@backingInt(supported.shadow_quality) - 1));
         if (!caps.frame_limit) supported.frame_limit = 0;
         if (!caps.window_settings) {
             supported.window_mode = .windowed;

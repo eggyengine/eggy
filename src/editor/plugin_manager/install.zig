@@ -3,6 +3,7 @@
 //! dependency (`zig fetch --save`), which pins its content hash. The Plugins window then lists the
 //! plugin in the project's `eggy.zon`.
 const std = @import("std");
+const zon_file = @import("eggy").assets.zon;
 const builtin = @import("builtin");
 
 pub const Request = struct {
@@ -161,7 +162,7 @@ pub const Install = struct {
 
 /// The `.fingerprint` of `text`, a `build.zig.zon`.
 fn fingerprintIn(arena: std.mem.Allocator, text: [:0]const u8) !u64 {
-    const zon = try std.zon.parse.fromSliceAlloc(struct { fingerprint: u64 }, arena, text, null, .{ .ignore_unknown_fields = true });
+    const zon = try zon_file.parse(struct { fingerprint: u64 }, arena, text, .{ .ignore_unknown_fields = true });
     return zon.fingerprint;
 }
 

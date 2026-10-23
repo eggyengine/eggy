@@ -78,7 +78,7 @@ pub const Graphics = struct {
         // Null: Vitellus's own choice; once one fails, every other.
         var allowed = backend_config.mask(settings.backend);
         while (true) {
-            const validation: vit.ValidationLevel = if (builtin.mode == .Debug) .core else .none;
+            const validation: vit.ValidationLevel = if (builtin.mode == .debug) .core else .none;
             const instance = try vit.Instance.init(allocator, .{ .backend = allowed, .validation = validation });
             const backend = instance.selected_backend;
             return initOn(allocator, window, instance, settings, policy) catch |err| {

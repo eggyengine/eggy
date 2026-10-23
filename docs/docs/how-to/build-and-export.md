@@ -59,8 +59,8 @@ project has no default scene; changing it there changes the default. Each platfo
   other small systems. A musl build has no screen reader support and can't compile shaders
   while it runs. A Linux build for another architecture or C library logs fatal errors
   instead of showing a dialog.
-- **Optimize for**: Speed (ReleaseFast), Size (ReleaseSmall), Speed with safety checks
-  (ReleaseSafe), or Debugging (Debug).
+- **Optimize for**: Speed (`fast`), Size (`small`), Speed with safety checks
+  (`safe`), or Debugging (`debug`).
 - **Tune for this computer**, on this computer's own system: faster here, but the game may
   not start on older processors.
 - **ZIP archive**, on desktop platforms: whether to zip the folder as well.
@@ -75,8 +75,8 @@ output a click away. From the package directory, the equivalent build step is:
 zig build export
 ```
 
-The step builds a ReleaseFast runtime and packages resources and libraries. `-Dtarget`
-selects a platform, `-Dexport-optimize` the optimization (default ReleaseFast),
+The step builds a `fast` runtime and packages resources and libraries. `-Dtarget`
+selects a platform, `-Dexport-optimize` the optimization (default `fast`),
 `-Dexport-zip=false` skips the ZIP, and `--sysroot` names a macOS SDK. Ordinary builds'
 `-Doptimize` doesn't apply to export.
 

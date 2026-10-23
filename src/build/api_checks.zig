@@ -9,7 +9,7 @@ const std = @import("std");
 /// const fixture = api_checks.project(b, target, optimize, engine_module);
 /// game_library.root_module.addImport("eggy_project", fixture);
 /// ```
-pub fn project(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builtin.OptimizeMode, eggy: *std.Build.Module) *std.Build.Module {
+pub fn project(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builtin.Optimize, eggy: *std.Build.Module) *std.Build.Module {
     var aliases = @import("../core/assets/registry.zig").Builder{ .gpa = b.allocator };
     defer aliases.deinit();
     aliases.claim(43) catch @panic("invalid fixture identity");

@@ -213,7 +213,7 @@ pub const View = struct {
         self.draft = null;
         if (mappings.len != 0) try self.setDraft(mappings[self.binding_index]);
         const rule = state.overrides.getTrigger(control.key) orelse control.trigger;
-        self.trigger_index = @intFromEnum(std.meta.activeTag(rule));
+        self.trigger_index = @backingInt(std.meta.activeTag(rule));
         var buffer: [64]u8 = undefined;
         try self.duration.set(try std.fmt.bufPrint(&buffer, "{d}", .{switch (rule) {
             .hold, .tap => |seconds| seconds,
@@ -314,12 +314,12 @@ pub const View = struct {
         switch (draft.*) {
             .key => |key| self.captureKey(context, "Key", key, .key),
             .mouse => |*mouse| {
-                var selected_index: usize = @intFromEnum(mouse.*);
-                if (context.select("Mouse button", mouse_names, &selected_index)) mouse.* = @enumFromInt(selected_index);
+                var selected_index: usize = @backingInt(mouse.*);
+                if (context.select("Mouse button", mouse_names, &selected_index)) mouse.* = @fromBackingInt(@intCast(selected_index));
             },
             .controller => |*controller| {
-                var selected_index: usize = @intFromEnum(controller.button);
-                if (context.select("Controller button", button_names, &selected_index)) controller.button = @enumFromInt(selected_index);
+                var selected_index: usize = @backingInt(controller.button);
+                if (context.select("Controller button", button_names, &selected_index)) controller.button = @fromBackingInt(@intCast(selected_index));
                 if (context.buttonVariant(if (self.capture == .controller) "Press a controller button..." else "Capture controller button", .outline)) self.capture = .controller;
             },
             .key_axis => |axis| {
@@ -340,14 +340,14 @@ pub const View = struct {
                 self.vectorNumbers(context);
             },
             .controller_axis => |*axis| {
-                var selected_index: usize = @intCast(@intFromEnum(axis.axis));
-                if (context.select("Controller axis", axis_names, &selected_index)) axis.axis = @enumFromInt(selected_index);
+                var selected_index: usize = @intCast(@backingInt(axis.axis));
+                if (context.select("Controller axis", axis_names, &selected_index)) axis.axis = @fromBackingInt(@intCast(selected_index));
                 _ = context.textInput("Axis scale", &self.numbers[0], "1 or -1");
                 _ = context.textInput("Dead zone", &self.numbers[1], "0 to less than 1");
             },
             .controller_stick => |*stick| {
-                var selected_index: usize = @intFromEnum(stick.stick);
-                if (context.select("Stick", &stick_names, &selected_index)) stick.stick = @enumFromInt(selected_index);
+                var selected_index: usize = @backingInt(stick.stick);
+                if (context.select("Stick", &stick_names, &selected_index)) stick.stick = @fromBackingInt(@intCast(selected_index));
                 self.vectorNumbers(context);
                 _ = context.textInput("Dead zone", &self.numbers[2], "0 to less than 1");
             },

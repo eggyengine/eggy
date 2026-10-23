@@ -1,5 +1,6 @@
 //! Toolchain diagnosis with explicitly approved zvm repairs.
 const std = @import("std");
+const zon_file = @import("eggy").assets.zon;
 const required_zig = @import("build_options").zig_version;
 const Prompt = @import("prompt.zig").Prompt;
 
@@ -49,7 +50,7 @@ pub fn run(process: *const std.process.Init, prompt: *Prompt, options: Options) 
         return error.ZigEnvironmentFailed;
     }
     const Environment = struct { lib_dir: []const u8, global_cache_dir: []const u8 };
-    const env = try std.zon.parse.fromSliceAlloc(Environment, prompt.arena, try prompt.arena.dupeZ(u8, env_result.stdout), null, .{ .ignore_unknown_fields = true });
+    const env = try zon_file.parse(Environment, prompt.arena, try prompt.arena.dupeSentinel(u8, env_result.stdout, 0), .{ .ignore_unknown_fields = true });
     const cwd = std.Io.Dir.cwd();
     try cwd.access(process.io, try std.fs.path.join(prompt.arena, &.{ env.lib_dir, "std", "std.zig" }), .{});
     try cwd.createDirPath(process.io, env.global_cache_dir);
@@ -132,8 +133,8 @@ fn execute(process: *const std.process.Init, prompt: *Prompt, dir: []const u8, a
 
 test "Zig must match the engine's minor release and minimum version" {
     try std.testing.expect(compatible(required_zig));
-    try std.testing.expect(!compatible("0.15.2"));
-    try std.testing.expect(!compatible("0.17.0"));
-    try std.testing.expect(!compatible("0.16.0-dev.1"));
+    try std.testing.expect(!compatible("0.16.0"));
+    try std.testing.expect(!compatible("0.18.0"));
+    try std.testing.expect(!compatible("0.17.0-dev.1"));
     try std.testing.expect(!compatible("not a version"));
 }

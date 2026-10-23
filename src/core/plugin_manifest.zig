@@ -87,7 +87,9 @@ const File = struct { plugin: Manifest };
 /// ```
 pub fn parse(arena: std.mem.Allocator, source: [:0]const u8) !Manifest {
     if (!mentionsPluginField(source)) return error.NotAPlugin;
-    const file = try std.zon.parse.fromSliceAlloc(File, arena, source, null, .{ .ignore_unknown_fields = true });
+    // Build scripts read this file too, so it can't use `eggy.assets.zon`.
+    var diagnostics: std.zon.parse.Diagnostics = undefined;
+    const file = try std.zon.parse.fromSlice(File, .{ .gpa = arena, .arena = arena, .source = source, .diagnostics = &diagnostics, .ignore_unknown_fields = true });
     const manifest = file.plugin;
     _ = std.SemanticVersion.parse(manifest.version) catch return error.InvalidVersion;
     _ = repositoryPath(manifest.repository) orelse return error.InvalidRepository;

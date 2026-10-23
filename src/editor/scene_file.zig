@@ -2,6 +2,7 @@
 //! open last, which `.eggy/scene.zon` remembers; with none, the world starts empty until one is
 //! opened from the Assets panel. File > Save writes the open scene, or a new one when none is.
 const std = @import("std");
+const zon_file = @import("eggy").assets.zon;
 const eggy = @import("eggy");
 const log = std.log.scoped(.scene);
 
@@ -258,7 +259,7 @@ pub const OpenScene = struct {
         const Memory = struct { scene: []const u8 };
         var arena = std.heap.ArenaAllocator.init(self.gpa);
         defer arena.deinit();
-        const memory = std.zon.parse.fromSliceAlloc(Memory, arena.allocator(), source, null, .{ .ignore_unknown_fields = true }) catch return null;
+        const memory = zon_file.parse(Memory, arena.allocator(), source, .{ .ignore_unknown_fields = true }) catch return null;
         if (!isProjectPath(memory.scene)) return null;
         project.access(io, memory.scene, .{}) catch return null;
         return self.gpa.dupe(u8, memory.scene) catch null;

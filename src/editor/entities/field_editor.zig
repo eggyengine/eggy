@@ -334,7 +334,7 @@ const Draw = struct {
             },
             .@"enum" => {
                 const current = switch (self.value.get(node)) {
-                    .enum_literal => |tag| tag.get(self.value.zoir),
+                    .enum_literal => |tag| tag.get(&self.value.zoir),
                     else => "",
                 };
                 var names: [64][]const u8 = undefined;
@@ -524,8 +524,8 @@ const Draw = struct {
         const format = editor.rotation_formats.get(key) orelse if (this.kind == .quaternion) RotationFormat.quaternion else .euler_deg;
         var names: [rotation_formats.len][]const u8 = undefined;
         for (&names, rotation_formats) |*name, option| name.* = page_style.fitText(self.scratch(), context.font, option.label(), select_text_size, width - select_chrome);
-        var picked: usize = @intFromEnum(format);
-        if (context.select(hiddenLabel(self.scratch(), childKey(key, 99)), &names, &picked)) editor.rotation_formats.put(editor.gpa, key, @enumFromInt(picked)) catch {};
+        var picked: usize = @backingInt(format);
+        if (context.select(hiddenLabel(self.scratch(), childKey(key, 99)), &names, &picked)) editor.rotation_formats.put(editor.gpa, key, @fromBackingInt(@intCast(picked))) catch {};
         if (context.last_added) |trigger| if (trigger.overlay == null) {
             trigger.style.min_width = 0;
             trigger.style.width = width;
@@ -694,7 +694,7 @@ const Draw = struct {
         const old = self.value.text(node);
         const start = @intFromPtr(old.ptr) - @intFromPtr(self.value.source.ptr);
         var copied = target;
-        copied.requires = (keep.dupeZ(u8, std.mem.span(target.requires)) catch return).ptr;
+        copied.requires = (keep.dupeSentinel(u8, std.mem.span(target.requires), 0) catch return).ptr;
         editor.slots.append(editor.gpa, .{
             .id = id,
             .component = self.component,
