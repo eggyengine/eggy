@@ -22,8 +22,8 @@
             .hash = "humpty-0.1.0-h_J630EWAAAV6IWrWR6io6M3xrCXQb23J9urCgJE3txM",
         },
         .clutch = .{
-            .url = "git+https://github.com/eggyengine/clutch#c12badcbfdcc8312e83065af5e05782de21447b1",
-            .hash = "clutch-0.1.0-gpdHb3UnAgCWabyJxv47U4CZvOQk4Tyio5OxV5CaoG3n",
+            .url = "git+https://github.com/eggyengine/clutch#51009ce0bb1c52bc56c49366ca96209aba91480e",
+            .hash = "clutch-0.1.0-gpdHb78fAgAwkt43rVE3VrwWbkZbsDlfvNZ1yyQH3Ge6",
         },
         .weeoui = .{
             .url = "git+https://github.com/eggyengine/weeoui#71a8f5707d70e65fd87d4cbae004e7a964dc6fb0",
