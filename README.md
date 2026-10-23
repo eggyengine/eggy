@@ -21,7 +21,7 @@ an eggy package works like a zig one: `src/main.zig` is a **game** (`pub const G
 
 add eggy to your project:
 ```bash
-zig fetch --save git+https://github.com/eggyengine/eggy
+zig fetch --save git+https://github.com/eggyengine/eggy#0.16.0
 ```
 
 then in `build.zig`:
