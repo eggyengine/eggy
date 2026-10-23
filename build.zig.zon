@@ -9,10 +9,6 @@
             .hash = "android-0.3.0-7iz7Qn5MAgCPmeMnCCYhLLHkxY5r8gTy_vKmrATmrnEB",
             .lazy = true,
         },
-        .nvdialog = .{
-            .url = "git+https://github.com/tseli0s/nvdialog#721bf6ff623833cd507b42b63424c0e5e57e2525",
-            .hash = "N-V-__8AAEuUDgBPfreH-NaCz_VkqQhUzodVDBJwMy7xG76s",
-        },
         .sdl3 = .{
             .url = "git+https://codeberg.org/7Games/zig-sdl3?ref=master#666331118c8f7d8a03ea633d79a343c34dc32b84",
             .hash = "sdl3-0.2.3-NmT1Q1QDKgACd5t_PNSG08lcOCX25qaRYZjUmXPTVBY_",

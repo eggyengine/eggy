@@ -117,7 +117,7 @@ file before installing the active configuration; a failed save retains the activ
 
 | Boundary | Unhandled error behavior |
 | --- | --- |
-| Standalone runtime initialization, frame, or event | Report a fatal native dialog and exit; browser reporting uses its console |
+| Standalone runtime initialization, frame, or event | Show the fatal error in a dialog (an alert in the browser) and exit |
 | Plugin initialization | Stop plugins already initialized; standalone startup fails |
 | Game-library startup in the editor | Log failure; the editor stays open without a started game |
 | Game/library update, event, UI, drawing, or editor hook | Log the failure and keep the editor/game loop running |

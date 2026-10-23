@@ -85,6 +85,7 @@ pub const UiScreen = ui_scenes.UiScreen;
 pub const UiBillboard = ui_scenes.UiBillboard;
 
 test {
+    _ = @import("fatal_dialog.zig");
     _ = @import("log/log.zig");
     _ = @import("mobile/mobile.zig");
     _ = @import("log/crash_report.zig");

@@ -414,7 +414,6 @@ fn addGameLibrary(b: *std.Build, engine: *std.Build, target: std.Build.ResolvedT
 /// The modules and dependencies Eggy's own tests need.
 const Engine = struct {
     eggy: *std.Build.Module,
-    fatal_dialog: *std.Build.Module,
     vitellus: *std.Build.Dependency,
     weeoui: *std.Build.Dependency,
     sdl3: *std.Build.Dependency,
@@ -512,14 +511,6 @@ fn addEngine(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.buil
     // Eggy wires Weeoui's SDL adapter below, against the same SDL as the game.
     const weeoui = b.dependency("weeoui", .{ .target = target, .optimize = optimize, .sdl3 = false });
     if (android) b.addNamedLazyPath("android_java", weeoui.path("examples/android/java"));
-    const nvdialog = b.dependency("nvdialog", .{});
-    const fatal_dialog = b.createModule(.{ .root_source_file = b.path("src/core/fatal_dialog.zig"), .target = target, .optimize = optimize, .link_libc = true });
-    // Linux's dialog links this system's GTK, so a game built for another Linux logs instead.
-    const native_dialog = !web and !android and (target.result.os.tag != .linux or (target.query.isNativeOs() and target.query.isNativeAbi() and target.query.cpu_arch == null));
-    const dialog_options = b.addOptions();
-    dialog_options.addOption(bool, "native_dialog", native_dialog);
-    fatal_dialog.addOptions("fatal_dialog_options", dialog_options);
-    if (native_dialog) addNvdialog(fatal_dialog, nvdialog, target.result);
     const sdl3 = sdl_build.dependency(b, target, optimize, if (web) emscripten.include else null) orelse return null;
     const sdl_adapter = b.createModule(.{
         .root_source_file = vitellus.path("src/windowing/sdl3.zig"),
@@ -540,7 +531,6 @@ fn addEngine(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.buil
     engine.addImport("eggenvector", emath.module("eggenvector"));
     engine.addImport("clutch", b.dependency("clutch", .{ .target = target, .optimize = optimize }).module("clutch"));
     engine.addImport("weeoui", weeoui.module("weeoui"));
-    engine.addImport("fatal_dialog", fatal_dialog);
     const assets = models.assetsModule(b, target, optimize);
     // Tools can import the formats without linking App, SDL, the renderer, or editor code.
     b.modules.put(b.allocator, "eggy_assets", assets) catch @panic("OOM");
@@ -662,7 +652,6 @@ fn addEngine(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.buil
 
     return .{
         .eggy = engine,
-        .fatal_dialog = fatal_dialog,
         .vitellus = vitellus,
         .weeoui = weeoui,
         .sdl3 = sdl3,
@@ -793,11 +782,10 @@ fn addDesktopApp(b: *std.Build, target: std.Build.ResolvedTarget, root_module: *
     return .{ .install = install, .run = run };
 }
 
-/// `zig build test-core`: the engine's tests, the fatal dialog's, the 3D scene's, and the icon tool's.
+/// `zig build test-core`: the engine's tests, the 3D scene's, and the icon tool's.
 fn addCoreTests(b: *std.Build, engine: Engine) *std.Build.Step {
     const step = b.step("test-core", "Run eggy's core tests");
     step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = engine.eggy, .use_llvm = true })).step);
-    step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = engine.fatal_dialog, .use_llvm = true })).step);
     const viewport = b.createModule(.{
         .root_source_file = b.path("src/core/viewport3d.zig"),
         .target = engine.eggy.resolved_target,
@@ -820,79 +808,4 @@ fn addCoreTests(b: *std.Build, engine: Engine) *std.Build.Step {
     const ico = b.createModule(.{ .root_source_file = b.path("src/build/ico.zig"), .target = engine.eggy.resolved_target, .optimize = engine.eggy.optimize, .imports = &.{.{ .name = "eggy_assets", .module = engine.assets }} });
     step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = ico, .use_llvm = true })).step);
     return step;
-}
-
-/// The native fatal-error dialog; the web build reports to the browser console instead.
-fn addNvdialog(fatal_dialog: *std.Build.Module, nvdialog: *std.Build.Dependency, target: std.Target) void {
-    fatal_dialog.addIncludePath(nvdialog.path("include"));
-    fatal_dialog.addIncludePath(nvdialog.path("src"));
-    fatal_dialog.addIncludePath(nvdialog.path("src/impl"));
-    fatal_dialog.addIncludePath(nvdialog.path("vendor"));
-    fatal_dialog.addCSourceFiles(.{
-        .root = nvdialog.path("."),
-        .files = &.{
-            "src/nvdialog_error.c",
-            "src/nvdialog_image.c",
-            "src/nvdialog_util.c",
-            "src/nvdialog_capab.c",
-            "src/nvdialog_version.c",
-            "src/nvdialog_init.c",
-            "src/nvdialog_string.c",
-            "src/nvdialog_main.c",
-        },
-        .flags = if (target.os.tag == .macos)
-            &.{ "-std=c11", "-DNVDIALOG_MAXBUF=4096", "-DNVD_STATIC_LINKAGE", "-DNVD_USE_COCOA=1" }
-        else
-            &.{ "-std=c11", "-DNVDIALOG_MAXBUF=4096", "-DNVD_STATIC_LINKAGE" },
-    });
-    switch (target.os.tag) {
-        .linux => {
-            fatal_dialog.addCSourceFiles(.{
-                .root = nvdialog.path("."),
-                .files = &.{
-                    "src/backend/gtk/nvdialog_about_dialog.c",
-                    "src/backend/gtk/nvdialog_file_dialog.c",
-                    "src/backend/gtk/nvdialog_dialog_box.c",
-                    "src/backend/gtk/nvdialog_question_dialog.c",
-                    "src/backend/gtk/nvdialog_notification.c",
-                    "src/backend/gtk/nvdialog_input_dialog.c",
-                },
-                .flags = &.{ "-std=c11", "-DNVDIALOG_MAXBUF=4096", "-DNVD_STATIC_LINKAGE" },
-            });
-            fatal_dialog.linkSystemLibrary("gtk+-3.0", .{ .use_pkg_config = .force });
-            fatal_dialog.linkSystemLibrary("dbus-1", .{ .use_pkg_config = .force });
-        },
-        .macos => {
-            fatal_dialog.addCSourceFiles(.{
-                .root = nvdialog.path("."),
-                .files = &.{
-                    "src/backend/cocoa/nvdialog_dialog_box.m",
-                    "src/backend/cocoa/nvdialog_file_dialog.m",
-                    "src/backend/cocoa/nvdialog_input_box.m",
-                    "src/backend/cocoa/nvdialog_question_dialog.m",
-                    "src/backend/cocoa/nvdialog_notification.m",
-                    "src/backend/cocoa/nvdialog_about_dialog.m",
-                    "src/backend/cocoa/nvdialog_cocoa_init.m",
-                },
-                .flags = &.{ "-DNVD_USE_COCOA=1", "-fno-objc-arc", "-DNVDIALOG_MAXBUF=4096", "-DNVD_STATIC_LINKAGE" },
-            });
-            inline for (.{ "AppKit", "Cocoa", "Foundation", "UserNotifications" }) |framework| fatal_dialog.linkFramework(framework, .{});
-        },
-        .windows => {
-            fatal_dialog.addCSourceFiles(.{
-                .root = nvdialog.path("."),
-                .files = &.{
-                    "src/backend/win32/nvdialog_about_dialog.c",
-                    "src/backend/win32/nvdialog_dialog_box.c",
-                    "src/backend/win32/nvdialog_question_dialog.c",
-                    "src/backend/win32/nvdialog_file_dialog.c",
-                    "src/backend/win32/nvdialog_notification.c",
-                    "src/backend/win32/nvdialog_input_box.c",
-                },
-                .flags = &.{ "-std=c11", "-DNVDIALOG_MAXBUF=4096", "-DNVD_STATIC_LINKAGE" },
-            });
-            inline for (.{ "comdlg32", "shell32", "user32", "gdi32", "ole32" }) |lib| fatal_dialog.linkSystemLibrary(lib, .{});
-        },
-        else => @panic("nvdialog is supported only on desktop Linux, macOS, and Windows"),
-    }
 }

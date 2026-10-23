@@ -1,22 +1,11 @@
-//! Fatal errors through desktop dialogs, or the platform logger where there is none: the
-//! browser, Android, and Linux games built on another system (whose GTK the dialog can't link).
+//! Fatal errors, logged and then shown in SDL's message box (a native dialog on the desktop and
+//! Android, an alert in the browser).
 const std = @import("std");
-const no_dialog = !@import("fatal_dialog_options").native_dialog;
-// The part of nvdialog.h this calls, declared by hand rather than translated.
-const nvd = if (no_dialog) struct {} else struct {
-    const NVD_NO_ERROR = 0;
-    const NVD_ALREADY_INITIALIZED = 10;
-    const NVD_DIALOG_ERROR = 0x101;
-    extern fn nvd_init() c_int;
-    extern fn nvd_get_error() c_int;
-    extern fn nvd_dialog_box_new(title: [*:0]const u8, message: [*:0]const u8, kind: c_int) ?*anyopaque;
-    extern fn nvd_show_dialog(dialog: *anyopaque) void;
-    extern fn nvd_free_object(object: *anyopaque) void;
-};
+const sdl3 = @import("vitellus_sdl3").sdl;
 
 /// Log a fatal `stage` failure, appending optional borrowed backend diagnostics, then show it,
-/// naming `crash_report` (the report's path) when one was written. Desktop may block for a native
-/// dialog; Web/Android log only. Truncates long detail for bounded stack storage.
+/// naming `crash_report` (the report's path) when one was written. May block until the dialog
+/// is dismissed. Truncates long detail for bounded stack storage.
 /// Reporting/dialog failures are logged, not returned; does not exit.
 ///
 /// ```zig
@@ -35,30 +24,17 @@ pub fn report(stage: []const u8, message: []const u8, crash_report: ?[]const u8)
     show(stage, shown);
 }
 
-/// Show a bounded fatal message in a native desktop dialog, borrowing both slices during
-/// the call. May block until dismissed; logs native-dialog failures and does not exit.
-/// Without a dialog (Web, Android, cross-built Linux) this does nothing: use `report` to log.
+/// Show a bounded fatal message in SDL's message box, borrowing both slices during the call.
+/// Works before `SDL_Init`. May block until dismissed; logs failures and does not exit.
 ///
 /// ```zig
 /// fatal_dialog.show("panic", "A required renderer resource is missing.");
 /// ```
 pub fn show(stage: []const u8, message: []const u8) void {
-    if (no_dialog) return; // `report` already logged it to the platform console.
     var buffer: [2048]u8 = undefined;
     const description = formatMessage(&buffer, stage, message);
-    const init_result = nvd.nvd_init();
-    if (init_result != 0 and init_result != -nvd.NVD_ALREADY_INITIALIZED) {
-        std.log.err("Cannot show fatal dialog: nvdialog init returned {d}", .{init_result});
-        return;
-    }
-    const dialog = nvd.nvd_dialog_box_new("Eggy - Fatal Error", description, nvd.NVD_DIALOG_ERROR) orelse {
-        std.log.err("Cannot create fatal dialog: nvdialog error {d}", .{nvd.nvd_get_error()});
-        return;
-    };
-    defer nvd.nvd_free_object(dialog);
-    nvd.nvd_show_dialog(dialog);
-    const dialog_error = nvd.nvd_get_error();
-    if (dialog_error != nvd.NVD_NO_ERROR) std.log.err("Cannot show fatal dialog: nvdialog error {d}", .{dialog_error});
+    sdl3.message_box.showSimple(.{ .error_dialog = true }, "Eggy - Fatal Error", description, null) catch |err|
+        std.log.err("Cannot show fatal dialog: {t}", .{err});
 }
 
 fn formatMessage(buffer: []u8, stage: []const u8, message: []const u8) [:0]u8 {

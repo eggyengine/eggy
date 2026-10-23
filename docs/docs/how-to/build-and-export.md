@@ -57,8 +57,7 @@ project has no default scene; changing it there changes the default. Each platfo
   for macOS.
 - **C library**, for Linux: glibc for most desktop distributions, or musl for Alpine and
   other small systems. A musl build has no screen reader support and can't compile shaders
-  while it runs. A Linux build for another architecture or C library logs fatal errors
-  instead of showing a dialog.
+  while it runs.
 - **Optimize for**: Speed (`fast`), Size (`small`), Speed with safety checks
   (`safe`), or Debugging (`debug`).
 - **Tune for this computer**, on this computer's own system: faster here, but the game may
