@@ -1,0 +1,136 @@
+<!doctype html>
+<html lang="en" dir="ltr" class="docs-wrapper plugin-docs plugin-id-default docs-version-current docs-doc-page docs-doc-id-explanation/input-and-time" data-has-hydrated="false">
+<head>
+<meta charset="UTF-8">
+<meta name="generator" content="Docusaurus v3.10.2">
+<title data-rh="true">Input and gameplay time | Eggy</title><meta data-rh="true" name="viewport" content="width=device-width,initial-scale=1"><meta data-rh="true" name="twitter:card" content="summary_large_image"><meta data-rh="true" property="og:url" content="https://eggyengine.github.io/eggy/feat-ui-scenes-tabs/explanation/input-and-time"><meta data-rh="true" property="og:locale" content="en"><meta data-rh="true" name="docusaurus_locale" content="en"><meta data-rh="true" name="docsearch:language" content="en"><meta data-rh="true" name="docusaurus_version" content="current"><meta data-rh="true" name="docusaurus_tag" content="docs-default-current"><meta data-rh="true" name="docsearch:version" content="current"><meta data-rh="true" name="docsearch:docusaurus_tag" content="docs-default-current"><meta data-rh="true" property="og:title" content="Input and gameplay time | Eggy"><meta data-rh="true" name="description" content="Eggy&#x27;s host collects input and advances time before gameplay reads them."><meta data-rh="true" property="og:description" content="Eggy&#x27;s host collects input and advances time before gameplay reads them."><link data-rh="true" rel="icon" href="/eggy/feat-ui-scenes-tabs/img/icon.svg"><link data-rh="true" rel="canonical" href="https://eggyengine.github.io/eggy/feat-ui-scenes-tabs/explanation/input-and-time"><link data-rh="true" rel="alternate" href="https://eggyengine.github.io/eggy/feat-ui-scenes-tabs/explanation/input-and-time" hreflang="en"><link data-rh="true" rel="alternate" href="https://eggyengine.github.io/eggy/feat-ui-scenes-tabs/explanation/input-and-time" hreflang="x-default"><script data-rh="true" type="application/ld+json">{"@context":"https://schema.org","@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"Explanation","item":"https://eggyengine.github.io/eggy/feat-ui-scenes-tabs/explanation"},{"@type":"ListItem","position":2,"name":"Input and gameplay time","item":"https://eggyengine.github.io/eggy/feat-ui-scenes-tabs/explanation/input-and-time"}]}</script><link rel="stylesheet" href="/eggy/feat-ui-scenes-tabs/assets/css/styles.888f8311.css">
+<script src="/eggy/feat-ui-scenes-tabs/assets/js/runtime~main.b69527d1.js" defer="defer"></script>
+<script src="/eggy/feat-ui-scenes-tabs/assets/js/main.cd5592ba.js" defer="defer"></script>
+</head>
+<body>
+<svg style="display: none;"><defs>
+<symbol id="theme-svg-external-link" viewBox="0 0 24 24"><path fill="currentColor" d="M21 13v10h-21v-19h12v2h-10v15h17v-8h2zm3-12h-10.988l4.035 4-6.977 7.07 2.828 2.828 6.977-7.07 4.125 4.172v-11z"/></symbol>
+</defs></svg>
+<script>!function(){var t=function(){try{return new URLSearchParams(window.location.search).get("docusaurus-theme")}catch(t){}}()||function(){try{return window.localStorage.getItem("theme")}catch(t){}}();document.documentElement.setAttribute("data-theme",t||(window.matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light")),document.documentElement.setAttribute("data-theme-choice",t||"system")}(),function(){try{const c=new URLSearchParams(window.location.search).entries();for(var[t,e]of c)if(t.startsWith("docusaurus-data-")){var a=t.replace("docusaurus-data-","data-");document.documentElement.setAttribute(a,e)}}catch(t){}}()</script><div id="__docusaurus"><link rel="preload" as="image" href="/eggy/feat-ui-scenes-tabs/img/icon.svg"><div role="region" aria-label="Skip to main content"><a class="skipToContent_fXgn" href="#__docusaurus_skipToContent_fallback">Skip to main content</a></div><nav aria-label="Main" class="theme-layout-navbar navbar navbar--fixed-top"><div class="navbar__inner"><div class="theme-layout-navbar-left navbar__items"><button aria-label="Toggle navigation bar" aria-expanded="false" class="navbar__toggle clean-btn" type="button"><svg width="30" height="30" viewBox="0 0 30 30" aria-hidden="true"><path stroke="currentColor" stroke-linecap="round" stroke-miterlimit="10" stroke-width="2" d="M4 7h22M4 15h22M4 23h22"></path></svg></button><a class="navbar__brand" href="/eggy/feat-ui-scenes-tabs/"><div class="navbar__logo"><img src="/eggy/feat-ui-scenes-tabs/img/icon.svg" alt="Eggy" class="themedComponent_mlkZ themedComponent--light_NVdE"><img src="/eggy/feat-ui-scenes-tabs/img/icon.svg" alt="Eggy" class="themedComponent_mlkZ themedComponent--dark_xIcU"></div><b class="navbar__title text--truncate">Eggy</b></a><a aria-current="page" class="navbar__item navbar__link navbar__link--active" href="/eggy/feat-ui-scenes-tabs/">Docs</a><a href="/eggy/feat-ui-scenes-tabs/api/" target="_blank" rel="noopener noreferrer" class="navbar__item navbar__link">API reference</a><a href="https://eggyengine.github.io/weeoui/" target="_blank" rel="noopener noreferrer" class="navbar__item navbar__link">Weeoui<svg width="13.5" height="13.5" aria-label="(opens in new tab)" class="iconExternalLink_nPIU"><use href="#theme-svg-external-link"></use></svg></a></div><div class="theme-layout-navbar-right navbar__items navbar__items--right"><a href="https://github.com/eggyengine/eggy" target="_blank" rel="noopener noreferrer" class="navbar__item navbar__link">GitHub<svg width="13.5" height="13.5" aria-label="(opens in new tab)" class="iconExternalLink_nPIU"><use href="#theme-svg-external-link"></use></svg></a><div class="toggle_vylO colorModeToggle_DEke"><button class="clean-btn toggleButton_gllP toggleButtonDisabled_aARS" type="button" disabled="" title="system mode" aria-label="Switch between dark and light mode (currently system mode)"><svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true" class="toggleIcon_g3eP lightToggleIcon_pyhR"><path fill="currentColor" d="M12,9c1.65,0,3,1.35,3,3s-1.35,3-3,3s-3-1.35-3-3S10.35,9,12,9 M12,7c-2.76,0-5,2.24-5,5s2.24,5,5,5s5-2.24,5-5 S14.76,7,12,7L12,7z M2,13l2,0c0.55,0,1-0.45,1-1s-0.45-1-1-1l-2,0c-0.55,0-1,0.45-1,1S1.45,13,2,13z M20,13l2,0c0.55,0,1-0.45,1-1 s-0.45-1-1-1l-2,0c-0.55,0-1,0.45-1,1S19.45,13,20,13z M11,2v2c0,0.55,0.45,1,1,1s1-0.45,1-1V2c0-0.55-0.45-1-1-1S11,1.45,11,2z M11,20v2c0,0.55,0.45,1,1,1s1-0.45,1-1v-2c0-0.55-0.45-1-1-1C11.45,19,11,19.45,11,20z M5.99,4.58c-0.39-0.39-1.03-0.39-1.41,0 c-0.39,0.39-0.39,1.03,0,1.41l1.06,1.06c0.39,0.39,1.03,0.39,1.41,0s0.39-1.03,0-1.41L5.99,4.58z M18.36,16.95 c-0.39-0.39-1.03-0.39-1.41,0c-0.39,0.39-0.39,1.03,0,1.41l1.06,1.06c0.39,0.39,1.03,0.39,1.41,0c0.39-0.39,0.39-1.03,0-1.41 L18.36,16.95z M19.42,5.99c0.39-0.39,0.39-1.03,0-1.41c-0.39-0.39-1.03-0.39-1.41,0l-1.06,1.06c-0.39,0.39-0.39,1.03,0,1.41 s1.03,0.39,1.41,0L19.42,5.99z M7.05,18.36c0.39-0.39,0.39-1.03,0-1.41c-0.39-0.39-1.03-0.39-1.41,0l-1.06,1.06 c-0.39,0.39-0.39,1.03,0,1.41s1.03,0.39,1.41,0L7.05,18.36z"></path></svg><svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true" class="toggleIcon_g3eP darkToggleIcon_wfgR"><path fill="currentColor" d="M9.37,5.51C9.19,6.15,9.1,6.82,9.1,7.5c0,4.08,3.32,7.4,7.4,7.4c0.68,0,1.35-0.09,1.99-0.27C17.45,17.19,14.93,19,12,19 c-3.86,0-7-3.14-7-7C5,9.07,6.81,6.55,9.37,5.51z M12,3c-4.97,0-9,4.03-9,9s4.03,9,9,9s9-4.03,9-9c0-0.46-0.04-0.92-0.1-1.36 c-0.98,1.37-2.58,2.26-4.4,2.26c-2.98,0-5.4-2.42-5.4-5.4c0-1.81,0.89-3.42,2.26-4.4C12.92,3.04,12.46,3,12,3L12,3z"></path></svg><svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true" class="toggleIcon_g3eP systemToggleIcon_QzmC"><path fill="currentColor" d="m12 21c4.971 0 9-4.029 9-9s-4.029-9-9-9-9 4.029-9 9 4.029 9 9 9zm4.95-13.95c1.313 1.313 2.05 3.093 2.05 4.95s-0.738 3.637-2.05 4.95c-1.313 1.313-3.093 2.05-4.95 2.05v-14c1.857 0 3.637 0.737 4.95 2.05z"></path></svg></button></div><div class="navbarSearchContainer_Bca1"></div></div></div><div role="presentation" class="navbar-sidebar__backdrop"></div></nav><div id="__docusaurus_skipToContent_fallback" class="theme-layout-main main-wrapper mainWrapper_z2l0"><div class="docsWrapper_hBAB"><button aria-label="Scroll back to top" class="clean-btn theme-back-to-top-button backToTopButton_sjWU" type="button"></button><div class="docRoot_UBD9"><aside class="theme-doc-sidebar-container docSidebarContainer_YfHR"><div class="sidebarViewport_aRkj"><div class="sidebar_njMd"><nav aria-label="Docs sidebar" class="menu thin-scrollbar menu_SIkG"><ul class="theme-doc-sidebar-menu menu__list"><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-1 menu__list-item"><a class="menu__link" href="/eggy/feat-ui-scenes-tabs/"><span class="linkLabel_WmDU">Start here</span></a></li><li class="theme-doc-sidebar-item-category theme-doc-sidebar-item-category-level-1 menu__list-item menu__list-item--collapsed"><div class="menu__list-item-collapsible"><a class="categoryLink_byQd menu__link menu__link--sublist" href="/eggy/feat-ui-scenes-tabs/tutorials"><span class="categoryLinkLabel_W154">Tutorials</span></a><button aria-label="Expand sidebar category &#x27;Tutorials&#x27;" aria-expanded="false" type="button" class="clean-btn menu__caret"></button></div></li><li class="theme-doc-sidebar-item-category theme-doc-sidebar-item-category-level-1 menu__list-item menu__list-item--collapsed"><div class="menu__list-item-collapsible"><a class="categoryLink_byQd menu__link menu__link--sublist" href="/eggy/feat-ui-scenes-tabs/how-to"><span class="categoryLinkLabel_W154">How-to guides</span></a><button aria-label="Expand sidebar category &#x27;How-to guides&#x27;" aria-expanded="false" type="button" class="clean-btn menu__caret"></button></div></li><li class="theme-doc-sidebar-item-category theme-doc-sidebar-item-category-level-1 menu__list-item menu__list-item--collapsed"><div class="menu__list-item-collapsible"><a class="categoryLink_byQd menu__link menu__link--sublist" href="/eggy/feat-ui-scenes-tabs/reference"><span class="categoryLinkLabel_W154">Reference</span></a><button aria-label="Expand sidebar category &#x27;Reference&#x27;" aria-expanded="false" type="button" class="clean-btn menu__caret"></button></div></li><li class="theme-doc-sidebar-item-category theme-doc-sidebar-item-category-level-1 menu__list-item"><div class="menu__list-item-collapsible"><a class="categoryLink_byQd menu__link menu__link--sublist menu__link--active" href="/eggy/feat-ui-scenes-tabs/explanation"><span class="categoryLinkLabel_W154">Explanation</span></a><button aria-label="Collapse sidebar category &#x27;Explanation&#x27;" aria-expanded="true" type="button" class="clean-btn menu__caret"></button></div><ul class="menu__list"><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="0" href="/eggy/feat-ui-scenes-tabs/explanation/game-lifecycle"><span class="linkLabel_WmDU">How a game runs</span></a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="0" href="/eggy/feat-ui-scenes-tabs/explanation/ownership-and-reload"><span class="linkLabel_WmDU">Ownership, Play, and reload</span></a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="0" href="/eggy/feat-ui-scenes-tabs/explanation/assets-and-scenes"><span class="linkLabel_WmDU">Assets, scenes, and packaging</span></a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link menu__link--active" aria-current="page" tabindex="0" href="/eggy/feat-ui-scenes-tabs/explanation/input-and-time"><span class="linkLabel_WmDU">Input and gameplay time</span></a></li></ul></li><li class="theme-doc-sidebar-item-category theme-doc-sidebar-item-category-level-1 menu__list-item menu__list-item--collapsed"><div class="menu__list-item-collapsible"><a class="categoryLink_byQd menu__link menu__link--sublist menu__link--sublist-caret" role="button" aria-expanded="false" href="/eggy/feat-ui-scenes-tabs/guides/animate-entities"><span class="categoryLinkLabel_W154">guides</span></a></div></li></ul></nav></div></div></aside><main class="docMainContainer_TBSr"><div class="container padding-top--md padding-bottom--lg"><div class="row"><div class="col docItemCol_VOVn"><div class="docItemContainer_Djhp"><article><nav class="theme-doc-breadcrumbs breadcrumbsContainer_Z_bl" aria-label="Breadcrumbs"><ul class="breadcrumbs"><li class="breadcrumbs__item"><a aria-label="Home page" class="breadcrumbs__link" href="/eggy/feat-ui-scenes-tabs/"><svg viewBox="0 0 24 24" class="breadcrumbHomeIcon_YNFT"><path d="M10 19v-5h4v5c0 .55.45 1 1 1h3c.55 0 1-.45 1-1v-7h1.7c.46 0 .68-.57.33-.87L12.67 3.6c-.38-.34-.96-.34-1.34 0l-8.36 7.53c-.34.3-.13.87.33.87H5v7c0 .55.45 1 1 1h3c.55 0 1-.45 1-1z" fill="currentColor"></path></svg></a></li><li class="breadcrumbs__item"><a class="breadcrumbs__link" href="/eggy/feat-ui-scenes-tabs/explanation"><span>Explanation</span></a></li><li class="breadcrumbs__item breadcrumbs__item--active"><span class="breadcrumbs__link">Input and gameplay time</span></li></ul></nav><div class="tocCollapsible_ETCw theme-doc-toc-mobile tocMobile_ITEo"><button type="button" class="clean-btn tocCollapsibleButton_TO0P">On this page</button></div><div class="theme-doc-markdown markdown"><header><h1>Input and gameplay time</h1></header><p>Eggy&#x27;s host collects input and advances time before gameplay reads them.
+Games and plugins read the current state through <code>app.input</code> and <code>app.time</code>;
+they do not poll SDL or advance the frame clock themselves.</p>
+<p>World systems receive read-only <code>eggy.ecs.Res(eggy.Input)</code> and <code>Res(eggy.Time)</code>
+pointers. Hooks use App&#x27;s fields, because a world resource may not exist before
+the first update.</p>
+<h2 class="anchor anchorTargetStickyNavbar_Vzrq" id="physical-keys-and-frame-edges">Physical keys and frame edges<a href="#physical-keys-and-frame-edges" class="hash-link" aria-label="Direct link to Physical keys and frame edges" title="Direct link to Physical keys and frame edges" translate="no">​</a></h2>
+<p>Key names describe physical positions. <code>.w</code> means the W position on a US keyboard
+layout, regardless of the character a user&#x27;s layout assigns to that position.
+Text-input widgets handle typed text; physical-key state cannot replace text
+input.</p>
+<p><code>pressed</code> and <code>released</code> describe transitions during a gameplay frame. A repeated
+key-down event does not produce another <code>pressed</code> edge. <code>held</code> continues across
+frames until the input ends. An edge lasts one gameplay frame, so several systems
+can observe the same press without consuming it.</p>
+<p>A raw axis subtracts its negative key from its positive key, so holding both
+directions gives zero. Raw <code>Input.direction</code> gives two independent right/up-positive
+axes: A/D horizontally and S/W vertically. It does not normalize diagonals.
+Mapped vectors use right/down-positive axes, and the default <code>keys_2d</code> binding
+normalizes diagonal movement.</p>
+<h2 class="anchor anchorTargetStickyNavbar_Vzrq" id="ui-routing-and-cancellation">UI routing and cancellation<a href="#ui-routing-and-cancellation" class="hash-link" aria-label="Direct link to UI routing and cancellation" title="Direct link to UI routing and cancellation" translate="no">​</a></h2>
+<p>Gameplay input respects UI ownership. An event consumed by UI does not also
+reach the game&#x27;s <code>event</code> hook. When UI takes ownership, Eggy cancels gameplay
+input without creating release actions. That prevents an interrupted tap or
+release gesture from firing an action after a control takes focus.</p>
+<p>Losing window focus releases held input. UI capture is a cancellation, so code
+that tracks a multi-frame action should account for that path too. The default
+game UI consumes touch contacts on its controls, and SDL&#x27;s synthetic mouse
+events do not create duplicate gameplay actions.</p>
+<p>Mouse coordinates are logical window points measured from the top-left. During
+editor gameplay, mouse and touch positions are local to the Scene viewport.
+Mouse deltas accumulate within a frame, with right/down positive. They describe
+distance moved, so multiplying them by delta time would make sensitivity depend
+on frame duration. Vertical wheel input accumulates notches, with motion away
+from the user positive.</p>
+<p>SDL controls such as relative mouse mode affect window or device behavior.
+Continuing to read gameplay through <code>app.input</code> preserves UI capture and editor
+routing.</p>
+<h2 class="anchor anchorTargetStickyNavbar_Vzrq" id="mapped-source-resolution">Mapped source resolution<a href="#mapped-source-resolution" class="hash-link" aria-label="Direct link to Mapped source resolution" title="Direct link to Mapped source resolution" translate="no">​</a></h2>
+<p>A named control can have several bindings. Eggy chooses the greatest magnitude,
+so keyboard and controller movement do not add together. Equal magnitudes keep
+the first binding/device result. A button bound to several sources releases
+only after all of them release.</p>
+<p>Controller sticks use a radial dead zone, with a default of 0.15. Controller axes
+use a scalar dead zone. The remaining range is rescaled to full travel. Dead
+zones must be finite and in <code>[0, 1)</code>; scales must be finite. Negative scales
+invert an axis.</p>
+<p>Raw controller snapshots have no dead zone. Their stick values use -1..1 with
+right/down positive, and triggers use 0..1. A map&#x27;s modifiers apply when resolving
+its controls, leaving raw polling available for code that needs the device state.</p>
+<p>Controller bindings select any connected device by default. A session-local
+device ID can restrict a binding to one controller, but project-persisted
+bindings reject those transient IDs. Touch contacts use the direct snapshot API
+and cannot be bound to mapped controls.</p>
+<h2 class="anchor anchorTargetStickyNavbar_Vzrq" id="map-activation-and-gestures">Map activation and gestures<a href="#map-activation-and-gestures" class="hash-link" aria-label="Direct link to Map activation and gestures" title="Direct link to Map activation and gestures" translate="no">​</a></h2>
+<p>Maps default to priority <code>0</code>, enabled <code>true</code>, and consume <code>true</code>. A higher-priority
+enabled consuming map reserves overlapping physical sources, even while its
+trigger is inactive. Equal-priority maps share input. A map with <code>consume = false</code>
+allows lower-priority maps to read those sources too.</p>
+<p>Priority affects mapped controls; it does not block raw polling or event hooks.
+Runtime activation and priority setters change temporary gameplay state without
+writing developer settings.</p>
+<p>Activation, rebinding, and priority changes do not create button edges. If a
+button is already held when a map gains access to it, the user must release it
+before a fresh press can activate the control. Project configuration reload and
+Undo restore startup defaults and cancel trigger progress.</p>
+<p>Immediate button triggers follow down and up edges. A hold trigger presses once
+after its threshold and stays held until release. A tap emits a press/release
+pulse when released within its threshold and is never held. A chord is active
+while its named button in the same map is held; that target can also be a tap&#x27;s
+one-frame pulse.</p>
+<p>Chord targets must exist and be button controls. Unknown references, non-button
+targets, cycles, and triggers on non-button controls are rejected. Hold and tap
+durations must be finite and nonnegative, with inclusive thresholds.</p>
+<p>Hold and tap timing uses counted unscaled gameplay seconds. Changing the time
+scale does not change the gesture threshold. Editor pause stops gesture
+advancement, and the frame clamp still applies. Focus loss releases input; UI
+capture cancels a gesture without creating a release or tap action.</p>
+<h2 class="anchor anchorTargetStickyNavbar_Vzrq" id="counted-gameplay-time">Counted gameplay time<a href="#counted-gameplay-time" class="hash-link" aria-label="Direct link to Counted gameplay time" title="Direct link to Counted gameplay time" translate="no">​</a></h2>
+<p>The gameplay clock measures the time counted for simulation:</p>
+<table><thead><tr><th>Field</th><th>Meaning</th></tr></thead><tbody><tr><td><code>delta_s</code></td><td>Gameplay seconds counted for the last frame; zero on the first frame</td></tr><tr><td><code>elapsed_s</code></td><td>Sum of counted gameplay deltas, not wall-clock time</td></tr><tr><td><code>frame</code></td><td>Number of gameplay frames counted</td></tr><tr><td><code>unscaled_delta_s</code></td><td>Counted frame seconds before applying the gameplay scale</td></tr><tr><td><code>unscaled_elapsed_s</code></td><td>Sum of counted frame seconds before applying the scale</td></tr></tbody></table>
+<p>The host caps each unscaled frame step at 0.1 seconds, then applies the gameplay
+multiplier. This limits how much simulation time a long stall contributes.
+The unscaled fields ignore the multiplier but retain the clamp, so they are
+also unsuitable for measuring wall-clock time.</p>
+<p><code>setScale(0.5)</code> makes subsequent counted deltas half as large. A scale of zero
+freezes the clock without stopping hooks or systems. Scale changes do not
+retroactively alter a frame already counted. Negative, NaN, and infinite values
+are rejected, leaving the previous scale intact.</p>
+<p>Editor Play starts the gameplay clock afresh. Pausing in the editor stops
+gameplay systems from updating. UI animation uses its own host-supplied clock.
+Neither time scaling nor value timers introduce or modify a fixed-step or
+physics scheduler.</p>
+<h2 class="anchor anchorTargetStickyNavbar_Vzrq" id="timer-lifetimes">Timer lifetimes<a href="#timer-lifetimes" class="hash-link" aria-label="Direct link to Timer lifetimes" title="Direct link to Timer lifetimes" translate="no">​</a></h2>
+<p>A timer stores a deadline in scaled gameplay seconds. It is a small value kept
+in game or component state, queried against an explicit <code>eggy.Time</code>. It allocates
+nothing and retains no callbacks, so unloading a plugin library cannot leave
+a callable timer behind.</p>
+<p>Its status is <code>.running</code>, <code>.finished</code>, or <code>.cancelled</code>. A finished timer continues
+to report <code>finished</code> until the caller replaces or discards it. Cancellation
+mutates the value passed by pointer and is idempotent; a cancelled timer does not
+report <code>finished</code>. Copies are independent values, so cancelling one does not
+cancel another.</p>
+<p>Zero-duration timers finish immediately. Negative or non-finite durations return
+<code>InvalidDuration</code>. Remaining time is nonnegative and is zero for finished or
+cancelled timers. Timers stop advancing whenever the scaled gameplay clock stops.
+They cannot be used as alarms for real-world deadlines.</p>
+<p>The clock tags each timer with its generation. A world reset invalidates old
+values; querying or cancelling one against the current clock returns
+<code>StaleTimer</code>. Play resets the gameplay clock, while a world reload can invalidate
+timers without rewinding the elapsed time.</p>
+<p>Persist a duration or remaining time in a saved game or scene, then start a fresh
+timer after loading. An absolute gameplay deadline or clock generation belongs
+to the old clock lifetime.</p>
+<h2 class="anchor anchorTargetStickyNavbar_Vzrq" id="apply-these-rules">Apply these rules<a href="#apply-these-rules" class="hash-link" aria-label="Direct link to Apply these rules" title="Direct link to Apply these rules" translate="no">​</a></h2>
+<ul>
+<li class=""><a class="" href="/eggy/feat-ui-scenes-tabs/guides/input-and-time">Read player input</a> for direct keyboard, mouse, controller, and touch queries.</li>
+<li class=""><a class="" href="/eggy/feat-ui-scenes-tabs/guides/input-mappings">Map player controls</a> for named actions, binding assets, and project overrides.</li>
+<li class=""><a class="" href="/eggy/feat-ui-scenes-tabs/guides/timers">Use timers and time scaling</a> for cooldowns and scaled movement.</li>
+<li class=""><a class="" href="/eggy/feat-ui-scenes-tabs/explanation/game-lifecycle">Game lifecycle</a> for execution and editor Play.</li>
+</ul></div><footer class="theme-doc-footer docusaurus-mt-lg"><div class="row margin-top--sm theme-doc-footer-edit-meta-row"><div class="col noPrint_WFHX"><a href="https://github.com/eggyengine/eggy/edit/feat/ui-scenes-tabs/docs/docs/explanation/input-and-time.md" target="_blank" rel="noopener noreferrer" class="theme-edit-this-page"><svg fill="currentColor" height="20" width="20" viewBox="0 0 40 40" class="iconEdit_Z9Sw" aria-hidden="true"><g><path d="m34.5 11.7l-3 3.1-6.3-6.3 3.1-3q0.5-0.5 1.2-0.5t1.1 0.5l3.9 3.9q0.5 0.4 0.5 1.1t-0.5 1.2z m-29.5 17.1l18.4-18.5 6.3 6.3-18.4 18.4h-6.3v-6.2z"></path></g></svg>Edit this page</a></div><div class="col lastUpdated_JAkA"></div></div></footer></article><nav class="docusaurus-mt-lg pagination-nav" aria-label="Docs pages"><a class="pagination-nav__link pagination-nav__link--prev" href="/eggy/feat-ui-scenes-tabs/explanation/assets-and-scenes"><div class="pagination-nav__sublabel">Previous</div><div class="pagination-nav__label">Assets, scenes, and packaging</div></a><a class="pagination-nav__link pagination-nav__link--next" href="/eggy/feat-ui-scenes-tabs/guides/animate-entities"><div class="pagination-nav__sublabel">Next</div><div class="pagination-nav__label">Animate with the Animation panel</div></a></nav></div></div><div class="col col--3"><div class="tableOfContents_bqdL thin-scrollbar theme-doc-toc-desktop"><ul class="table-of-contents table-of-contents__left-border"><li><a href="#physical-keys-and-frame-edges" class="table-of-contents__link toc-highlight">Physical keys and frame edges</a></li><li><a href="#ui-routing-and-cancellation" class="table-of-contents__link toc-highlight">UI routing and cancellation</a></li><li><a href="#mapped-source-resolution" class="table-of-contents__link toc-highlight">Mapped source resolution</a></li><li><a href="#map-activation-and-gestures" class="table-of-contents__link toc-highlight">Map activation and gestures</a></li><li><a href="#counted-gameplay-time" class="table-of-contents__link toc-highlight">Counted gameplay time</a></li><li><a href="#timer-lifetimes" class="table-of-contents__link toc-highlight">Timer lifetimes</a></li><li><a href="#apply-these-rules" class="table-of-contents__link toc-highlight">Apply these rules</a></li></ul></div></div></div></div></main></div></div></div></div>
+</body>
+</html>
