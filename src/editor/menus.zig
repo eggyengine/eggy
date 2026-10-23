@@ -61,6 +61,7 @@ pub const Command = enum(u32) {
     new_tab_3d,
     new_tab_2d,
     new_tab_ui,
+    oopsies,
 };
 /// Window menu items: `window_item_first` + panel id.
 const window_item_first: u32 = first_id + 0x200;
@@ -174,6 +175,7 @@ pub const Menubar = struct {
             .{ .id = @backingInt(Command.devtools), .label = "DevTools", .shortcut = "F12" },
             .{ .kind = .separator },
             .{ .id = @backingInt(Command.about), .label = "About Eggy" },
+            .{ .id = @backingInt(Command.oopsies), .label = "😛" },
         };
         const own = try plugin_bars.ownMenus(gpa, bars, states);
         const all = try gpa.alloc(widgets.MenubarMenu, menu_order.len + own.len);

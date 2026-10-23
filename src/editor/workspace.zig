@@ -944,6 +944,8 @@ pub const Workspace = struct {
                 .new_tab_2d => self.openTab(.scene_2d),
                 .new_tab_ui => self.openTab(.ui),
                 .about => return .about,
+                // Crashes the editor on purpose, through the fatal dialog and crash report.
+                .oopsies => @panic("Oopsies..."),
                 .documentation => help_menu.openUrl(help_menu.documentation_url),
                 .report_issue => help_menu.openUrl(help_menu.issues_url),
                 .show_logs => if (!help_menu.showLogs(self.arena.allocator())) self.toast("This run has no log file"),
