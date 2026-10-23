@@ -391,7 +391,10 @@ fn sourceOrder(a: mesh.Drawable, b: mesh.Drawable) std.math.Order {
     return std.mem.order(u8, a_file, b_file);
 }
 
+/// Write `bytes` to the start of `buffer`. Nothing to write (no shadow casters in view) maps
+/// nothing, since a buffer can't be mapped for zero bytes.
 fn upload(buffer: vit.Buffer, bytes: []const u8) !void {
+    if (bytes.len == 0) return;
     const mapped = try buffer.map(.write, .{ .size = bytes.len });
     @memcpy(mapped[0..bytes.len], bytes);
     buffer.unmap(.{ .size = bytes.len });
