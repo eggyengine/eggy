@@ -14,7 +14,7 @@
             .hash = "sdl3-0.2.3-NmT1Q1QDKgACd5t_PNSG08lcOCX25qaRYZjUmXPTVBY_",
         },
         .vitellus = .{
-            .url = "git+https://github.com/eggyengine/vitellus#6531041b7ba20ee962a8d5534ce28d0a9e59f715",
+            .url = "git+https://github.com/eggyengine/vitellus#6caa81e986464503cb58d897289ea41b2b1e00e7",
             .hash = "vitellus-0.1.0-JC2CjEIMCgBkfdY6etwvlPZgi4SsC5O-cQwoUm9dLsqG",
         },
         .humpty = .{
