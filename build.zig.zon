@@ -14,19 +14,19 @@
             .hash = "sdl3-0.2.3-NmT1Q1QDKgACd5t_PNSG08lcOCX25qaRYZjUmXPTVBY_",
         },
         .vitellus = .{
-            .url = "git+https://github.com/eggyengine/vitellus#6531041b7ba20ee962a8d5534ce28d0a9e59f715",
+            .url = "git+https://github.com/eggyengine/vitellus#6caa81e986464503cb58d897289ea41b2b1e00e7",
             .hash = "vitellus-0.1.0-JC2CjEIMCgBkfdY6etwvlPZgi4SsC5O-cQwoUm9dLsqG",
         },
         .humpty = .{
-            .url = "git+https://github.com/eggyengine/humpty#6c65b79a0d020f29145d73d11455ee336208eb42",
-            .hash = "humpty-0.1.0-h_J630EWAAAbHoRbcCIxIT1aN8g2j5WisuHUJuPWVDGm",
+            .url = "git+https://github.com/eggyengine/humpty#9280090cfd7f8c62cadc278b2538731bb93ccafe",
+            .hash = "humpty-0.1.0-h_J630EWAABaVPzs2AgF7nWfJxt-a-pyt8qNnkG4wMND",
         },
         .clutch = .{
-            .url = "git+https://github.com/eggyengine/clutch#51009ce0bb1c52bc56c49366ca96209aba91480e",
-            .hash = "clutch-0.1.0-gpdHb78fAgAwkt43rVE3VrwWbkZbsDlfvNZ1yyQH3Ge6",
+            .url = "git+https://github.com/eggyengine/clutch#ca6b3fb364fcdb1326a6c78204f35bff2ec7de40",
+            .hash = "clutch-0.1.0-gpdHb6kfAgA7WgAGO251ESX_fPv9AiTHfi_Fyzd-IaYN",
         },
         .weeoui = .{
-            .url = "git+https://github.com/eggyengine/weeoui#d70bdeef61bc6888fdc73419b6258efa2db7d848",
+            .url = "git+https://github.com/eggyengine/weeoui#6f805457aada0d2f71727c7960c3ecf3128abed9",
             .hash = "weeoui-0.0.1-A8JXQY5PFACZvxNlNg_MiAqySr-2RUcHq8ZFmv2a-PD1",
         },
         .eggenvector = .{
