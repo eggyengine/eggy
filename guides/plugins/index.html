@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="generator" content="Docusaurus v3.10.2">
 <title data-rh="true">Create reusable plugins | Eggy</title><meta data-rh="true" name="viewport" content="width=device-width,initial-scale=1"><meta data-rh="true" name="twitter:card" content="summary_large_image"><meta data-rh="true" property="og:url" content="https://eggyengine.github.io/eggy/guides/plugins"><meta data-rh="true" property="og:locale" content="en"><meta data-rh="true" name="docusaurus_locale" content="en"><meta data-rh="true" name="docsearch:language" content="en"><meta data-rh="true" name="docusaurus_version" content="current"><meta data-rh="true" name="docusaurus_tag" content="docs-default-current"><meta data-rh="true" name="docsearch:version" content="current"><meta data-rh="true" name="docsearch:docusaurus_tag" content="docs-default-current"><meta data-rh="true" property="og:title" content="Create reusable plugins | Eggy"><meta data-rh="true" name="description" content="Put components, systems, and settings in a plugin that your own game or another package"><meta data-rh="true" property="og:description" content="Put components, systems, and settings in a plugin that your own game or another package"><link data-rh="true" rel="icon" href="/eggy/img/icon.svg"><link data-rh="true" rel="canonical" href="https://eggyengine.github.io/eggy/guides/plugins"><link data-rh="true" rel="alternate" href="https://eggyengine.github.io/eggy/guides/plugins" hreflang="en"><link data-rh="true" rel="alternate" href="https://eggyengine.github.io/eggy/guides/plugins" hreflang="x-default"><script data-rh="true" type="application/ld+json">{"@context":"https://schema.org","@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"How-to guides","item":"https://eggyengine.github.io/eggy/how-to"},{"@type":"ListItem","position":2,"name":"Create reusable plugins","item":"https://eggyengine.github.io/eggy/guides/plugins"}]}</script><link rel="stylesheet" href="/eggy/assets/css/styles.888f8311.css">
-<script src="/eggy/assets/js/runtime~main.9c24569e.js" defer="defer"></script>
+<script src="/eggy/assets/js/runtime~main.88d4aebf.js" defer="defer"></script>
 <script src="/eggy/assets/js/main.8bdb8feb.js" defer="defer"></script>
 </head>
 <body>
@@ -15,7 +15,7 @@
 <p>Put components, systems, and settings in a plugin that your own game or another package
 can use. The game and reusable plugins use the same hooks.</p>
 <h2 class="anchor anchorTargetStickyNavbar_Vzrq" id="before-you-start">Before you start<a href="#before-you-start" class="hash-link" aria-label="Direct link to Before you start" title="Direct link to Before you start" translate="no">​</a></h2>
-<p>Use a Zig 0.16 game package that already calls <code>eggy.addGame</code>.
+<p>Use a Zig 0.17 game package that already calls <code>eggy.addGame</code>.
 <a class="" href="/eggy/how-to/set-up-project">Set up a project</a> if you need one. A reusable plugin belongs in
 <code>src/root.zig</code> as <code>pub const Plugin</code>; game-only behavior can stay in <code>pub const Game</code>
 in <code>src/main.zig</code>.</p>

@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="generator" content="Docusaurus v3.10.2">
 <title data-rh="true">Build and distribute a game | Eggy</title><meta data-rh="true" name="viewport" content="width=device-width,initial-scale=1"><meta data-rh="true" name="twitter:card" content="summary_large_image"><meta data-rh="true" property="og:url" content="https://eggyengine.github.io/eggy/guides/project-settings-and-builds"><meta data-rh="true" property="og:locale" content="en"><meta data-rh="true" name="docusaurus_locale" content="en"><meta data-rh="true" name="docsearch:language" content="en"><meta data-rh="true" name="docusaurus_version" content="current"><meta data-rh="true" name="docusaurus_tag" content="docs-default-current"><meta data-rh="true" name="docsearch:version" content="current"><meta data-rh="true" name="docsearch:docusaurus_tag" content="docs-default-current"><meta data-rh="true" property="og:title" content="Build and distribute a game | Eggy"><meta data-rh="true" name="description" content="Build a standalone runtime, select its startup scene, and export the directory or ZIP"><meta data-rh="true" property="og:description" content="Build a standalone runtime, select its startup scene, and export the directory or ZIP"><link data-rh="true" rel="icon" href="/eggy/img/icon.svg"><link data-rh="true" rel="canonical" href="https://eggyengine.github.io/eggy/guides/project-settings-and-builds"><link data-rh="true" rel="alternate" href="https://eggyengine.github.io/eggy/guides/project-settings-and-builds" hreflang="en"><link data-rh="true" rel="alternate" href="https://eggyengine.github.io/eggy/guides/project-settings-and-builds" hreflang="x-default"><script data-rh="true" type="application/ld+json">{"@context":"https://schema.org","@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"How-to guides","item":"https://eggyengine.github.io/eggy/how-to"},{"@type":"ListItem","position":2,"name":"Build and distribute a game","item":"https://eggyengine.github.io/eggy/guides/project-settings-and-builds"}]}</script><link rel="stylesheet" href="/eggy/assets/css/styles.888f8311.css">
-<script src="/eggy/assets/js/runtime~main.9c24569e.js" defer="defer"></script>
+<script src="/eggy/assets/js/runtime~main.88d4aebf.js" defer="defer"></script>
 <script src="/eggy/assets/js/main.8bdb8feb.js" defer="defer"></script>
 </head>
 <body>
@@ -44,10 +44,9 @@ project has no default scene; changing it there changes the default. Each platfo
 for macOS.</li>
 <li class=""><strong>C library</strong>, for Linux: glibc for most desktop distributions, or musl for Alpine and
 other small systems. A musl build has no screen reader support and can&#x27;t compile shaders
-while it runs. A Linux build for another architecture or C library logs fatal errors
-instead of showing a dialog.</li>
-<li class=""><strong>Optimize for</strong>: Speed (ReleaseFast), Size (ReleaseSmall), Speed with safety checks
-(ReleaseSafe), or Debugging (Debug).</li>
+while it runs.</li>
+<li class=""><strong>Optimize for</strong>: Speed (<code>fast</code>), Size (<code>small</code>), Speed with safety checks
+(<code>safe</code>), or Debugging (<code>debug</code>).</li>
 <li class=""><strong>Tune for this computer</strong>, on this computer&#x27;s own system: faster here, but the game may
 not start on older processors.</li>
 <li class=""><strong>ZIP archive</strong>, on desktop platforms: whether to zip the folder as well.</li>
@@ -58,8 +57,8 @@ its path or choose it with the folder button. On a Mac, Eggy uses the SDK Xcode 
 Export shows a progress bar for the whole build and the step under way, with Zig&#x27;s
 output a click away. From the package directory, the equivalent build step is:</p>
 <div class="language-sh codeBlockContainer_Ckt0 theme-code-block" style="--prism-color:#bfc7d5;--prism-background-color:#292d3e"><div class="codeBlockContent_QJqH"><pre tabindex="0" class="prism-code language-sh codeBlock_bY9V thin-scrollbar" style="color:#bfc7d5;background-color:#292d3e"><code class="codeBlockLines_e6Vv"><div class="token-line" style="color:#bfc7d5"><span class="token plain">zig build </span><span class="token builtin class-name" style="color:rgb(255, 203, 107)">export</span><br></div></code></pre></div></div>
-<p>The step builds a ReleaseFast runtime and packages resources and libraries. <code>-Dtarget</code>
-selects a platform, <code>-Dexport-optimize</code> the optimization (default ReleaseFast),
+<p>The step builds a <code>fast</code> runtime and packages resources and libraries. <code>-Dtarget</code>
+selects a platform, <code>-Dexport-optimize</code> the optimization (default <code>fast</code>),
 <code>-Dexport-zip=false</code> skips the ZIP, and <code>--sysroot</code> names a macOS SDK. Ordinary builds&#x27;
 <code>-Doptimize</code> doesn&#x27;t apply to export.</p>
 <p>For interactive terminal export, run <code>eggy_editor export</code>. It lists scenes and common
