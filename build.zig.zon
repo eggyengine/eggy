@@ -26,7 +26,7 @@
             .hash = "clutch-0.1.0-gpdHb6kfAgA7WgAGO251ESX_fPv9AiTHfi_Fyzd-IaYN",
         },
         .weeoui = .{
-            .url = "git+https://github.com/eggyengine/weeoui#d70bdeef61bc6888fdc73419b6258efa2db7d848",
+            .url = "git+https://github.com/eggyengine/weeoui#6f805457aada0d2f71727c7960c3ecf3128abed9",
             .hash = "weeoui-0.0.1-A8JXQY5PFACZvxNlNg_MiAqySr-2RUcHq8ZFmv2a-PD1",
         },
         .eggenvector = .{
