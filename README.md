@@ -1,6 +1,3 @@
-> [!NOTE]
-> By removing this, you prove that the code has been reviewed by human.
-
 # eggy
 
 _eggy_ is a game engine written in Zig. more info at [eggyengine.github.io](https://eggyengine.github.io). 
