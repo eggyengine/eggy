@@ -248,6 +248,28 @@ function Resolve-ProjectDirectory([string]$Path) {
     return $full
 }
 
+# Eggy's logo, darker toward the shell's shadow.
+function Write-Egg {
+    Write-Host @'
+
+         :oooooooooo:
+       :ooooooooooooo00
+      :oo....:oooooooo00
+     :oooo:::ooooooooo0#O
+     ooooooooooooooooO0#0
+    :oooooooooooooooOO00#O
+    OoooooooooooooooO00##0
+    0OooooooooooooOOO##@@#
+    00OOoooooooOOOO0##@@@#
+    0#00OOOOOOOOO####@@@##
+    0##############@@@@@#
+     0##@@@@###@@@@@@@@#0
+      ####@@@@@@@@@@@##0
+         ###########O
+
+'@
+}
+
 function Test-DirectoryEmpty([string]$Path) {
     if (-not (Test-Path -LiteralPath $Path)) { return $true }
     return @(Get-ChildItem -Force -LiteralPath $Path).Count -eq 0
@@ -310,6 +332,7 @@ function Start-EggyProject {
     $directory = $null
     $wipe = $false
     try {
+        Write-Egg
         Write-Host "Create an Eggy project. Zig $($script:ZigVersion)."
         $title = Read-Answer 'Project title'
         $suggested = Get-PackageName $title
@@ -380,8 +403,16 @@ function Start-EggyProject {
         $wipe = $false
         Write-Host ""
         Write-Host "Created $directory"
-        Write-Host "  cd $directory"
-        Write-Host '  zig build run'
+        if (-not (Test-Yes (Read-Answer 'Open the editor now? The project compiles first' 'Y'))) {
+            Write-Host 'Open it later with:'
+            Write-Host "  cd $directory"
+            Write-Host '  zig build run'
+            return
+        }
+        Write-Host "Sit back and make yourself a coffee, as it'll take a while to compile."
+        Set-Location $directory
+        & (Get-ZigExe) build run
+        if ($LASTEXITCODE -ne 0) { throw "zig build run failed ($LASTEXITCODE)." }
     }
     catch {
         if ($wipe -and $directory -and (Test-Path -LiteralPath $directory)) {

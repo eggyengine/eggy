@@ -33,7 +33,8 @@ The script asks for a title, a package name, and a directory, then writes the
 template and fetches Eggy. If Zig 0.17 is missing, it asks before installing zvm
 (when zvm is not already installed) and Zig. It stops if Zig's standard library,
 a template file, or a required package is missing. The directory must be absent
-or empty. Open the new project with `zig build run`.
+or empty. At the end it offers to compile the project and open its editor; the
+first compile takes a while. Otherwise, open it later with `zig build run`.
 
 ## Steps
 

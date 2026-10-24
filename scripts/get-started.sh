@@ -343,6 +343,28 @@ resolve_dir() {
     printf '%s/%s\n' "$(cd "$parent" && pwd)" "$base"
 }
 
+# Eggy's logo, darker toward the shell's shadow.
+print_egg() {
+    cat >/dev/tty <<'EOF'
+
+         :oooooooooo:
+       :ooooooooooooo00
+      :oo....:oooooooo00
+     :oooo:::ooooooooo0#O
+     ooooooooooooooooO0#0
+    :oooooooooooooooOO00#O
+    OoooooooooooooooO00##0
+    0OooooooooooooOOO##@@#
+    00OOoooooooOOOO0##@@@#
+    0#00OOOOOOOOO####@@@##
+    0##############@@@@@#
+     0##@@@@###@@@@@@@@#0
+      ####@@@@@@@@@@@##0
+         ###########O
+
+EOF
+}
+
 dir_is_empty() {
     local path=$1 entries
     [[ -d "$path" ]] || return 0
@@ -366,6 +388,7 @@ main() {
     check_zig
     fetch_template
 
+    print_egg
     echo "Create an Eggy project. Zig ${zig_version}." >/dev/tty
 
     title=$(ask "Project title")
@@ -441,12 +464,20 @@ main() {
     wipe_on_fail=0
     trap - ERR
 
-    cat >/dev/tty <<EOF
+    printf '\nCreated %s\n' "$directory" >/dev/tty
+    reply=$(ask "Open the editor now? The project compiles first" "Y")
+    case "${reply,,}" in
+        y | yes) ;;
+        *)
+            printf 'Open it later with:\n  cd %s\n  zig build run\n' "$directory" >/dev/tty
+            return
+            ;;
+    esac
 
-Created ${directory}
-  cd ${directory}
-  zig build run
-EOF
+    # Read input from the terminal: when piped from curl, stdin is the script.
+    echo "Sit back and make yourself a coffee, as it'll take a while to compile." >/dev/tty
+    cd "$directory"
+    zig build run </dev/tty
 }
 
 if [[ "${EGGY_GET_STARTED_TEST:-}" == 1 ]]; then
