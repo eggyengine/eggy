@@ -14,7 +14,7 @@ irm https://raw.githubusercontent.com/eggyengine/eggy/main/scripts/get-started.p
 ```
 
 ## make a game
-requires zig `0.16.0`
+requires zig `0.17.0`
 
 The eggy engine uses the editor to initialise the project, so all of these steps are done automatically.
 
