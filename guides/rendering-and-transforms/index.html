@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="generator" content="Docusaurus v3.10.2">
 <title data-rh="true">Render entities and cameras | Eggy</title><meta data-rh="true" name="viewport" content="width=device-width,initial-scale=1"><meta data-rh="true" name="twitter:card" content="summary_large_image"><meta data-rh="true" property="og:url" content="https://eggyengine.github.io/eggy/guides/rendering-and-transforms"><meta data-rh="true" property="og:locale" content="en"><meta data-rh="true" name="docusaurus_locale" content="en"><meta data-rh="true" name="docsearch:language" content="en"><meta data-rh="true" name="docusaurus_version" content="current"><meta data-rh="true" name="docusaurus_tag" content="docs-default-current"><meta data-rh="true" name="docsearch:version" content="current"><meta data-rh="true" name="docsearch:docusaurus_tag" content="docs-default-current"><meta data-rh="true" property="og:title" content="Render entities and cameras | Eggy"><meta data-rh="true" name="description" content="Create a Mesh entity and a Camera to draw a 3D scene, then move them through their"><meta data-rh="true" property="og:description" content="Create a Mesh entity and a Camera to draw a 3D scene, then move them through their"><link data-rh="true" rel="icon" href="/eggy/img/icon.svg"><link data-rh="true" rel="canonical" href="https://eggyengine.github.io/eggy/guides/rendering-and-transforms"><link data-rh="true" rel="alternate" href="https://eggyengine.github.io/eggy/guides/rendering-and-transforms" hreflang="en"><link data-rh="true" rel="alternate" href="https://eggyengine.github.io/eggy/guides/rendering-and-transforms" hreflang="x-default"><script data-rh="true" type="application/ld+json">{"@context":"https://schema.org","@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"How-to guides","item":"https://eggyengine.github.io/eggy/how-to"},{"@type":"ListItem","position":2,"name":"Render entities and cameras","item":"https://eggyengine.github.io/eggy/guides/rendering-and-transforms"}]}</script><link rel="stylesheet" href="/eggy/assets/css/styles.888f8311.css">
-<script src="/eggy/assets/js/runtime~main.15561705.js" defer="defer"></script>
+<script src="/eggy/assets/js/runtime~main.0d50f9d4.js" defer="defer"></script>
 <script src="/eggy/assets/js/main.8bdb8feb.js" defer="defer"></script>
 </head>
 <body>
@@ -72,6 +72,9 @@ Existing cameras default to active with priority zero. To switch exclusively:</p
 <p>Set <code>Camera.projection = .orthographic</code> and <code>orthographic_height_m</code> for a view whose
 visible height stays constant with depth. Perspective cameras use <code>fov_deg</code>.
 Run the game or enter Play in the editor to check the view through that Camera.
+To play from another of the scene&#x27;s cameras, hold <strong>Shift</strong> while you press <strong>Play</strong>, pick
+the camera, and press <strong>Play</strong>. That camera is the only active one until you press Stop,
+which puts the scene back as it was.
 The first example should show an orange cube. If it is missing, check that the
 Mesh and Camera entities each have a Transform and that you are viewing the game
 camera, not the editor&#x27;s editing camera.</p>
