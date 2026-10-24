@@ -180,6 +180,16 @@ pub fn addPlugin(b: *std.Build, options: PluginOptions) *std.Build.Module {
 /// Eggy as a dependency of `b`. `addGame` and `addPlugin` pass the same arguments, so a package
 /// that calls both gets one eggy, and the game's and plugin's `eggy.App` are the same type.
 fn eggyDependency(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builtin.Optimize) *std.Build.Dependency {
+    // The macOS SDK to cross-compile with, kept where Eggy's SDL and the export's inner build
+    // find it (see `sdl.zig`), before Eggy is configured. An option is declared once a build.
+    const declared = struct {
+        var macos_sdk = false;
+    };
+    if (!declared.macos_sdk) {
+        declared.macos_sdk = true;
+        if (b.option([]const u8, "macos-sdk", "The macOS SDK folder, to build for macOS from another system")) |sdk|
+            b.graph.environ_map.put(sdl_build.macos_sdk_variable, sdk) catch @panic("OOM");
+    }
     return b.dependencyFromBuildZig(@This(), .{ .target = target, .optimize = optimize });
 }
 
@@ -197,8 +207,8 @@ fn addProject(b: *std.Build, engine: *std.Build, emscripten: Emscripten, target:
     // The project module: the game's name and its plugin types, the game first. The editor's
     // game library has every plugin; the runtime leaves dev plugins out when exporting.
     options.game.addImport("eggy", eggy);
-    const plugins = game_plugins.collect(b, engine, target, optimize, options.plugins, options.dev_plugins) orelse return null;
     const dev_plugins = b.option(bool, "dev-plugins", "Build the runtime with dev plugins (default: true; export leaves them out)") orelse true;
+    const plugins = game_plugins.collect(b, engine, target, optimize, options.plugins, options.dev_plugins, dev_plugins) orelse return null;
     var all_modules: std.ArrayList(*std.Build.Module) = .empty;
     var all_keys: std.ArrayList([]const u8) = .empty;
     var runtime_modules: std.ArrayList(*std.Build.Module) = .empty;
@@ -253,6 +263,11 @@ fn addProject(b: *std.Build, engine: *std.Build, emscripten: Emscripten, target:
             .{ .name = "weeoui_sdl3", .module = eggy.import_table.get("weeoui_sdl3").? },
         },
     });
+    // Building for macOS elsewhere: the SDK's frameworks and libraries, which the runtime links.
+    if (target.result.os.tag == .macos and !target.query.isNativeOs()) if (b.graph.environ_map.get(sdl_build.macos_sdk_variable)) |sdk| {
+        runtime_module.addSystemFrameworkPath(.{ .cwd_relative = b.pathJoin(&.{ sdk, "System/Library/Frameworks" }) });
+        runtime_module.addLibraryPath(.{ .cwd_relative = b.pathJoin(&.{ sdk, "usr/lib" }) });
+    };
     const all_step = b.step("all", "Build every executable for this target");
     game_export.addExport(b, engine, target, runtime_name, if (own) null else game_resources.mainScene(b, files, scene_option, true));
     build_runner.record(b);

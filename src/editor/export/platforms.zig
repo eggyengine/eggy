@@ -177,9 +177,11 @@ pub fn exportArgs(arena: std.mem.Allocator, platform: Platform, settings: Settin
     try args.append(arena, try std.fmt.allocPrint(arena, "-Dtarget={s}", .{target(platform, settings)}));
     try args.append(arena, try std.fmt.allocPrint(arena, "-Dscene={s}", .{scene}));
     try args.append(arena, try std.fmt.allocPrint(arena, "-Dexport-optimize={t}", .{settings.optimize.mode()}));
+    // The game ships without dev plugins, so their packages needn't build for its platform.
+    try args.append(arena, "-Ddev-plugins=false");
     if (zips(platform) and !settings.zip) try args.append(arena, "-Dexport-zip=false");
     if (settings.this_cpu and buildsForThisCpu(platform, settings)) try args.append(arena, "-Dcpu=native");
-    if (platform == .macos) if (sdk) |path| try args.appendSlice(arena, &.{ "--sysroot", path });
+    if (platform == .macos) if (sdk) |path| try args.append(arena, try std.fmt.allocPrint(arena, "-Dmacos-sdk={s}", .{path}));
     return args;
 }
 
@@ -192,7 +194,7 @@ test "settings become zig build export arguments" {
     defer arena.deinit();
     const settings = Settings{ .architecture = .aarch64, .optimize = .size, .zip = false };
     const args = try exportArgs(arena.allocator(), .macos, settings, "resources/main.scene.zon", "/sdk");
-    const expected = [_][]const u8{ "-Dtarget=aarch64-macos", "-Dscene=resources/main.scene.zon", "-Dexport-optimize=small", "-Dexport-zip=false", "--sysroot", "/sdk" };
+    const expected = [_][]const u8{ "-Dtarget=aarch64-macos", "-Dscene=resources/main.scene.zon", "-Dexport-optimize=small", "-Ddev-plugins=false", "-Dexport-zip=false", "-Dmacos-sdk=/sdk" };
     try std.testing.expectEqual(expected.len, args.items.len);
     for (expected, args.items) |want, got| try std.testing.expectEqualStrings(want, got);
 }
@@ -207,5 +209,5 @@ test "the web is neither zipped nor tuned to this computer" {
     defer arena.deinit();
     const settings = Settings{ .architecture = .x86_64, .this_cpu = true, .zip = false };
     const args = try exportArgs(arena.allocator(), .web, settings, "resources/main.scene.zon", null);
-    try std.testing.expectEqual(@as(usize, 3), args.items.len);
+    try std.testing.expectEqual(@as(usize, 4), args.items.len);
 }

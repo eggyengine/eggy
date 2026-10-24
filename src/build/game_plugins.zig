@@ -13,17 +13,20 @@ pub const Plugin = struct {
 
 /// Every plugin the game `b` lists or installed, in that order, in `b`'s arena; null while an
 /// installed plugin's package is not fetched yet (Zig fetches it and runs the build again).
+/// Without `with_dev`, installed dev plugins aren't even fetched, so a build that leaves them
+/// out never configures their packages (or the Eggy they pin).
 /// `engine` is Eggy's builder, which publishes the plugins inside Eggy. An installed plugin whose
 /// module can't be found fails the build, naming it.
 ///
 /// ```zig
-/// const plugins = game_plugins.collect(b, engine, target, optimize, options.plugins, options.dev_plugins) orelse return null;
+/// const plugins = game_plugins.collect(b, engine, target, optimize, options.plugins, options.dev_plugins, true) orelse return null;
 /// ```
-pub fn collect(b: *std.Build, engine: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builtin.Optimize, listed: []const *std.Build.Module, dev_listed: []const *std.Build.Module) ?[]const Plugin {
+pub fn collect(b: *std.Build, engine: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builtin.Optimize, listed: []const *std.Build.Module, dev_listed: []const *std.Build.Module, with_dev: bool) ?[]const Plugin {
     var plugins: std.ArrayList(Plugin) = .empty;
     for (listed) |module| plugins.append(b.allocator, .{ .module = module, .dev = false }) catch @panic("OOM");
     for (dev_listed) |module| plugins.append(b.allocator, .{ .module = module, .dev = true }) catch @panic("OOM");
     for (installed(b)) |entry| {
+        if (entry.dev and !with_dev) continue;
         const module = if (entry.dependency) |name| blk: {
             const dependency = b.lazyDependency(name, .{ .target = target, .optimize = optimize }) orelse return null;
             break :blk dependency.builder.modules.get(entry.module);

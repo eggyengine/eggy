@@ -47,6 +47,8 @@ pub fn addExport(b: *std.Build, engine: *std.Build, target: std.Build.ResolvedTa
         .native => "-Dcpu=native",
         else => "-Dcpu=baseline",
     });
+    // Building for macOS elsewhere: the SDK, for SDL and the runtime to link against.
+    if (b.graph.environ_map.get(@import("sdl.zig").macos_sdk_variable)) |sdk| nested.addArg(b.fmt("-Dmacos-sdk={s}", .{sdk}));
     nested.setCwd(b.path("."));
     nested.addArg("--prefix");
     const built = nested.addOutputDirectoryArg(folder);
