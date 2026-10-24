@@ -4,8 +4,8 @@
 <meta charset="UTF-8">
 <meta name="generator" content="Docusaurus v3.10.2">
 <title data-rh="true">Build and distribute a game | Eggy</title><meta data-rh="true" name="viewport" content="width=device-width,initial-scale=1"><meta data-rh="true" name="twitter:card" content="summary_large_image"><meta data-rh="true" property="og:url" content="https://eggyengine.github.io/eggy/guides/project-settings-and-builds"><meta data-rh="true" property="og:locale" content="en"><meta data-rh="true" name="docusaurus_locale" content="en"><meta data-rh="true" name="docsearch:language" content="en"><meta data-rh="true" name="docusaurus_version" content="current"><meta data-rh="true" name="docusaurus_tag" content="docs-default-current"><meta data-rh="true" name="docsearch:version" content="current"><meta data-rh="true" name="docsearch:docusaurus_tag" content="docs-default-current"><meta data-rh="true" property="og:title" content="Build and distribute a game | Eggy"><meta data-rh="true" name="description" content="Build a standalone runtime, select its startup scene, and export the directory or ZIP"><meta data-rh="true" property="og:description" content="Build a standalone runtime, select its startup scene, and export the directory or ZIP"><link data-rh="true" rel="icon" href="/eggy/img/icon.svg"><link data-rh="true" rel="canonical" href="https://eggyengine.github.io/eggy/guides/project-settings-and-builds"><link data-rh="true" rel="alternate" href="https://eggyengine.github.io/eggy/guides/project-settings-and-builds" hreflang="en"><link data-rh="true" rel="alternate" href="https://eggyengine.github.io/eggy/guides/project-settings-and-builds" hreflang="x-default"><script data-rh="true" type="application/ld+json">{"@context":"https://schema.org","@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"How-to guides","item":"https://eggyengine.github.io/eggy/how-to"},{"@type":"ListItem","position":2,"name":"Build and distribute a game","item":"https://eggyengine.github.io/eggy/guides/project-settings-and-builds"}]}</script><link rel="stylesheet" href="/eggy/assets/css/styles.888f8311.css">
-<script src="/eggy/assets/js/runtime~main.e513c37a.js" defer="defer"></script>
-<script src="/eggy/assets/js/main.8bdb8feb.js" defer="defer"></script>
+<script src="/eggy/assets/js/runtime~main.2e0438a7.js" defer="defer"></script>
+<script src="/eggy/assets/js/main.35e44b3b.js" defer="defer"></script>
 </head>
 <body>
 <svg style="display: none;"><defs>
@@ -83,7 +83,8 @@ distribute the generated <code>.data</code> file together with the HTML, JavaScr
 The page shows the game across the whole browser window, with a progress bar while it
 downloads and any error that stops it shown over the game. Serve the folder from a web
 server (any static host, such as GitHub Pages, works): browsers won&#x27;t load the <code>.data</code>
-file from a page opened straight from disk.</p>
+file from a page opened straight from disk. The host must serve it over HTTPS (or <code>localhost</code>), as WebGPU needs a secure page; see
+<a class="" href="/eggy/guides/web-deploy">Put your game on the web</a>.</p>
 <p>For Android, pick the <strong>Android version</strong>: the oldest Android the game runs on, from
 Android 13 (API 33) to Android 16 (API 36), Android 15 (API 35) unless you set another in
 Edit &gt; Preferences under Android. The number after <code>android.</code> in <code>-Dtarget</code> is the same API
