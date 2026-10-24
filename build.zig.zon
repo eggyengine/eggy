@@ -10,12 +10,12 @@
             .lazy = true,
         },
         .sdl3 = .{
-            .url = "git+https://github.com/eggyengine/zig-sdl3#2a9dd9d1619465f7e1636a59610df0680a6865c0",
-            .hash = "sdl3-0.2.3-NmT1Q5QDKgDxnXbpAqG3QS216p0peNKlJKGhvJSELJs3",
+            .url = "git+https://github.com/eggyengine/zig-sdl3#fd0ca1f7a9d2613befc6d06b3d076cb4323b2759",
+            .hash = "sdl3-0.2.3-NmT1Q1cGKgACt9YvCpObQdbLLFCy6FOSyHUoa_tgj14_",
         },
         .vitellus = .{
-            .url = "git+https://github.com/eggyengine/vitellus#06040fd54d34d11c661d44b45ede0b29c674cab6",
-            .hash = "vitellus-0.1.0-JC2CjDQMCgAeG_qsP0b7JJBSldy-LttgD04yyLJOBdTO",
+            .url = "git+https://github.com/eggyengine/vitellus#11fbc241412dc38b27c2a517a169f4c8cf5059c5",
+            .hash = "vitellus-0.1.0-JC2CjMsWCgC4l_ovPGSrzrt7wPzafiRPybnZmn98BFLK",
         },
         .humpty = .{
             .url = "git+https://github.com/eggyengine/humpty#9280090cfd7f8c62cadc278b2538731bb93ccafe",
@@ -26,8 +26,8 @@
             .hash = "clutch-0.1.0-gpdHb6kfAgA7WgAGO251ESX_fPv9AiTHfi_Fyzd-IaYN",
         },
         .weeoui = .{
-            .url = "git+https://github.com/eggyengine/weeoui#0ac095f424590238b6f20cc5447d2a23cd9c54fc",
-            .hash = "weeoui-0.0.1-A8JXQdVhFABIOSYCmhcJaCbtPJmXcARXRZNbaTTZAbmf",
+            .url = "git+https://github.com/eggyengine/weeoui#0a04552c51b91421cd2f15c6dd944f9bb2bd7c69",
+            .hash = "weeoui-0.0.1-A8JXQaVlFAB4HqH25ckn5Ak0D_1O5WB277torCrAVqkl",
         },
         .eggenvector = .{
             .url = "git+https://github.com/eggyengine/eggenvector#67b5b202495539bb34aec9941aec3ad24b5752ec",
