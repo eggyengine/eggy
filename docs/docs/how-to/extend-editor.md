@@ -118,6 +118,10 @@ asset catalog and record undo history. Deletion moves files into the project's t
 do not depend on keyboard modifiers. Pass project-relative paths, except for the source
 passed to `importFile`.
 
+To write a file's contents, use `writeFile(path, contents)`. It makes the folders the
+path needs and records one undo step: undoing a new file moves it (and any folder made for
+it) to the trash, and undoing a rewrite puts the old text back.
+
 Use `selection` and `select` to read or change selection, and `openScene` and `saveScene`
 to use the editor's scene workflow.
 

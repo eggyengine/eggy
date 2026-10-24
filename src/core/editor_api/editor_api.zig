@@ -35,6 +35,7 @@ pub const Operation = enum(u32) {
     show_open_project,
     project_folder,
     show_panel,
+    write_file,
 };
 pub const Entity = extern struct { id: u32 = 0, generation: u32 = 0 };
 /// Strings are borrowed for this synchronous request only.
@@ -225,6 +226,17 @@ pub const Context = struct {
     /// ```
     pub fn importFile(self: *Context, outside: []const u8, folder: []const u8) !void {
         try self.textRequest(.import_file, outside, folder);
+    }
+    /// Write `contents` to the project-relative file `path`, making the folders it needs, as one
+    /// undo step: undone, a new file (and any folder made for it) goes to the trash, and an
+    /// existing one gets its old text back. Writing what it already holds records nothing.
+    /// Requires editing mode and a project; invalid paths and I/O failures are errors.
+    ///
+    /// ```zig
+    /// try editor.writeFile(".mcp.json", "{}\n");
+    /// ```
+    pub fn writeFile(self: *Context, path: []const u8, contents: []const u8) !void {
+        try self.textRequest(.write_file, path, contents);
     }
     /// Set the project's default scene to a project-relative scene path, recording a settings
     /// undo action. Requires editing mode; path validation and write failures propagate.

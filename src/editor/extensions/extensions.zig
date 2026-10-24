@@ -250,6 +250,35 @@ fn apply(host: anytype, request: api.Request, response: *api.Response) !void {
             }
             host.filesChanged();
         },
+        .write_file => {
+            try eggy.refs.validatePath(text);
+            if (text.len == 0) return error.InvalidPath;
+            const project = host.project orelse return error.NoProject;
+            try host.history.reserve();
+            var threaded: std.Io.Threaded = .init_single_threaded;
+            const io = threaded.io();
+            var files = try std.Io.Dir.cwd().openDir(io, project.dir, .{});
+            defer files.close(io);
+            defer host.filesChanged();
+            // An existing file keeps its old text for undo.
+            if (files.readFileAlloc(io, text, host.gpa, .limited(16 << 20))) |before| {
+                errdefer host.gpa.free(before);
+                if (std.mem.eql(u8, before, extra)) return host.gpa.free(before);
+                const path = try host.gpa.dupe(u8, text);
+                errdefer host.gpa.free(path);
+                const after = try host.gpa.dupe(u8, extra);
+                errdefer host.gpa.free(after);
+                try files.writeFile(io, .{ .sub_path = text, .data = extra });
+                host.history.record(.{ .file_text = .{ .path = path, .text = .{ .before = before, .after = after } } });
+                return;
+            } else |err| if (err != error.FileNotFound) return err;
+            // A new one is a creation: of its topmost new folder, so undo takes the folders too.
+            const created = try host.gpa.dupe(u8, firstMissing(io, files, text));
+            errdefer host.gpa.free(created);
+            if (std.fs.path.dirnamePosix(text)) |folder| try files.createDirPath(io, folder);
+            try files.writeFile(io, .{ .sub_path = text, .data = extra });
+            host.history.record(.{ .create = .{ .path = created } });
+        },
         .default_scene => {
             _ = try eggy.AssetRef(.scene).parse(text);
             const project = host.project orelse return error.NoProject;
@@ -258,6 +287,25 @@ fn apply(host: anytype, request: api.Request, response: *api.Response) !void {
         },
         .selection, .select, .show_panel, .project_settings, .project_folder, .request_build, .request_reload, .show_export, .show_new_project, .show_open_project => unreachable,
     }
+}
+
+/// The shortest prefix of the project-relative `path` that doesn't exist yet in `files`.
+fn firstMissing(io: std.Io, files: std.Io.Dir, path: []const u8) []const u8 {
+    var end: usize = 0;
+    while (std.mem.indexOfScalarPos(u8, path, end, '/')) |slash| : (end = slash + 1) {
+        files.access(io, path[0..slash], .{}) catch return path[0..slash];
+    }
+    return path;
+}
+
+test "a written file's first missing folder is what undo trashes" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const io = std.testing.io;
+    try tmp.dir.createDirPath(io, ".vscode");
+    try std.testing.expectEqualStrings(".vscode/mcp.json", firstMissing(io, tmp.dir, ".vscode/mcp.json"));
+    try std.testing.expectEqualStrings(".cursor", firstMissing(io, tmp.dir, ".cursor/rules/mcp.json"));
+    try std.testing.expectEqualStrings(".mcp.json", firstMissing(io, tmp.dir, ".mcp.json"));
 }
 
 test "deferred workflow requests are taken once without retaining callbacks" {

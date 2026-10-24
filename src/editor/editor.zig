@@ -1569,6 +1569,7 @@ pub fn Editor(comptime project: type) type {
                     const env = self.uiDesignerEnv() orelse return error.NoProject;
                     try self.ui_designer.restore(env, io, files, change.path, change.text.value(direction));
                 },
+                .file_text => |change| try files.writeFile(io, .{ .sub_path = change.path, .data = change.text.value(direction) }),
                 .layout => |change| {
                     const text = change.value(direction);
                     if (!layout_file.restore(self.gpa, text, &self.workspace.dock, &self.workspace.tabs)) return error.ParseZon;
