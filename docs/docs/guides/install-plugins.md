@@ -34,6 +34,17 @@ Edit > Undo takes the install back.
 When a page shows a newer version of a plugin you have, its button reads **Update to
 1.2.0**.
 
+## Updates
+
+Plugins you installed from an address or a path update by themselves. When your project
+opens, and every hour after, the editor reads each one's `eggy.zon` again from where you
+installed it. When its `.version` is higher, it installs that version, passing the same
+checks as an install, then rebuilds the game and says which plugin it updated. Edit > Undo
+takes an update back.
+
+Plugins made by Eggy update when you upgrade Eggy (File > Upgrade Editor). To update
+plugins only when you choose, turn off **Update plugins** in Edit > Preferences.
+
 ## Turn it off, or uninstall it
 
 **Disable** turns an installed plugin off without removing anything: the game runs

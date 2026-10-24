@@ -25,6 +25,7 @@ pub const Editor = struct {
     stop_play_key: eggy.Key = .escape,
     /// In `std.log.Level`'s order.
     log_level: enum { err, warn, info, debug } = .info,
+    update_plugins: bool = true,
 
     pub const descriptions = .{
         .code_editor = "What double-clicking a code or text file in Assets opens it in. System uses the app your desktop opens it with.",
@@ -32,6 +33,7 @@ pub const Editor = struct {
         .assets_view = "Whether the Assets panel shows files as a tree or as a grid of icons. Its buttons set it too.",
         .theme = "The editor's colours. System follows the desktop's light or dark setting.",
         .rebuild_on_focus = "Rebuild the project when you come back to the editor after changing its code.",
+        .update_plugins = "Install newer versions of the project's plugins by themselves, checking when it opens and every hour. Each update can be undone. Plugins inside Eggy update with Eggy.",
         .show_debug_logs = "Show debug messages in the Console when the editor starts.",
         .log_level = "The quietest messages printed to the terminal and written to the log file, in Eggy's data folder under logs. The Console keeps every message. --log-level=<level> overrides it.",
         .stop_play_key = "Press this key once to stop Play or Simulate and release the mouse. Click the binding to choose another key.",
@@ -243,7 +245,7 @@ test "the registry lists each plugin, whether it is on, and its preferences" {
 }
 
 test "the editor's preferences have a manifest" {
-    try std.testing.expectEqual(@as(usize, 8), editor_manifest.fields.len);
+    try std.testing.expectEqual(@as(usize, 9), editor_manifest.fields.len);
     try std.testing.expectEqualStrings("system", editor_manifest.fields[0].options[0]);
     try std.testing.expectEqualStrings("vscode", editor_manifest.fields[5].default[1..]);
     try std.testing.expectEqualStrings(".escape", editor_manifest.fields[6].default);

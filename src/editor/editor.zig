@@ -138,6 +138,9 @@ pub fn Editor(comptime project: type) type {
         /// File > Export, while open.
         export_window: ?*ExportWindow = null,
         plugins_window: ?*plugin_manager.PluginsWindow = null,
+        /// The installed plugins being checked for newer versions, and when that last began.
+        plugin_updates: ?*plugin_manager.AutoUpdate = null,
+        plugins_checked_ms: ?u64 = null,
         /// File > Project Settings, while open.
         /// The Preferences window's Project section, while that window is open on a project.
         project_settings: ?*ProjectSettings = null,
@@ -443,6 +446,7 @@ pub fn Editor(comptime project: type) type {
             if (self.preferences_window) |window| window.close(&self.app.graphics);
             if (self.export_window) |window| window.close(&self.app.graphics);
             if (self.plugins_window) |window| window.close(&self.app.graphics);
+            if (self.plugin_updates) |updates| updates.destroy();
             if (self.project_settings) |settings| settings.close();
             if (self.save_prompt) |prompt| prompt.close(&self.app.graphics);
             // The dock as this user left it, for the next editor.
@@ -750,6 +754,7 @@ pub fn Editor(comptime project: type) type {
                 }
                 if (outcome.switched) |switched| self.flipPlugin(.{ .key = switched.module, .on = switched.on });
             }
+            self.updatePlugins();
             if (self.input_map_window) |window| {
                 const result = try window.update(&self.app.graphics, &self.ui, &self.history);
                 if (result.saved) self.assets_panel.refreshSoon();
@@ -2670,6 +2675,41 @@ pub fn Editor(comptime project: type) type {
                 return null;
             };
             return self.plugins_window;
+        }
+
+        /// Check the project's installed plugins for newer versions when it opens and hourly
+        /// after, and take each update found as a step to undo and a rebuild. Not while Edit >
+        /// Plugins is open (it writes the same files) or a build runs (which would skip the rebuild).
+        fn updatePlugins(self: *Self) void {
+            const check_interval_ms = 60 * 60 * 1000;
+            const opened = self.project orelse return;
+            if (self.build_window != null) return;
+            if (self.plugin_updates) |updates| {
+                switch (updates.poll()) {
+                    .working => {},
+                    .done => {
+                        updates.destroy();
+                        self.plugin_updates = null;
+                    },
+                    .updated => |update| {
+                        self.history.record(.{ .plugins = .{ .project = update.change.project, .package = update.change.package } });
+                        if (self.project_settings) |settings| settings.reload() catch {};
+                        if (self.plugins_window) |window| window.reloadInstalled();
+                        var message: [128]u8 = undefined;
+                        self.workspace.toast(std.fmt.bufPrint(&message, "Updated {s} to {s}", .{ update.title, update.version }) catch "Updated a plugin");
+                        self.rebuildForPlugins();
+                    },
+                }
+                return;
+            }
+            if (!preferences.editor(&self.app.preference_values).update_plugins or self.plugins_window != null) return;
+            const now = sdl3.timer.getMillisecondsSinceInit();
+            if (self.plugins_checked_ms) |at| if (now - at < check_interval_ms) return;
+            self.plugins_checked_ms = now;
+            self.plugin_updates = plugin_manager.AutoUpdate.start(self.gpa, opened.dir) catch |err| blk: {
+                std.log.warn("cannot check the project's plugins for updates: {t}", .{err});
+                break :blk null;
+            };
         }
 
         /// The project's plugins changed: build the game with them (the Build window shows it).

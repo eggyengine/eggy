@@ -18,6 +18,7 @@ const fetch_zig = @import("fetch.zig");
 const install_zig = @import("install.zig");
 const source = @import("source.zig");
 const package_removal = @import("package_removal.zig");
+const project_plugins = @import("project_plugins.zig");
 const Fetched = fetch_zig.Fetched;
 const Installed = eggy.plugin_manifest.Installed;
 const Manifest = eggy.plugin_manifest.Manifest;
@@ -41,12 +42,10 @@ const Section = enum {
     }
 };
 
-/// A file's text before and after a change.
-pub const Texts = eggy.Action([]u8);
-
-/// An install or uninstall, owned by whoever takes it: `eggy.zon`'s texts, and `build.zig.zon`'s
-/// when an uninstall took the plugin's package out too. A step to undo.
-pub const Change = struct { project: Texts, package: ?Texts = null };
+pub const AutoUpdate = @import("auto_update.zig").AutoUpdate;
+pub const Texts = project_plugins.Texts;
+pub const Change = project_plugins.Change;
+pub const freeChange = project_plugins.freeChange;
 
 /// What a frame of the window asks of the editor.
 pub const Outcome = struct {
@@ -75,6 +74,8 @@ pub const PluginsWindow = struct {
     /// Why the last fetch or install failed, owned.
     problem: std.ArrayList(u8) = .empty,
     installing: ?*install_zig.Install = null,
+    /// The project's `build.zig.zon` before `installing` saved its package, owned, for undo.
+    package_before: ?[]u8 = null,
     /// What this frame asks of the editor, for `update` to return.
     outcome: Outcome = .{},
     /// The modules of the plugins turned off, borrowed from the editor for a frame.
@@ -108,6 +109,7 @@ pub const PluginsWindow = struct {
         self.window.close(graphics);
         if (self.fetching) |fetch| fetch.destroy();
         if (self.installing) |running| running.destroy();
+        if (self.package_before) |text| gpa.free(text);
         self.dropShown();
         self.freeBuiltins();
         self.installed_arena.deinit();
@@ -198,9 +200,20 @@ pub const PluginsWindow = struct {
             const outcome = status.outcome orelse return;
             running.destroy();
             self.installing = null;
+            const package_before = self.package_before;
+            self.package_before = null;
             switch (outcome) {
-                .saved => if (self.shown) |fetched| self.record(fetched) catch |err| self.failInstall(err),
-                .failed => |why| self.setProblem(why),
+                .saved => if (self.shown) |fetched| {
+                    self.record(fetched) catch |err| self.failInstall(err);
+                    // What `zig fetch --save` did to build.zig.zon goes in the same step.
+                    if (package_before) |before| if (self.outcome.change) |*change| {
+                        change.package = project_plugins.packageChange(self.gpa, self.project_dir, before) catch null;
+                    } else self.gpa.free(before);
+                } else if (package_before) |before| self.gpa.free(before),
+                .failed => |why| {
+                    if (package_before) |before| self.gpa.free(before);
+                    self.setProblem(why);
+                },
             }
         }
     }
@@ -338,10 +351,10 @@ pub const PluginsWindow = struct {
     fn buildInstallRow(self: *PluginsWindow, context: *ui.Context, fetched: *Fetched) void {
         const arena = context.builder().allocator;
         const manifest = fetched.manifest;
-        if (manifest.minimum_eggy_version) |minimum| if (eggy.plugin_manifest.compareVersions(minimum, build_options.version) == .gt) {
-            context.alert("Needs a newer Eggy", std.fmt.allocPrint(arena, "This plugin needs Eggy {s} or newer; the project is on {s}. Use File > Upgrade Editor first.", .{ minimum, build_options.version }) catch "", false);
+        if (project_plugins.needsNewerEggy(manifest)) {
+            context.alert("Needs a newer Eggy", std.fmt.allocPrint(arena, "This plugin needs Eggy {s} or newer; the project is on {s}. Use File > Upgrade Editor first.", .{ manifest.minimum_eggy_version.?, build_options.version }) catch "", false);
             return;
-        };
+        }
         context.begin(.row);
         const installed = self.installedFor(manifest.module) orelse {
             if (self.installButton(context, "Install")) self.install(fetched);
@@ -414,11 +427,7 @@ pub const PluginsWindow = struct {
         if (self.installing != null) return;
         self.problem.clearRetainingCapacity();
         const manifest = fetched.manifest;
-        // An update must be the same package from the same place.
-        if (self.installedFor(manifest.module)) |installed| {
-            if (installed.fingerprint) |known| if (known != manifest.fingerprint) return self.setProblem("This plugin's fingerprint isn't the installed one's: it is a different package under the same name. Uninstall the installed one first if you mean to replace it.");
-            if (installed.repository.len > 0 and !std.mem.eql(u8, installed.repository, manifest.repository)) return self.setProblem("This plugin names another repository than the installed one. Uninstall the installed one first if you mean to replace it.");
-        }
+        if (self.installedFor(manifest.module)) |installed| if (project_plugins.replacementProblem(installed, manifest)) |why| return self.setProblem(why);
         switch (fetched.package) {
             // Eggy's own: nothing to fetch, but this Eggy must have it, with Eggy's fingerprint.
             .eggy => {
@@ -426,14 +435,20 @@ pub const PluginsWindow = struct {
                 if (manifest.fingerprint != build_options.fingerprint) return self.setProblem("The plugin says it ships inside Eggy, but its fingerprint isn't Eggy's.");
                 self.record(builtin) catch |err| self.failInstall(err);
             },
-            .fetch => |package| self.installing = install_zig.Install.start(self.gpa, .{
-                .project_dir = self.project_dir,
-                .url = package.url,
-                .dependency = package.dependency,
-                .fingerprint = manifest.fingerprint,
-            }) catch |err| blk: {
-                self.failInstall(err);
-                break :blk null;
+            .fetch => |package| {
+                self.package_before = project_plugins.readPackageFile(self.gpa, self.project_dir) catch |err| blk: {
+                    log.warn("cannot read build.zig.zon, so undoing this install leaves its package there: {t}", .{err});
+                    break :blk null;
+                };
+                self.installing = install_zig.Install.start(self.gpa, .{
+                    .project_dir = self.project_dir,
+                    .url = package.url,
+                    .dependency = package.dependency,
+                    .fingerprint = manifest.fingerprint,
+                }) catch |err| blk: {
+                    self.failInstall(err);
+                    break :blk null;
+                };
             },
         }
     }
@@ -441,16 +456,7 @@ pub const PluginsWindow = struct {
     /// List `fetched` in the project's `eggy.zon` (replacing an older entry), for undo.
     fn record(self: *PluginsWindow, fetched: *Fetched) !void {
         const manifest = fetched.manifest;
-        const entry = Installed{
-            .module = manifest.module,
-            .dependency = if (fetched.package == .fetch) fetched.package.fetch.dependency else null,
-            .version = manifest.version,
-            .dev = manifest.dev,
-            .source = if (self.shown_builtin) "" else fetched.origin.text(),
-            .repository = manifest.repository,
-            .fingerprint = manifest.fingerprint,
-        };
-        try self.rewritePlugins(entry.module, entry);
+        try self.rewritePlugins(manifest.module, project_plugins.entryFor(fetched, self.shown_builtin));
         log.info("installed {s} {s}", .{ manifest.module, manifest.version });
     }
 
@@ -497,35 +503,7 @@ pub const PluginsWindow = struct {
     /// Write the project's `eggy.zon` with `module`'s entry replaced by `entry` (or removed), as
     /// this frame's `change`.
     fn rewritePlugins(self: *PluginsWindow, module: []const u8, entry: ?Installed) !void {
-        var arena_state = std.heap.ArenaAllocator.init(self.gpa);
-        defer arena_state.deinit();
-        const arena = arena_state.allocator();
-        var threaded: std.Io.Threaded = .init_single_threaded;
-        const io = threaded.io();
-        var dir = try std.Io.Dir.cwd().openDir(io, self.project_dir, .{});
-        defer dir.close(io);
-        const before = try dir.readFileAllocOptions(io, eggy.project.file_name, arena, .limited(1 << 20), .of(u8), 0);
-        var config = try eggy.project.parse(arena, before);
-
-        var plugins: std.ArrayList(Installed) = .empty;
-        var replaced = false;
-        for (config.plugins) |installed| {
-            if (!std.mem.eql(u8, installed.module, module)) {
-                try plugins.append(arena, installed);
-            } else if (entry) |new| {
-                try plugins.append(arena, new);
-                replaced = true;
-            }
-        }
-        if (entry != null and !replaced) try plugins.append(arena, entry.?);
-        config.plugins = plugins.items;
-
-        var after: std.Io.Writer.Allocating = .init(arena);
-        try eggy.project.write(&after.writer, config);
-        try dir.writeFile(io, .{ .sub_path = eggy.project.file_name, .data = after.written() });
-        const before_copy = try self.gpa.dupe(u8, before);
-        errdefer self.gpa.free(before_copy);
-        self.outcome.change = .{ .project = .{ .before = before_copy, .after = try self.gpa.dupe(u8, after.written()) } };
+        self.outcome.change = .{ .project = try project_plugins.rewrite(self.gpa, self.project_dir, module, entry) };
         self.reloadInstalled();
     }
 
@@ -606,14 +584,6 @@ pub const PluginsWindow = struct {
         self.builtins = &.{};
     }
 };
-
-/// Free `change`'s texts.
-pub fn freeChange(gpa: std.mem.Allocator, change: Change) void {
-    for ([_]?Texts{ change.project, change.package }) |maybe| if (maybe) |texts| {
-        gpa.free(texts.before);
-        gpa.free(texts.after);
-    };
-}
 
 /// A small badge, as wide as its text.
 fn badge(context: *ui.Context, text: []const u8, variant: anytype) void {
@@ -715,6 +685,8 @@ test {
     _ = fetch_zig;
     _ = install_zig;
     _ = package_removal;
+    _ = project_plugins;
+    _ = @import("auto_update.zig");
 }
 
 test "Eggy's own plugins have readable manifests that name Eggy" {
