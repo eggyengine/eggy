@@ -33,6 +33,13 @@ const icon_size: f32 = 20;
 /// The footer: its line, the gap under it and its buttons.
 const footer_height: f32 = 1 + page_gap + 36;
 const page_gap: f32 = 12;
+/// The window's height on the settings page, and what showing the output adds to the progress page.
+const settings_height: f32 = 500;
+const output_height: f32 = 360;
+
+/// What the window was last sized for; it resizes only when this changes, so a size the person
+/// dragged it to stays.
+const Fit = enum { settings, progress, output };
 
 /// The platform shown: one of Eggy's, or a plugin's by its key (owned).
 const Selected = union(enum) { builtin: platforms.Platform, plugin: []u8 };
@@ -74,6 +81,10 @@ pub const ExportWindow = struct {
     exporting_for: [128]u8 = undefined,
     exporting_for_len: usize = 0,
     show_output: bool = false,
+    fit: Fit = .settings,
+    /// The progress page's text above the output, and its buttons below, by element id: their
+    /// heights last frame size the window to fit them.
+    progress_ids: [2]u32 = .{ 0, 0 },
     /// Why the last Export didn't start.
     problem: ?[]const u8 = null,
     closing: bool = false,
@@ -102,7 +113,7 @@ pub const ExportWindow = struct {
         errdefer gpa.free(dir);
         self.* = .{
             .gpa = gpa,
-            .window = try ToolWindow.open(gpa, graphics, font, "Export", .{ 780, 500 }, .{ .resizable = true }),
+            .window = try ToolWindow.open(gpa, graphics, font, "Export", .{ 780, settings_height }, .{ .resizable = true }),
             .terminal = .init(gpa, mono),
             .icons = .load(gpa, font),
             .project_dir = dir,
@@ -197,6 +208,7 @@ pub const ExportWindow = struct {
     }
 
     fn build(self: *ExportWindow, context: *ui.Context, status: ?job_zig.Status, game: ?*HotGame, editor: *eggy.editor.Context) void {
+        self.fitWindow(context, if (status == null) .settings else if (self.show_output) .output else .progress);
         if (status) |current| return self.buildProgress(context, current);
         if (!self.has_default_scene) return self.chooseScene(context);
         // A plugin platform gone with a rebuilt library falls back to this system.
@@ -407,6 +419,8 @@ pub const ExportWindow = struct {
     fn buildProgress(self: *ExportWindow, context: *ui.Context, status: job_zig.Status) void {
         const arena = context.builder().allocator;
         const platform = self.exporting_for[0..self.exporting_for_len];
+        context.begin(.column);
+        context.begin(.column);
         context.heading(3, switch (status.stage) {
             .done => std.fmt.allocPrint(arena, "Exported for {s}", .{platform}) catch "Exported",
             .failed => std.fmt.allocPrint(arena, "The export for {s} failed", .{platform}) catch "The export failed",
@@ -435,14 +449,30 @@ pub const ExportWindow = struct {
 
         // Zig's output, on request.
         if (context.buttonVariant(if (self.show_output) "Hide output" else "Show output", .link)) self.show_output = !self.show_output;
+        context.end();
+        self.progress_ids[0] = context.last_added.?.id;
         if (self.show_output) {
-            // The output only grows, so its length tells when it changed.
+            // The output only grows, so its length tells when it changed. It fills the page's
+            // height left between the text and the buttons.
             self.terminal.showSteps(status.steps, sdl3.timer.getMillisecondsSinceInit());
-            self.terminal.add(context, status.log, status.log.len, @max(120, context.viewport.h - 280));
+            self.terminal.add(context, status.log, status.log.len, 120);
+            // A column grows only children without a height of their own.
+            if (context.last_added) |output| {
+                output.style.height = null;
+                output.style.min_height = 120;
+                output.style.grow = 1;
+            }
         }
 
         context.begin(.row);
-        defer page_style.endRow(context);
+        self.buildProgressButtons(context, status);
+        page_style.endRow(context);
+        self.progress_ids[1] = context.last_added.?.id;
+        context.end();
+        restyle(context, .{ .gap = page_gap, .height = if (self.show_output) page_style.pageHeight(context) else null });
+    }
+
+    fn buildProgressButtons(self: *ExportWindow, context: *ui.Context, status: job_zig.Status) void {
         switch (status.stage) {
             .done, .failed => {
                 if (status.stage == .done and context.button("Show in file manager")) self.showExports();
@@ -652,6 +682,26 @@ pub const ExportWindow = struct {
             self.scene = i;
             self.has_default_scene = true;
         };
+    }
+
+    /// Resize the window when what it shows changes to `fit`: the settings, or the progress
+    /// page's text and buttons, with room for the output when it is shown. Waits a frame for
+    /// the progress page's heights, which come from the frame before.
+    fn fitWindow(self: *ExportWindow, context: *const ui.Context, fit: Fit) void {
+        if (fit == self.fit) return;
+        const height = switch (fit) {
+            .settings => settings_height,
+            .progress, .output => blk: {
+                const text = context.last_bounds.get(self.progress_ids[0]) orelse return;
+                const buttons = context.last_bounds.get(self.progress_ids[1]) orelse return;
+                const page = text.rect.h + page_gap + buttons.rect.h + 2 * context.pagePadding();
+                break :blk if (fit == .output) page + page_gap + output_height else page;
+            },
+        };
+        const window = self.window.popout.window.window;
+        const width, _ = window.getSize() catch return;
+        window.setSize(width, @intFromFloat(height)) catch return;
+        self.fit = fit;
     }
 
     /// Stop the export, if it is still going, and go back to the settings.
