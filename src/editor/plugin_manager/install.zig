@@ -134,21 +134,37 @@ pub const Install = struct {
     }
 
     /// The fingerprint in the `build.zig.zon` of the package fetched as `hash`: in the project's
-    /// `zig-pkg` folder, or Zig's global cache.
+    /// `zig-pkg` folder, or Zig's global cache, unpacked or as the `<hash>.tar.gz` Zig 0.17 keeps.
     fn fingerprintOf(self: *Install, arena: std.mem.Allocator, hash: []const u8) !u64 {
+        const text = try self.packageZon(arena, hash) orelse {
+            self.fail("Couldn't find the fetched package {s}.", .{hash});
+            return error.FileNotFound;
+        };
+        return fingerprintIn(arena, text) catch {
+            self.fail("The package's build.zig.zon has no fingerprint, so it can't be checked.", .{});
+            return error.NoFingerprint;
+        };
+    }
+
+    /// The text of the fetched package's `build.zig.zon`, or null where Zig left none.
+    fn packageZon(self: *Install, arena: std.mem.Allocator, hash: []const u8) !?[:0]u8 {
         const io = self.threaded.io();
-        var places: std.ArrayList([]const u8) = .empty;
-        try places.append(arena, try std.fs.path.join(arena, &.{ self.request.project_dir, "zig-pkg", hash, "build.zig.zon" }));
-        if (globalCache(arena)) |cache| try places.append(arena, try std.fs.path.join(arena, &.{ cache, "p", hash, "build.zig.zon" }));
-        for (places.items) |path| {
-            const text = std.Io.Dir.cwd().readFileAllocOptions(io, path, arena, .limited(1 << 20), .of(u8), 0) catch continue;
-            return fingerprintIn(arena, text) catch {
-                self.fail("The package's build.zig.zon has no fingerprint, so it can't be checked.", .{});
-                return error.NoFingerprint;
-            };
-        }
-        self.fail("Couldn't find the fetched package {s}.", .{hash});
-        return error.FileNotFound;
+        const cache = globalCache(arena);
+        const folders = [_]?[]const u8{
+            try std.fs.path.join(arena, &.{ self.request.project_dir, "zig-pkg", hash }),
+            if (cache) |dir| try std.fs.path.join(arena, &.{ dir, "p", hash }) else null,
+        };
+        for (folders) |maybe| if (maybe) |folder| {
+            const path = try std.fs.path.join(arena, &.{ folder, "build.zig.zon" });
+            if (std.Io.Dir.cwd().readFileAllocOptions(io, path, arena, .limited(1 << 20), .of(u8), 0)) |text| return text else |_| {}
+        };
+        const dir = cache orelse return null;
+        const archive = try std.fs.path.join(arena, &.{ dir, "p", try std.fmt.allocPrint(arena, "{s}.tar.gz", .{hash}) });
+        var file = std.Io.Dir.cwd().openFile(io, archive, .{}) catch return null;
+        defer file.close(io);
+        var file_buffer: [64 * 1024]u8 = undefined;
+        var file_reader = file.reader(io, &file_buffer);
+        return try zonInArchive(arena, &file_reader.interface, hash);
     }
 
     fn fail(self: *Install, comptime fmt: []const u8, args: anytype) void {
@@ -159,6 +175,25 @@ pub const Install = struct {
         self.reason.print(self.gpa, fmt, args) catch {};
     }
 };
+
+/// The `<hash>/build.zig.zon` inside `gzipped`, a package as Zig's cache archives it; null
+/// without one.
+fn zonInArchive(arena: std.mem.Allocator, gzipped: *std.Io.Reader, hash: []const u8) !?[:0]u8 {
+    const wanted = try std.fmt.allocPrint(arena, "{s}/build.zig.zon", .{hash});
+    const window = try arena.alloc(u8, std.compress.flate.max_window_len);
+    var gunzip = std.compress.flate.Decompress.init(gzipped, .gzip, window);
+    var file_name: [std.fs.max_path_bytes]u8 = undefined;
+    var link_name: [std.fs.max_path_bytes]u8 = undefined;
+    var entries = std.tar.Iterator.init(&gunzip.reader, .{ .file_name_buffer = &file_name, .link_name_buffer = &link_name });
+    while (try entries.next()) |entry| {
+        if (entry.kind != .file or !std.mem.eql(u8, entry.name, wanted)) continue;
+        if (entry.size > 1 << 20) return error.StreamTooLong;
+        const text = try arena.allocSentinel(u8, @intCast(entry.size), 0);
+        try entries.reader.readSliceAll(text);
+        return text;
+    }
+    return null;
+}
 
 /// The `.fingerprint` of `text`, a `build.zig.zon`.
 fn fingerprintIn(arena: std.mem.Allocator, text: [:0]const u8) !u64 {
@@ -190,6 +225,28 @@ fn processEnviron() std.process.Environ {
         .windows => .{ .block = .global },
         else => .{ .block = .{ .slice = std.mem.sliceTo(std.c.environ, null) } },
     };
+}
+
+test "a package's build.zig.zon is read out of the archive Zig's cache keeps" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    // A package as Zig 0.17 caches it: `<hash>.tar.gz`, its files under a `<hash>/` folder.
+    var gzipped: std.Io.Writer.Allocating = .init(a);
+    var window: [std.compress.flate.max_window_len]u8 = undefined;
+    var gzip = try std.compress.flate.Compress.Raw.init(&gzipped.writer, &window, .gzip);
+    var tar = std.tar.Writer{ .underlying_writer = &gzip.writer };
+    try tar.writeFileBytes("pkg-0.1.0-abc/build.zig", "", .{});
+    try tar.writeFileBytes("pkg-0.1.0-abc/build.zig.zon", ".{ .name = .pkg, .fingerprint = 0x9fbfb05e800ea209 }", .{});
+    try tar.finishPedantically();
+    try gzip.finish();
+
+    var archive: std.Io.Reader = .fixed(gzipped.written());
+    const text = (try zonInArchive(a, &archive, "pkg-0.1.0-abc")).?;
+    try std.testing.expectEqual(@as(u64, 0x9fbfb05e800ea209), try fingerprintIn(a, text));
+    archive = .fixed(gzipped.written());
+    try std.testing.expect(try zonInArchive(a, &archive, "other-hash") == null);
 }
 
 test "a package's fingerprint is read past its other fields" {
