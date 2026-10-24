@@ -77,9 +77,11 @@ pub const Graphics = struct {
         try settings.validateValues();
         // Null: Vitellus's own choice; once one fails, every other.
         var allowed = backend_config.mask(settings.backend);
+        var last_error: ?anyerror = null;
         while (true) {
             const validation: vit.ValidationLevel = if (builtin.mode == .debug) .core else .none;
-            const instance = try vit.Instance.init(allocator, .{ .backend = allowed, .validation = validation });
+            // With every backend tried, the last one's own error says why, not `NoSupportedBackend`.
+            const instance = vit.Instance.init(allocator, .{ .backend = allowed, .validation = validation }) catch |err| return if (err == error.NoSupportedBackend) last_error orelse err else err;
             const backend = instance.selected_backend;
             return initOn(allocator, window, instance, settings, policy) catch |err| {
                 if (settings.backend != .auto) return err;
@@ -88,6 +90,7 @@ pub const Graphics = struct {
                 switch (backend) {
                     inline else => |tag| @field(rest, @tagName(tag)) = false,
                 }
+                last_error = err;
                 allowed = rest;
                 continue;
             };
