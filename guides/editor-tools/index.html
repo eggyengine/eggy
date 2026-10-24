@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="generator" content="Docusaurus v3.10.2">
 <title data-rh="true">Extend the editor | Eggy</title><meta data-rh="true" name="viewport" content="width=device-width,initial-scale=1"><meta data-rh="true" name="twitter:card" content="summary_large_image"><meta data-rh="true" property="og:url" content="https://eggyengine.github.io/eggy/guides/editor-tools"><meta data-rh="true" property="og:locale" content="en"><meta data-rh="true" name="docusaurus_locale" content="en"><meta data-rh="true" name="docsearch:language" content="en"><meta data-rh="true" name="docusaurus_version" content="current"><meta data-rh="true" name="docusaurus_tag" content="docs-default-current"><meta data-rh="true" name="docsearch:version" content="current"><meta data-rh="true" name="docsearch:docusaurus_tag" content="docs-default-current"><meta data-rh="true" property="og:title" content="Extend the editor | Eggy"><meta data-rh="true" name="description" content="Add a plugin panel that edits the selected entity with undo support, then expose"><meta data-rh="true" property="og:description" content="Add a plugin panel that edits the selected entity with undo support, then expose"><link data-rh="true" rel="icon" href="/eggy/img/icon.svg"><link data-rh="true" rel="canonical" href="https://eggyengine.github.io/eggy/guides/editor-tools"><link data-rh="true" rel="alternate" href="https://eggyengine.github.io/eggy/guides/editor-tools" hreflang="en"><link data-rh="true" rel="alternate" href="https://eggyengine.github.io/eggy/guides/editor-tools" hreflang="x-default"><script data-rh="true" type="application/ld+json">{"@context":"https://schema.org","@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"How-to guides","item":"https://eggyengine.github.io/eggy/how-to"},{"@type":"ListItem","position":2,"name":"Extend the editor","item":"https://eggyengine.github.io/eggy/guides/editor-tools"}]}</script><link rel="stylesheet" href="/eggy/assets/css/styles.888f8311.css">
-<script src="/eggy/assets/js/runtime~main.88d4aebf.js" defer="defer"></script>
+<script src="/eggy/assets/js/runtime~main.15561705.js" defer="defer"></script>
 <script src="/eggy/assets/js/main.8bdb8feb.js" defer="defer"></script>
 </head>
 <body>
@@ -62,6 +62,9 @@ not to a stored function pointer from its previous library.</p>
 asset catalog and record undo history. Deletion moves files into the project&#x27;s trash. Move and copy
 do not depend on keyboard modifiers. Pass project-relative paths, except for the source
 passed to <code>importFile</code>.</p>
+<p>To write a file&#x27;s contents, use <code>writeFile(path, contents)</code>. It makes the folders the
+path needs and records one undo step: undoing a new file moves it (and any folder made for
+it) to the trash, and undoing a rewrite puts the old text back.</p>
 <p>Use <code>selection</code> and <code>select</code> to read or change selection, and <code>openScene</code> and <code>saveScene</code>
 to use the editor&#x27;s scene workflow.</p>
 <p><code>projectSettings(arena)</code> returns <code>eggy.project.Config</code>, with strings owned by your arena.
