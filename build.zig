@@ -271,7 +271,8 @@ fn addProject(b: *std.Build, engine: *std.Build, emscripten: Emscripten, target:
         android_build.addApp(b, engine, android, runtime_module, runtime_name, prepared.directory, icon_path);
         return null;
     }
-    const runtime_app = addDesktopApp(b, target, runtime_module, runtime_name);
+    // A released game ships without Windows debug symbols beside it.
+    const runtime_app = addDesktopApp(b, target, runtime_module, runtime_name, optimize == .debug);
     // The executable's own icon, which Windows shows for it, from the same packaged image.
     const icon_ico = if (icon_key != null and target.result.os.tag == .windows) game_metadata.icoFrom(b, engine, prepared.directory.path(b, icon_key.?)) else null;
     game_metadata.addTo(b, runtime_app.install.artifact, metadata, icon_ico);
@@ -312,7 +313,7 @@ fn addProject(b: *std.Build, engine: *std.Build, emscripten: Emscripten, target:
             .{ .name = "eggy_project", .module = editor_project },
         },
     });
-    const editor_app = addDesktopApp(b, target, editor_module, b.fmt("{s}_editor", .{options.name}));
+    const editor_app = addDesktopApp(b, target, editor_module, b.fmt("{s}_editor", .{options.name}), true);
     editor_app.run.setCwd(b.path("."));
     const resources = installEditorResources(b, engine);
     // Beside the editor on every platform, where it looks for it.
@@ -772,10 +773,11 @@ fn installRuntimeLibraries(b: *std.Build, engine: *std.Build) *std.Build.Step {
 
 const DesktopApp = struct { install: *std.Build.Step.InstallArtifact, run: *std.Build.Step.Run };
 
-/// Executable `name` from `root_module`: installed with `zig build`, and runnable on its own.
-fn addDesktopApp(b: *std.Build, target: std.Build.ResolvedTarget, root_module: *std.Build.Module, name: []const u8) DesktopApp {
+/// Executable `name` from `root_module`: installed with `zig build` (with its `.pdb` on Windows
+/// when `with_pdb`), and runnable on its own.
+fn addDesktopApp(b: *std.Build, target: std.Build.ResolvedTarget, root_module: *std.Build.Module, name: []const u8, with_pdb: bool) DesktopApp {
     const exe = b.addExecutable(.{ .name = name, .root_module = root_module, .use_llvm = true });
-    const install = b.addInstallArtifact(exe, .{});
+    const install = b.addInstallArtifact(exe, .{ .pdb_dir = if (with_pdb) .default else .disabled });
     b.getInstallStep().dependOn(&install.step);
 
     // Run the installed copy, so libraries installed beside it (DXC, Slang, AccessKit) are found.
