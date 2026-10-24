@@ -510,7 +510,8 @@ fn addEngine(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.buil
     const emath = b.dependency("eggenvector", .{ .target = target, .optimize = optimize });
     // Eggy wires Weeoui's SDL adapter below, against the same SDL as the game.
     const weeoui = b.dependency("weeoui", .{ .target = target, .optimize = optimize, .sdl3 = false });
-    if (android) b.addNamedLazyPath("android_java", weeoui.path("examples/android/java"));
+    // SDL's Java activity from the release zig-sdl3 builds natively, so their JNI signatures agree.
+    if (android) b.addNamedLazyPath("android_java", (b.lazyDependency("sdl_android_java", .{}) orelse return null).path("android-project/app/src/main/java"));
     const sdl3 = sdl_build.dependency(b, target, optimize, if (web) emscripten.include else null) orelse return null;
     const sdl_adapter = b.createModule(.{
         .root_source_file = vitellus.path("src/windowing/sdl3.zig"),

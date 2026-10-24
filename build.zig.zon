@@ -52,6 +52,11 @@
             .hash = "cli-0.12.0-2eKe__kOAQC6VETttxaViKBGYMCGU3qGilpD78MenETi",
             .lazy = true,
         },
+        .sdl_android_java = .{
+            .url = "https://github.com/libsdl-org/SDL/archive/refs/tags/release-3.4.18.tar.gz",
+            .hash = "N-V-__8AACpx-AKEJIUZ0-XrP9-96MpSaw17FJ7L6B7LmO42",
+            .lazy = true,
+        },
     },
     .paths = .{
         "build.zig",

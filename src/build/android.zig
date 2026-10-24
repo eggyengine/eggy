@@ -64,10 +64,10 @@ pub fn addApp(b: *std.Build, engine: *std.Build, comptime android: type, root: *
     const installed_sdl = b.addInstallFileWithDir(sdl.library, .{ .custom = "android" }, "libSDL3.so");
     app.step.dependOn(&installed_sdl.step);
     apk.addJavaSourceFiles(.{ .root = engine.named_lazy_paths.get("android_java").?, .files = &.{
-        "org/libsdl/app/SDL.java",                  "org/libsdl/app/SDLActivity.java",                 "org/libsdl/app/SDLAudioManager.java",
-        "org/libsdl/app/SDLControllerManager.java", "org/libsdl/app/SDLDummyEdit.java",                "org/libsdl/app/SDLInputConnection.java",
-        "org/libsdl/app/SDLSurface.java",           "org/libsdl/app/HIDDevice.java",                   "org/libsdl/app/HIDDeviceManager.java",
-        "org/libsdl/app/HIDDeviceUSB.java",         "org/libsdl/app/HIDDeviceBLESteamController.java",
+        "org/libsdl/app/SDL.java",                  "org/libsdl/app/SDLActivity.java",  "org/libsdl/app/SDLAudioManager.java",
+        "org/libsdl/app/SDLControllerManager.java", "org/libsdl/app/SDLDummyEdit.java", "org/libsdl/app/SDLInputConnection.java",
+        "org/libsdl/app/SDLSensorManager.java",     "org/libsdl/app/SDLSurface.java",   "org/libsdl/app/HIDDevice.java",
+        "org/libsdl/app/HIDDeviceManager.java",     "org/libsdl/app/HIDDeviceUSB.java", "org/libsdl/app/HIDDeviceBLESteamController.java",
     } });
     apk.addLibraryFile(switch (target.result.cpu.arch) {
         .aarch64 => .arm64_v8a,
