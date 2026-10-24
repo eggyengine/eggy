@@ -58,7 +58,7 @@ cbuffer Camera : register(b0, space0) {
 };
 
 [[vk::binding(1, 0)]]
-Texture2D<float> shadow_map : register(t1, space0);
+DepthTexture2D shadow_map : register(t1, space0);
 [[vk::binding(2, 0)]]
 SamplerComparisonState shadow_sampler : register(s2, space0);
 
