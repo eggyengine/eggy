@@ -13,7 +13,7 @@ const log = std.log.scoped(.layout);
 
 const file_name = "layout.zon";
 /// Bumped when what is saved changes shape, so an older file is set aside, not misread.
-const version: u32 = 1;
+const version: u32 = 2;
 
 /// What is saved of a `dock.DockSpace`: everything but what it works out each frame, and the
 /// OS windows of pop-outs, which the editor opens again.
@@ -29,6 +29,8 @@ const Saved = struct {
     tabs: [workspace_tabs.max_tabs]?workspace_tabs.Tab = @splat(null),
     /// Null when no tab is shown: the main window is empty.
     active_tab: ?u8 = 0,
+    /// The file each Asset Preview copy shows (`Tabs.previews`).
+    previews: [workspace_tabs.max_tabs]?[]const u8 = @splat(null),
     /// The plugin panels (by title) this user has had: one closed stays closed, rather than
     /// docking again as new.
     seen_panels: []const []const u8 = &.{},
@@ -76,6 +78,7 @@ pub fn fingerprint(layout: *const dock.DockSpace, tabs: *const Tabs, seen_panels
 fn serialize(layout: *const dock.DockSpace, tabs: *const Tabs, seen_panels: []const []const u8, writer: *std.Io.Writer) !void {
     var saved = Saved{ .version = version, .nodes = layout.nodes, .homes = layout.homes, .root = layout.root, .floating = layout.floating, .windows = undefined, .z_counter = layout.z_counter, .tabs = tabs.list, .active_tab = tabs.active, .seen_panels = seen_panels };
     for (&saved.windows, layout.windows) |*kept, window| kept.* = if (window) |open| .{ .root = open.root, .size = open.size } else null;
+    for (&saved.previews, &tabs.previews) |*kept, *preview| kept.* = if (preview.* != null) preview.*.?.slice() else null;
     try std.zon.stringify.serialize(saved, .{ .whitespace = false }, writer);
 }
 
@@ -154,6 +157,7 @@ fn apply(saved: Saved, layout: *dock.DockSpace, tabs: *Tabs) void {
     // A file from before tabs has one: the main window's layout. One saved with none has an
     // empty main window, which makes a tab only to drop it.
     tabs.* = if (saved.tabs[0] == null) .init(layout) else .{ .list = saved.tabs, .active = saved.active_tab };
+    for (&tabs.previews, saved.previews) |*preview, kept| preview.* = if (kept) |path| workspace_tabs.PreviewPath.of(path) else null;
     tabs.prune(layout);
 }
 

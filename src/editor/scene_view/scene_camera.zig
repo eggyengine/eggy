@@ -61,7 +61,7 @@ pub const SceneCamera = struct {
     /// const view = camera.view();
     /// ```
     pub fn view(self: *const SceneCamera) View {
-        return .{ .eye = self.eye(), .forward = self.forward(), .up = self.up(), .fov_deg = self.fov_deg, .projection = self.projection, .orthographic_height_m = self.orthographic_height_m };
+        return .{ .eye = self.eye(), .forward = self.forward(), .up = self.up(), .fov_deg = self.fov_deg, .far = std.math.inf(f32), .projection = self.projection, .orthographic_height_m = self.orthographic_height_m };
     }
 
     /// Steer by `event`, from window `scene`, the Scene panel's rect (in the event's window;

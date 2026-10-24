@@ -260,16 +260,20 @@ pub const AssetsPanel = struct {
     }
 
     /// A key while the panel has the keyboard: Enter keeps a rename, Escape drops it (or closes
-    /// the menu), Delete deletes the selected entry. Returns whether it was used, and the action.
+    /// the menu), Delete deletes the selected entry. Otherwise, unless the filter is being typed
+    /// in, the arrows move the selection (in the list Right and Left also open and close folders
+    /// and models, or step into and out of them) and Enter opens it as a double-click does.
+    /// `context` has last frame's layout, and scrolls the selection into view. Returns whether
+    /// it was used, and the action.
     /// Editor-only: this does not perform file operations. Consume or copy action paths before
     /// another build/interaction mutates panel storage.
     ///
     /// ```zig
     /// // Given a focused panel:
-    /// const result = panel.key(.{ .key = .escape, .modifiers = .{}, .repeat = false });
+    /// const result = panel.key(context, .{ .key = .escape, .modifiers = .{}, .repeat = false });
     /// if (result.used) return;
     /// ```
-    pub fn key(self: *AssetsPanel, key_down: @FieldType(ui.input.Event, "key_down")) Handled {
+    pub fn key(self: *AssetsPanel, context: *ui.Context, key_down: @FieldType(ui.input.Event, "key_down")) Handled {
         switch (key_down.key) {
             .enter => if (self.renaming != null) return .{ .used = true, .action = self.finishRename() },
             .escape => {
@@ -282,7 +286,80 @@ pub const AssetsPanel = struct {
             .delete => if (self.renaming == null and self.selected.items.len > 0 and !self.selected_virtual) return .{ .used = true, .action = .{ .delete = self.selected.items } },
             else => {},
         }
-        return .{ .used = false };
+        if (self.renaming != null or self.menu != null or context.wants_text) return .{ .used = false };
+        return self.navigate(context, key_down.key);
+    }
+
+    /// Move the selection with an arrow key, or open it with Enter.
+    fn navigate(self: *AssetsPanel, context: *ui.Context, pressed: ui.input.Key) Handled {
+        if (self.shown.len == 0) return .{ .used = false };
+        const current = self.selectedIndex();
+        const searching = self.filter.text().len > 0;
+        const target: usize = switch (pressed) {
+            .enter => {
+                const index = current orelse return .{ .used = false };
+                const entry = self.shown[index].entry;
+                // The list opens a folder in place, as a press does.
+                if (self.view == .list and entry.kind == .folder and !searching) {
+                    self.toggle(entry.path);
+                    return .{ .used = true };
+                }
+                return self.openEntry(entry);
+            },
+            .up => if (current) |at| at -| self.rowStep(context, at) else 0,
+            .down => if (current) |at| @min(self.shown.len - 1, at + self.rowStep(context, at)) else 0,
+            .left => blk: {
+                const at = current orelse break :blk 0;
+                if (self.view == .grid) break :blk at -| 1;
+                // In the list: close an open entry, else go to the one it is in.
+                const item = self.shown[at];
+                if (item.open and !searching) {
+                    self.toggle(item.entry.path);
+                    return .{ .used = true };
+                }
+                var parent = at;
+                while (parent > 0) {
+                    parent -= 1;
+                    if (self.shown[parent].depth < item.depth) break;
+                } else break :blk at;
+                break :blk parent;
+            },
+            .right => blk: {
+                const at = current orelse break :blk 0;
+                if (self.view == .grid) break :blk @min(self.shown.len - 1, at + 1);
+                // In the list: open a closed folder or model, else step into it.
+                const item = self.shown[at];
+                if (!opensInList(item.entry) or searching) break :blk at;
+                if (!item.open) {
+                    self.toggle(item.entry.path);
+                    return .{ .used = true };
+                }
+                break :blk if (at + 1 < self.shown.len and self.shown[at + 1].depth > item.depth) at + 1 else at;
+            },
+            else => return .{ .used = false },
+        };
+        self.select(self.shown[target].entry.path, self.shown[target].entry.virtual);
+        if (context.last_bounds.get(item_id_base + @as(u32, @intCast(target)))) |bounds| context.scroll.ensureVisible(bounds.rect);
+        return .{ .used = true };
+    }
+
+    /// Where the selection is in what is shown, if it is shown.
+    fn selectedIndex(self: *const AssetsPanel) ?usize {
+        for (self.shown, 0..) |item, i| if (item.entry.virtual == self.selected_virtual and self.isSelected(item.entry.path)) return i;
+        return null;
+    }
+
+    /// How many entries Up and Down move past from entry `at`: one in the list, a row of tiles
+    /// in the grid (those level with it in last frame's layout).
+    fn rowStep(self: *const AssetsPanel, context: *const ui.Context, at: usize) usize {
+        if (self.view != .grid) return 1;
+        const own = context.last_bounds.get(item_id_base + @as(u32, @intCast(at))) orelse return 1;
+        var level: usize = 0;
+        for (0..self.shown.len) |i| {
+            const bounds = context.last_bounds.get(item_id_base + @as(u32, @intCast(i))) orelse continue;
+            if (@abs(bounds.rect.y - own.rect.y) < 1) level += 1;
+        }
+        return @max(1, level);
     }
 
     fn startRename(self: *AssetsPanel, path: []const u8) void {
@@ -446,7 +523,13 @@ pub const AssetsPanel = struct {
         if (down.button != .left or down.clicks < 2) return .{ .used = false };
         self.endDrag();
         const item = self.itemAt(context, down.position) orelse return .{ .used = false };
-        const entry = item.entry;
+        return self.openEntry(item.entry);
+    }
+
+    /// Open `entry` as a double-click does: a scene opens, a folder opens in the grid, a model
+    /// opens there too and shows in the Asset Preview, code opens in the code editor, and
+    /// anything else shows in the Asset Preview.
+    fn openEntry(self: *AssetsPanel, entry: listing.Entry) Handled {
         if (entry.virtual) return .{ .used = true, .action = .{ .preview = entry.path } };
         return switch (entry.kind) {
             .model => blk: {
@@ -1085,6 +1168,63 @@ test "dragging a file onto a folder asks to move it there, but not a folder into
     _ = panel.pointer(&context, .{ .pointer_down = .{ .position = folder, .button = .left, .clicks = 1 } });
     _ = panel.pointer(&context, .{ .pointer_move = .{ .x = folder.x, .y = folder.y + 8 } });
     try std.testing.expect(panel.pointer(&context, .{ .pointer_up = .{ .position = folder, .button = .left } }).action == null);
+}
+
+test "arrow keys move the selection, open and close folders, and Enter opens the selection" {
+    const gpa = std.testing.allocator;
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.createDirPath(io, "art");
+    try tmp.dir.writeFile(io, .{ .sub_path = "art/ship.png", .data = "" });
+    try tmp.dir.writeFile(io, .{ .sub_path = "main.zig", .data = "" });
+    const dir = try tmp.dir.realPathFileAlloc(io, ".", gpa);
+    defer gpa.free(dir);
+
+    var context = try ui.Context.init(gpa);
+    defer context.deinit();
+    var icons = Icons.load(gpa, context.font);
+    defer icons.deinit(gpa);
+    var panel = AssetsPanel.init(gpa);
+    defer panel.deinit();
+    const Frame = struct {
+        fn draw(p: *AssetsPanel, c: *ui.Context, d: []const u8, i: *const Icons) !void {
+            p.read_at_ms = null;
+            c.newFrame(.{ .x = 0, .y = 0, .w = 300, .h = 400 });
+            _ = p.build(c, d, null, i, null);
+            _ = try c.render();
+        }
+    };
+    const press = struct {
+        fn f(p: *AssetsPanel, c: *ui.Context, k: ui.input.Key) Handled {
+            return p.key(c, .{ .key = k, .modifiers = .{}, .repeat = false });
+        }
+    }.f;
+    try Frame.draw(&panel, &context, dir, &icons);
+
+    // Down picks the first entry, then the next; Up goes back.
+    _ = press(&panel, &context, .down);
+    try std.testing.expectEqualStrings("art", panel.selection().?.path);
+    _ = press(&panel, &context, .down);
+    try std.testing.expectEqualStrings("main.zig", panel.selection().?.path);
+    _ = press(&panel, &context, .up);
+    try std.testing.expectEqualStrings("art", panel.selection().?.path);
+
+    // Right opens the folder, then steps into it; Left steps out, then closes it.
+    _ = press(&panel, &context, .right);
+    try Frame.draw(&panel, &context, dir, &icons);
+    try std.testing.expectEqual(@as(usize, 3), panel.shown.len);
+    _ = press(&panel, &context, .right);
+    try std.testing.expectEqualStrings("art/ship.png", panel.selection().?.path);
+    _ = press(&panel, &context, .left);
+    try std.testing.expectEqualStrings("art", panel.selection().?.path);
+    _ = press(&panel, &context, .left);
+    try Frame.draw(&panel, &context, dir, &icons);
+    try std.testing.expectEqual(@as(usize, 2), panel.shown.len);
+
+    // Enter opens code in the code editor.
+    _ = press(&panel, &context, .down);
+    try std.testing.expectEqualStrings("main.zig", press(&panel, &context, .enter).action.?.open_code);
 }
 
 test "double-clicking a code file asks to open it in the code editor" {

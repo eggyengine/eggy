@@ -33,7 +33,7 @@ pub const Editor = struct {
         .assets_view = "Whether the Assets panel shows files as a tree or as a grid of icons. Its buttons set it too.",
         .theme = "The editor's colours. System follows the desktop's light or dark setting.",
         .rebuild_on_focus = "Rebuild the project when you come back to the editor after changing its code.",
-        .update_plugins = "Install newer versions of the project's plugins by themselves, checking when it opens and every hour. Each update can be undone. Plugins inside Eggy update with Eggy.",
+        .update_plugins = "Check for newer versions of the project's plugins when it opens and every hour, and ask before installing each. Each update can be undone. Plugins inside Eggy update with Eggy.",
         .show_debug_logs = "Show debug messages in the Console when the editor starts.",
         .log_level = "The quietest messages printed to the terminal and written to the log file, in Eggy's data folder under logs. The Console keeps every message. --log-level=<level> overrides it.",
         .stop_play_key = "Press this key once to stop Play or Simulate and release the mouse. Click the binding to choose another key.",

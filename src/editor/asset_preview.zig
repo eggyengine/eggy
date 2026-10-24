@@ -10,6 +10,7 @@ const ui_scenes = eggy.ui_scenes;
 const ProjectAssets = @import("assets/project_assets.zig").ProjectAssets;
 const TerminalView = @import("terminal_view.zig").TerminalView;
 const ModelPreview = @import("model_preview.zig").ModelPreview;
+const ModelRequest = @import("model_preview.zig").Request;
 const page_style = @import("page_style.zig");
 
 /// The most of a text file shown.
@@ -93,19 +94,28 @@ pub const AssetPreview = struct {
         if (context.last_added) |text| text.paint_kind.text.wrap = true;
 
         if (selection.virtual) {
-            context.muted(std.fmt.allocPrint(arena, "Part of {s}: drop it on a field to use it.", .{std.fs.path.dirname(path) orelse path}) catch "Part of a model.");
-            page_style.smallText(context, 13);
-            // A material's texture shows as the image it is.
-            const reference = request.assets.referenceAt(path) orelse return;
-            if (reference.kind != .image) return;
-            if (!std.mem.eql(u8, self.path.items, path)) {
-                self.path.clearRetainingCapacity();
-                self.path.appendSlice(self.gpa, path) catch {};
-                self.images.forgetAll();
-            }
-            context.muted("Drag it onto a folder in Assets to save it as a PNG you can edit.");
+            const model_path = std.fs.path.dirname(path) orelse path;
+            context.muted(std.fmt.allocPrint(arena, "Part of {s}: drop it on a field to use it.", .{std.fs.path.basename(model_path)}) catch "Part of a model.");
             page_style.smallText(context, 12);
-            self.image(context, request, arena.dupe(u8, reference.key()) catch return, @max(80, page_style.pageHeight(context) - 84));
+            const reference = request.assets.referenceAt(path) orelse return;
+            const height = @max(80, page_style.pageHeight(context) - 84);
+            switch (reference.kind) {
+                // The model's geometry is the model; an animation plays on it.
+                .model => self.model.build(context, self.modelRequest(request, model_path, null, height)),
+                .animation => self.model.build(context, self.modelRequest(request, model_path, std.fs.path.basename(path), height)),
+                // A material's texture shows as the image it is.
+                .image => {
+                    if (!std.mem.eql(u8, self.path.items, path)) {
+                        self.path.clearRetainingCapacity();
+                        self.path.appendSlice(self.gpa, path) catch {};
+                        self.images.forgetAll();
+                    }
+                    context.muted("Drag it onto a folder in Assets to save it as a PNG you can edit.");
+                    page_style.smallText(context, 12);
+                    self.image(context, request, arena.dupe(u8, reference.key()) catch return, height);
+                },
+                else => {},
+            }
             return;
         }
         self.refresh(request.project_dir, path);
@@ -119,7 +129,7 @@ pub const AssetPreview = struct {
             .image => |key| self.image(context, request, key, height),
             .ui_scene => |key| self.uiScene(context, request, key, height),
             .font => |key| self.fontSample(context, request, key),
-            .model => self.model.build(context, .{ .path = path, .assets = request.assets, .app = request.app, .time_ms = request.time_ms, .height = height }),
+            .model => self.model.build(context, self.modelRequest(request, path, null, height)),
             .text => self.text.add(context, self.contents.items, self.version, height),
             .described => |note| {
                 context.muted(note);
@@ -127,6 +137,11 @@ pub const AssetPreview = struct {
                 if (context.last_added) |text| text.paint_kind.text.wrap = true;
             },
         }
+    }
+
+    /// What the model viewer reads to show the model file at `model_path`, playing `clip`.
+    fn modelRequest(self: *AssetPreview, request: Request, model_path: []const u8, clip: ?[]const u8, height: f32) ModelRequest {
+        return .{ .path = model_path, .clip = clip, .assets = request.assets, .app = request.app, .images = &self.images, .time_ms = request.time_ms, .height = height };
     }
 
     /// Read `path` again when it is another file or it changed: its size, and its text if it is

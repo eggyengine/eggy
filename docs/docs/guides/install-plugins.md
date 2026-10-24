@@ -36,14 +36,17 @@ When a page shows a newer version of a plugin you have, its button reads **Updat
 
 ## Updates
 
-Plugins you installed from an address or a path update by themselves. When your project
-opens, and every hour after, the editor reads each one's `eggy.zon` again from where you
-installed it. When its `.version` is higher, it installs that version, passing the same
-checks as an install, then rebuilds the game and says which plugin it updated. Edit > Undo
-takes an update back.
+The editor checks plugins you installed from an address for updates. When your project
+opens, and every hour after, it reads each one's `eggy.zon` again from where you installed
+it. When its `.version` is higher, the editor asks before installing it, showing the new
+version and where it comes from, since whoever controls that address could publish anything.
+**Update** installs it, passing the same checks as an install, then rebuilds the game.
+**Skip** leaves the plugin as it is until a newer version comes out or the editor restarts.
+Edit > Undo takes an update back.
 
-Plugins made by Eggy update when you upgrade Eggy (File > Upgrade Editor). To update
-plugins only when you choose, turn off **Update plugins** in Edit > Preferences.
+Plugins installed from a folder on your computer are never updated for you: that folder is
+yours to change. Plugins made by Eggy update when you upgrade Eggy (File > Upgrade Editor).
+To stop the checks, turn off **Update plugins** in Edit > Preferences.
 
 ## Turn it off, or uninstall it
 

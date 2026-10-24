@@ -31,6 +31,29 @@ pub fn materialOf(scene: *const c.struct_aiScene, index: u32) error{InvalidMater
     return surface;
 }
 
+/// Which of `scene`'s materials `index` is, when it is one.
+pub fn materialIndex(scene: *const c.struct_aiScene, index: u32) ?u32 {
+    return if (index < scene.mNumMaterials) index else null;
+}
+
+/// Each of `scene`'s materials by the name the file gives it ("Material N" when it has none),
+/// allocated with `gpa` for the model to own.
+pub fn materialNames(scene: *const c.struct_aiScene) error{OutOfMemory}![]assets.model.Material {
+    const materials = try gpa.alloc(assets.model.Material, scene.mNumMaterials);
+    var made: usize = 0;
+    errdefer {
+        for (materials[0..made]) |material| gpa.free(material.name);
+        gpa.free(materials);
+    }
+    for (materials, 0..) |*material, index| {
+        var name: c.struct_aiString = undefined;
+        const named = c.aiGetMaterialString(scene.mMaterials[index], "?mat.name", 0, 0, &name) == c.aiReturn_SUCCESS and name.length > 0;
+        material.name = if (named) try gpa.dupe(u8, name.data[0..name.length]) else try std.fmt.allocPrint(gpa, "Material {d}", .{index + 1});
+        made += 1;
+    }
+    return materials;
+}
+
 /// The textures a model's materials use, each decoded once.
 pub const Textures = struct {
     scene: *const c.struct_aiScene,

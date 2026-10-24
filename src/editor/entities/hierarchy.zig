@@ -214,6 +214,8 @@ pub const Hierarchy = struct {
                 if (self.menu != null and !self.onMenu(context, down.position)) self.menu = null;
                 switch (down.button) {
                     .right => {
+                        // What a scene instance's file made has no menu: its file says what it is.
+                        if (row) |r| if (r.from_instance) return .{ .used = true, .action = .{ .select = r.entity } };
                         self.menu = .{
                             .at = down.position,
                             .entity = if (row) |r| r.entity else null,
@@ -236,6 +238,8 @@ pub const Hierarchy = struct {
                             if (down.position.x >= left and down.position.x < left + 18)
                                 return .{ .used = true, .action = .{ .toggle_collapse = pressed.entity } };
                         };
+                        // What a scene instance's file made isn't renamed or moved, only tuned.
+                        if (pressed.from_instance) return .{ .used = false };
                         // A rename takes both clicks on the name's text, in the same spot.
                         const on_name = self.onName(context, pressed.entity, down.position);
                         const first = self.name_press;
@@ -382,6 +386,7 @@ pub const Hierarchy = struct {
             .collapsed = row.collapsed,
             .hidden = row.hidden,
             .self_hidden = row.self_hidden,
+            .from_instance = row.from_instance,
         };
         const element = b.node(id, .{ .height = row_height }, .{ .custom = .{ .context = paint, .draw = RowPaint.draw } }, &.{}) catch return null;
         element.cursor = .pointer;
@@ -600,6 +605,8 @@ const RowPaint = struct {
     collapsed: bool,
     hidden: bool,
     self_hidden: bool,
+    /// Made from a scene instance's file: its name is tinted.
+    from_instance: bool = false,
 
     fn draw(context: *const anyopaque, c: *ui.Canvas, r: ui.Rect) anyerror!void {
         const self: *const RowPaint = @ptrCast(@alignCast(context));
@@ -633,7 +640,7 @@ const RowPaint = struct {
 
         // The name, dimmed while it is being dragged or has none, and the components right.
         const text_left = left + 24;
-        const name_color = if (self.dragged or self.unnamed or self.hidden) t.muted_foreground else if (self.selected) t.accent_foreground else t.foreground;
+        const name_color = if (self.dragged or self.unnamed or self.hidden) t.muted_foreground else if (self.selected) t.accent_foreground else if (self.from_instance) t.primary else t.foreground;
         if (self.has_children) try c.icon(.{ .x = left + 4, .y = mid_y - 6, .w = 12, .h = 12 }, if (self.collapsed) .chevron_right else .chevron_down, name_color);
         try drawEye(c, .{ .x = r.x + r.w - 22, .y = mid_y - 5, .w = 16, .h = 10 }, self.hidden, if (self.self_hidden) t.muted_foreground else name_color);
         try c.textIn(.{ .x = text_left, .y = r.y, .w = @max(0, r.x + r.w - text_left - 30), .h = r.h }, self.name, name_size, name_color, .start);

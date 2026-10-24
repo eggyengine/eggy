@@ -121,6 +121,9 @@ try app.cameras().setActive(camera);
 Set `Camera.projection = .orthographic` and `orthographic_height_m` for a view whose
 visible height stays constant with depth. Perspective cameras use `fov_deg`.
 Run the game or enter Play in the editor to check the view through that Camera.
+To play from another of the scene's cameras, hold **Shift** while you press **Play**, pick
+the camera, and press **Play**. That camera is the only active one until you press Stop,
+which puts the scene back as it was.
 The first example should show an orange cube. If it is missing, check that the
 Mesh and Camera entities each have a Transform and that you are viewing the game
 camera, not the editor's editing camera.

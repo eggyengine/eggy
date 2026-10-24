@@ -78,6 +78,39 @@ fn lensOf(game: *const HotGame, app: *eggy.App, entity: eggy.ecs.EntityId, compo
     return lens;
 }
 
+/// Every entity with a valid `Camera`, in slot order, in `arena`, and which of them the game
+/// looks through now (as `find` chooses), if any.
+/// Editor-only: an entity whose lens is invalid is left out, as the runtime would refuse it.
+pub fn list(arena: std.mem.Allocator, game: *const HotGame, app: *eggy.App) !struct { entities: []eggy.ecs.EntityId, current: ?usize } {
+    const component = game.builtinComponent("Camera") orelse return .{ .entities = &.{}, .current = null };
+    const current = find(game, app);
+    var found: std.ArrayList(eggy.ecs.EntityId) = .empty;
+    var current_index: ?usize = null;
+    for (app.world.slots.items, 0..) |slot, i| {
+        if (!slot.alive) continue;
+        const entity = eggy.ecs.EntityId.init(@intCast(i), slot.generation);
+        if (!game.hasComponent(app, entity, component) or lensOf(game, app, entity, component) == null) continue;
+        if (current != null and current.?.entity.eql(entity)) current_index = found.items.len;
+        try found.append(arena, entity);
+    }
+    return .{ .entities = found.items, .current = current_index };
+}
+
+/// Make `entity`'s camera the only active one, so the game looks through it, by writing every
+/// camera's `active` field. Editor-only: writes go straight into the world; undo is the host's.
+pub fn makeOnlyActive(game: *const HotGame, app: *eggy.App, entity: eggy.ecs.EntityId) void {
+    const component = game.builtinComponent("Camera") orelse return;
+    const active_field = for (game.component_types[component].fields, 0..) |field, index| {
+        if (std.mem.eql(u8, field.name, "active")) break index;
+    } else return;
+    for (app.world.slots.items, 0..) |slot, i| {
+        if (!slot.alive) continue;
+        const camera = eggy.ecs.EntityId.init(@intCast(i), slot.generation);
+        if (!game.hasComponent(app, camera, component)) continue;
+        _ = game.writeField(app, camera, component, active_field, if (camera.eql(entity)) "true" else "false");
+    }
+}
+
 /// Put `entity` (a camera) where `camera` is, looking where it looks, through its `Transform`.
 /// ponytail: the pose is written as the entity's own, so a camera inside a moved parent ends up off; turn it into the parent's space once cameras are parented.
 /// Editor-only: caller supplies a live camera with Transform; writes position and Euler degrees

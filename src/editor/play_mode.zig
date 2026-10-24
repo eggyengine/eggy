@@ -58,22 +58,28 @@ pub const PlayMode = struct {
     /// for `stop`, and start the game over on it, as the shipped game starts (its plugins'
     /// `init` running, keeping what they spawn).
     /// Editor-host only: `game` must be loaded/started against this app; `roots` are current
-    /// world's top-level IDs and `off` the plugin keys to disable. Borrows both slices,
-    /// owns a captured snapshot until stop/deinit, and invalidates old world entity IDs.
+    /// world's top-level IDs and `off` the plugin keys to disable. Borrows the slices,
+    /// owns a captured snapshot until stop/deinit, and invalidates old world entity IDs; each of
+    /// `follow` is rewritten to the entity made from it (one not in the scene keeps its id).
     /// Already playing is a no-op; capture/allocation errors propagate.
     ///
     /// ```zig
-    /// try mode.play(gpa, app, game, root_ids, switches.off());
+    /// try mode.play(gpa, app, game, root_ids, switches.off(), &.{});
     /// // Later, after gameplay frames:
     /// mode.stop(app, game, switches.off());
     /// ```
-    pub fn play(self: *PlayMode, gpa: std.mem.Allocator, app: *eggy.App, game: *HotGame, roots: []const eggy.ecs.EntityId, off: []const []const u8) !void {
+    pub fn play(self: *PlayMode, gpa: std.mem.Allocator, app: *eggy.App, game: *HotGame, roots: []const eggy.ecs.EntityId, off: []const []const u8, follow: []eggy.ecs.EntityId) !void {
         if (self.before != null) return;
         self.before = try eggy.scene.Scene.capture(gpa, &app.world, game.sceneAccess(), roots);
         // Its entities are made anew: the scene's sources follow them, for `keepTransform`.
         const made = game.restartMaking(app, &self.before.?, off, .keep);
         defer gpa.free(made);
-        if (made.len == self.before.?.sources.len) @memcpy(@constCast(self.before.?.sources), made);
+        if (made.len != self.before.?.sources.len) return;
+        for (follow) |*entity| for (self.before.?.sources, made) |source, new| if (source.eql(entity.*)) {
+            entity.* = new;
+            break;
+        };
+        @memcpy(@constCast(self.before.?.sources), made);
     }
 
     /// Keep `entity`'s `Transform` as it is now in the scene that `stop` puts back. Returns

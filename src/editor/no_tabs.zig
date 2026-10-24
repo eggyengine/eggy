@@ -117,7 +117,7 @@ const Glyph = struct {
                 try c.roundRect(.{ .x = r.x + 6, .y = r.y + r.h * 0.45, .w = r.w * 0.55, .h = 3 }, ink, 1.5);
                 try c.roundRectAlpha(.{ .x = r.x + 6, .y = r.y + r.h * 0.66, .w = r.w * 0.35, .h = 3 }, ink, 1.5, 0.6);
             },
-            .panels => {},
+            .panels, .asset => {},
         }
     }
 

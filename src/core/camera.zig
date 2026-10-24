@@ -81,9 +81,14 @@ pub const View = extern struct {
     up: [3]f32,
     fov_deg: f32 = 60,
     near: f32 = 0.1,
+    /// Infinity sees without end (the editor's own camera): perspective projects to infinite
+    /// depth, orthographic as far as `orthographic_reach_m`.
     far: f32 = 1000,
     projection: Projection = .perspective,
     orthographic_height_m: f32 = 10,
+
+    /// How deep an orthographic view with an infinite `far` sees.
+    const orthographic_reach_m: f32 = 100_000;
 
     /// Looking at the middle of the world from above and in front, for scenes without a camera.
     pub const default: View = lookingAt(.{ 0, 8, 18 }, .{ 0, 1, 0 }, .{});
@@ -113,14 +118,22 @@ pub const View = extern struct {
         const eye = math.Vec3{ .x = self.eye[0], .y = self.eye[1], .z = self.eye[2] };
         const target = math.Vec3{ .x = self.eye[0] + self.forward[0], .y = self.eye[1] + self.forward[1], .z = self.eye[2] + self.forward[2] };
         const view = math.mat.lookAt4x4(f32, eye, target, .{ .x = self.up[0], .y = self.up[1], .z = self.up[2] });
-        var projection = math.mat.perspective4x4(f32, self.fov_deg * std.math.rad_per_deg, aspect, self.near, self.far);
-        if (self.projection == .orthographic)
+        const infinite = std.math.isInf(self.far);
+        var projection = math.mat.perspective4x4(f32, self.fov_deg * std.math.rad_per_deg, aspect, self.near, if (infinite) self.near * 2 else self.far);
+        // The limit as `far` grows without end: depth 1 only at infinity.
+        if (infinite) {
+            projection.data[2][2] = -1;
+            projection.data[3][2] = -self.near;
+        }
+        if (self.projection == .orthographic) {
+            const far = if (infinite) orthographic_reach_m else self.far;
             projection.data = .{
                 .{ 2 / (self.orthographic_height_m * aspect), 0, 0, 0 },
                 .{ 0, 2 / self.orthographic_height_m, 0, 0 },
-                .{ 0, 0, 1 / (self.near - self.far), 0 },
-                .{ 0, 0, self.near / (self.near - self.far), 1 },
+                .{ 0, 0, 1 / (self.near - far), 0 },
+                .{ 0, 0, self.near / (self.near - far), 1 },
             };
+        }
         const matrix = math.mul(f32, 4, 4, 4, projection, view);
         var columns: [4][4]f32 = undefined;
         for (&columns, matrix.data) |*column, data| column.* = data;
@@ -220,6 +233,19 @@ test "the default view sees the origin in the middle of the view" {
     try std.testing.expect(where.in_front);
     try std.testing.expectApproxEqAbs(@as(f32, 0), where.x, 0.001);
     try std.testing.expectApproxEqAbs(@as(f32, 0), where.y, 0.001);
+}
+
+test "an infinite far plane keeps distant points inside the depth range" {
+    const view = View.lookingAt(.{ 0, 0, 0 }, .{ 0, 0, -1 }, .{ .far = std.math.inf(f32) });
+    const columns = view.viewProjection(1);
+    var previous: f32 = 0;
+    for ([_]f32{ 1, 1_000, 1_000_000 }) |distance| {
+        var clip: @Vector(4, f32) = columns[3];
+        clip += @as(@Vector(4, f32), columns[2]) * @as(@Vector(4, f32), @splat(-distance));
+        const depth = clip[2] / clip[3];
+        try std.testing.expect(depth > previous and depth <= 1);
+        previous = depth;
+    }
 }
 
 test "a camera entity looks down its -z, from where its transform puts it" {

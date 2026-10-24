@@ -21,8 +21,13 @@ pub const file_variable = "EGGY_RUNNER_FILE";
 /// ```
 pub fn argv(b: *std.Build) ?[]const []const u8 {
     if (builtin.os.tag != .linux) return null;
+    // Streamed: /proc reports a size of 0, which `readFileAlloc` would trust.
     const path = b.fmt("/proc/{d}/cmdline", .{std.os.linux.getppid()});
-    const cmdline = std.Io.Dir.cwd().readFileAlloc(b.graph.io, path, b.allocator, .limited(64 * 1024)) catch return null;
+    const file = std.Io.Dir.cwd().openFile(b.graph.io, path, .{}) catch return null;
+    defer file.close(b.graph.io);
+    var buffer: [4096]u8 = undefined;
+    var reader = file.readerStreaming(b.graph.io, &buffer);
+    const cmdline = reader.interface.allocRemaining(b.allocator, .limited(64 * 1024)) catch return null;
     // `maker build --zig-lib=… --zig=… --global-cache=… --seed=…`, then this build's own arguments.
     var parts = std.mem.splitScalar(u8, cmdline, 0);
     var args: [6][]const u8 = undefined;

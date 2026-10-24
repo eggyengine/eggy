@@ -59,6 +59,7 @@ pub fn import(scene: *const c.struct_aiScene, dir: []const u8, scale: f32) Error
         .indices = try builder.indices.toOwnedSlice(gpa),
         .parts = try builder.parts.toOwnedSlice(gpa),
         .textures = decoded,
+        .materials = try surfaces.materialNames(scene),
         .rig = .{
             .nodes = try builder.nodes.toOwnedSlice(gpa),
             .influences = try builder.influences.toOwnedSlice(gpa),
@@ -201,6 +202,7 @@ const Builder = struct {
             .first_index = first_index,
             .index_count = @intCast(triangles * 3),
             .texture = texture,
+            .material = surfaces.materialIndex(scene, mesh.*.mMaterialIndex),
             .first_vertex = first_vertex,
             .vertex_count = count,
             .node = node,

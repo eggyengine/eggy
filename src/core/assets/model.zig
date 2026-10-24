@@ -20,7 +20,7 @@ pub const Vertex = extern struct {
 
 /// The `.eggmodel` layout this build reads and writes. A file of another version fails to read
 /// with `error.UnexpectedData`; bump it whenever the stored types below change shape or meaning.
-pub const format_version: u32 = 2;
+pub const format_version: u32 = 3;
 
 /// A run of a model's `indices` drawn with one texture: its own, or none (the `Mesh`'s, or
 /// plain colour).
@@ -29,6 +29,8 @@ pub const Part = struct {
     index_count: u32,
     /// Which of the model's `textures`.
     texture: ?u32 = null,
+    /// Which of the model's `materials` paints it; its colours are in its corners.
+    material: ?u32 = null,
     /// The corners this part owns, which its indices point into. Only a model with a `Rig` fills
     /// them in; a part of a static model leaves them zero.
     first_vertex: u32 = 0,
@@ -42,6 +44,11 @@ pub const Part = struct {
     /// This part's blend shapes: `rig.morph_targets[morph_first..][0..morph_count]`.
     morph_first: u32 = 0,
     morph_count: u32 = 0,
+};
+
+/// A material of the model file, as it names it, for the editor to show.
+pub const Material = struct {
+    name: []const u8,
 };
 
 /// A joint of the model's node tree. Parents come before their children.
@@ -180,6 +187,7 @@ pub const Model = struct {
     indices: []u32,
     parts: []Part,
     textures: []Texture,
+    materials: []Material = &.{},
     rig: Rig = .{},
 
     /// Free what `read` (or an importer) allocated with `gpa`.
@@ -196,6 +204,8 @@ pub const Model = struct {
         gpa.free(self.parts);
         for (self.textures) |*texture| texture.deinit(gpa);
         gpa.free(self.textures);
+        for (self.materials) |material| gpa.free(material.name);
+        gpa.free(self.materials);
         self.rig.deinit(gpa);
     }
 
@@ -234,6 +244,7 @@ pub const Model = struct {
         for (self.parts) |part| {
             if (@as(usize, part.first_index) + part.index_count > self.indices.len) return false;
             if (part.texture) |texture| if (texture >= self.textures.len) return false;
+            if (part.material) |material| if (material >= self.materials.len) return false;
         }
         for (self.textures) |texture| if (!texture.isWhole()) return false;
         return self.rigIsWhole();

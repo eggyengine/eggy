@@ -45,6 +45,9 @@ pub const HotGame = struct {
     manifest_arena: std.heap.ArenaAllocator,
     /// How many copies this editor has loaded, which names the next one.
     loads: u32 = 0,
+    /// The world's scene instances, which `sceneAccess` hands on so scenes save and put back
+    /// what each instance changed (`eggy.App.instanceHooks`); the editor keeps it current.
+    instances: ?eggy.scene.Access.Instances = null,
 
     /// Load a private copy of the game library at absolute `path`, without starting plugins.
     /// Editor host only: owns copied paths/metadata until `deinit`; file, dynamic-loader,
@@ -796,7 +799,7 @@ pub const HotGame = struct {
     /// defer scene.deinit();
     /// ```
     pub fn sceneAccess(self: *const HotGame) eggy.scene.Access {
-        return .{ .context = self, .vtable = &scene_vtable };
+        return .{ .context = self, .vtable = &scene_vtable, .instances = self.instances };
     }
 
     /// Whether the game is running: it started (a plugin's `init` failing stops it until the

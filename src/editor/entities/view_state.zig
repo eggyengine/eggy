@@ -1,23 +1,96 @@
 //! Editor-only hierarchy folds and inherited visibility, never serialized into game scenes.
+//! They are kept by each entity's name path in its scene (`kept`), which outlives the world
+//! being made anew (Play, Stop, reopening, a rebuild) and the editor (see `view_file.zig`); the
+//! entity sets the editor asks about are worked out from it by `follow`.
 const std = @import("std");
 const eggy = @import("eggy");
 const ecs = eggy.ecs;
 const Row = @import("tree.zig").Row;
 
+/// Folded or hidden.
+pub const Fold = enum { collapsed, hidden };
+
+/// Name paths ("fence/fence north 1", "#2" after a name its earlier siblings share), owned.
+pub const Paths = std.StringArrayHashMapUnmanaged(void);
+
 pub const ViewState = struct {
     gpa: std.mem.Allocator,
     collapsed: std.AutoHashMapUnmanaged(ecs.EntityId, void) = .empty,
     hidden: std.AutoHashMapUnmanaged(ecs.EntityId, void) = .empty,
+    /// What is folded and hidden, by name path: what lasts.
+    kept: [2]Paths = .{ .empty, .empty },
+    /// Whether `kept` changed since it was last saved.
+    dirty: bool = false,
+    /// Folds and hides made since the last `follow`, which records them by path.
+    pending: std.ArrayList(struct { entity: ecs.EntityId, fold: Fold, on: bool }) = .empty,
 
     pub fn deinit(self: *ViewState) void {
         self.collapsed.deinit(self.gpa);
         self.hidden.deinit(self.gpa);
+        self.forgetKept();
+        for (&self.kept) |*paths| paths.deinit(self.gpa);
+        self.pending.deinit(self.gpa);
     }
 
-    /// Forget view state whenever a new world is installed, even if IDs are reused.
+    /// Forget the entity sets whenever a new world is installed, even if IDs are reused; `kept`
+    /// stays, and `follow` finds its entities in the new world.
     pub fn reset(self: *ViewState) void {
         self.collapsed.clearRetainingCapacity();
         self.hidden.clearRetainingCapacity();
+        self.pending.clearRetainingCapacity();
+    }
+
+    /// Replace what is kept (another scene's, read back): `collapsed` and `hidden` name paths,
+    /// copied. Not dirty after.
+    pub fn keep(self: *ViewState, collapsed: []const []const u8, hidden: []const []const u8) !void {
+        self.forgetKept();
+        for ([_][]const []const u8{ collapsed, hidden }, &self.kept) |paths, *into| for (paths) |path| {
+            const owned = try self.gpa.dupe(u8, path);
+            errdefer self.gpa.free(owned);
+            const entry = try into.getOrPut(self.gpa, owned);
+            if (entry.found_existing) self.gpa.free(owned);
+        };
+        self.dirty = false;
+    }
+
+    fn forgetKept(self: *ViewState) void {
+        for (&self.kept) |*paths| {
+            for (paths.keys()) |path| self.gpa.free(path);
+            paths.clearRetainingCapacity();
+        }
+    }
+
+    /// Record the folds and hides made since last time by path, then work out which of `world`'s
+    /// entities (from `roots`, named through `access`) are folded or hidden. Call each frame.
+    /// ponytail: walks every entity each frame; track world changes if scenes reach tens of thousands.
+    pub fn follow(self: *ViewState, world: *ecs.World, roots: []const ecs.EntityId, access: eggy.scene.Access) !void {
+        var arena_state = std.heap.ArenaAllocator.init(self.gpa);
+        defer arena_state.deinit();
+        const arena = arena_state.allocator();
+        var paths: std.AutoArrayHashMapUnmanaged(ecs.EntityId, []const u8) = .empty;
+        try namePaths(arena, world, access, roots, "", &paths);
+
+        for (self.pending.items) |change| {
+            const path = paths.get(change.entity) orelse continue;
+            const kept = &self.kept[@backingInt(change.fold)];
+            if (change.on) {
+                if (kept.contains(path)) continue;
+                const owned = try self.gpa.dupe(u8, path);
+                kept.put(self.gpa, owned, {}) catch |err| {
+                    self.gpa.free(owned);
+                    return err;
+                };
+            } else if (kept.fetchSwapRemove(path)) |removed| self.gpa.free(removed.key) else continue;
+            self.dirty = true;
+        }
+        self.pending.clearRetainingCapacity();
+
+        self.collapsed.clearRetainingCapacity();
+        self.hidden.clearRetainingCapacity();
+        for (paths.keys(), paths.values()) |entity, path| {
+            if (self.kept[@backingInt(Fold.collapsed)].contains(path)) try self.collapsed.put(self.gpa, entity, {});
+            if (self.kept[@backingInt(Fold.hidden)].contains(path)) try self.hidden.put(self.gpa, entity, {});
+        }
     }
 
     pub fn prune(self: *ViewState, world: *ecs.World) void {
@@ -30,10 +103,13 @@ pub const ViewState = struct {
     }
 
     pub fn toggleCollapse(self: *ViewState, entity: ecs.EntityId) !void {
-        if (!self.collapsed.remove(entity)) try self.collapsed.put(self.gpa, entity, {});
+        const on = !self.collapsed.contains(entity);
+        try self.pending.append(self.gpa, .{ .entity = entity, .fold = .collapsed, .on = on });
+        if (on) try self.collapsed.put(self.gpa, entity, {}) else _ = self.collapsed.remove(entity);
     }
 
     pub fn setHidden(self: *ViewState, entity: ecs.EntityId, hidden: bool) !void {
+        try self.pending.append(self.gpa, .{ .entity = entity, .fold = .hidden, .on = hidden });
         if (hidden) try self.hidden.put(self.gpa, entity, {}) else _ = self.hidden.remove(entity);
     }
 
@@ -97,6 +173,66 @@ pub const ViewState = struct {
         frame.options[2] = shadow_now;
     }
 };
+
+/// Each entity under `roots` (and their children) with its name path below `prefix`, into `out`.
+/// Siblings sharing a name are told apart by "#2", "#3" and so on, in order.
+fn namePaths(arena: std.mem.Allocator, world: *ecs.World, access: eggy.scene.Access, roots: anytype, prefix: []const u8, out: *std.AutoArrayHashMapUnmanaged(ecs.EntityId, []const u8)) !void {
+    var seen: std.StringHashMapUnmanaged(usize) = .empty;
+    var name_buffer: [eggy.Name.max_len]u8 = undefined;
+    var siblings = roots;
+    while (nextOf(&siblings)) |entity| {
+        const name = try arena.dupe(u8, access.name(world, entity, &name_buffer) orelse "");
+        const count = try seen.getOrPut(arena, name);
+        count.value_ptr.* = if (count.found_existing) count.value_ptr.* + 1 else 1;
+        const own = if (count.value_ptr.* == 1) name else try std.fmt.allocPrint(arena, "{s}#{d}", .{ name, count.value_ptr.* });
+        const path = if (prefix.len == 0) own else try std.fmt.allocPrint(arena, "{s}/{s}", .{ prefix, own });
+        try out.put(arena, entity, path);
+        try namePaths(arena, world, access, world.children(entity), path, out);
+    }
+}
+
+/// The next of `siblings`: a slice of roots, or a world's children iterator.
+fn nextOf(siblings: anytype) ?ecs.EntityId {
+    if (@typeInfo(@TypeOf(siblings.*)) == .pointer) {
+        if (siblings.len == 0) return null;
+        const first = siblings.*[0];
+        siblings.* = siblings.*[1..];
+        return first;
+    }
+    return siblings.next();
+}
+
+test "folds and hides are kept by name path, and found again in a world made anew" {
+    const gpa = std.testing.allocator;
+    const access = eggy.scene.registryAccess(eggy.components.Registry(&.{}, &.{}));
+    var state = ViewState{ .gpa = gpa };
+    defer state.deinit();
+    for (0..2) |round| {
+        var world = ecs.World.init(gpa);
+        defer world.deinit();
+        const fence = try world.spawn(.{eggy.Name.init("fence")});
+        const first = try world.spawn(.{eggy.Name.init("panel")});
+        const second = try world.spawn(.{eggy.Name.init("panel")});
+        try world.setParent(first, fence);
+        try world.setParent(second, fence);
+        const roots = [_]ecs.EntityId{fence};
+        state.reset();
+        if (round == 0) {
+            // Fold the fence and hide its second panel: kept as "fence" and "fence/panel#2".
+            try state.toggleCollapse(fence);
+            try state.setHidden(second, true);
+            try state.follow(&world, &roots, access);
+            try std.testing.expect(state.dirty);
+            try std.testing.expect(state.kept[@backingInt(Fold.collapsed)].contains("fence"));
+            try std.testing.expect(state.kept[@backingInt(Fold.hidden)].contains("fence/panel#2"));
+        } else {
+            // A new world with new ids: the same entities are folded and hidden again.
+            try state.follow(&world, &roots, access);
+            try std.testing.expect(state.collapsed.contains(fence));
+            try std.testing.expect(state.hidden.contains(second) and !state.hidden.contains(first));
+        }
+    }
+}
 
 test "folds do not hide meshes, visibility inherits, and dead generations are pruned" {
     const gpa = std.testing.allocator;

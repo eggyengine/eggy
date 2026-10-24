@@ -43,6 +43,9 @@ const Section = enum {
 };
 
 pub const AutoUpdate = @import("auto_update.zig").AutoUpdate;
+pub const UpdateOffer = @import("auto_update.zig").Offer;
+pub const UpdatePrompt = @import("update_prompt.zig").UpdatePrompt;
+pub const updateKey = @import("update_prompt.zig").updateKey;
 pub const Texts = project_plugins.Texts;
 pub const Change = project_plugins.Change;
 pub const freeChange = project_plugins.freeChange;
@@ -687,6 +690,7 @@ test {
     _ = package_removal;
     _ = project_plugins;
     _ = @import("auto_update.zig");
+    _ = @import("update_prompt.zig");
 }
 
 test "Eggy's own plugins have readable manifests that name Eggy" {

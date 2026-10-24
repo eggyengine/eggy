@@ -5,6 +5,7 @@ const ecs = @import("clutch");
 const action = @import("../action.zig");
 const components = @import("../components.zig");
 const project = @import("../project.zig");
+const zon_file = @import("eggy_assets").zon;
 
 /// Fixed-representation results shared by separately compiled editor and game libraries.
 pub const Status = enum(u32) { ok, failed, out_of_memory, invalid_entity, no_project, not_editing, busy, buffer_too_small };
@@ -36,6 +37,18 @@ pub const Operation = enum(u32) {
     project_folder,
     show_panel,
     write_file,
+    status,
+    scene_text,
+    replace_scene,
+    add_to_scene,
+    component_types,
+    console_text,
+    undo,
+    redo,
+    play,
+    pause,
+    resume_play,
+    stop_play,
 };
 pub const Entity = extern struct { id: u32 = 0, generation: u32 = 0 };
 /// Strings are borrowed for this synchronous request only.
@@ -49,8 +62,27 @@ pub const Request = extern struct {
     extra_len: usize = 0,
     buffer: [*]u8 = undefined,
     capacity: usize = 0,
+    /// A number some operations take (`play`'s seconds).
+    number: f64 = 0,
 };
 pub const Response = extern struct { entity: Entity = .{}, has_entity: bool = false, length: usize = 0 };
+
+/// What the editor is doing, as `Context.status` reads it.
+pub const EditorStatus = struct {
+    /// The open scene, relative to the project; null with none.
+    open_scene: ?[]const u8 = null,
+    /// Whether the world differs from the open scene's file.
+    unsaved: bool = false,
+    play: enum { editing, playing, paused } = .editing,
+    /// The last build an editor tool asked for (`requestBuild`), and its output: the end of it,
+    /// when long.
+    build: enum { none, building, succeeded, failed } = .none,
+    build_log: []const u8 = "",
+    /// What Undo and Redo would take back or do again; null when nothing.
+    undo: ?[]const u8 = null,
+    redo: ?[]const u8 = null,
+};
+
 pub const Host = extern struct {
     context: *anyopaque,
     request: *const fn (*anyopaque, *const Request, *Response) callconv(.c) Status,
@@ -322,6 +354,88 @@ pub const Context = struct {
         try self.textRequest(.show_panel, key, "");
     }
 
+    /// What the editor is doing now: the open scene, play, the last requested build, and undo.
+    /// Strings live in `arena`.
+    ///
+    /// ```zig
+    /// const now = try editor.status(arena.allocator());
+    /// if (now.play != .editing) return;
+    /// ```
+    pub fn status(self: *Context, arena: std.mem.Allocator) !EditorStatus {
+        const text = try self.readText(arena, .{ .operation = .status });
+        return zon_file.parse(EditorStatus, arena, text, .{});
+    }
+
+    /// The world as a scene file's ZON (see `eggy.scene`), its top-level entities in the
+    /// Hierarchy's order, in `arena`. An entity is named by its place in `.entities`.
+    ///
+    /// ```zig
+    /// const zon = try editor.sceneText(arena.allocator());
+    /// ```
+    pub fn sceneText(self: *Context, arena: std.mem.Allocator) ![:0]const u8 {
+        return self.readText(arena, .{ .operation = .scene_text });
+    }
+
+    /// Replace every entity of the world with the scene `zon` (as `sceneText` writes it), as one
+    /// undo step. Returns how many components and fields it couldn't put in (logged why).
+    /// Requires editing mode; ZON that isn't a scene fails with nothing changed.
+    ///
+    /// ```zig
+    /// _ = try editor.replaceScene(".{ .entities = .{} }"); // An empty world.
+    /// ```
+    pub fn replaceScene(self: *Context, zon: []const u8) !usize {
+        return (try self.send(.{ .operation = .replace_scene, .text = zon.ptr, .text_len = zon.len })).length;
+    }
+
+    /// Add the entities of the scene `zon` to the world, after those it has, as one undo step;
+    /// `parent` (a place in `sceneText`'s `.entities`) puts its top-level ones under that entity.
+    /// Returns how many components and fields it couldn't put in, as `replaceScene`.
+    ///
+    /// ```zig
+    /// _ = try editor.addToScene(".{ .entities = .{ .{ .name = \"Rock\" } } }", null);
+    /// ```
+    pub fn addToScene(self: *Context, zon: []const u8, parent: ?usize) !usize {
+        return (try self.send(.{ .operation = .add_to_scene, .text = zon.ptr, .text_len = zon.len, .number = if (parent) |place| @floatFromInt(place) else -1 })).length;
+    }
+
+    /// Every component type a scene can hold, with each field's default value as ZON, as ZON
+    /// in `arena`: `.{ .{ .type = "Transform", .owner = "eggy", .addable = true, .fields = .{
+    /// .{ .name = "position", .default = ".{ 0, 0, 0 }" } } } }`.
+    pub fn componentTypes(self: *Context, arena: std.mem.Allocator) ![:0]const u8 {
+        return self.readText(arena, .{ .operation = .component_types });
+    }
+
+    /// The Console's latest messages, oldest first, a line each (more lines for details), in
+    /// `arena`: at most `max_messages`.
+    pub fn consoleText(self: *Context, arena: std.mem.Allocator, max_messages: usize) ![:0]const u8 {
+        return self.readText(arena, .{ .operation = .console_text, .number = @floatFromInt(max_messages) });
+    }
+
+    /// Queue Edit > Undo, or Redo, for after this hook: the game starts over on the scene it
+    /// puts back, so keep nothing from `app.world` past the hook.
+    pub fn undo(self: *Context) !void {
+        _ = try self.send(.{ .operation = .undo });
+    }
+    pub fn redo(self: *Context) !void {
+        _ = try self.send(.{ .operation = .redo });
+    }
+
+    /// Queue Play for after this hook, pausing by itself after `seconds` (0: until stopped).
+    /// Editor hooks don't run while the game runs, so pausing is how a tool gets back in.
+    pub fn play(self: *Context, seconds: f64) !void {
+        _ = try self.send(.{ .operation = .play, .number = seconds });
+    }
+    /// Queue pausing, resuming (pausing again after `seconds`, 0: never), or stopping play.
+    pub fn pause(self: *Context) !void {
+        _ = try self.send(.{ .operation = .pause });
+    }
+    pub fn resumePlay(self: *Context, seconds: f64) !void {
+        _ = try self.send(.{ .operation = .resume_play, .number = seconds });
+    }
+    pub fn stopPlay(self: *Context) !void {
+        _ = try self.send(.{ .operation = .stop_play });
+    }
+
     /// Parse settings into a caller-owned arena; all returned strings live in `arena`.
     /// Reads the open project's file through the host. Requires a project; changed size
     /// between reads, parse failures, allocation failures and host failures return errors.
@@ -369,6 +483,25 @@ pub const Context = struct {
     pub fn registerSceneTool(_: *Context, name: []const u8) error{NotImplemented}!void {
         _ = name;
         return error.NotImplemented;
+    }
+
+    /// A host text read: asked once for its size, then into a buffer that big.
+    /// Text that grows between the two (the Console's) is asked for again.
+    fn readText(self: *Context, arena: std.mem.Allocator, request: Request) ![:0]u8 {
+        for (0..3) |_| {
+            const size = try self.send(request);
+            const buffer = try arena.allocSentinel(u8, size.length, 0);
+            var read_request = request;
+            read_request.buffer = buffer.ptr;
+            read_request.capacity = buffer.len;
+            const read = self.send(read_request) catch |err| switch (err) {
+                error.BufferTooSmall => continue,
+                else => return err,
+            };
+            buffer[read.length] = 0;
+            return buffer[0..read.length :0];
+        }
+        return error.BufferTooSmall;
     }
 
     fn textRequest(self: *Context, operation: Operation, text: []const u8, extra: []const u8) !void {

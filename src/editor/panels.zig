@@ -52,12 +52,14 @@ pub const Panel = enum(u32) {
 pub const max_copies = 8;
 
 /// The panels each workspace tab can have its own of: every 3D tab its Scene and the panels
-/// around it, every 2D tab its 2D Scene, every UI tab the UI Designer's three. Copy 0 is the
-/// panel's own id; copy n takes an id from the gap between the built-in panels and `plugin_first`.
-const copyable = [_]Panel{ .scene, .scene_2d, .ui_designer, .ui_tree, .ui_properties, .hierarchy, .inspector, .console, .assets, .animation };
+/// around it, every 2D tab its 2D Scene, every UI tab the UI Designer's three, and every asset
+/// tab its Asset Preview (copy 0 shows the Assets selection; each other copy, one file). Copy 0
+/// is the panel's own id; copy n takes an id from the gap between the built-in panels and
+/// `plugin_first`.
+const copyable = [_]Panel{ .scene, .scene_2d, .ui_designer, .ui_tree, .ui_properties, .hierarchy, .inspector, .console, .assets, .animation, .asset_preview };
 
 /// One panel for each live copy `Live` keeps (the UI Designer's three go live together).
-pub const live_panels = [_]Panel{ .scene, .scene_2d, .ui_designer, .hierarchy, .inspector, .console, .assets, .animation };
+pub const live_panels = [_]Panel{ .scene, .scene_2d, .ui_designer, .hierarchy, .inspector, .console, .assets, .animation, .asset_preview };
 const copy_first: u32 = 20;
 
 /// The dock id of `panel`'s copy `copy` (below `max_copies`); copy 0 is `panel`'s own id.
@@ -90,6 +92,7 @@ pub const Live = struct {
     console: u8 = 0,
     assets: u8 = 0,
     animation: u8 = 0,
+    asset_preview: u8 = 0,
 
     /// Where `panel`'s live copy is kept, or null for a panel there is only one of.
     pub fn of(self: *Live, panel: Panel) ?*u8 {
@@ -102,7 +105,7 @@ pub const Live = struct {
             .console => &self.console,
             .assets => &self.assets,
             .animation => &self.animation,
-            .asset_preview => null,
+            .asset_preview => &self.asset_preview,
         };
     }
 

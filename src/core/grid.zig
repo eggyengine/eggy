@@ -8,8 +8,6 @@ const shaders = @import("scene_shaders");
 const frames_in_flight = @import("weeoui_vitellus").frames_in_flight;
 const camera = @import("camera.zig");
 
-/// How far away the grid still shows, in metres.
-const reach_m: f32 = 150;
 /// (0, 0), (2, 0) and (0, 2): one triangle that covers the viewport.
 const triangle = [3][2]f32{ .{ 0, 0 }, .{ 2, 0 }, .{ 0, 2 } };
 
@@ -126,7 +124,7 @@ pub const Grid = struct {
             .across = .{ right[0] * half_height * aspect, right[1] * half_height * aspect, right[2] * half_height * aspect, 0 },
             .upward = .{ view.up[0] * half_height, view.up[1] * half_height, view.up[2] * half_height, 0 },
             .viewport = .{ viewport_px.x, viewport_px.y, viewport_px.w, viewport_px.h },
-            .options = .{ if (srgb) 1 else 0, reach_m, if (view.projection == .orthographic) 1 else 0, 0 },
+            .options = .{ if (srgb) 1 else 0, 0, if (view.projection == .orthographic) 1 else 0, 0 },
         };
         const buffer = self.uniforms[self.slot];
         const bytes = std.mem.asBytes(&uniforms);

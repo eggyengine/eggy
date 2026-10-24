@@ -17,6 +17,8 @@ pub const Kind = enum(u8) {
     ui,
     /// Panels dragged onto the tab bar: named after its first panel.
     panels,
+    /// One file in an Asset Preview of its own: named after the file.
+    asset,
 
     /// The name of a tab of this kind (`.panels` tabs are named after a panel instead).
     pub fn title(kind: Kind) [:0]const u8 {
@@ -25,6 +27,7 @@ pub const Kind = enum(u8) {
             .scene_2d => "2D",
             .ui => "UI",
             .panels => "Panels",
+            .asset => "Asset",
         };
     }
 };
@@ -35,12 +38,43 @@ pub const max_tabs = 8;
 /// (kept first, and not closed until unpinned).
 pub const Tab = struct { root: u8, kind: Kind, pinned: bool = false };
 
+/// The project path an Asset Preview copy shows, kept inline so `Tabs` copies and saves as a
+/// value.
+pub const PreviewPath = struct {
+    pub const max_len = 512;
+    /// The path, then a 0 so its name can title a window.
+    bytes: [max_len + 1]u8 = undefined,
+    len: u16 = 0,
+
+    /// `path` kept, or null when it is longer than `max_len`.
+    pub fn of(path: []const u8) ?PreviewPath {
+        if (path.len > max_len) return null;
+        var kept = PreviewPath{ .len = @intCast(path.len) };
+        @memcpy(kept.bytes[0..path.len], path);
+        kept.bytes[path.len] = 0;
+        return kept;
+    }
+
+    pub fn slice(self: *const PreviewPath) []const u8 {
+        return self.bytes[0..self.len];
+    }
+
+    /// The file's name, for its tab and window.
+    pub fn name(self: *const PreviewPath) [:0]const u8 {
+        const start = if (std.mem.lastIndexOfScalar(u8, self.slice(), '/')) |slash| slash + 1 else 0;
+        return self.bytes[start..self.len :0];
+    }
+};
+
 /// The tabs, in order, pinned ones first.
 pub const Tabs = struct {
     list: [max_tabs]?Tab = @splat(null),
     /// The tab shown in the main window, whose tree is the dock's main root; null when none is,
     /// and the main window is an empty stack no tab owns.
     active: ?u8 = null,
+    /// The file each Asset Preview copy shows, by copy (`panels.max_copies` of them, as many as
+    /// tabs); copy 0, and a copy with none, shows the Assets selection.
+    previews: [max_tabs]?PreviewPath = @splat(null),
 
     /// One 3D tab, holding the main root of `layout` as it is.
     pub fn init(layout: *const dock.DockSpace) Tabs {

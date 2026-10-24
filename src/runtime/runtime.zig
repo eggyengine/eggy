@@ -102,7 +102,7 @@ pub fn Runtime(comptime project: type) type {
                 break :blk &.{};
             } else &.{};
             // The game's first scene, before the plugins start, as the editor puts it in.
-            if (@hasDecl(project, "main_scene")) if (project.main_scene) |path| if (data) |packaged| startScene(gpa, packaged.copies(), &app.world, path);
+            if (@hasDecl(project, "main_scene")) if (project.main_scene) |path| if (data) |packaged| startScene(gpa, packaged.copies(), &app, path);
             var plugins = try Plugins.init(gpa, &app, Plugins.enabledExcept(off));
             errdefer {
                 if (app.resource_jobs) |jobs| jobs.clear();
@@ -128,14 +128,21 @@ pub fn Runtime(comptime project: type) type {
             window.setIcon(surface) catch |err| std.log.warn("cannot set the game's icon: {t}", .{err});
         }
 
-        /// Put the scene at `path` (from `files`) into `world`; a scene that can't be read leaves
+        /// The game's components, with `app`'s scene instances keeping what each changed.
+        fn access(app: *eggy.App) eggy.scene.Access {
+            var through = eggy.scene.registryAccess(Plugins.Components);
+            through.instances = app.instanceHooks();
+            return through;
+        }
+
+        /// Put the scene at `path` (from `files`) into `app`'s world; a scene that can't be read leaves
         /// it empty, having said why.
-        fn startScene(gpa: std.mem.Allocator, files: eggy.scene_instances.Files, world: *eggy.ecs.World, path: []const u8) void {
+        fn startScene(gpa: std.mem.Allocator, files: eggy.scene_instances.Files, app: *eggy.App, path: []const u8) void {
             const source = files.read(files.context, gpa, path) catch |err| return std.log.err("cannot read the scene {s}: {t}", .{ path, err });
             defer gpa.free(source);
             var scene = eggy.scene.Scene.parse(gpa, source) catch |err| return std.log.err("cannot read the scene {s}: {t}", .{ path, err });
             defer scene.deinit();
-            const made = scene.instantiate(gpa, world, eggy.scene.registryAccess(Plugins.Components), null) catch |err| return std.log.err("cannot put the scene {s} in: {t}", .{ path, err });
+            const made = scene.instantiate(gpa, &app.world, access(app), null) catch |err| return std.log.err("cannot put the scene {s} in: {t}", .{ path, err });
             gpa.free(made.entities);
             if (made.skipped > 0) std.log.warn("{s}: {d} components or fields left out (see above)", .{ path, made.skipped });
         }
@@ -177,7 +184,7 @@ pub fn Runtime(comptime project: type) type {
             self.app.beginDiagnosticsFrame();
             try self.app.graphics.syncSize(self.app.window);
             // Scene instances' entities, from their files, for any made or changed.
-            if (self.data) |packaged| self.app.sceneInstances().sync(packaged.copies(), &self.app.world, eggy.scene.registryAccess(Plugins.Components), null);
+            if (self.data) |packaged| self.app.sceneInstances().sync(packaged.copies(), &self.app.world, access(&self.app), null);
             self.app.time.tick(sdl3.timer.getNanosecondsSinceInit());
             try self.app.advanceInput();
             try self.plugins.update(&self.app);

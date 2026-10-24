@@ -193,7 +193,7 @@ fn importScene(scene: *const c.struct_aiScene, dir: []const u8, scale: f32) !ass
             next_vertex += 1;
         }
 
-        part.* = .{ .first_index = @intCast(next_index), .index_count = 0, .texture = try textures.ofMaterial(mesh.*.mMaterialIndex) };
+        part.* = .{ .first_index = @intCast(next_index), .index_count = 0, .texture = try textures.ofMaterial(mesh.*.mMaterialIndex), .material = surfaces.materialIndex(scene, mesh.*.mMaterialIndex) };
         for (mesh.*.mFaces[0..mesh.*.mNumFaces]) |face| {
             if (face.mNumIndices != 3) continue;
             for (face.mIndices[0..3]) |index| {
@@ -203,7 +203,8 @@ fn importScene(scene: *const c.struct_aiScene, dir: []const u8, scale: f32) !ass
         }
         part.index_count = @intCast(next_index - part.first_index);
     }
+    const materials = try surfaces.materialNames(scene);
     const decoded = try textures.list.toOwnedSlice(gpa);
     textures.by_material.deinit(gpa);
-    return .{ .vertices = vertices, .indices = indices, .parts = parts, .textures = decoded };
+    return .{ .vertices = vertices, .indices = indices, .parts = parts, .textures = decoded, .materials = materials };
 }

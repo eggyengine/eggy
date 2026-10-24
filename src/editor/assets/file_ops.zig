@@ -6,6 +6,7 @@
 //! copied, so ids follow moves and copies get new ones.
 const std = @import("std");
 const descriptor = @import("eggy").assets.descriptor;
+const model_references = @import("model_references.zig");
 
 pub const trash_dir = ".eggy/trash";
 
@@ -152,21 +153,68 @@ pub fn copyInto(gpa: std.mem.Allocator, io: std.Io, project: std.Io.Dir, path: [
 }
 
 /// Copy `outside` (an absolute path: a file, or a folder and everything in it) into `folder` of
-/// the project, as `copyInto` does. Returns the copy's path; caller-owned.
+/// the project, as `copyInto` does. A glTF model brings the files it refers to beside it (its
+/// textures and buffers) to the same place beside the copy, unless they are there already.
+/// Returns what it made, caller-owned: the copy's path first, then for each file brought along
+/// the file or the first folder made for it, so trashing them all in reverse undoes it.
 /// Editor-only: creates the destination folder, omits legacy descriptors from copied trees, and
 /// propagates I/O/allocation errors; failure can leave partial output.
 ///
 /// ```zig
 /// // Given gpa, io, an open project and an absolute external file path:
-/// const path = try import(gpa, io, project, outside, "resources");
-/// defer gpa.free(path);
+/// const made = try import(gpa, io, project, outside, "resources");
+/// std.debug.print("added {s}\n", .{made[0]});
 /// ```
-pub fn import(gpa: std.mem.Allocator, io: std.Io, project: std.Io.Dir, outside: []const u8, folder: []const u8) ![]u8 {
+pub fn import(gpa: std.mem.Allocator, io: std.Io, project: std.Io.Dir, outside: []const u8, folder: []const u8) ![][]u8 {
+    var made: std.ArrayList([]u8) = .empty;
+    errdefer {
+        for (made.items) |path| gpa.free(path);
+        made.deinit(gpa);
+    }
+    try made.ensureUnusedCapacity(gpa, 1);
     const target = try freeTarget(gpa, io, project, folder, std.fs.path.basename(outside));
-    errdefer gpa.free(target);
+    made.appendAssumeCapacity(target);
     try project.createDirPath(io, folder);
     try copyTree(gpa, io, std.Io.Dir.cwd(), outside, project, target);
-    return target;
+    if (model_references.isGltf(outside)) try importReferences(gpa, io, project, outside, target, &made);
+    return made.toOwnedSlice(gpa);
+}
+
+/// Copy the files the glTF model at `outside` refers to beside its copy at `target`, appending
+/// what was made to `made`. One that is missing is logged and left out: the model still imports.
+fn importReferences(gpa: std.mem.Allocator, io: std.Io, project: std.Io.Dir, outside: []const u8, target: []const u8, made: *std.ArrayList([]u8)) !void {
+    var arena_state = std.heap.ArenaAllocator.init(gpa);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    // ponytail: reads the whole model for its JSON, fine until models reach hundreds of MB.
+    const model = try std.Io.Dir.cwd().readFileAlloc(io, outside, arena, .limited(512 << 20));
+    const references = model_references.referencedFiles(arena, model) catch return;
+    const source_folder = std.fs.path.dirname(outside) orelse ".";
+    const target_folder = std.fs.path.dirnamePosix(target) orelse "";
+    for (references) |relative| {
+        const destination = try join(arena, target_folder, relative);
+        if (exists(io, project, destination)) continue;
+        const source = try std.fs.path.join(arena, &.{ source_folder, relative });
+        std.Io.Dir.cwd().access(io, source, .{}) catch {
+            std.log.warn("{s} refers to {s}, which isn't beside it: imported without it", .{ std.fs.path.basename(outside), relative });
+            continue;
+        };
+        try made.ensureUnusedCapacity(gpa, 1);
+        const created = try gpa.dupe(u8, firstMissing(io, project, destination));
+        errdefer gpa.free(created);
+        if (std.fs.path.dirnamePosix(destination)) |parent| try project.createDirPath(io, parent);
+        try copyTree(gpa, io, std.Io.Dir.cwd(), source, project, destination);
+        made.appendAssumeCapacity(created);
+    }
+}
+
+/// The first part of `path` that doesn't exist yet: what making it creates.
+fn firstMissing(io: std.Io, project: std.Io.Dir, path: []const u8) []const u8 {
+    var end: usize = 0;
+    while (std.mem.indexOfScalarPos(u8, path, end, '/')) |slash| : (end = slash + 1) {
+        if (!exists(io, project, path[0..slash])) return path[0..slash];
+    }
+    return path;
 }
 
 /// `name` in `folder`, or "<stem> 2<extension>" and so on, whichever is free. Caller-owned.
@@ -352,9 +400,43 @@ test "moving and copying into folders, and importing from outside" {
     const source = try outside.dir.realPathFileAlloc(io, "boom.ogg", gpa);
     defer gpa.free(source);
     const imported = try import(gpa, io, project, source, "sounds");
-    defer gpa.free(imported);
-    try std.testing.expectEqualStrings("sounds/boom.ogg", imported);
+    defer freePaths(gpa, imported);
+    try std.testing.expectEqual(@as(usize, 1), imported.len);
+    try std.testing.expectEqualStrings("sounds/boom.ogg", imported[0]);
     try std.testing.expect(exists(io, project, "sounds/boom.ogg"));
+}
+
+test "an imported glTF model brings the textures beside it, once" {
+    const gpa = std.testing.allocator;
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var outside = std.testing.tmpDir(.{});
+    defer outside.cleanup();
+    try outside.dir.writeFile(io, .{ .sub_path = "bee.gltf", .data = "{\"images\":[{\"uri\":\"Textures/colormap.png\"},{\"uri\":\"gone.png\"}]}" });
+    try outside.dir.writeFile(io, .{ .sub_path = "cat.gltf", .data = "{\"images\":[{\"uri\":\"Textures/colormap.png\"}]}" });
+    try outside.dir.createDirPath(io, "Textures");
+    try outside.dir.writeFile(io, .{ .sub_path = "Textures/colormap.png", .data = "png" });
+
+    // The first brings the texture's folder; the second finds it there already.
+    const bee_source = try outside.dir.realPathFileAlloc(io, "bee.gltf", gpa);
+    defer gpa.free(bee_source);
+    const bee = try import(gpa, io, tmp.dir, bee_source, "models");
+    defer freePaths(gpa, bee);
+    try std.testing.expectEqual(@as(usize, 2), bee.len);
+    try std.testing.expectEqualStrings("models/bee.gltf", bee[0]);
+    try std.testing.expectEqualStrings("models/Textures", bee[1]);
+    try std.testing.expect(exists(io, tmp.dir, "models/Textures/colormap.png"));
+    const cat_source = try outside.dir.realPathFileAlloc(io, "cat.gltf", gpa);
+    defer gpa.free(cat_source);
+    const cat = try import(gpa, io, tmp.dir, cat_source, "models");
+    defer freePaths(gpa, cat);
+    try std.testing.expectEqual(@as(usize, 1), cat.len);
+}
+
+fn freePaths(gpa: std.mem.Allocator, paths: [][]u8) void {
+    for (paths) |path| gpa.free(path);
+    gpa.free(paths);
 }
 
 test "moves and copies leave legacy descriptors alone, for the catalog to migrate" {

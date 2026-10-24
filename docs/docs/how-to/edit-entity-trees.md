@@ -54,9 +54,23 @@ hidden lights no longer illuminate the scene, and hidden selections have no gizm
 or camera preview. Right-click also offers
 **Hide in editor** / **Show in editor**, with Undo/Redo support.
 
-Folds and eye visibility are editor-only and reset when the world is replaced,
-including scene changes, Undo of scene edits, Play, and game-code reloads. They
-never change saved scene contents or runtime game behavior.
+Folds and eye visibility are kept for each scene in the project's `.eggy/hierarchy.zon`, so
+they are there when you open the scene again. They are editor-only: they never change saved
+scene contents or runtime game behavior.
+
+## Tune one scene instance
+
+A scene instance's entities are listed under it in the Hierarchy, their names tinted. Select
+one and change its fields in the Inspector, or move it with the gizmo, to tune that instance
+alone. For example, a `garden` scene can hold `player_entity` and `player2_entity`, both
+instances of `player.scene.zon`. Give `player_entity`'s player a higher speed and only it
+runs faster.
+
+The scene the instance is in saves only what you changed, on the instance, so a later change
+to `player.scene.zon` still shows in every instance wherever you didn't change it. Only field
+values are kept: these entities can't be dragged to another parent, and a new name or a
+component you add to one isn't saved. Open the instanced scene to change what it is made of.
+Each change is a step you can undo.
 
 ## Inspector components
 

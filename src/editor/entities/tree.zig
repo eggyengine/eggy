@@ -1,6 +1,6 @@
 //! The world's entities as the Hierarchy lists them: in tree order (each followed by its
-//! children, but not a scene instance's, which come from its file), with their names and
-//! components, narrowed by a filter.
+//! children, a scene instance's marked as made from its file), with their names and components,
+//! narrowed by a filter.
 const std = @import("std");
 const eggy = @import("eggy");
 const ecs = eggy.ecs;
@@ -17,6 +17,9 @@ pub const Row = struct {
     self_hidden: bool = false,
     /// The names of its components, in type order.
     components: []const []const u8,
+    /// Made by a scene instance above it from its file: it can be tuned for that instance
+    /// (its fields are saved as the instance's changes), but not renamed or moved.
+    from_instance: bool = false,
     /// Whether it is the last of its siblings shown: the tree's guide line ends at it.
     last: bool = true,
     /// For each level above it (`depth` of them), whether that level's guide line carries on
@@ -38,7 +41,7 @@ pub const Row = struct {
 /// ```
 pub fn collect(arena: std.mem.Allocator, world: *ecs.World, roots: []const ecs.EntityId, access: ?eggy.scene.Access, filter: []const u8) ![]const Row {
     var rows: std.ArrayList(Row) = .empty;
-    for (roots) |entity| try addSubtree(arena, &rows, world, access, entity, 0);
+    for (roots) |entity| try addSubtree(arena, &rows, world, access, entity, 0, false);
     return narrow(arena, rows.items, filter);
 }
 
@@ -88,7 +91,7 @@ fn guides(arena: std.mem.Allocator, rows: []Row) ![]const Row {
     return rows;
 }
 
-fn addSubtree(arena: std.mem.Allocator, rows: *std.ArrayList(Row), world: *ecs.World, access: ?eggy.scene.Access, entity: ecs.EntityId, depth: usize) !void {
+fn addSubtree(arena: std.mem.Allocator, rows: *std.ArrayList(Row), world: *ecs.World, access: ?eggy.scene.Access, entity: ecs.EntityId, depth: usize, from_instance: bool) !void {
     var name_buffer: [eggy.Name.max_len]u8 = undefined;
     var names: std.ArrayList([]const u8) = .empty;
     var name: []const u8 = "";
@@ -101,11 +104,10 @@ fn addSubtree(arena: std.mem.Allocator, rows: *std.ArrayList(Row), world: *ecs.W
         if (eggy.scene_instance.typeIndex(through.types())) |component| instance = through.has(world, entity, component);
     }
     var children = world.children(entity);
-    const has_children = !instance and children.next() != null;
-    try rows.append(arena, .{ .entity = entity, .name = name, .depth = depth, .has_parent = depth > 0, .has_children = has_children, .components = names.items });
-    if (instance) return;
+    const has_children = children.next() != null;
+    try rows.append(arena, .{ .entity = entity, .name = name, .depth = depth, .has_parent = depth > 0, .has_children = has_children, .components = names.items, .from_instance = from_instance });
     children = world.children(entity);
-    while (children.next()) |child| try addSubtree(arena, rows, world, access, child, depth + 1);
+    while (children.next()) |child| try addSubtree(arena, rows, world, access, child, depth + 1, from_instance or instance);
 }
 
 fn matches(row: Row, query: []const u8) bool {
@@ -152,4 +154,23 @@ test "rows come in tree order, and a filter keeps matches with their ancestors" 
     try std.testing.expect(!all[0].last);
     try std.testing.expect(all[3].last);
     try std.testing.expectEqualSlices(bool, &.{ false, false }, all[2].lines);
+}
+
+test "a scene instance's entities are listed under it, marked as made from its file" {
+    const gpa = std.testing.allocator;
+    const access = eggy.scene.registryAccess(eggy.components.Registry(&.{ eggy.Transform, eggy.SceneInstance }, &.{ "eggy", "eggy" }));
+    var world = ecs.World.init(gpa);
+    defer world.deinit();
+    const player_entity = try world.spawn(.{ eggy.Transform{}, eggy.SceneInstance{} });
+    const player = try world.spawn(.{});
+    try world.setParent(player, player_entity);
+    const hat = try world.spawn(.{});
+    try world.setParent(hat, player);
+
+    var arena = std.heap.ArenaAllocator.init(gpa);
+    defer arena.deinit();
+    const rows = try collect(arena.allocator(), &world, &.{player_entity}, access, "");
+    try std.testing.expectEqual(@as(usize, 3), rows.len);
+    try std.testing.expect(rows[0].has_children and !rows[0].from_instance);
+    try std.testing.expect(rows[1].from_instance and rows[2].from_instance);
 }

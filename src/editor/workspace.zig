@@ -163,6 +163,9 @@ pub const Workspace = struct {
     tab_press: ?tab_drag.TabDrag = null,
     /// The bar's tab something carried rests on, shown after a moment.
     spring: tab_drag.SpringLoad = .{},
+    /// Whether a file is carried from Assets, which the bar offers to open in a tab of its own.
+    /// The editor sets it each frame.
+    carrying_file: bool = false,
     /// Which copy of the Scene, 2D Scene and UI Designer is drawn (one per tab can be open), and
     /// the main window's tree they last followed.
     live: panels.Live = .{},
@@ -429,7 +432,15 @@ pub const Workspace = struct {
         if (self.tabs.ofRoot(window.root)) |tab| return self.tabTitleZ(tab);
         const node = self.dock.nodes[window.root];
         if (node.count == 0) return "Panel";
-        return panels.panelTitle(node.panels[node.active], self.plugin_panels);
+        return self.panelTitleZ(node.panels[node.active]);
+    }
+
+    /// Panel `id`'s title: an Asset Preview copy showing one file is named after it.
+    fn panelTitleZ(self: *const Workspace, id: u32) [:0]const u8 {
+        if (panels.copyOf(id)) |found| if (found.panel == .asset_preview and found.copy > 0) {
+            if (self.tabs.previews[found.copy]) |*path| return path.name();
+        };
+        return panels.panelTitle(id, self.plugin_panels);
     }
 
     /// Build and lay out every window's tree: the main window over `viewport`, and each pop-out
@@ -978,13 +989,49 @@ pub const Workspace = struct {
         _ = self.dock.activate(ui.dock.first_id + id);
     }
 
-    /// Show the Asset Preview in an OS window of its own, popping it out of wherever it is
-    /// docked (opening it first if it was closed). Closing the window docks it back home.
-    pub fn previewInWindow(self: *Workspace) !void {
-        const id = @backingInt(Panel.asset_preview);
-        if (self.dock.nodeOf(id)) |stack| if (std.meta.activeTag(self.dock.hostOf(stack)) == .window and self.dock.nodes[stack].count == 1) return;
-        if (self.dock.nodeOf(id) == null) try self.showPanel(.asset_preview);
-        try self.dock.detach(id);
+    /// Where `openAsset` shows a file.
+    pub const AssetPlace = enum { tab, window };
+
+    /// Show the file at `path` (a project path) in an Asset Preview of its own tab: in the main
+    /// window (`.tab`), or popped out into an OS window (`.window`), which closing closes the
+    /// tab. A file already in a tab of its own has that tab brought forward instead. Fails when
+    /// there are too many tabs, previews or windows, or the path is too long to keep.
+    pub fn openAsset(self: *Workspace, path: []const u8, place: AssetPlace) !void {
+        // A file already open comes forward where it is.
+        for (1..panels.max_copies) |copy| {
+            const kept = self.tabs.previews[copy] orelse continue;
+            if (!std.mem.eql(u8, kept.slice(), path)) continue;
+            const id = panels.copyId(.asset_preview, @intCast(copy));
+            if (self.dock.nodeOf(id) == null) continue;
+            self.live.asset_preview = @intCast(copy);
+            if (self.tabs.ofPanel(&self.dock, id)) |tab| if (self.tabs.windowOf(&self.dock, tab) == null) self.tabs.show(&self.dock, tab);
+            _ = self.dock.activate(ui.dock.first_id + id);
+            return;
+        }
+
+        // A copy of the Asset Preview no tab has, showing `path`, in a new asset tab.
+        const copy = for (1..panels.max_copies) |copy| {
+            if (self.dock.nodeOf(panels.copyId(.asset_preview, @intCast(copy))) == null) break copy;
+        } else return error.TooManyCopies;
+        const kept = workspace_tabs.PreviewPath.of(path) orelse return error.NameTooLong;
+        const was = self.tabs.active;
+        const index = try self.tabs.open(&self.dock, .asset);
+        errdefer self.tabs.close(&self.dock, index);
+        try self.dock.add(panels.copyId(.asset_preview, @intCast(copy)), null, .center);
+        self.tabs.previews[copy] = kept;
+        self.live.asset_preview = @intCast(copy);
+        if (place == .tab) return;
+
+        // Out into a window, the tab shown before staying shown.
+        try self.tabs.popOut(&self.dock, index, .{ 720, 640 });
+        if (was) |shown| if (self.tabs.windowOf(&self.dock, shown) == null) self.tabs.show(&self.dock, shown);
+        self.followed_root = self.dock.root;
+    }
+
+    /// Whether (x, y) in the main window is on the tab bar, where a file let go opens in a tab.
+    pub fn onTabBar(self: *const Workspace, x: f32, y: f32) bool {
+        const root = self.roots[main_slot] orelse return false;
+        return tab_bar.dropAt(root, self.tabs.count(), x, y) != null;
     }
 
     /// Show the tab holding the live UI Designer, or open a UI tab when it isn't docked in one.
@@ -1009,11 +1056,7 @@ pub const Workspace = struct {
     /// properties on the right.
     fn newTab(self: *Workspace, kind: workspace_tabs.Kind) !void {
         switch (kind) {
-            .scene_3d => {
-                const copy = try self.freeCopy(&scene_preset);
-                _ = try self.tabs.open(&self.dock, .scene_3d);
-                try self.addScenePreset(copy);
-            },
+            .scene_3d => _ = try self.openSceneTab(),
             .scene_2d => {
                 const copy = try self.freeCopy(&.{.scene_2d});
                 _ = try self.tabs.open(&self.dock, .scene_2d);
@@ -1029,8 +1072,17 @@ pub const Workspace = struct {
                 try self.dock.add(panels.copyId(.ui_properties, copy), designer, .right);
                 self.splitRatio(panels.copyId(.ui_properties, copy), 0.72);
             },
-            .panels => {},
+            .panels, .asset => {},
         }
+    }
+
+    /// Open a new 3D tab, shown, with its own copy of the 3D preset; returns which copy, which
+    /// is the Scene copy's for `panels.Live.scene`.
+    pub fn openSceneTab(self: *Workspace) !u8 {
+        const copy = try self.freeCopy(&scene_preset);
+        _ = try self.tabs.open(&self.dock, .scene_3d);
+        try self.addScenePreset(copy);
+        return copy;
     }
 
     /// The first copy number none of `group`'s panels have open, for a new tab's.
@@ -1058,11 +1110,13 @@ pub const Workspace = struct {
         };
     }
 
-    /// The OS window `index` was closed: a tab in it goes back to the tab bar, and panels go
-    /// back to where they were.
+    /// The OS window `index` was closed: an asset's tab in it closes (unless pinned), another
+    /// tab goes back to the tab bar, and panels go back to where they were.
     pub fn closeWindow(self: *Workspace, index: usize) void {
         const window = self.dock.windows[index] orelse return;
-        if (self.tabs.ofRoot(window.root) != null) {
+        if (self.tabs.ofRoot(window.root)) |tab| {
+            const found = self.tabs.list[tab].?;
+            if (found.kind == .asset and !found.pinned) return self.tabs.close(&self.dock, tab);
             self.dock.windows[index] = null;
             return;
         }
@@ -1181,6 +1235,10 @@ pub const Workspace = struct {
                 if (self.live.of(found.panel)) |live| live.* = found.copy;
             };
         }
+        // A preview closed forgets its file, so its copy shows the selection when it opens again.
+        for (1..panels.max_copies) |copy| {
+            if (self.dock.nodeOf(panels.copyId(.asset_preview, @intCast(copy))) == null) self.tabs.previews[copy] = null;
+        }
         for (panels.live_panels) |panel| {
             const live = self.live.of(panel).?;
             if (self.dock.nodeOf(panels.copyId(panel, live.*)) != null) continue;
@@ -1191,14 +1249,15 @@ pub const Workspace = struct {
         }
     }
 
-    /// Tab `index`'s name: its kind's, or for panels dragged onto the bar, its first panel's.
+    /// Tab `index`'s name: its kind's, or for panels dragged onto the bar and asset tabs, its
+    /// first panel's (an Asset Preview's file).
     fn tabTitleZ(self: *const Workspace, index: usize) [:0]const u8 {
         const tab = self.tabs.list[index] orelse return "Tab";
-        if (tab.kind != .panels) return tab.kind.title();
+        if (tab.kind != .panels and tab.kind != .asset) return tab.kind.title();
         var at = tab.root;
         while (self.dock.nodes[at].kind == .split) at = self.dock.nodes[at].first;
         const node = self.dock.nodes[at];
-        return if (node.count > 0) panels.panelTitle(node.panels[0], self.plugin_panels) else tab.kind.title();
+        return if (node.count > 0) self.panelTitleZ(node.panels[0]) else tab.kind.title();
     }
 
     /// The tab bar as it looks this frame; `hot` is the control under the pointer.
@@ -1214,9 +1273,11 @@ pub const Workspace = struct {
         }
         // A panel carried over the bar lands in a tab or a new one; a tab carried along it, in a place.
         const carried_tab = if (self.tab_press) |pressed| if (pressed.started) self.tabs.ofRoot(pressed.root) else null else null;
-        const carried = self.draggedPanel() != null and carried_tab == null;
+        const carried = (self.draggedPanel() != null or self.carrying_file) and carried_tab == null;
         const over_bar = (carried or carried_tab != null) and self.pointer_slot == main_slot;
-        const drop = if (over_bar) if (self.roots[main_slot]) |root| tab_bar.dropAt(root, count, self.pointer.x, self.pointer.y) else null else null;
+        var drop = if (over_bar) if (self.roots[main_slot]) |root| tab_bar.dropAt(root, count, self.pointer.x, self.pointer.y) else null else null;
+        // A file always opens in a new tab.
+        if (self.carrying_file and drop != null) drop = .new;
         return tab_bar.element(b, width, font, .{
             .titles = titles,
             .active = self.tabs.active,
@@ -1419,16 +1480,41 @@ test "a pinned tab can't be closed until it is unpinned" {
     try std.testing.expectEqual(@as(usize, 0), workspace.tabs.count());
 }
 
-test "previewing an asset pops the Asset Preview out into a window, once" {
+test "previewing an asset opens a tab of its own in a window, once, and closing the window closes the tab" {
     var workspace = try testWorkspace();
     defer workspace.deinit();
     workspace.dock.os_windows = true;
-    const id = @backingInt(Panel.asset_preview);
-    try workspace.previewInWindow();
+    const tabs_before = workspace.tabs.count();
+    const shown_before = workspace.tabs.active;
+    try workspace.openAsset("resources/bee.glb", .window);
+    try std.testing.expectEqual(tabs_before + 1, workspace.tabs.count());
+    try std.testing.expectEqual(shown_before, workspace.tabs.active);
+    const id = panels.copyId(.asset_preview, workspace.live.asset_preview);
+    try std.testing.expect(workspace.live.asset_preview > 0);
     const host = workspace.dock.hostOf(workspace.dock.nodeOf(id).?);
     try std.testing.expect(std.meta.activeTag(host) == .window);
-    try workspace.previewInWindow();
-    try std.testing.expect(std.meta.eql(host, workspace.dock.hostOf(workspace.dock.nodeOf(id).?)));
+    try std.testing.expectEqualStrings("bee.glb", workspace.windowTitle(host.window));
+
+    // The same file again brings the same window forward.
+    try workspace.openAsset("resources/bee.glb", .window);
+    try std.testing.expectEqual(tabs_before + 1, workspace.tabs.count());
+
+    // Closing the window closes only that tab; the Asset Preview that follows Assets stays.
+    workspace.closeWindow(host.window);
+    workspace.followShownTab();
+    try std.testing.expectEqual(tabs_before, workspace.tabs.count());
+    try std.testing.expect(workspace.dock.nodeOf(id) == null);
+    try std.testing.expect(workspace.dock.nodeOf(@backingInt(Panel.asset_preview)) != null);
+    try std.testing.expectEqual(@as(u8, 0), workspace.live.asset_preview);
+}
+
+test "a file dropped on the tab bar opens in a new tab, shown" {
+    var workspace = try testWorkspace();
+    defer workspace.deinit();
+    try workspace.openAsset("resources/models/tree.glb", .tab);
+    const shown = workspace.tabs.active.?;
+    try std.testing.expectEqual(workspace_tabs.Kind.asset, workspace.tabs.list[shown].?.kind);
+    try std.testing.expectEqualStrings("tree.glb", workspace.tabTitleZ(shown));
 }
 
 test "the Window menu closes and reopens a panel" {

@@ -143,6 +143,23 @@ pub const Step = union(enum) {
         }
     }
 
+    /// One step for files made together (`paths` and each path owned, both taken even on
+    /// failure): a `create`, or a group of them that undo trashes in reverse.
+    ///
+    /// ```zig
+    /// history.record(try Step.created(gpa, try file_ops.import(gpa, io, project, outside, "resources")));
+    /// ```
+    pub fn created(gpa: std.mem.Allocator, paths: [][]u8) !Step {
+        defer gpa.free(paths);
+        if (paths.len == 1) return .{ .create = .{ .path = paths[0] } };
+        errdefer for (paths) |path| gpa.free(path);
+        const steps = try gpa.alloc(Step, paths.len);
+        errdefer gpa.free(steps);
+        const label = try gpa.dupe(u8, "an import");
+        for (steps, paths) |*step, path| step.* = .{ .create = .{ .path = path } };
+        return .{ .group = .{ .label = label, .steps = steps } };
+    }
+
     /// What it was, for the Console and the Edit menu.
     /// Returns static text or a borrowed group label, valid while that step remains alive.
     ///

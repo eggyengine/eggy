@@ -5,6 +5,7 @@
 const std = @import("std");
 const zon_file = @import("eggy").assets.zon;
 const builtin = @import("builtin");
+const package_removal = @import("package_removal.zig");
 
 pub const Request = struct {
     /// The project's folder, absolute.
@@ -115,6 +116,18 @@ pub const Install = struct {
             return error.FingerprintMismatch;
         }
         self.say("Fingerprint 0x{x} matches", .{found});
+
+        // A folder entry goes first, since `--save` would keep its `.path` key; put back if saving fails.
+        const io = self.threaded.io();
+        var project = try std.Io.Dir.cwd().openDir(io, request.project_dir, .{});
+        defer project.close(io);
+        const package = try project.readFileAllocOptions(io, "build.zig.zon", arena, .limited(1 << 20), .of(u8), 0);
+        const replaces_folder = package_removal.isFolderDependency(arena, package, request.dependency) catch false;
+        if (replaces_folder) {
+            self.say("Replacing the folder dependency {s}", .{request.dependency});
+            try project.writeFile(io, .{ .sub_path = "build.zig.zon", .data = (try package_removal.withoutDependency(arena, package, request.dependency)).? });
+        }
+        errdefer if (replaces_folder) project.writeFile(io, .{ .sub_path = "build.zig.zon", .data = package }) catch {};
 
         // Saved: Zig pins its hash in build.zig.zon.
         self.say("$ zig fetch --save={s} {s}", .{ request.dependency, request.url });

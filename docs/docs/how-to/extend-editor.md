@@ -145,6 +145,46 @@ Only one lifecycle request may be pending, and one cannot be queued inside an ac
 Use the [Console controls](../how-to/handle-errors.md#inspect-the-console) to filter
 and inspect diagnostics.
 
+## Drive the editor from a tool
+
+A tool that works the editor on someone's behalf, such as a server an AI agent talks to,
+can read and change the whole scene and run the game from its hooks:
+
+```zig
+pub fn editorUpdate(self: *Plugin, editor: *eggy.editor.Context) !void {
+    var arena = std.heap.ArenaAllocator.init(self.gpa);
+    defer arena.deinit();
+    const now = try editor.status(arena.allocator());
+    if (now.play != .editing) return;
+    const scene = try editor.sceneText(arena.allocator());
+    _ = scene;
+    _ = try editor.addToScene(".{ .entities = .{ .{ .name = \"Rock\" } } }", null);
+}
+```
+
+- `status(arena)` says which scene is open and whether it is saved, whether the game
+  is playing or paused, how the last `requestBuild` went (with the end of its output),
+  and what Undo and Redo would do.
+- `sceneText(arena)` returns the world as scene-file ZON. `replaceScene(zon)` replaces
+  every entity with that ZON, and `addToScene(zon, parent)` adds its entities, under the
+  entity at place `parent` in `sceneText`'s `.entities` when one is given. Each is one
+  undo step, works only while editing, and returns how many components or fields it
+  couldn't put in; the Console says why.
+- `componentTypes(arena)` lists every component a scene can hold, with each field's
+  default value as ZON, so a tool can write components it wasn't compiled with.
+- `consoleText(arena, max_messages)` returns the Console's latest messages.
+- `undo` and `redo` queue Edit > Undo and Redo for after the hook.
+- `play(seconds)`, `pause`, `resumePlay(seconds)` and `stopPlay` queue play controls.
+  Editor hooks don't run while the game runs, so `play` and `resumePlay` pause by
+  themselves after `seconds` (0 runs until stopped), and the tool picks up again once
+  paused.
+
+Play, Stop, Undo of a scene step and a library reload start plugins over, so keep
+nothing from `app.world` past the hook. A build a tool asked for with `requestBuild`
+closes its Build window by itself when it ends; read how it went from `status`. When the
+build changed the editor itself, the rebuilt editor opens in its place, and the tool starts
+over there.
+
 ## Check the edit and its undo
 
 In editing mode, select an entity with a Transform, press Raise selection, and check

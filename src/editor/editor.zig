@@ -24,6 +24,7 @@ const project_settings_zig = @import("project_settings.zig");
 const ProjectSettings = project_settings_zig.ProjectSettings;
 const DevtoolsWindow = @import("devtools_window.zig").DevtoolsWindow;
 const AboutWindow = @import("about_window.zig").AboutWindow;
+const PlayCameraPrompt = @import("play_camera_prompt.zig").PlayCameraPrompt;
 const window_placement = @import("window_placement.zig");
 const source_stamp = @import("projects/source_stamp.zig");
 const Console = @import("console.zig").Console;
@@ -68,8 +69,10 @@ const input_map_asset = @import("input_map_asset/input_map_asset.zig");
 const animation_dock = @import("animation_dock/animation_dock.zig");
 const ui_designer = @import("ui_designer/ui_designer.zig");
 const AssetPreview = @import("asset_preview.zig").AssetPreview;
+const AssetPreviewRequest = @import("asset_preview.zig").Request;
 const Scene2d = @import("scene_2d.zig").Scene2d;
 const tab_views = @import("tab_views.zig");
+const scene_tabs = @import("scene_tabs.zig");
 /// The Preferences section File > Project Settings opens.
 const project_section = "Project";
 
@@ -141,6 +144,12 @@ pub fn Editor(comptime project: type) type {
         /// The installed plugins being checked for newer versions, and when that last began.
         plugin_updates: ?*plugin_manager.AutoUpdate = null,
         plugins_checked_ms: ?u64 = null,
+        /// "Update plugin?", while a newer version waits for an answer; and the versions skipped
+        /// ("module@version", owned), not offered again this run.
+        update_prompt: ?*plugin_manager.UpdatePrompt = null,
+        skipped_updates: std.ArrayList([]u8) = .empty,
+        /// Shift+Play's "Play from which camera?", while open.
+        play_camera_prompt: ?*PlayCameraPrompt = null,
         /// File > Project Settings, while open.
         /// The Preferences window's Project section, while that window is open on a project.
         project_settings: ?*ProjectSettings = null,
@@ -170,6 +179,8 @@ pub fn Editor(comptime project: type) type {
         scene_2d: Scene2d = .{},
         /// Each tab's own Scene camera, 2D view and UI scene, swapped in as its copy goes live.
         tab_views: tab_views.TabViews = .{},
+        /// Which scene each 3D tab shows; the live one's is the open scene.
+        scene_tabs: scene_tabs.SceneTabs = .{},
         animation: animation_dock.Dock = .{},
         asset_icons: AssetIcons,
         console: Console,
@@ -409,6 +420,7 @@ pub fn Editor(comptime project: type) type {
             if (game) |*loaded| {
                 if (opened_project) |opened| {
                     open_scene = .{ .gpa = gpa, .project_dir = opened.dir };
+                    loaded.instances = app.instanceHooks();
                     open_scene.?.reopen(&app.world, loaded.sceneAccess());
                 }
             }
@@ -447,6 +459,10 @@ pub fn Editor(comptime project: type) type {
             if (self.export_window) |window| window.close(&self.app.graphics);
             if (self.plugins_window) |window| window.close(&self.app.graphics);
             if (self.plugin_updates) |updates| updates.destroy();
+            if (self.update_prompt) |prompt| prompt.close(&self.app.graphics);
+            if (self.play_camera_prompt) |prompt| prompt.close(&self.app.graphics);
+            for (self.skipped_updates.items) |key| self.gpa.free(key);
+            self.skipped_updates.deinit(self.gpa);
             if (self.project_settings) |settings| settings.close();
             if (self.save_prompt) |prompt| prompt.close(&self.app.graphics);
             // The dock as this user left it, for the next editor.
@@ -488,6 +504,7 @@ pub fn Editor(comptime project: type) type {
             self.assets_ui.deinit();
             self.ui_designer.deinit(self.gpa);
             self.tab_views.deinit(self.gpa);
+            self.scene_tabs.deinit(self.gpa);
             self.ui_designer_ui.deinit();
             self.ui_tree_ui.deinit();
             self.ui_properties_ui.deinit();
@@ -518,6 +535,7 @@ pub fn Editor(comptime project: type) type {
         /// if (result != .run) return result;
         /// ```
         pub fn iterate(self: *Self) !sdl3.AppResult {
+            self.followInstances();
             // Graphics choices queued since last frame take effect before anything is drawn.
             try self.app.applyGraphicsSettings();
             self.app.beginDiagnosticsFrame();
@@ -544,6 +562,8 @@ pub fn Editor(comptime project: type) type {
             // The game stays paused while the Build progress window is up.
             // The game runs only while playing; otherwise only its editor tools do.
             if (self.build_window == null) if (self.game) |*game| {
+                // Play an editor tool started for a while pauses, letting the tool back in.
+                if (self.play_mode.running() and self.extension_state.pauseDue(sdl3.timer.getMillisecondsSinceInit())) self.setPaused(true);
                 if (self.play_mode.running()) {
                     self.app.time.tick(sdl3.timer.getNanosecondsSinceInit());
                     try self.app.advanceInput();
@@ -564,6 +584,7 @@ pub fn Editor(comptime project: type) type {
             // selection's gizmo over it.
             self.syncSceneInstances();
             self.entity_editor.forgetDead(&self.app);
+            if (self.project) |opened| self.entity_editor.keepView(&self.app, self.gamePtr(), opened.dir, self.openScenePath() orelse "");
             // The tab shown last frame decides whose Scene camera, 2D view and UI scene are in use.
             self.followTabs();
             const look: scene_view.SceneView.Look = if (!self.play_mode.playing()) .editing else if (self.workspace.simulating) .simulating else .playing;
@@ -611,6 +632,7 @@ pub fn Editor(comptime project: type) type {
             self.workspace.can_upgrade = self.upgrades.can_upgrade;
             self.workspace.can_link = self.upgrades.can_link;
             self.workspace.developer_known = self.upgrades.developer_dir != null;
+            self.workspace.carrying_file = self.assets_panel.dragged() != null;
             const modifiers = sdl3.keyboard.getModState();
             self.workspace.shift_held = modifiers.left_shift or modifiers.right_shift;
             const stop_key = preferences.editor(&self.app.preference_values).stop_play_key;
@@ -665,9 +687,8 @@ pub fn Editor(comptime project: type) type {
                     panels.ui_designer_page => if (self.uiDesignerEnv()) |env| self.ui_designer.buildPreview(page_ui, env) else page_ui.muted("Open a project to design UI."),
                     panels.ui_tree_page => if (self.uiDesignerEnv()) |env| self.ui_designer.buildTree(page_ui, env) else page_ui.muted("Open a project to design UI."),
                     panels.asset_preview_page => if (self.project) |opened| if (self.project_assets) |project_assets| {
-                        const picked = self.assets_panel.selection();
                         self.asset_preview.build(page_ui, .{
-                            .selection = if (picked) |chosen| .{ .path = chosen.path, .virtual = chosen.virtual } else null,
+                            .selection = self.previewed(),
                             .assets = project_assets,
                             .project_dir = opened.dir,
                             .app = &self.app,
@@ -713,6 +734,10 @@ pub fn Editor(comptime project: type) type {
             if (self.save_prompt) |prompt| if (try prompt.update(&self.app.graphics, &self.ui)) |answer| {
                 if (try self.answerSavePrompt(answer)) return .success;
             };
+            // "Update plugin?", if asking.
+            if (self.update_prompt) |prompt| if (try prompt.update(&self.app.graphics, &self.ui)) |install| self.answerUpdatePrompt(install);
+            // Shift+Play's camera choice, if asking.
+            if (self.play_camera_prompt) |prompt| if (try prompt.update(&self.app.graphics, &self.ui)) |answer| self.answerPlayCamera(answer);
             self.autosave();
             // Edit > Preferences, if open.
             if (self.preferences_window) |window| {
@@ -957,7 +982,48 @@ pub fn Editor(comptime project: type) type {
         }
 
         /// Play or Simulate: keep the scene, then run the game with nothing selected.
-        fn startPlaying(self: *Self) void {
+        pub fn startPlaying(self: *Self) void {
+            self.startPlayingFrom(null);
+        }
+
+        /// Shift+Play: ask which of the scene's cameras to play from. With none, it just plays.
+        fn askPlayCamera(self: *Self) void {
+            self.workspace.playing = false;
+            if (self.play_camera_prompt != null) return;
+            const game = if (self.game) |*loaded| loaded else return self.startPlaying();
+            var arena = std.heap.ArenaAllocator.init(self.gpa);
+            defer arena.deinit();
+            const cameras = scene_view.game_camera.list(arena.allocator(), game, &self.app) catch return self.startPlaying();
+            if (cameras.entities.len == 0) {
+                self.workspace.toast("The scene has no camera to pick, so it plays as it is");
+                return self.startPlaying();
+            }
+            const choices = arena.allocator().alloc(PlayCameraPrompt.Choice, cameras.entities.len) catch return self.startPlaying();
+            for (choices, cameras.entities) |*choice, entity| {
+                var buffer: [eggy.Name.max_len]u8 = undefined;
+                const name = game.readName(&self.app, entity, &buffer) orelse "";
+                choice.* = .{ .entity = entity, .name = if (name.len > 0) arena.allocator().dupe(u8, name) catch "Camera" else std.fmt.allocPrint(arena.allocator(), "Camera {d}", .{entity.id}) catch "Camera" };
+            }
+            self.play_camera_prompt = PlayCameraPrompt.open(self.gpa, &self.app.graphics, self.ui.font, self.app.window.window, choices, cameras.current) catch |err| {
+                std.log.err("cannot ask which camera to play from: {t}", .{err});
+                return self.startPlaying();
+            };
+        }
+
+        /// "Play from which camera?" was answered: play from the camera picked, or not at all.
+        fn answerPlayCamera(self: *Self, answer: PlayCameraPrompt.Answer) void {
+            const prompt = self.play_camera_prompt orelse return;
+            prompt.close(&self.app.graphics);
+            self.play_camera_prompt = null;
+            switch (answer) {
+                .play => |camera| self.startPlayingFrom(camera),
+                .cancel => {},
+            }
+        }
+
+        /// Play, looking through `camera` (an entity of the scene) alone when one is given.
+        fn startPlayingFrom(self: *Self, camera: ?eggy.ecs.EntityId) void {
+            self.extension_state.pause_at_ms = null;
             // Not with components whose plugin is off: their code isn't there to run them.
             if (self.playWarning()) |warning| {
                 self.workspace.playing = false;
@@ -973,11 +1039,14 @@ pub fn Editor(comptime project: type) type {
             // Start as the shipped game does, with no keys held and its clock at zero.
             self.app.input.cancel();
             self.app.time.reset();
-            self.play_mode.play(self.gpa, &self.app, game, self.entity_editor.roots(&self.app.world), self.plugin_switches.off()) catch |err| {
+            var follow = [_]eggy.ecs.EntityId{camera orelse undefined};
+            self.play_mode.play(self.gpa, &self.app, game, self.entity_editor.roots(&self.app.world), self.plugin_switches.off(), follow[0..@intFromBool(camera != null)]) catch |err| {
                 self.workspace.playing = false;
                 self.workspace.simulating = false;
                 return std.log.err("cannot start playing: {t}", .{err});
             };
+            // The camera picked is the only one the game looks through; Stop puts the scene back.
+            if (camera != null) scene_view.game_camera.makeOnlyActive(game, &self.app, follow[0]);
             self.entity_editor.resetWorldView();
             self.workspace.playing = true;
             self.game_input = .{ .focused = true };
@@ -985,7 +1054,8 @@ pub fn Editor(comptime project: type) type {
 
         /// Stop: the game starts over on the scene kept by Play. Entities are made anew; the
         /// selection follows its entity there.
-        fn stopPlaying(self: *Self) void {
+        pub fn stopPlaying(self: *Self) void {
+            self.extension_state.pause_at_ms = null;
             self.releaseViewportMouse();
             self.scene_view.camera.cancelNavigation();
             self.game_input.cancel(&self.app);
@@ -997,6 +1067,13 @@ pub fn Editor(comptime project: type) type {
             const place = self.entity_editor.selectionPlace(&self.app, game);
             self.play_mode.stop(&self.app, game, self.plugin_switches.off());
             self.entity_editor.reselect(&self.app, game, place);
+        }
+
+        /// Hold the game where it is (true), or let it go on, as the pause button does.
+        pub fn setPaused(self: *Self, paused: bool) void {
+            self.play_mode.paused = paused;
+            self.workspace.paused = paused;
+            self.app.input.cancel();
         }
 
         /// Keep the selected entity's Transform as it is in play, for when play stops (Ctrl+Shift+K).
@@ -1063,7 +1140,7 @@ pub fn Editor(comptime project: type) type {
                     defer self.gpa.free(folder);
                     file_manager.showFolder(self.gpa, folder) catch |err| std.log.err("cannot show {s}: {t}", .{ path, err });
                 },
-                .preview => |path| self.workspace.previewInWindow() catch |err| {
+                .preview => |path| self.workspace.openAsset(path, .window) catch |err| {
                     std.log.err("cannot preview {s} in a window: {t}", .{ path, err });
                     self.workspace.toast("Couldn't open the preview window: see the Console");
                 },
@@ -1117,6 +1194,19 @@ pub fn Editor(comptime project: type) type {
         /// try host.openSceneStep(.{ .open_scene = "resources/scene/main.scene.zon" });
         /// ```
         pub fn openSceneStep(self: *Self, action: assets.Action) !void {
+            return switch (action) {
+                .open_scene => |path| self.replaceSceneStep(.{ .open = path }),
+                .create_scene => |folder| self.replaceSceneStep(.{ .create = folder }),
+                else => unreachable,
+            };
+        }
+
+        /// What `replaceSceneStep` puts in the world: a scene file, a new one in a folder, or a
+        /// world a 3D tab kept (borrowed).
+        const SceneSource = union(enum) { open: []const u8, create: []const u8, kept: scene_tabs.Kept };
+
+        /// Replace the world with `source`, as one step to undo; see `openSceneStep`.
+        fn replaceSceneStep(self: *Self, source: SceneSource) !void {
             self.stopPlaying();
             const scene = if (self.open_scene) |*open| open else return;
             const game = if (self.game) |*loaded| loaded else return error.NoGameLibrary;
@@ -1128,10 +1218,17 @@ pub fn Editor(comptime project: type) type {
             errdefer if (from) |path| self.gpa.free(path);
             const from_saved = scene.saved_hash;
 
-            switch (action) {
-                .open_scene => |path| try scene.open(path, &self.app.world, game.sceneAccess()),
-                .create_scene => |folder| try scene.create(folder, &self.app.world, game.sceneAccess()),
-                else => unreachable,
+            switch (source) {
+                .open => |path| try scene.open(path, &self.app.world, game.sceneAccess()),
+                .create => |folder| try scene.create(folder, &self.app.world, game.sceneAccess()),
+                .kept => |kept| {
+                    const text = try self.gpa.dupeSentinel(u8, kept.text, 0);
+                    defer self.gpa.free(text);
+                    var world = try eggy.scene.Scene.parse(self.gpa, text);
+                    defer world.deinit();
+                    game.restart(&self.app, &world, self.plugin_switches.off(), .discard);
+                    try scene.reopenAs(kept.path, kept.saved_hash);
+                },
             }
             self.entity_editor.resetWorldView();
             self.filesChanged();
@@ -1144,7 +1241,7 @@ pub fn Editor(comptime project: type) type {
                 .to = try self.gpa.dupe(u8, scene.path.?),
                 .to_world = to_world,
                 .to_saved = scene.saved_hash,
-                .created = action == .create_scene,
+                .created = source == .create,
             } });
         }
 
@@ -1424,7 +1521,7 @@ pub fn Editor(comptime project: type) type {
         }
 
         /// Edit > Undo or Redo: carry the step back (`.undo`) or out again (`.redo`).
-        fn undoOrRedo(self: *Self, direction: eggy.Direction) void {
+        pub fn undoOrRedo(self: *Self, direction: eggy.Direction) void {
             if (self.input_settings) |settings| settings.recordPending(&self.history) catch |err| {
                 std.log.err("cannot record input mappings before undo: {t}", .{err});
                 return self.workspace.toast("Couldn't record input mappings: see the Console");
@@ -1936,6 +2033,7 @@ pub fn Editor(comptime project: type) type {
         /// if (result != .run) return result;
         /// ```
         pub fn event(self: *Self, curr_event: sdl3.events.Event) !sdl3.AppResult {
+            self.followInstances();
             try self.app.deviceEvent(curr_event);
             if (self.about_window) |window| {
                 if (window.closeRequested(curr_event)) {
@@ -1966,6 +2064,22 @@ pub fn Editor(comptime project: type) type {
                 if (prompt.keyAnswer(curr_event)) |answer| return if (try self.answerSavePrompt(answer)) .success else .run;
                 if (prompt.handle(curr_event)) return .run;
                 if (weeoui_sdl3.translate(curr_event) != null) return .run;
+            }
+            // "Update plugin?" takes its own events; closing it, or Escape, skips.
+            if (self.update_prompt) |prompt| {
+                if (prompt.keyAnswer(curr_event)) |install| {
+                    self.answerUpdatePrompt(install);
+                    return .run;
+                }
+                if (prompt.handle(curr_event)) return .run;
+            }
+            // "Play from which camera?" takes its own events; closing it, or Escape, cancels.
+            if (self.play_camera_prompt) |prompt| {
+                if (prompt.keyAnswer(curr_event)) |answer| {
+                    self.answerPlayCamera(answer);
+                    return .run;
+                }
+                if (prompt.handle(curr_event)) return .run;
             }
             // File > New/Open Project's window takes its own events; closing it, or Escape, cancels.
             if (self.project_flow) |flow| {
@@ -2115,13 +2229,10 @@ pub fn Editor(comptime project: type) type {
                 .window => |button| if (button != .close or self.mayLeave(.quit)) {
                     if (weeoui_sdl3.windowAction(self.app.window.window, button)) return .success;
                 },
-                .play => |playing| if (playing) self.startPlaying() else self.stopPlaying(),
+                .play => |playing| if (!playing) self.stopPlaying() else if (self.workspace.shift_held) self.askPlayCamera() else self.startPlaying(),
                 .simulate => self.startPlaying(),
                 .scene_button => |button| self.scene_view.press(button),
-                .pause => |paused| {
-                    self.play_mode.paused = paused;
-                    self.app.input.cancel();
-                },
+                .pause => |paused| self.setPaused(paused),
                 .new_project => if (self.project_flow == null and self.mayLeave(.new_project)) {
                     layout_file.save(self.gpa, self.preference_folders.global, &self.workspace.dock, &self.workspace.tabs, self.workspace.seen_plugin_panels.items);
                     self.project_flow = try ProjectFlow.create(self.gpa, &self.app.graphics, self.ui.font, self.mono);
@@ -2410,10 +2521,23 @@ pub fn Editor(comptime project: type) type {
         fn updateBuildWindow(self: *Self, window: *BuildWindow, arena: std.mem.Allocator) !bool {
             // A build that changed nothing was dropped (see `rebuildState`): nothing to show.
             const job = self.rebuild orelse {
+                self.extension_state.closes_build_window = false;
                 self.closeBuildWindow();
                 return false;
             };
             const status = try job.status(arena);
+            // A build an editor tool asked for closes by itself, its outcome kept for the tool.
+            // When the editor itself was rebuilt, the tool can't press Reload: open it in place of this one.
+            if (self.extension_state.closes_build_window and (status.stage == .done or status.stage == .failed)) {
+                self.extension_state.closes_build_window = false;
+                if (status.stage == .failed) {
+                    self.cancelBuild();
+                } else if (!std.meta.eql(editorModified(self.gpa, self.project.?), self.editor_modified)) {
+                    return try self.launchRebuilt(job);
+                }
+                self.closeBuildWindow();
+                return false;
+            }
             // Reload asked for the editor as soon as it is built.
             if (self.reload_when_built and status.stage == .done) return try self.launchRebuilt(job);
             switch (try window.update(&self.app.graphics, &self.ui, status, self.workspace.build_state == .ready)) {
@@ -2491,6 +2615,7 @@ pub fn Editor(comptime project: type) type {
         fn rebuildState(self: *Self, arena: std.mem.Allocator) !workspace_zig.BuildState {
             const job = self.rebuild orelse return .idle;
             const status = try job.status(arena);
+            if (status.stage == .done or status.stage == .failed) self.extension_state.noteBuild(self.gpa, status.stage == .failed, status.log);
             return switch (status.stage) {
                 .failed => .failed,
                 .done => blk: {
@@ -2537,6 +2662,7 @@ pub fn Editor(comptime project: type) type {
                 };
                 if (self.project) |opened| {
                     if (self.open_scene == null) self.open_scene = .{ .gpa = self.gpa, .project_dir = opened.dir };
+                    self.game.?.instances = self.app.instanceHooks();
                     self.open_scene.?.reopen(&self.app.world, self.game.?.sceneAccess());
                 }
             }
@@ -2616,6 +2742,39 @@ pub fn Editor(comptime project: type) type {
             self.layout_changed_ms = null;
         }
 
+        /// A file let go on the tab bar: a scene opens in a 3D tab of its own, beside the one
+        /// open; anything else, in an Asset Preview tab.
+        fn openInTab(self: *Self, path: []const u8, kind: eggy.assets.Kind) void {
+            if (kind != .scene) return self.workspace.openAsset(path, .tab) catch |err| {
+                std.log.warn("cannot open {s} in a tab: {t}", .{ path, err });
+                self.workspace.toast("Couldn't open the tab: too many tabs or panels");
+            };
+            const copy = self.workspace.openSceneTab() catch |err| {
+                std.log.warn("cannot open {s} in a tab: {t}", .{ path, err });
+                return self.workspace.toast("Couldn't open the tab: too many tabs or panels");
+            };
+            self.scene_tabs.assign(self.gpa, copy, path) catch return self.workspace.toast("Couldn't open the scene: out of memory");
+        }
+
+        /// Point the game's scene access at this App's scene instances, wherever the editor
+        /// now is in memory, so scenes save and put back what each instance changed.
+        fn followInstances(self: *Self) void {
+            if (self.game) |*game| game.instances = self.app.instanceHooks();
+        }
+
+        /// The file the live Asset Preview shows: its own tab's, or the one selected in Assets.
+        fn previewed(self: *Self) @FieldType(AssetPreviewRequest, "selection") {
+            const copy = self.workspace.live.asset_preview;
+            if (copy > 0) if (self.workspace.tabs.previews[copy]) |*kept| {
+                const path = kept.slice();
+                // A model's parts are paths inside it.
+                const virtual = if (std.fs.path.dirname(path)) |parent| eggy.assets.Kind.of(parent) == .model else false;
+                return .{ .path = path, .virtual = virtual };
+            };
+            const picked = self.assets_panel.selection() orelse return null;
+            return .{ .path = picked.path, .virtual = picked.virtual };
+        }
+
         /// What is being dragged between panels, if anything. In `arena`.
         fn dragging(self: *Self, arena: std.mem.Allocator) ?Dragged {
             // Only an asset a field can hold is dragged out: folders and what has no identity stay.
@@ -2638,14 +2797,16 @@ pub fn Editor(comptime project: type) type {
             const io = threaded.io();
             var files = std.Io.Dir.cwd().openDir(io, opened.dir, .{}) catch return;
             defer files.close(io);
+            defer self.filesChanged();
             const imported = file_ops.import(self.gpa, io, files, dropped.file_name, folder) catch |err| {
                 std.log.err("cannot bring {s} into the project: {t}", .{ dropped.file_name, err });
                 return self.workspace.toast("Couldn't bring that file in: see the Console");
             };
             var message: [128]u8 = undefined;
-            self.workspace.toast(std.fmt.bufPrint(&message, "Added {s}", .{imported}) catch "Added the file");
-            self.history.record(.{ .create = .{ .path = imported } });
-            self.filesChanged();
+            self.workspace.toast(std.fmt.bufPrint(&message, "Added {s}", .{imported[0]}) catch "Added the file");
+            self.history.record(history_zig.Step.created(self.gpa, imported) catch |err| {
+                return std.log.err("cannot record bringing {s} in: {t}", .{ dropped.file_name, err });
+            });
         }
 
         /// A plugin's `eggy.zon` dropped anywhere opens in Edit > Plugins, to read and install;
@@ -2691,6 +2852,7 @@ pub fn Editor(comptime project: type) type {
                         updates.destroy();
                         self.plugin_updates = null;
                     },
+                    .offer => |offer| self.offerUpdate(updates, offer),
                     .updated => |update| {
                         self.history.record(.{ .plugins = .{ .project = update.change.project, .package = update.change.package } });
                         if (self.project_settings) |settings| settings.reload() catch {};
@@ -2710,6 +2872,30 @@ pub fn Editor(comptime project: type) type {
                 std.log.warn("cannot check the project's plugins for updates: {t}", .{err});
                 break :blk null;
             };
+        }
+
+        /// Ask whether to install `offer`, unless that version was skipped this run.
+        fn offerUpdate(self: *Self, updates: *plugin_manager.AutoUpdate, offer: plugin_manager.UpdateOffer) void {
+            var buffer: [256]u8 = undefined;
+            var fixed = std.heap.FixedBufferAllocator.init(&buffer);
+            const key = plugin_manager.updateKey(fixed.allocator(), offer) catch "";
+            for (self.skipped_updates.items) |skipped| if (std.mem.eql(u8, skipped, key)) return updates.answer(false);
+            self.update_prompt = plugin_manager.UpdatePrompt.open(self.gpa, &self.app.graphics, self.ui.font, self.app.window.window, offer) catch |err| {
+                std.log.err("cannot ask about updating {s}: {t}", .{ offer.module, err });
+                return updates.answer(false);
+            };
+        }
+
+        /// The person answered "Update plugin?": install it, or remember the version as skipped.
+        fn answerUpdatePrompt(self: *Self, install: bool) void {
+            const prompt = self.update_prompt orelse return;
+            if (!install) {
+                const key = self.gpa.dupe(u8, prompt.key) catch null;
+                if (key) |owned| self.skipped_updates.append(self.gpa, owned) catch self.gpa.free(owned);
+            }
+            prompt.close(&self.app.graphics);
+            self.update_prompt = null;
+            if (self.plugin_updates) |updates| updates.answer(install);
         }
 
         /// The project's plugins changed: build the game with them (the Build window shows it).
@@ -2869,6 +3055,7 @@ pub fn Editor(comptime project: type) type {
                     _ = self.ui_designer.dropOnPreview(env, at, dragged);
                 };
                 if (dragged == .asset) self.spawnDropped(slot, at, dragged.asset, over);
+                if (dragged == .asset and slot == main_slot and self.workspace.onTabBar(at.x, at.y)) if (self.assets_panel.dragged()) |path| self.openInTab(path, dragged.asset.kind);
             };
             for (0..self.pageCount()) |index| {
                 const placed = self.workspace.placed.pages[index] orelse continue;
@@ -2887,7 +3074,7 @@ pub fn Editor(comptime project: type) type {
                 // Assets' right-clicks, double-clicks and keys, before its UI.
                 if (index == panels.assets_page) {
                     const result = switch (input) {
-                        .key_down => |key| self.assets_panel.key(key),
+                        .key_down => |key| self.assets_panel.key(&self.assets_ui, key),
                         else => self.assets_panel.pointer(&self.assets_ui, input),
                     };
                     if (result.action) |action| self.applyAssetAction(action);
@@ -3093,6 +3280,36 @@ pub fn Editor(comptime project: type) type {
         fn followTabs(self: *Self) void {
             self.workspace.followShownTab();
             self.tab_views.follow(self.gpa, self.workspace.live, &self.scene_view, &self.scene_2d, &self.ui_designer, self.uiDesignerEnv());
+            self.followSceneTab();
+        }
+
+        /// Open the scene of the 3D tab shown, putting the one open aside for the tab it was in.
+        fn followSceneTab(self: *Self) void {
+            var open: [panels.max_copies]bool = undefined;
+            for (&open, 0..) |*still, copy| still.* = self.workspace.dock.nodeOf(panels.copyId(.scene, @intCast(copy))) != null;
+            self.scene_tabs.forgetClosed(self.gpa, open);
+            const live = self.workspace.live.scene;
+            if (!self.scene_tabs.changing(live)) {
+                _ = self.scene_tabs.follow(self.gpa, live, null);
+                return;
+            }
+            const leaving: ?scene_tabs.Kept = if (self.open_scene) |*scene| if (scene.path) |path| if (self.sceneText()) |text| blk: {
+                const kept_path = self.gpa.dupe(u8, path) catch {
+                    self.gpa.free(text);
+                    break :blk null;
+                };
+                break :blk .{ .path = kept_path, .text = text, .saved_hash = scene.saved_hash };
+            } else null else null else null;
+            const next = self.scene_tabs.follow(self.gpa, live, leaving) orelse return;
+            defer next.deinit(self.gpa);
+            const shown = switch (next) {
+                .file => |path| self.replaceSceneStep(.{ .open = path }),
+                .kept => |kept| self.replaceSceneStep(.{ .kept = kept }),
+            };
+            shown catch |err| {
+                std.log.err("cannot open the tab's scene: {t}", .{err});
+                self.workspace.toast("Couldn't open the tab's scene: see the Console");
+            };
         }
 
         fn sceneTarget(self: *Self) ?scene_view.Target {
@@ -3147,6 +3364,8 @@ test {
     _ = @import("ui_designer/ui_designer.zig");
     _ = @import("asset_preview.zig");
     _ = @import("model_preview.zig");
+    _ = @import("scene_tabs.zig");
+    _ = @import("play_camera_prompt.zig");
     _ = @import("scene_2d.zig");
     _ = @import("assets/png_writer.zig");
     _ = @import("tab_bar.zig");
@@ -3197,6 +3416,7 @@ test {
     _ = @import("assets/listing.zig");
     _ = @import("assets/icons.zig");
     _ = @import("assets/file_ops.zig");
+    _ = @import("assets/model_references.zig");
     _ = @import("assets/project_assets.zig");
     _ = @import("assets/legacy_refs.zig");
     _ = @import("window_placement.zig");

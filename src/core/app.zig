@@ -267,7 +267,7 @@ pub const App = struct {
     /// _ = root; // An entity owned by app.world, not caller-allocated scene data.
     /// ```
     pub fn scenes(self: *App) Scenes {
-        return .{ .world = &self.world, .instances = self.sceneInstances(), .resources = self.resources(), .access = self.scene_access, .transition = &self.scene_transition };
+        return .{ .world = &self.world, .instances = self.sceneInstances(), .resources = self.resources(), .access = self.sceneAccess(), .transition = &self.scene_transition };
     }
 
     /// The instance registry shared by author calls and the executable's scene-sync point.
@@ -281,6 +281,31 @@ pub const App = struct {
     pub fn sceneInstances(self: *App) *SceneInstances {
         if (self.instances == null) self.instances = .init(self.world.allocator);
         return &self.instances.?;
+    }
+
+    /// `scene_access`, with this App's scene instances keeping what each changed.
+    fn sceneAccess(self: *App) ?scene.Access {
+        var access = self.scene_access orelse return null;
+        access.instances = self.instanceHooks();
+        return access;
+    }
+
+    /// The hooks through which scenes captured from and made into this world save and put back
+    /// what each scene instance changed (`Scene.Access.instances`). They reach the instances
+    /// through the App, so they stay good across `resetWorld`; the App must outlive them.
+    pub fn instanceHooks(self: *App) scene.Access.Instances {
+        const Through = struct {
+            fn changes(context: *anyopaque, arena: std.mem.Allocator, world: *clutch.World, access: scene.Access, instance: clutch.EntityId) anyerror![]const scene.Scene.Override {
+                const app: *App = @ptrCast(@alignCast(context));
+                return app.sceneInstances().changes(arena, world, access, instance);
+            }
+            fn keep(context: *anyopaque, world: *clutch.World, instance: clutch.EntityId, overrides: []const scene.Scene.Override) void {
+                const app: *App = @ptrCast(@alignCast(context));
+                const instances = app.sceneInstances().hooks();
+                instances.keep(instances.context, world, instance, overrides);
+            }
+        };
+        return .{ .context = self, .changes = Through.changes, .keep = Through.keep };
     }
 
     /// Lazily create the default game UI. Customize its context theme/widgets, or use
@@ -387,7 +412,7 @@ pub const App = struct {
         // Clips play after the game's systems, by the game's (scaled, pause-held) time.
         @import("animation.zig").step(&self.world, &self.graphics.clips, self.time.delta_s);
         self.world.tick();
-        if (self.scene_transition.pending != null) if (self.scene_access) |access| {
+        if (self.scene_transition.pending != null) if (self.sceneAccess()) |access| {
             if (try self.scene_transition.apply(&self.world, access, self.sceneInstances())) self.input.cancel();
         };
         try self.profiling.end(sample);

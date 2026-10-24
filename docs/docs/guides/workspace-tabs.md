@@ -37,6 +37,17 @@ Drag a panel by its tab up onto the bar. Let go on a tab to move the panel into 
 Inspector a whole tab. Hold the panel over a tab for a moment to show that tab, then drop the
 panel exactly where you want it in its layout. A tab closes by itself when its last panel leaves.
 
+## Open a file or a scene in a tab
+
+Drag a file from **Assets** up onto the bar to give it a tab of its own, showing it in an
+**Asset Preview**. The tab is named after the file. Double-click a file in Assets to open
+it the same way in a window of its own. Closing that window closes only its tab.
+
+Drag a scene onto the bar to open it in a new 3D tab, beside the scene you have open. Each 3D
+tab keeps its own scene. Showing another tab opens its scene in its place, with any changes
+you haven't saved, and showing the first tab again brings yours back as you left it.
+**Ctrl+Z** goes back to the scene you had before.
+
 ## Move a tab
 
 Drag a tab along the bar and let go where you want it.

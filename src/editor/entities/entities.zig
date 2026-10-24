@@ -15,6 +15,7 @@ const inspector_zig = @import("inspector.zig");
 const RootOrder = @import("root_order.zig").RootOrder;
 const Clipboard = @import("clipboard.zig").Clipboard;
 const ViewState = @import("view_state.zig").ViewState;
+const view_file = @import("view_file.zig");
 const Dragged = @import("../dragged.zig").Dragged;
 const project_assets = @import("../assets/project_assets.zig");
 const ProjectAssets = project_assets.ProjectAssets;
@@ -36,6 +37,9 @@ pub const EntityEditor = struct {
     pending_extract: ?ecs.EntityId = null,
     pending_visibility: ?ecs.EntityId = null,
     view_state: ViewState,
+    /// The scene whose folds `view_state` keeps (a project path; "" for one not saved yet), once
+    /// read from the project's file.
+    view_scene: ?std.ArrayList(u8) = null,
     /// Names the assets fields hold (their ids are not paths); the host sets it when a project opens.
     assets: ?*ProjectAssets = null,
 
@@ -63,6 +67,26 @@ pub const EntityEditor = struct {
         self.root_order.deinit();
         self.clipboard.deinit();
         self.view_state.deinit();
+        if (self.view_scene) |*scene| scene.deinit(self.gpa);
+    }
+
+    /// Keep the Hierarchy's folds and hidden entities for `scene` (a project path; "" for one not
+    /// saved yet) in the project at `project_dir`: read them when the scene changes, find their
+    /// entities in the world, and write them back once changed. Call each frame.
+    /// Failures are logged: it is only the view.
+    pub fn keepView(self: *EntityEditor, app: *eggy.App, game: ?*const HotGame, project_dir: []const u8, scene: []const u8) void {
+        const changed_scene = if (self.view_scene) |kept| !std.mem.eql(u8, kept.items, scene) else true;
+        if (changed_scene) {
+            if (self.view_scene == null) self.view_scene = .empty;
+            self.view_scene.?.clearRetainingCapacity();
+            self.view_scene.?.appendSlice(self.gpa, scene) catch {};
+            view_file.load(self.gpa, project_dir, scene, &self.view_state);
+        }
+        const loaded = game orelse return;
+        self.view_state.follow(&app.world, self.roots(&app.world), loaded.sceneAccess()) catch |err| log.warn("cannot follow the Hierarchy's folds: {t}", .{err});
+        if (!self.view_state.dirty) return;
+        view_file.save(self.gpa, project_dir, scene, &self.view_state);
+        self.view_state.dirty = false;
     }
 
     /// `world`'s top-level entities in the Hierarchy's order, for capturing the scene in it.
@@ -178,7 +202,22 @@ pub const EntityEditor = struct {
                 log.warn("{s} can't be removed while another component needs it", .{loaded.component_types[component].name});
             } else loaded.removeComponent(app, entity, component),
         };
+        instanceNote(context, app, loaded, entity);
         return true;
+    }
+
+    /// On an entity a scene instance's file made: how changes to it are kept.
+    fn instanceNote(context: *ui.Context, app: *eggy.App, game: *const HotGame, entity: ecs.EntityId) void {
+        const component = game.builtinComponent("SceneInstance") orelse return;
+        const note = blk: {
+            var above = app.world.getParent(entity);
+            while (above) |up| : (above = app.world.getParent(up)) {
+                if (game.hasComponent(app, up, component)) break :blk "Made from a scene instance's file. Changes here are kept for that instance alone; rename or move it in its own scene.";
+            }
+            return;
+        };
+        context.muted(note);
+        if (context.last_added) |text| text.paint_kind.text.wrap = true;
     }
 
     /// A pointer event over the Hierarchy page, before its UI sees it (see `Hierarchy.pointer`).
@@ -577,6 +616,7 @@ test {
     _ = @import("clipboard.zig");
     _ = @import("extraction.zig");
     _ = @import("view_state.zig");
+    _ = @import("view_file.zig");
     _ = @import("root_order.zig");
     _ = @import("tree.zig");
     _ = @import("hierarchy.zig");

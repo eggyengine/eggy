@@ -1,7 +1,8 @@
 // The editor's infinite grid on the ground (y = 0): each pixel's ray from the camera meets the
-// ground somewhere, and lines are drawn where that point is near a whole metre (fainter) or ten
-// (stronger), the x axis in red and the z axis in blue, fading with distance. Its depth is the
-// point's, so meshes in front hide it. One oversized triangle covers the viewport.
+// ground somewhere, and lines are drawn where that point is near a whole 1, 10, 100 or 1000
+// metres (each stronger than the last), the x axis in red and the z axis in blue. Each size fades
+// out as its cells shrink below a few pixels, so the grid reaches the horizon without shimmering.
+// Its depth is the point's, so meshes in front hide it. One oversized triangle covers the viewport.
 
 struct VertexInput {
     // (0, 0), (2, 0) and (0, 2): so (0, 0) to (1, 1) spans the viewport.
@@ -28,7 +29,7 @@ cbuffer Grid : register(b0, space0) {
     float4 across;           // xyz: right, as far as the view's edge is from its middle
     float4 upward;           // xyz: up, likewise
     float4 viewport;         // the viewport in pixels: x, y, width, height
-    float4 options;          // x: sRGB target; y: reach in metres; z: orthographic projection
+    float4 options;          // x: sRGB target; y: unused; z: orthographic projection
 };
 
 [shader("vertex")]
@@ -39,12 +40,13 @@ VertexOutput vertexMain(VertexInput input) {
 }
 
 // How much of a line `size` metres apart covers this pixel of the ground at `coord`: 1 on it,
-// fading out over about a pixel either side.
+// fading out over about a pixel either side, and gone where its cells are too small to tell apart.
 float gridLine(float2 coord, float size) {
     float2 c = coord / size;
     float2 width = fwidth(c);
     float2 distance = abs(frac(c - 0.5) - 0.5) / max(width, float2(1e-5, 1e-5));
-    return 1.0 - min(min(distance.x, distance.y), 1.0);
+    float visible = 1.0 - smoothstep(0.08, 0.3, max(width.x, width.y));
+    return (1.0 - min(min(distance.x, distance.y), 1.0)) * visible;
 }
 
 // How much of a line along one axis (where `value` is 0) covers this pixel.
@@ -64,16 +66,13 @@ FragmentOutput fragmentMain(VertexOutput input) {
     float3 ground = origin + direction * t;
 
     // The lines, the axes over them, fading with distance and at grazing angles.
-    float minor = gridLine(ground.xz, 1.0) * 0.18;
-    float major = gridLine(ground.xz, 10.0) * 0.35;
-    float alpha = max(minor, major);
+    float alpha = max(max(gridLine(ground.xz, 1.0) * 0.18, gridLine(ground.xz, 10.0) * 0.3),
+                      max(gridLine(ground.xz, 100.0) * 0.4, gridLine(ground.xz, 1000.0) * 0.5));
     float3 color = float3(0.55, 0.57, 0.62);
     float x_axis = axisLine(ground.z);
     float z_axis = axisLine(ground.x);
     if (x_axis > 0.0) { color = lerp(color, float3(0.86, 0.25, 0.25), x_axis); alpha = max(alpha, x_axis * 0.8); }
     if (z_axis > 0.0) { color = lerp(color, float3(0.25, 0.45, 0.9), z_axis); alpha = max(alpha, z_axis * 0.8); }
-    float distance = length(ground - eye.xyz);
-    alpha *= 1.0 - smoothstep(options.y * 0.4, options.y, distance);
     alpha *= smoothstep(0.0, 0.15, abs(normalize(direction).y));
     if (alpha <= 0.002) discard;
 

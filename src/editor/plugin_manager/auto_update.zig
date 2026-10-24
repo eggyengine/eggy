@@ -1,10 +1,13 @@
-//! Keeping a project's installed plugins up to date by themselves: in the background, read each
-//! one's `eggy.zon` again from where it was installed, and install a newer version as the Plugins
-//! window's Update would, one plugin at a time. Plugins inside Eggy update with Eggy instead.
+//! Keeping a project's installed plugins up to date: in the background, read each one's
+//! `eggy.zon` again from where it was installed and offer a newer version, which is installed as
+//! the Plugins window's Update would once the person agrees (a bad actor may have pushed it), one
+//! plugin at a time. Plugins inside Eggy update with Eggy instead, and
+//! those whose package is a folder (a checkout being developed) are left to whoever develops them.
 const std = @import("std");
 const eggy = @import("eggy");
 const fetch_zig = @import("fetch.zig");
 const install_zig = @import("install.zig");
+const package_removal = @import("package_removal.zig");
 const project_plugins = @import("project_plugins.zig");
 const Installed = eggy.plugin_manifest.Installed;
 const log = std.log.scoped(.plugins);
@@ -15,9 +18,22 @@ pub const Progress = union(enum) {
     working,
     /// Every plugin is checked; destroy it.
     done,
+    /// A newer version is waiting for `answer`, borrowed until then. Reported once.
+    offer: Offer,
     /// A plugin was updated: the change to record (the caller owns its texts), and what it
     /// became, borrowed until the next poll.
     updated: struct { change: project_plugins.Change, title: []const u8, version: []const u8 },
+};
+
+/// A newer version of an installed plugin, for the person to agree to.
+pub const Offer = struct {
+    module: []const u8,
+    title: []const u8,
+    installed_version: []const u8,
+    version: []const u8,
+    repository: []const u8,
+    /// Where its `eggy.zon` was read from.
+    source: []const u8,
 };
 
 pub const AutoUpdate = struct {
@@ -29,6 +45,9 @@ pub const AutoUpdate = struct {
     next: usize = 0,
     /// The plugin being read again, then the newer one being installed (owned).
     fetching: ?*fetch_zig.Fetch = null,
+    /// A newer version waiting for `answer` (owned), and whether `poll` has reported it.
+    offered: ?*fetch_zig.Fetched = null,
+    offer_reported: bool = false,
     newer: ?*fetch_zig.Fetched = null,
     installing: ?*install_zig.Install = null,
     /// `build.zig.zon` before `installing` saved the package, owned, for undo.
@@ -49,9 +68,15 @@ pub const AutoUpdate = struct {
         var dir = try std.Io.Dir.cwd().openDir(io, project_dir, .{});
         defer dir.close(io);
         const config = try eggy.project.load(a, io, dir);
-        // Only those fetched from somewhere can come from there again.
+        const package = dir.readFileAllocOptions(io, "build.zig.zon", a, .limited(1 << 20), .of(u8), 0) catch "";
+        // Only those fetched from somewhere can come from there again, and not over a local checkout.
         var queue: std.ArrayList(Installed) = .empty;
-        for (config.plugins) |installed| if (installed.dependency != null and installed.source.len > 0) try queue.append(a, installed);
+        for (config.plugins) |installed| {
+            const dependency = installed.dependency orelse continue;
+            if (installed.source.len == 0) continue;
+            if (package_removal.isFolderDependency(a, package, dependency) catch false) continue;
+            try queue.append(a, installed);
+        }
         self.* = .{ .gpa = gpa, .arena = arena, .project_dir = try a.dupe(u8, project_dir), .queue = queue.items, .reported = .init(gpa) };
         return self;
     }
@@ -61,6 +86,7 @@ pub const AutoUpdate = struct {
         const gpa = self.gpa;
         if (self.fetching) |fetch| fetch.destroy();
         if (self.installing) |running| running.destroy();
+        if (self.offered) |fetched| fetched.destroy();
         if (self.newer) |fetched| fetched.destroy();
         if (self.package_before) |text| gpa.free(text);
         self.reported.deinit();
@@ -71,6 +97,19 @@ pub const AutoUpdate = struct {
     /// Move the check on, once a frame. Failures are logged and skip that plugin.
     pub fn poll(self: *AutoUpdate) Progress {
         if (self.installing) |running| return self.pollInstall(running);
+        if (self.offered) |fetched| {
+            if (self.offer_reported) return .working;
+            self.offer_reported = true;
+            const installed = self.queue[self.next - 1];
+            return .{ .offer = .{
+                .module = installed.module,
+                .title = fetched.manifest.title,
+                .installed_version = installed.version,
+                .version = fetched.manifest.version,
+                .repository = fetched.manifest.repository,
+                .source = installed.source,
+            } };
+        }
         if (self.fetching) |fetch| {
             const outcome = fetch.take() orelse return .working;
             fetch.destroy();
@@ -106,11 +145,20 @@ pub const AutoUpdate = struct {
         else if (fetched.package != .fetch)
             "it now says it ships inside Eggy"
         else {
-            self.startInstall(fetched);
+            self.offered = fetched;
+            self.offer_reported = false;
             return;
         };
         if (skip) |why| log.warn("not updating {s} to {s}: {s}", .{ installed.module, manifest.version, why });
         fetched.destroy();
+    }
+
+    /// The person's answer to the offer `poll` reported: install it, or leave the plugin as it is
+    /// and check the next one. Without an offer waiting, nothing.
+    pub fn answer(self: *AutoUpdate, install: bool) void {
+        const fetched = self.offered orelse return;
+        self.offered = null;
+        if (install) self.startInstall(fetched) else fetched.destroy();
     }
 
     fn startInstall(self: *AutoUpdate, fetched: *fetch_zig.Fetched) void {
@@ -162,7 +210,7 @@ pub const AutoUpdate = struct {
     }
 };
 
-test "only plugins fetched from somewhere are checked again" {
+test "only plugins fetched from somewhere, and not from a folder, are checked again" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
     const io = std.testing.io;
@@ -171,7 +219,11 @@ test "only plugins fetched from somewhere are checked again" {
         \\    .{ .module = "eggy_git", .version = "0.1.0" },
         \\    .{ .module = "stats", .dependency = "stats", .version = "1.0.0" },
         \\    .{ .module = "mcp", .dependency = "eggy_mcp", .version = "0.1.0", .source = "https://raw.githubusercontent.com/me/mcp/main/eggy.zon" },
+        \\    .{ .module = "wip", .dependency = "wip", .version = "0.1.0", .source = "https://raw.githubusercontent.com/me/wip/main/eggy.zon" },
         \\} }
+    });
+    try tmp.dir.writeFile(io, .{ .sub_path = "build.zig.zon", .data =
+        \\.{ .name = .game, .dependencies = .{ .wip = .{ .path = "../wip" } } }
     });
     const folder = try tmp.dir.realPathFileAlloc(io, ".", std.testing.allocator);
     defer std.testing.allocator.free(folder);

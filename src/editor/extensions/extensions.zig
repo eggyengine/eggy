@@ -4,16 +4,28 @@ const eggy = @import("eggy");
 const api = eggy.editor;
 const settings = @import("../project_settings.zig");
 const file_ops = @import("../assets/file_ops.zig");
+const history = @import("../history.zig");
 const workspace = @import("../workspace.zig");
 const ProjectFlow = @import("../projects/flow.zig").ProjectFlow;
 const ExportWindow = @import("../export/export.zig").ExportWindow;
 const layout_file = @import("../layout_file.zig");
+const console_log = @import("../console_log.zig");
+const entity_snapshot = @import("../entities/snapshot.zig");
 const sdl = eggy.sdl_adapter.sdl;
 
 /// Owns snapshots only; it never retains game-library callbacks or component pointers.
 pub const State = struct {
     before: ?[]u8 = null,
     pending: ?api.Operation = null,
+    /// When play started or resumed by a tool pauses by itself (`play`'s seconds), in ms.
+    pause_at_ms: ?u64 = null,
+    /// `pending`'s seconds, for play and resume.
+    pending_seconds: f64 = 0,
+    /// The last build a tool asked for, its output's end (owned), and whether its Build window
+    /// still waits to close by itself.
+    build: @FieldType(api.EditorStatus, "build") = .none,
+    build_log: ?[]u8 = null,
+    closes_build_window: bool = false,
     /// Free an editor extension's pending snapshot with its allocating `gpa`, then reset state.
     /// Host-only: discards queued lifecycle work; it does not restore the world or cancel an
     /// already-recorded history group. Safe to call again on the reset state.
@@ -23,7 +35,32 @@ pub const State = struct {
     /// ```
     pub fn deinit(self: *State, gpa: std.mem.Allocator) void {
         if (self.before) |before| gpa.free(before);
+        if (self.build_log) |log| gpa.free(log);
         self.* = .{};
+    }
+
+    /// Drop an open edit's snapshot (`begin_edit`), keeping the rest.
+    pub fn cancelEdit(self: *State, gpa: std.mem.Allocator) void {
+        if (self.before) |before| gpa.free(before);
+        self.before = null;
+    }
+
+    /// Keep the outcome of a build a tool asked for (the end of `log`), once it finishes.
+    /// Host-only: call when the editor's rebuild reaches `done` or `failed`; others are ignored.
+    pub fn noteBuild(self: *State, gpa: std.mem.Allocator, failed: bool, log: []const u8) void {
+        if (self.build != .building) return;
+        const kept_bytes = 64 * 1024;
+        if (self.build_log) |old| gpa.free(old);
+        self.build_log = gpa.dupe(u8, log[log.len -| kept_bytes..]) catch null;
+        self.build = if (failed) .failed else .succeeded;
+    }
+
+    /// Whether play a tool started is due to pause now, at `now_ms`; forgets it once due.
+    pub fn pauseDue(self: *State, now_ms: u64) bool {
+        const at = self.pause_at_ms orelse return false;
+        if (now_ms < at) return false;
+        self.pause_at_ms = null;
+        return true;
     }
 
     /// Take a lifecycle request only after game-library hooks have returned.
@@ -43,6 +80,12 @@ pub const State = struct {
             .show_export => .export_game,
             .show_new_project => .new_project,
             .show_open_project => .open_project,
+            .undo => .undo,
+            .redo => .redo,
+            .play => .{ .play = true },
+            .stop_play => .{ .play = false },
+            .pause => .{ .pause = true },
+            .resume_play => .{ .pause = false },
             else => unreachable,
         };
     }
@@ -63,12 +106,27 @@ pub const State = struct {
 /// }
 /// ```
 pub fn processRequest(host: anytype, request: workspace.Outcome) !bool {
+    const seconds = host.extension_state.pending_seconds;
+    host.extension_state.pending_seconds = 0;
     switch (request) {
         .build_project => {
             if (host.project == null) return error.NoProject;
             if (host.buildRunning()) return error.EditorBusy;
             host.cancelBuild();
             try host.startBuild(.rebuild);
+            host.extension_state.build = .building;
+            host.extension_state.closes_build_window = true;
+        },
+        .undo => host.undoOrRedo(.undo),
+        .redo => host.undoOrRedo(.redo),
+        .play => |on| {
+            if (on) host.startPlaying() else host.stopPlaying();
+            host.extension_state.pause_at_ms = if (on and seconds > 0) sdl.timer.getMillisecondsSinceInit() + @as(u64, @intFromFloat(seconds * 1000)) else null;
+        },
+        .pause => |paused| {
+            if (!host.play_mode.playing()) return error.NotPlaying;
+            host.setPaused(paused);
+            host.extension_state.pause_at_ms = if (!paused and seconds > 0) sdl.timer.getMillisecondsSinceInit() + @as(u64, @intFromFloat(seconds * 1000)) else null;
         },
         .reload => return host.forceReload(),
         .export_game => {
@@ -126,11 +184,42 @@ fn apply(host: anytype, request: api.Request, response: *api.Response) !void {
     const text = request.text[0..request.text_len];
     const extra = request.extra[0..request.extra_len];
     switch (request.operation) {
-        .request_build, .request_reload, .show_export, .show_new_project, .show_open_project => {
+        .request_build, .request_reload, .show_export, .show_new_project, .show_open_project, .undo, .redo, .play, .pause, .resume_play, .stop_play => {
             if (host.extension_state.pending != null or host.extension_state.before != null or host.history.group != null or host.build_window != null or host.project_flow != null) return error.EditorBusy;
             if (request.operation != .show_new_project and request.operation != .show_open_project and host.project == null) return error.NoProject;
             host.extension_state.pending = request.operation;
+            host.extension_state.pending_seconds = if (std.math.isFinite(request.number)) @max(0, request.number) else 0;
             return;
+        },
+        .status => {
+            const state = &host.extension_state;
+            var written: std.Io.Writer.Allocating = .init(host.gpa);
+            defer written.deinit();
+            try std.zon.stringify.serialize(api.EditorStatus{
+                .open_scene = if (host.open_scene) |*scene| scene.path else null,
+                .unsaved = host.workspace.scene_unsaved,
+                .play = if (!host.play_mode.playing()) .editing else if (host.play_mode.paused) .paused else .playing,
+                .build = state.build,
+                .build_log = state.build_log orelse "",
+                .undo = if (host.history.peek(.undo)) |step| step.describe() else null,
+                .redo = if (host.history.peek(.redo)) |step| step.describe() else null,
+            }, .{}, &written.writer);
+            return respondText(request, response, written.written());
+        },
+        .scene_text => {
+            const scene = try snapshot(host);
+            defer host.gpa.free(scene);
+            return respondText(request, response, scene);
+        },
+        .component_types => {
+            const types = try componentTypes(host);
+            defer host.gpa.free(types);
+            return respondText(request, response, types);
+        },
+        .console_text => {
+            const messages = try consoleText(host.gpa, if (std.math.isFinite(request.number)) @intFromFloat(std.math.clamp(request.number, 1, 10_000)) else 200);
+            defer host.gpa.free(messages);
+            return respondText(request, response, messages);
         },
         .selection => {
             host.entity_editor.forgetDead(&host.app);
@@ -173,27 +262,9 @@ fn apply(host: anytype, request: api.Request, response: *api.Response) !void {
     }
     if (host.play_mode.playing()) return error.NotEditing;
     switch (request.operation) {
-        .begin_edit => {
-            if (host.project == null) return error.NoProject;
-            if (host.extension_state.before != null or host.extension_state.pending != null) return error.EditorBusy;
-            try host.history.reserve();
-            const before = try snapshot(host);
-            errdefer host.gpa.free(before);
-            host.history.watch(try host.gpa.dupe(u8, before), std.math.maxInt(u64), false);
-            try host.history.reserve();
-            host.extension_state.before = before;
-        },
-        .commit_edit => {
-            const before = host.extension_state.before orelse return error.EditorBusy;
-            const after = try snapshot(host);
-            errdefer host.gpa.free(after);
-            if (std.mem.eql(u8, before, after)) return error.ComponentNotInScene;
-            const baseline = try host.gpa.dupe(u8, after);
-            host.extension_state.before = null;
-            host.history.record(.{ .scene = .{ .before = before, .after = after } });
-            host.history.setBaseline(baseline);
-        },
-        .cancel_edit => host.extension_state.deinit(host.gpa),
+        .begin_edit => try beginEdit(host),
+        .commit_edit => if (!try commitEdit(host)) return error.ComponentNotInScene,
+        .cancel_edit => host.extension_state.cancelEdit(host.gpa),
         .begin_group => {
             if (host.input_settings) |controls| try controls.recordPending(&host.history);
             try host.history.beginGroup(text);
@@ -242,11 +313,11 @@ fn apply(host: anytype, request: api.Request, response: *api.Response) !void {
                 if (host.open_scene) |*scene| scene.moved(text, to);
                 host.history.record(.{ .rename = .{ .from = from, .to = to } });
             } else {
-                const path = if (request.operation == .copy_file)
-                    try file_ops.copyInto(host.gpa, io, files, text, extra)
-                else
-                    try file_ops.import(host.gpa, io, files, text, extra);
-                host.history.record(.{ .create = .{ .path = path } });
+                if (request.operation == .copy_file) {
+                    host.history.record(.{ .create = .{ .path = try file_ops.copyInto(host.gpa, io, files, text, extra) } });
+                } else {
+                    host.history.record(try history.Step.created(host.gpa, try file_ops.import(host.gpa, io, files, text, extra)));
+                }
             }
             host.filesChanged();
         },
@@ -285,7 +356,8 @@ fn apply(host: anytype, request: api.Request, response: *api.Response) !void {
             try host.history.reserve();
             if (try settings.setDefaultScene(host.gpa, project.dir, text)) |change| host.history.recordProjectSettings(change.before, change.after, host.workspace.time_ms);
         },
-        .selection, .select, .show_panel, .project_settings, .project_folder, .request_build, .request_reload, .show_export, .show_new_project, .show_open_project => unreachable,
+        .replace_scene, .add_to_scene => response.length = try changeScene(host, request.operation == .replace_scene, text, request.number),
+        .selection, .select, .show_panel, .project_settings, .project_folder, .request_build, .request_reload, .show_export, .show_new_project, .show_open_project, .status, .scene_text, .component_types, .console_text, .undo, .redo, .play, .pause, .resume_play, .stop_play => unreachable,
     }
 }
 
@@ -314,6 +386,131 @@ test "deferred workflow requests are taken once without retaining callbacks" {
     try std.testing.expect(state.takeRequest() == null);
     state.pending = .request_build;
     try std.testing.expectEqual(workspace.Outcome.build_project, state.takeRequest().?);
+}
+
+/// Start a scene edit: keep the world as it is now for the undo step `commitEdit` records.
+fn beginEdit(host: anytype) !void {
+    if (host.project == null) return error.NoProject;
+    if (host.extension_state.before != null or host.extension_state.pending != null) return error.EditorBusy;
+    try host.history.reserve();
+    const before = try snapshot(host);
+    errdefer host.gpa.free(before);
+    host.history.watch(try host.gpa.dupe(u8, before), std.math.maxInt(u64), false);
+    try host.history.reserve();
+    host.extension_state.before = before;
+}
+
+/// Record the world since `beginEdit` as one undo step; false (the edit still open) when it
+/// didn't change.
+fn commitEdit(host: anytype) !bool {
+    const before = host.extension_state.before orelse return error.EditorBusy;
+    const after = try snapshot(host);
+    errdefer host.gpa.free(after);
+    if (std.mem.eql(u8, before, after)) {
+        host.gpa.free(after);
+        return false;
+    }
+    const baseline = try host.gpa.dupe(u8, after);
+    host.extension_state.before = null;
+    host.history.record(.{ .scene = .{ .before = before, .after = after } });
+    host.history.setBaseline(baseline);
+    return true;
+}
+
+/// Put the scene `zon`'s entities into the world, after its own (or in place of them, when
+/// `replace`), under the entity at place `parent_place` when that is 0 or more; one undo step.
+/// Returns how many components and fields were left out. Fails before changing anything when
+/// `zon` isn't a scene or the parent isn't there.
+fn changeScene(host: anytype, replace: bool, zon: []const u8, parent_place: f64) !usize {
+    const game = if (host.game) |*loaded| loaded else return error.NoGameLibrary;
+    const access = game.sceneAccess();
+    const world = &host.app.world;
+    const source = try host.gpa.dupeSentinel(u8, zon, 0);
+    defer host.gpa.free(source);
+    var scene = try eggy.scene.Scene.parse(host.gpa, source);
+    defer scene.deinit();
+
+    // The parent, by its place in the scene as `scene_text` lists it.
+    const parent: ?eggy.ecs.EntityId = if (replace or !std.math.isFinite(parent_place) or parent_place < 0) null else blk: {
+        var captured = try entity_snapshot.capture(host.gpa, world, access, host.entity_editor.roots(world));
+        defer captured.deinit();
+        const place: usize = @intFromFloat(parent_place);
+        if (place >= captured.sources.len) return error.NoSuchEntity;
+        break :blk captured.sources[place];
+    };
+
+    try beginEdit(host);
+    // From here the world changes: whatever happens is recorded, so Undo can take it back.
+    defer {
+        const recorded = commitEdit(host) catch |err| blk: {
+            std.log.err("cannot record the scene change: {t}", .{err});
+            break :blk false;
+        };
+        if (!recorded) host.extension_state.cancelEdit(host.gpa);
+    }
+    if (replace) {
+        const roots = try host.gpa.dupe(eggy.ecs.EntityId, host.entity_editor.roots(world));
+        defer host.gpa.free(roots);
+        for (roots) |root| world.despawnRecursive(root);
+        host.entity_editor.forgetDead(&host.app);
+    }
+    const made = try scene.instantiate(host.gpa, world, access, parent);
+    defer host.gpa.free(made.entities);
+    // Top-level entities follow the scene's order, after the world's own.
+    if (parent == null) {
+        _ = host.entity_editor.roots(world);
+        for (scene.entities, made.entities) |saved, entity| if (saved.parent == null) try host.entity_editor.root_order.place(entity, std.math.maxInt(usize));
+    }
+    return made.skipped;
+}
+
+/// Every component type with its fields' defaults as ZON (see `Context.componentTypes`),
+/// owned by `host.gpa`. Defaults are read from a component added to an entity of a scratch world.
+fn componentTypes(host: anytype) ![]u8 {
+    const game = if (host.game) |*loaded| loaded else return error.NoGameLibrary;
+    const access = game.sceneAccess();
+    var scratch = eggy.ecs.World.init(host.gpa);
+    defer scratch.deinit();
+    var text: std.Io.Writer.Allocating = .init(host.gpa);
+    errdefer text.deinit();
+    const out = &text.writer;
+    try out.writeAll(".{\n");
+    for (access.types(), 0..) |info, index| {
+        const entity = try scratch.spawn(.{});
+        const added = access.add(&scratch, entity, index);
+        try out.print("    .{{ .type = \"{f}\", .owner = \"{f}\", .addable = {}, .fields = .{{", .{ std.zig.fmtString(info.name), std.zig.fmtString(info.owner), info.addable });
+        for (info.fields, 0..) |field, field_index| {
+            const default: ?[]u8 = if (added) access.readFieldAlloc(host.gpa, &scratch, entity, index, field_index) catch null else null;
+            defer if (default) |value| host.gpa.free(value);
+            try out.print("\n        .{{ .name = \"{f}\", .kind = .{t}, .default = \"{f}\" }},", .{ std.zig.fmtString(field.name), field.kind, std.zig.fmtString(default orelse "") });
+        }
+        try out.writeAll(if (info.fields.len > 0) "\n    } },\n" else "} },\n");
+    }
+    try out.writeAll("}\n");
+    return text.toOwnedSlice();
+}
+
+/// The Console's last `max_messages` messages, oldest first, owned by `gpa`.
+fn consoleText(gpa: std.mem.Allocator, max_messages: usize) ![]u8 {
+    var messages: console_log.Messages = .{};
+    defer messages.deinit(gpa);
+    _ = try console_log.snapshot(gpa, &messages, .{ .levels = .{ true, true, true, true } });
+    var text: std.ArrayList(u8) = .empty;
+    errdefer text.deinit(gpa);
+    const entries = messages.entries.items;
+    for (entries[entries.len -| max_messages..]) |entry| {
+        try text.appendSlice(gpa, messages.text.items[entry.start..entry.end]);
+        try text.append(gpa, '\n');
+    }
+    return text.toOwnedSlice(gpa);
+}
+
+/// Answer a two-call text read: its size when the request has no buffer, else the text.
+fn respondText(request: api.Request, response: *api.Response, text: []const u8) !void {
+    response.length = text.len;
+    if (request.capacity == 0) return;
+    if (text.len > request.capacity) return error.BufferTooSmall;
+    @memcpy(request.buffer[0..text.len], text);
 }
 
 /// Scene text for history, captured through the current library's typed registry.

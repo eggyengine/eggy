@@ -24,6 +24,19 @@ const log = std.log.scoped(.scene);
 pub const Access = struct {
     context: *const anyopaque,
     vtable: *const VTable,
+    /// The world's scene instances, which keep the fields each changed from its file: `capture`
+    /// saves them on the instance, and `instantiate` hands them back to it. Without, instances
+    /// are saved and made as their files are.
+    instances: ?Instances = null,
+
+    /// What keeps a world's scene instances (`SceneInstances.hooks`).
+    pub const Instances = struct {
+        context: *anyopaque,
+        /// The fields `instance` changed in the entities its file made, in `arena`.
+        changes: *const fn (context: *anyopaque, arena: std.mem.Allocator, world: *ecs.World, access: Access, instance: ecs.EntityId) anyerror![]const Scene.Override,
+        /// Keep `overrides` (copied) for `instance`, to put back once its entities are made.
+        keep: *const fn (context: *anyopaque, world: *ecs.World, instance: ecs.EntityId, overrides: []const Scene.Override) void,
+    };
 
     pub const FieldReadError = error{ NoComponent, NoSuchComponent, OutOfMemory };
 
@@ -252,6 +265,19 @@ pub const Scene = struct {
         /// An index into `entities`; null at the top level.
         parent: ?usize = null,
         components: []const Component = &.{},
+        /// A scene instance's: what it changed in the entities its file makes.
+        overrides: []const Override = &.{},
+    };
+
+    /// One field a scene instance gives a value of its own, in one of the entities its file
+    /// makes: that entity by its name path in the file ("Player", "Player/Hat", "Hat#2" for a
+    /// second sibling of that name), the component, the field, and the value as ZON.
+    pub const Override = struct {
+        entity: []const u8,
+        type: []const u8,
+        owner: []const u8,
+        field: []const u8,
+        value: []const u8,
     };
 
     pub const Component = struct {
@@ -315,7 +341,11 @@ pub const Scene = struct {
             try captured.append(gpa, entity);
             const parent = if (world.getParent(entity)) |up| indices.get(up.id) else null;
             try entities.append(arena, try captureEntity(arena, world, access, entity, parent));
-            if (instance_type) |index| if (access.has(world, entity, index)) continue;
+            if (instance_type) |index| if (access.has(world, entity, index)) {
+                // An instance keeps only what it changed in its file's entities.
+                if (access.instances) |instances| entities.items[entities.items.len - 1].overrides = try instances.changes(instances.context, arena, world, access, entity);
+                continue;
+            };
             // Children in reverse, so they come out in order.
             var children: std.ArrayList(ecs.EntityId) = .empty;
             defer children.deinit(gpa);
@@ -393,6 +423,7 @@ pub const Scene = struct {
             entity.* = try world.spawn(.{});
             spawned += 1;
             if (saved.name.len > 0) access.setName(world, entity.*, saved.name);
+            if (saved.overrides.len > 0) if (access.instances) |instances| instances.keep(instances.context, world, entity.*, saved.overrides);
             for (saved.components) |component| {
                 const index = findType(types, component.type, component.owner) orelse {
                     log.warn("no component {s} from {s}: it is left out", .{ component.type, component.owner });
@@ -464,7 +495,13 @@ pub const Scene = struct {
                 for (component.fields, 0..) |field, i| try writer.print("{s}.{f} = {s}", .{ if (i == 0) " " else ", ", std.zig.fmtId(field.name), field.value });
                 try writer.writeAll(if (component.fields.len > 0) " } },\n" else "} },\n");
             }
-            try writer.writeAll("            },\n        },\n");
+            try writer.writeAll("            },\n");
+            if (entity.overrides.len > 0) {
+                try writer.writeAll("            .overrides = .{\n");
+                for (entity.overrides) |override| try writer.print("                .{{ .entity = \"{f}\", .type = \"{f}\", .owner = \"{f}\", .field = \"{f}\", .value = {s} }},\n", .{ std.zig.fmtString(override.entity), std.zig.fmtString(override.type), std.zig.fmtString(override.owner), std.zig.fmtString(override.field), override.value });
+                try writer.writeAll("            },\n");
+            }
+            try writer.writeAll("        },\n");
         }
         try writer.writeAll("    },\n}\n");
     }
@@ -513,6 +550,22 @@ pub const Scene = struct {
                 }
             }
             entity.components = list.items;
+            if (reader.field(node, "overrides")) |override_nodes| {
+                const nodes = reader.items(override_nodes) orelse return error.ParseZon;
+                const overrides = try arena.alloc(Override, nodes.len);
+                for (overrides, 0..) |*override, j| {
+                    const at = nodes.at(j);
+                    const value = reader.field(at, "value") orelse return error.ParseZon;
+                    override.* = .{
+                        .entity = try reader.string(reader.field(at, "entity") orelse return error.ParseZon),
+                        .type = try reader.string(reader.field(at, "type") orelse return error.ParseZon),
+                        .owner = if (reader.field(at, "owner")) |owner| try reader.string(owner) else "",
+                        .field = try reader.string(reader.field(at, "field") orelse return error.ParseZon),
+                        .value = try arena.dupe(u8, ast.getNodeSource(value.getAstNode(&zoir))),
+                    };
+                }
+                entity.overrides = overrides;
+            }
             if (entity.parent) |parent| if (parent >= i) return error.ParseZon; // parents come first
             try entities.append(arena, entity);
         }
@@ -540,7 +593,9 @@ fn fieldKind(info: components.Info, name: []const u8) components.Kind {
     return .other;
 }
 
-fn findType(types: []const components.Info, name: []const u8, owner: []const u8) ?usize {
+/// Where the component type `name` from `owner` is among `types`; one of that name from another
+/// owner when none matches both.
+pub fn findType(types: []const components.Info, name: []const u8, owner: []const u8) ?usize {
     var by_name: ?usize = null;
     for (types, 0..) |info, i| {
         if (!std.mem.eql(u8, info.name, name)) continue;
