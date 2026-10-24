@@ -422,7 +422,8 @@ pub fn animatedBounds(model: Model) Bounds {
     var box = Bounds{ .min = @splat(std.math.inf(f32)), .max = @splat(-std.math.inf(f32)) };
     for (model.vertices) |vertex| box.include(vertex.position);
     if (model.vertices.len == 0) return .{ .min = @splat(0), .max = @splat(0) };
-    const gpa = std.heap.page_allocator;
+    // malloc on the web: growing memory behind Emscripten's back detaches its views of it.
+    const gpa = if (@import("builtin").os.tag == .emscripten) std.heap.c_allocator else std.heap.page_allocator;
     posedBounds(gpa, model, &box) catch return box;
     return box;
 }
