@@ -136,7 +136,10 @@ pub const GameOptions = struct {
 pub fn addGame(b: *std.Build, options: GameOptions) void {
     const target = options.target orelse b.standardTargetOptions(.{});
     const optimize = options.optimize orelse b.standardOptimizeOption(.{});
-    _ = addProject(b, eggyDependency(b, target, optimize).builder, Emscripten.init(b, null), target, optimize, options, options.name);
+    const engine = eggyDependency(b, target, optimize).builder;
+    // A copy of `$EMSDK`: plugins' Eggy dependencies re-run SDK setup, which frees the map's old value.
+    const emsdk = if (b.graph.environ_map.get("EMSDK")) |path| b.dupe(path) else null;
+    _ = addProject(b, engine, Emscripten.init(b, emsdk), target, optimize, options, options.name);
 }
 
 pub const PluginOptions = struct {

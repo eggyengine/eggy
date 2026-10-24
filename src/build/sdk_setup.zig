@@ -31,5 +31,6 @@ pub fn prepare(b: *std.Build, target: std.Build.ResolvedTarget, emsdk: ?[]const 
     const parsed = std.json.parseFromSlice(std.json.Value, b.allocator, text, .{}) catch @panic("invalid SDK setup environment");
     var values = parsed.value.object.iterator();
     while (values.next()) |entry| b.graph.environ_map.put(entry.key_ptr.*, entry.value_ptr.string) catch @panic("OOM");
-    return if (web) b.graph.environ_map.get("EMSDK") else emsdk;
+    // A copy: another Eggy in the graph (a plugin's) re-runs setup, and `put` frees the old value.
+    return if (web) b.dupe(b.graph.environ_map.get("EMSDK").?) else emsdk;
 }
