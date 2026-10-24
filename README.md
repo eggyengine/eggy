@@ -2,13 +2,16 @@
 
 _eggy_ is a game engine written in Zig. more info at [eggyengine.github.io](https://eggyengine.github.io). 
 
-eggy itself comes in three parts:
+since the editor is compiled with the runtime, create a project with this script (which bootstraps everything):
 
-| module | what it is | platforms |
-|---|---|---|
-| `eggy` | the engine your game imports: window, renderer, scene, plugins | all, including the web |
-| `eggy_runtime` | runs your game as players see it | all, including the web |
-| `eggy_editor` | your game with editor tooling over it | desktop only |
+```bash
+curl -fsSL https://raw.githubusercontent.com/eggyengine/eggy/main/scripts/get-started.sh | bash
+```
+
+or on windows:
+```pwsh
+irm https://raw.githubusercontent.com/eggyengine/eggy/main/scripts/get-started.ps1 | iex
+```
 
 ## make a game
 requires zig `0.16.0`
@@ -16,76 +19,6 @@ requires zig `0.16.0`
 The eggy engine uses the editor to initialise the project, so all of these steps are done automatically.
 
 Documentation is also available at [eggyengine.github.io/eggy](https://eggyengine.github.io/eggy)
-<!-- 
-an eggy package works like a zig one: `src/main.zig` is a **game** (`pub const Game`), and `src/root.zig` is a **plugin** or library (`pub const Plugin`) that other packages can use. keep both, or delete the one you don't need.
-
-add eggy to your project:
-```bash
-zig fetch --save git+https://github.com/eggyengine/eggy#0.16.0
-```
-
-then in `build.zig`:
-```zig
-const std = @import("std");
-const eggy = @import("eggy");
-
-pub fn build(b: *std.Build) void {
-    const target = b.standardTargetOptions(.{});
-    const optimize = b.standardOptimizeOption(.{});
-
-    // src/root.zig: published as module "my_game", with @import("eggy")
-    const plugin = eggy.addPlugin(b, .{ .name = "my_game", .root_source_file = b.path("src/root.zig"), .target = target, .optimize = optimize });
-
-    // src/main.zig: the game, running the plugin
-    eggy.addGame(b, .{
-        .name = "my_game",
-        .game = b.createModule(.{ .root_source_file = b.path("src/main.zig"), .target = target, .optimize = optimize }),
-        .plugins = &.{plugin},
-        .target = target,
-        .optimize = optimize,
-    });
-}
-```
-
-your game, in `src/main.zig`:
-```zig
-const eggy = @import("eggy");
-
-pub const Game = struct {
-    frames: u64 = 0,
-
-    pub fn update(self: *Game, app: *eggy.App) !void {
-        _ = app;
-        self.frames += 1;
-    }
-
-    pub fn editorUi(self: *Game, ui: *eggy.ui.Context) void {
-        ui.label("Frames: {d}", .{self.frames});
-    }
-};
-```
-
-and your plugin, in `src/root.zig`:
-```zig
-const eggy = @import("eggy");
-
-pub const Plugin = struct {
-    pub fn editorUi(_: *Plugin, ui: *eggy.ui.Context) void {
-        ui.muted("my_game plugin");
-    }
-};
-```
-
-### using other plugins
-a plugin package publishes its `src/root.zig` with `addPlugin`. fetch it, then list it in `addGame`; plugins run after your game each frame, in the order you list them:
-```zig
-.plugins = &.{
-    plugin,
-    b.dependency("cool_plugin", .{}).module("cool_plugin"),
-},
-```
-
-every plugin runs on your game's eggy, so they all share one engine. -->
 
 ### linux packages
 fatal errors pop up a native dialog through [nvdialog](https://github.com/tseli0s/nvdialog), which needs GTK3 and DBus headers. accessibility needs `libunwind`. on debian:

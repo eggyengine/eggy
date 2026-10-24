@@ -17,6 +17,24 @@ directory first on `PATH`.
 The commands below use `eggy_editor`. Replace that with the path to your installed
 executable when it is not on `PATH`.
 
+To create a project without an editor yet, run this from the folder that should contain it:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/eggyengine/eggy/main/scripts/get-started.sh | bash
+```
+
+On Windows, from PowerShell:
+
+```powershell
+irm https://raw.githubusercontent.com/eggyengine/eggy/main/scripts/get-started.ps1 | iex
+```
+
+The script asks for a title, a package name, and a directory, then writes the
+template and fetches Eggy. If Zig 0.17 is missing, it asks before installing zvm
+(when zvm is not already installed) and Zig. It stops if Zig's standard library,
+a template file, or a required package is missing. The directory must be absent
+or empty. Open the new project with `zig build run`.
+
 ## Steps
 
 ### Check Zig before creating a project

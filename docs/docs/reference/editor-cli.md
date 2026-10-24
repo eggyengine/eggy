@@ -82,6 +82,14 @@ The destination must be absent or empty; existing files are never overwritten.
 Creation uses the same bundled engine and template as **File > New Project**, then
 builds the project's editor. Without `--open`, it finishes in the terminal.
 
+Without an editor binary,
+`curl -fsSL https://raw.githubusercontent.com/eggyengine/eggy/main/scripts/get-started.sh | bash`
+asks the same questions and fetches Eggy instead of unpacking the bundled engine.
+On Windows, `irm https://raw.githubusercontent.com/eggyengine/eggy/main/scripts/get-started.ps1 | iex`
+from PowerShell does the same. If Zig 0.17 is missing, the script asks before
+installing zvm and Zig. It also checks the template files and the project's
+required packages before it finishes.
+
 ## `export` {#export-a-game}
 
 ```sh
