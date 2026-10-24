@@ -113,7 +113,8 @@ distribute the generated `.data` file together with the HTML, JavaScript and Web
 The page shows the game across the whole browser window, with a progress bar while it
 downloads and any error that stops it shown over the game. Serve the folder from a web
 server (any static host, such as GitHub Pages, works): browsers won't load the `.data`
-file from a page opened straight from disk.
+file from a page opened straight from disk. The host must serve it over HTTPS (or `localhost`), as WebGPU needs a secure page; see
+[Put your game on the web](../guides/web-deploy.md).
 
 For Android, pick the **Android version**: the oldest Android the game runs on, from
 Android 13 (API 33) to Android 16 (API 36), Android 15 (API 35) unless you set another in

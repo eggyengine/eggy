@@ -54,6 +54,11 @@
     },
     onAbort: (what) => report("The game stopped: " + what),
   };
+
+  // The game draws with WebGPU, which browsers only offer to secure pages.
+  if (!navigator.gpu) report(window.isSecureContext
+    ? "This browser doesn't support WebGPU, which the game needs to draw. Try a recent Chrome or Edge, or enable WebGPU in this browser's settings."
+    : "WebGPU needs a secure page: open the game from https:// or http://localhost, not " + location.origin + ".");
 </script>
 {{{ SCRIPT }}}
 </body>
