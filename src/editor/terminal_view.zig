@@ -155,6 +155,12 @@ pub const TerminalView = struct {
     /// were drawn last.
     live: ?terminal_steps.Live = null,
     live_height: f32 = 0,
+    /// How many rows the pinned steps may take, once their top edge is dragged; until then up
+    /// to half the view.
+    steps_rows: ?usize = null,
+    /// The pointer is over the steps' top edge, or dragging it.
+    over_steps_edge: bool = false,
+    dragging_steps_edge: bool = false,
 
     /// A row's bytes, and the bytes of the line it was cut from (for colouring it).
     const Row = struct { start: usize, end: usize, line_start: usize, line_end: usize };
@@ -215,7 +221,7 @@ pub const TerminalView = struct {
         const width = context.contentWidth();
         const element = context.builder().node(0, .{ .width = width, .height = height }, .{ .custom = .{ .context = self, .draw = draw } }, &.{}) catch return;
         element.accessibility.label = "Output";
-        element.cursor = .text;
+        element.cursor = if (self.over_steps_edge or self.dragging_steps_edge) .ns_resize else .text;
         context.element(element);
     }
 
@@ -261,6 +267,11 @@ pub const TerminalView = struct {
                 const inside = area.contains(down.position.x, down.position.y);
                 self.focused = inside;
                 if (!inside) return false;
+                // A press on the steps' top edge drags it, resizing them against the output.
+                if (down.button == .left and self.over_steps_edge) {
+                    self.dragging_steps_edge = true;
+                    return true;
+                }
                 // A press on the pinned steps opens or closes one, rather than selecting.
                 if (self.live) |*live| if (live.area) |steps_area| if (down.button == .left and steps_area.contains(down.position.x, down.position.y)) {
                     _ = live.click(down.position.y);
@@ -283,11 +294,24 @@ pub const TerminalView = struct {
                 return true;
             },
             .pointer_move => |p| {
+                if (self.dragging_steps_edge) {
+                    const inner = area.inset(padding);
+                    const rows: usize = @intFromFloat(@max(0, inner.y + inner.h - p.y) / line_height);
+                    self.steps_rows = std.math.clamp(rows, 1, @max(1, allRows(inner) -| 1));
+                    return true;
+                }
+                // The steps' top edge: the gap between them and the output.
+                const edge_bottom = area.y + area.h - padding - self.live_height + line_height * 0.75;
+                self.over_steps_edge = self.live_height > 0 and area.contains(p.x, p.y) and p.y >= edge_bottom - line_height * 0.75 and p.y <= edge_bottom;
                 if (!self.selecting) return false;
                 if (self.selection) |*selection| selection.focus = self.offsetAt(p.x, p.y);
                 return true;
             },
             .pointer_up => {
+                if (self.dragging_steps_edge) {
+                    self.dragging_steps_edge = false;
+                    return true;
+                }
                 if (!self.selecting) return false;
                 self.selecting = false;
                 return true;
@@ -418,6 +442,10 @@ pub const TerminalView = struct {
         return .{ .anchor = start, .focus = end };
     }
 
+    fn allRows(inner: ui.Rect) usize {
+        return @intFromFloat(@max(0, inner.h) / line_height);
+    }
+
     fn draw(context: *const anyopaque, c: *ui.Canvas, r: ui.Rect) anyerror!void {
         const self: *TerminalView = @ptrCast(@alignCast(@constCast(context)));
         self.area = r;
@@ -440,8 +468,8 @@ pub const TerminalView = struct {
         self.live_height = 0;
         if (self.live) |*live| {
             live.area = null;
-            const all_rows: usize = @intFromFloat(@max(0, inner.h) / line_height);
-            const lines = if (live.steps.len == 0) 0 else live.layout(@max(3, all_rows / 2));
+            const all_rows = allRows(inner);
+            const lines = if (live.steps.len == 0) 0 else live.layout(if (self.steps_rows) |rows| @min(rows, all_rows -| 1) else @max(3, all_rows / 2));
             if (lines > 0) {
                 const steps_h = @as(f32, @floatFromInt(lines)) * line_height;
                 self.live_height = steps_h + line_height * 0.75;
