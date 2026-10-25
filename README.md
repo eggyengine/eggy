@@ -20,14 +20,16 @@ The eggy engine uses the editor to initialise the project, so all of these steps
 
 Documentation is also available at [eggyengine.github.io/eggy](https://eggyengine.github.io/eggy)
 
-### linux packages
+<!-- note: uncomment below if linux packaging errors occur in the future -->
+
+<!-- ### linux packages
 fatal errors pop up a native dialog through [nvdialog](https://github.com/tseli0s/nvdialog), which needs GTK3 and DBus headers. accessibility needs `libunwind`. on debian:
 
 ```bash
 sudo apt install libgtk-3-dev libdbus-1-dev libunwind-dev
 ```
 
-everything else (SDL3, nvdialog, AccessKit) is fetched and linked by `zig build`. windows builds ship `accesskit.dll` beside the executables.
+everything else (SDL3, nvdialog, AccessKit) is fetched and linked by `zig build`. windows builds ship `accesskit.dll` beside the executables. -->
 
 ## contributing to eggy
 clone the repository, then run the editor as such:
