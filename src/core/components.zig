@@ -355,6 +355,8 @@ pub fn editableType(comptime T: type) bool {
 /// `T` as scenes and the Inspector write it: each reference (anywhere inside) as what it points
 /// at, `null` or an entity for an `EntityRef`, a path for an `AssetRef`.
 fn Stored(comptime T: type) type {
+    // Every component of a project is walked in one evaluation; the default runs out with many.
+    @setEvalBranchQuota(100_000);
     if (refs.refKind(T)) |kind| return switch (kind) {
         .entity => ?ecs.EntityId,
         .asset => []const u8,
@@ -377,6 +379,7 @@ fn storedTypes(comptime types: []const type) [types.len]type {
 
 /// Whether `T` has a reference anywhere inside it.
 fn holdsRef(comptime T: type) bool {
+    @setEvalBranchQuota(100_000);
     if (refs.refKind(T) != null) return true;
     return switch (@typeInfo(T)) {
         .array => |info| holdsRef(info.child),
