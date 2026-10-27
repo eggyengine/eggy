@@ -612,6 +612,7 @@ fn addEngine(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.buil
         if (std.mem.startsWith(u8, entry.key_ptr.*, runtime_library_prefix)) b.addNamedLazyPath(entry.key_ptr.*, entry.value_ptr.*);
     }
     if (target.result.os.tag == .windows) b.addNamedLazyPath(runtime_library_prefix ++ "bin/accesskit.dll", weeoui.namedLazyPath("accesskit_dll"));
+    if (slang and !web) if (slangGlslang(vitellus, target)) |library| b.addNamedLazyPath(b.fmt("{s}{s}", .{ runtime_library_prefix, library.installed }), library.path);
     switch (target.result.os.tag) {
         .linux => {
             engine.linkSystemLibrary("m", .{});
@@ -795,6 +796,21 @@ fn installEditorLibraries(b: *std.Build, engine: *std.Build) *std.Build.Step {
     }
     b.getInstallStep().dependOn(step);
     return step;
+}
+
+/// Slang's glslang library, which run-time Slang needs to emit SPIR-V (it holds `spirv-opt`), from
+/// the Slang release Vitellus uses, and where it goes beside the app. Null until it is fetched.
+// ponytail: Vitellus installs only slang-compiler; move this into its `addRuntimeLibrary` and drop it here.
+fn slangGlslang(vitellus: *std.Build.Dependency, target: std.Build.ResolvedTarget) ?struct { path: std.Build.LazyPath, installed: []const u8 } {
+    const arm = target.result.cpu.arch == .aarch64;
+    const package, const file, const installed = switch (target.result.os.tag) {
+        .linux => .{ if (arm) "slang_linux_aarch64" else "slang_linux_x86_64", "lib/libslang-glslang-2026.18.2.so", "lib/libslang-glslang-2026.18.2.so" },
+        .macos => .{ if (arm) "slang_macos_aarch64" else "slang_macos_x86_64", "lib/libslang-glslang-2026.18.2.dylib", "lib/libslang-glslang-2026.18.2.dylib" },
+        .windows => .{ if (arm) "slang_windows_aarch64" else "slang_windows_x86_64", "bin/slang-glslang.dll", "bin/slang-glslang.dll" },
+        else => return null,
+    };
+    const slang = vitellus.builder.lazyDependency(package, .{}) orelse return null;
+    return .{ .path = slang.path(file), .installed = installed };
 }
 
 /// Install the shared runtime libraries for either executable and exported games.

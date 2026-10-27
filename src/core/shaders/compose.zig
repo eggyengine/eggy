@@ -67,7 +67,8 @@ pub fn compose(gpa: std.mem.Allocator, source: []const u8, name: []const u8) (Er
     const writer = &out.writer;
     // The wrapper up to its marker, with the library in place of its include.
     writer.writeAll(wrapper[0..included]) catch return error.OutOfMemory;
-    writer.writeAll(library) catch return error.OutOfMemory;
+    // Inlined once, so its include guard would only draw Slang's warning.
+    writer.writeAll(std.mem.trimStart(u8, library[std.mem.indexOf(u8, library, "#pragma once\n").? + "#pragma once\n".len ..], "\n")) catch return error.OutOfMemory;
     writer.writeAll(wrapper[included + library_include.len .. marked]) catch return error.OutOfMemory;
     // The project's shader, numbered as its own file.
     if (role == .surface) writer.writeAll("#define EGGY_SURFACE 1\n") catch return error.OutOfMemory;
