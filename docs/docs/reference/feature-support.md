@@ -18,7 +18,6 @@ no output devices, threads, sessions, files, fake handles, or successful empty r
 
 | App service | Requests |
 | --- | --- |
-| `animation` | play, blend, pause, stop, seek a named model clip |
 | `materials.applyEffect` | postprocessing effects |
 | `particles` | emission and stopping |
 | `network` | connection, listening, messages, polling, disconnection |
@@ -51,6 +50,8 @@ stages synchronous scene replacement for the end of the gameplay update.
 | [Debug drawing and CPU profiling](../how-to/debug-and-profile.md) | World-space overlays, named samples/counters; DevTools Game tab | Same frame-owned collectors and drawing |
 | [World sprites and text](../how-to/world-drawing.md) | Depth-tested atlas sprites and camera-facing glyphs | Same scene renderer |
 | [Sound and 3D audio](../guides/play-sound.md): `AudioSource`, `AudioListener`, `app.audio()` | WAV, FLAC, MP3 and Ogg Vorbis through miniaudio; buses; Asset Preview playback | Same API |
+| [Animation](audio-and-animation.md#animation): `Animator`, `app.animation()` | Authored `.clip.zon` clips and imported model clips (bones, blend shapes, baked frames), with blending; Animation panel | Same API; packaged models keep their rigs |
+| [2D](../guides/make-a-2d-game.md): `Sprite`, `SpriteAnimator`, `Tilemap` | 2D Scene panel with handles, sprite-sheet preview and tile painting | Same API |
 | Editor context, panels, commands, actions | Desktop only | Not run or linked |
 | Missing-backend contracts listed above | `NotImplemented` | `NotImplemented` |
 
@@ -73,6 +74,7 @@ through the Android plugin.
 | Manually feeding `Input.handle(event)` | `try Input.handle(event)`; device/host failures are explicit |
 | `app.materials.assign(...)`, `app.lighting.setLight(...)` | `app.materials().assign(...)`, `app.lighting().setLight(...)`; borrowed current-world services |
 | `app.audio.play(...)` | `app.audio().play(...)`; buses are now `master`, `music`, `effects`, `dialogue` and `ui` |
+| `app.animation.play(entity, .{ .model, .name }, ...)` | `app.animation().play(entity, .{ .imported = ... }, ...)`; a clip is an `AssetRef(.animation)`, not a name |
 
 Rebuild the editor and game library together after updating the engine. Their ABI is
 checked, not mixed across revisions. Native World/query APIs, transforms, simple polling,

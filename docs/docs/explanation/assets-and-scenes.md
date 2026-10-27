@@ -33,8 +33,11 @@ reference, which the build resolves to IDs; it must not reconstruct packaged fil
 
 A `SceneInstance` root refers to a source scene. Saving the containing scene stores
 that instance, not its generated descendants. Refreshing the source scene updates
-each instance. The editor selects the instance root and hides generated descendants
-in the Hierarchy; edit them by opening the source scene.
+each instance. Clicking an instance in the Scene selects its root. The Hierarchy lists its
+generated descendants under it, tinted: change their fields to tune that instance alone,
+and the containing scene saves only those changes, as overrides on the instance (see
+[Tune one scene instance](../how-to/edit-entity-trees.md#tune-one-scene-instance)). To
+change what the instance is made of, open the source scene.
 
 Instantiated entities keep the source scene's parent tree, with entity references
 remapped to the new entities. Recursive scene instances are prevented. Components or
@@ -79,8 +82,8 @@ tool.root_module.addImport("eggy_assets", engine.module("eggy_assets"));
 Its catalog, model, imported-clip, and texture formats use explicit readers, writers,
 allocators, and `std.Io` where needed. Games can also access it as `eggy.assets`.
 
-Browser builds read their preloaded packaged resources synchronously. Async reads and
-streaming still return `NotImplemented`.
+Browser builds read their preloaded packaged resources synchronously, and decode
+asynchronous requests when they are polled. Scene streaming still returns `NotImplemented`.
 
 ## Switch levels
 

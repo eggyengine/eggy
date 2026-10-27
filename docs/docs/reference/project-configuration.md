@@ -44,12 +44,14 @@ See [Create reusable plugins](../how-to/create-plugins.md#using-plugins).
 | `title` | Required | Player-visible title and editor window title |
 | `version` | `"0.0.1"` | Game version stored in executable metadata |
 | `default_scene` | `null` | Project-relative startup scene; exports require this or an explicit scene |
+| `icon` | `null` | Project-relative image: badged on the editor's icon, and the built game's window, Windows executable (PNG only) and Android launcher icon |
 | `metadata` | Empty fields | Executable metadata below |
+| `graphics` | Eggy's defaults | The graphics settings the game ships with, such as `.texture_filter = .nearest` for pixel art; a player's own graphics settings override them. See [render quality](../how-to/render-quality.md) |
 | `plugins` | Empty | Plugins installed from Edit > Plugins, which the game is built with |
 | `plugin` | `null` | This folder's plugin, for others to install; see [Share the plugin](../how-to/create-plugins.md#share-the-plugin) |
 
 File > Project Settings opens the Project section of Edit > Preferences and edits
-this file, including the startup scene.
+this file, including the startup scene, the icon and the graphics defaults.
 
 ### Installed plugins
 
@@ -142,8 +144,7 @@ module names identify plugins, independently of Zig type names. Disabled plugins
 not run, but their settings and component declarations remain known.
 
 Runtime builds embed project plugin preferences and enabled state. Preferences are
-configuration, not gameplay saves; `app.storage` is a separate unsupported contract
-that returns `NotImplemented`.
+configuration, not gameplay saves; keep progress in [game-save slots](../how-to/save-games.md).
 
 See [Map player controls](../how-to/map-input.md) for input assets and overrides, and
 [Create reusable plugins](../how-to/create-plugins.md#preferences) for a preference declaration.

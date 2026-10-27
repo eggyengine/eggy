@@ -116,8 +116,8 @@ the colour; Cancel restores it. Controls read world values every frame.
 
 Add component offers types whose fields all have defaults. A component's `dependencies`
 are added with it when editing or loading a scene; the Inspector prevents removing a
-component still needed by another. `Mesh`, `Camera`, and `SceneInstance` depend on
-`Transform`.
+component still needed by another. `Mesh`, `Camera`, `SceneLight`, `Sprite`, `Tilemap`,
+`UiBillboard`, and `SceneInstance` depend on `Transform`, and `SpriteAnimator` on `Sprite`.
 
 Reference slots accept matching entities/files by drag-and-drop; the x clears a slot.
 `EntityRef(T)` requires component `T`, `EntityRef(void)` accepts any entity, and
@@ -312,7 +312,8 @@ pub const editor_file_types = [_]eggy.plugins.EditorFileType{.{
 ```
 
 This declaration adds a template under the plugin's name in both Assets New menus.
-Eggy's built-in kinds are Scene, Input Map, and Folder.
+Eggy's built-in kinds are Scene, Input Map, Material, Animation Clip, UI Scene, Tilemap,
+and Folder.
 
 | Field | Contract |
 | --- | --- |

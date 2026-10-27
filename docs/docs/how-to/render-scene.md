@@ -81,7 +81,7 @@ from the Hierarchy; scene-local references are remapped on loading.
 
 Built-in shapes are cube, sphere, plane, cylinder, and cone. Use `.shape = .sphere`
 or `eggy.mesh.Source.of(shape)` for a selected `eggy.mesh.Shape`.
-For an imported static model:
+For an imported model:
 
 ```zig
 const mesh = eggy.Mesh{
@@ -93,6 +93,8 @@ const mesh = eggy.Mesh{
 
 The explicit texture overrides model-part textures and is tinted by the mesh color.
 Without it, a model uses its imported textures; an untextured shape uses plain color.
+An animated model plays its clips through an
+[`Animator`](../reference/audio-and-animation.md#animation).
 The renderer owns GPU caches and prepares texture uploads outside render passes.
 Use [resource loaders](../how-to/load-assets.md) when you need owned CPU data instead.
 
@@ -144,6 +146,8 @@ does not need to manage these objects.
 Materials, directional/point/spot lights and directional shadows have
 [working components and reusable assets](materials-and-lighting.md).
 [World sprites and text](world-drawing.md) share the scene camera and depth buffer.
+For 2D games, the `Sprite` and `Tilemap` components draw images saved in the scene; see
+[Make a 2D game](../guides/make-a-2d-game.md).
 [Debug lines, boxes and labels](debug-and-profile.md) are frame-owned overlays.
 See [feature support](../reference/feature-support.md) for the remaining backend contracts.
 

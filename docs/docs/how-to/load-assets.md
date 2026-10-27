@@ -22,9 +22,10 @@ scene streaming is not implemented.
 
 ## Create files in Assets
 
-Use New in the Assets toolbar, or New > in the right-click menu. Both offer
-Scene, Input Map, Folder, and text, Zig, ZON, JSON, Markdown, and TOML templates, along with file types
-declared by the game's plugins. New files get unique names and can be undone.
+Use New in the Assets toolbar, or New > in the right-click menu. Both offer Scene,
+Input Map, Material, Animation Clip, UI Scene, Tilemap and Folder, along with file types
+declared by the game's plugins. Write code and other text files in your code editor. New
+files get unique names and can be undone.
 Right-click a folder to create inside it; right-click a file to create beside it.
 
 Double-click `.inmap.zon` assets to open the [Input Map editor](../how-to/map-input.md).
@@ -41,9 +42,10 @@ assign a texture.
 
 A scene file dropped into Scene/Hierarchy creates a `SceneInstance` root. Only that root
 is saved in the containing scene; generated descendants belong to the source scene.
-Clicking an instance selects its root, and the Hierarchy hides its generated descendants.
-Open the source scene to edit those entities. The SceneInstance's scene field also accepts
-a scene-file drop.
+Clicking an instance selects its root. The Hierarchy lists its generated descendants
+under it, tinted, so you can [tune that one instance](edit-entity-trees.md#tune-one-scene-instance);
+open the source scene to change what it is made of. The SceneInstance's scene field also
+accepts a scene-file drop.
 
 Hierarchy Add creates an empty entity; Delete removes it and its descendants.
 Drag onto a row to reparent, or onto its top/bottom edge to reorder siblings. Scenes
@@ -81,7 +83,8 @@ defer geometry.deinit(gpa);
 
 Free the sentinel-terminated bytes with the allocator passed to `read`. Release images
 and models with `deinit`, as above. Image pixels are RGBA bytes, top row first; models
-contain static geometry, parts, and textures. These are CPU data. To display a model,
+contain geometry, parts, textures, and the rig (bones and blend shapes) of an animated
+model. These are CPU data. To display a model,
 use a [Mesh component](../how-to/render-scene.md#meshes-and-textures).
 
 `read` is for resources copied unchanged, such as text, scenes, and fonts.
