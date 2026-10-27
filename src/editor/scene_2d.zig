@@ -1,7 +1,8 @@
 //! The 2D Scene panel: the world seen flat from the front (its XY plane, Y up) through an
 //! orthographic camera, as a 2D game sees it. Scroll to zoom about the pointer, drag with the
 //! right or middle button to pan, click an entity to select it and drag it to move it (snapped to
-//! the grid when Snap is on). The editor renders the world into the panel (`shot`); the grid and
+//! the grid when Snap is on). F frames the selection and Delete deletes it. On a gamepad the left stick pans, the triggers zoom (right in,
+//! left out) and holding the left shoulder pans faster. The editor renders the world into the panel (`shot`); the grid and
 //! the pointer's place are drawn over it.
 const std = @import("std");
 const eggy = @import("eggy");
@@ -34,6 +35,8 @@ pub const Scene2d = struct {
     mark: ?usize = null,
     shown: bool = false,
     pointer: ui.Vec2 = .{ .x = 0, .y = 0 },
+    /// Whether the pointer is over the viewport, so a gamepad steers this panel.
+    hovered: bool = false,
     /// What was drawn last (for picking); the editor sets it when it renders.
     drawn: []const eggy.mesh.Drawable = &.{},
     /// Where the pointer was last while panning.
@@ -126,6 +129,7 @@ pub const Scene2d = struct {
             .mouse_motion => |motion| {
                 const at = ui.Vec2{ .x = motion.x, .y = motion.y };
                 self.pointer = at;
+                self.hovered = self.area.contains(at.x, at.y);
                 if (self.panning) |from| {
                     self.panBy(at.x - from.x, at.y - from.y);
                     self.panning = at;
@@ -143,6 +147,25 @@ pub const Scene2d = struct {
             },
             else => return false,
         }
+    }
+
+    /// Pan and zoom by a gamepad's left stick and triggers, over `seconds`.
+    /// Desktop editor only: pass a finite nonnegative frame duration and the pad's raw state.
+    /// A full stick crosses the panel's height each second, whatever the zoom; zooming keeps
+    /// the panel's centre still. Call once per frame.
+    pub fn steer(self: *Scene2d, pad: eggy.input.ControllerState, seconds: f32) void {
+        const stick = scene_view.deadZone(pad.left_stick);
+        const speed = self.height_m * seconds * (if (pad.buttons.contains(.left_shoulder)) @as(f32, 3) else 1);
+        self.centre[0] += stick[0] * speed;
+        self.centre[1] -= stick[1] * speed;
+        const zoom_in = pad.triggers[1] - pad.triggers[0];
+        if (@abs(zoom_in) > 0.15) self.height_m = std.math.clamp(self.height_m * @exp(-zoom_in * 1.5 * seconds), 0.25, 5000);
+    }
+
+    /// Centre on `centre`, zoomed to show `radius` around it.
+    pub fn frame(self: *Scene2d, centre: [2]f32, radius: f32) void {
+        self.centre = centre;
+        self.height_m = std.math.clamp(radius * 4, 0.25, 5000);
     }
 
     /// Zoom in `notches` wheel steps (out when negative), the point under `at` staying there.
@@ -262,6 +285,19 @@ test "panning drags the world with the pointer, and the grid thins out when zoom
     const near_step = view.gridStep();
     view.height_m = 400;
     try std.testing.expect(view.gridStep() > near_step);
+}
+
+test "a gamepad's left stick pans a panel height a second, and the right trigger zooms in" {
+    var view = Scene2d{};
+    view.steer(.{ .left_stick = .{ 1, 0 } }, 0.5);
+    view.steer(.{ .left_stick = .{ 0, -1 } }, 0.5);
+    try std.testing.expectApproxEqAbs(@as(f32, 6), view.centre[0], 1e-4);
+    try std.testing.expectApproxEqAbs(@as(f32, 6), view.centre[1], 1e-4);
+    view.steer(.{ .triggers = .{ 0, 1 } }, 1);
+    try std.testing.expect(view.height_m < 12);
+    const height = view.height_m;
+    view.steer(.{ .left_stick = .{ 0.1, 0 }, .triggers = .{ 0.1, 0 } }, 1);
+    try std.testing.expectEqual(height, view.height_m);
 }
 
 test "a click picks the entity under the pointer through the flat view" {

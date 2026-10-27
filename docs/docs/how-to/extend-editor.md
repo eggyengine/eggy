@@ -200,7 +200,12 @@ axes; hold Shift to pan or Ctrl to zoom. The Scene panel distinguishes mouse and
 touchpad input on each scroll, so both can be used together. Native pinch gestures zoom
 where the desktop exposes them through SDL. Gestures start only over the Scene, outside
 its floating toolbar and other panels. SDL has no native twist-rotation event; use
-horizontal two-finger scrolling to rotate around the scene.
+horizontal two-finger scrolling to rotate around the scene. A connected gamepad flies with
+the left stick, looks around with the right (orbits with the right shoulder held), rises
+and sinks with the right and left triggers, flies faster while the left shoulder is held,
+and frames the selection with the south button (A on Xbox pads). It steers whichever Scene
+panel, 3D or 2D, the pointer was over last; while the game runs, the gamepad is the game's
+instead.
 
 Enter Play to check mode restrictions. The Scene toolbar, gizmo, and orientation widget
 are hidden, and an accent border marks the game viewport as playing.

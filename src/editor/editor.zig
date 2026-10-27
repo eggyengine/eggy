@@ -71,6 +71,8 @@ const ui_designer = @import("ui_designer/ui_designer.zig");
 const AssetPreview = @import("asset_preview.zig").AssetPreview;
 const AssetPreviewRequest = @import("asset_preview.zig").Request;
 const Scene2d = @import("scene_2d.zig").Scene2d;
+/// The 3D Scene panel or the flat 2D one.
+const ScenePanel = enum { scene, flat };
 const tab_views = @import("tab_views.zig");
 const scene_tabs = @import("scene_tabs.zig");
 /// The Preferences section File > Project Settings opens.
@@ -210,6 +212,8 @@ pub fn Editor(comptime project: type) type {
         scene_view: scene_view.SceneView = .{},
         /// When the scene camera last flew, to fly by the time since.
         camera_tick_ns: u64 = 0,
+        /// The Scene panel a gamepad steers: the one the pointer was over last.
+        gamepad_panel: ScenePanel = .scene,
         /// Draws the main window's UI into the frame `Graphics` already started.
         overlay: weeoui_vitellus.Renderer,
         /// The OS window for each of the dock's pop-out windows that is open.
@@ -578,7 +582,16 @@ pub fn Editor(comptime project: type) type {
             self.keepLayout();
             // The scene camera flies by the keys held, over the time since the last frame.
             const now_ns = sdl3.timer.getNanosecondsSinceInit();
-            if (self.camera_tick_ns != 0) self.scene_view.camera.fly(@as(f32, @floatFromInt(now_ns - self.camera_tick_ns)) / std.time.ns_per_s);
+            if (self.camera_tick_ns != 0) {
+                const seconds = @as(f32, @floatFromInt(now_ns - self.camera_tick_ns)) / std.time.ns_per_s;
+                self.scene_view.camera.fly(seconds);
+                // Gamepads steer the Scene panel the pointer was over last, unless the game has them.
+                if (self.scene_view.camera.hovered) self.gamepad_panel = .scene else if (self.scene_2d.hovered) self.gamepad_panel = .flat;
+                if (!self.gameHasScene()) if (self.app.input_backend) |backend| for (backend.state.devices.values()) |device| switch (self.gamepadPanel()) {
+                    .scene => self.scene_view.camera.steer(device.raw, seconds),
+                    .flat => self.scene_2d.steer(device.raw, seconds),
+                };
+            }
             self.camera_tick_ns = now_ns;
             // Scene instances' entities, then what the Scene panel is seen from, and the
             // selection's gizmo over it.
@@ -2154,7 +2167,12 @@ pub fn Editor(comptime project: type) type {
             };
 
             // While the game plays, the Scene panel is the game's: the mouse over it goes to it.
-            const game_has_scene = self.play_mode.playing() and !self.workspace.simulating;
+            const game_has_scene = self.gameHasScene();
+            // Otherwise a gamepad's south button frames the selection, as F does.
+            if (!game_has_scene and curr_event == .gamepad_button_down and curr_event.gamepad_button_down.button == .south) {
+                self.frameSelected(self.gamepadPanel());
+                return .run;
+            }
             if (game_has_scene) if (self.sceneRect(slot)) |rect| {
                 if (self.overScene(slot, curr_event) or ((self.game_input.mouse_captured or self.game_input.buttons != 0) and !eggy.game_ui.isTouchInput(curr_event) and pointerOf(curr_event) != null) or self.game_input.ownsTouch(curr_event)) {
                     if (self.game) |*game| try self.routeGameInput(game, curr_event, slot, rect);
@@ -2180,9 +2198,12 @@ pub fn Editor(comptime project: type) type {
                 return .run;
             };
             if (!game_has_scene and self.scene_view.camera.drag != null and eggy.game_ui.isInput(curr_event)) return .run;
-            if (!game_has_scene) if (curr_event == .key_down) if (curr_event.key_down.key) |key| if (self.scene_view.camera.hovered and self.scene_view.camera.drag == null and self.scene_view.drag == null) switch (key) {
+            // The same keys work over the 2D Scene panel, while it isn't panning or moving.
+            const over_scene = self.scene_view.camera.hovered and self.scene_view.camera.drag == null and self.scene_view.drag == null;
+            const over_flat = self.scene_2d.shown and self.scene_2d.hovered and self.scene_2d.panning == null and !self.scene_2d.isMoving();
+            if (!game_has_scene) if (curr_event == .key_down) if (curr_event.key_down.key) |key| if (over_scene or over_flat) switch (key) {
                 .f => {
-                    self.frameSelected();
+                    self.frameSelected(if (over_scene) .scene else .flat);
                     return .run;
                 },
                 // Delete (or Backspace) deletes the selection, as the Hierarchy's Delete does.
@@ -3332,14 +3353,28 @@ pub fn Editor(comptime project: type) type {
         }
 
         /// Point the scene camera at the entity selected in the Hierarchy, close enough to see it.
-        fn frameSelected(self: *Self) void {
+        /// Bring the selected entity into view in `panel`.
+        fn frameSelected(self: *Self, panel: ScenePanel) void {
             const entity = self.entity_editor.selected orelse return;
             const game = if (self.game) |*loaded| loaded else return;
             const placed = game.worldMatrix(&self.app, entity) orelse return;
             // Its size: the longest of its axes, as scaled.
             var radius: f32 = 0.5;
             for (placed[0..3]) |axis| radius = @max(radius, @sqrt(axis[0] * axis[0] + axis[1] * axis[1] + axis[2] * axis[2]));
-            self.scene_view.camera.frame(.{ placed[3][0], placed[3][1], placed[3][2] }, radius);
+            switch (panel) {
+                .scene => self.scene_view.camera.frame(.{ placed[3][0], placed[3][1], placed[3][2] }, radius),
+                .flat => self.scene_2d.frame(.{ placed[3][0], placed[3][1] }, radius),
+            }
+        }
+
+        /// Whether the playing game has the Scene panel (and the gamepad), rather than the editor.
+        fn gameHasScene(self: *const Self) bool {
+            return self.play_mode.playing() and !self.workspace.simulating;
+        }
+
+        /// The panel a gamepad steers: the 2D one only while it is shown.
+        fn gamepadPanel(self: *const Self) ScenePanel {
+            return if (self.gamepad_panel == .flat and self.scene_2d.shown) .flat else .scene;
         }
 
         /// `rect` (in UI points) in window pixels.

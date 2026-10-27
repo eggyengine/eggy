@@ -15,7 +15,8 @@ Press **+** on the bar, choose **File > New Tab...** or press **Ctrl+T**, then p
 - **2D Scene** opens the **2D Scene** panel: the world seen flat from the front, X to the
   right and Y up, as a 2D game sees it. Scroll to zoom, drag with the right or middle button
   to pan, and click an entity to select it. Drag it to move it; with **Snap** on it lands on
-  the grid. **Ctrl+Z** undoes a move.
+  the grid. **Ctrl+Z** undoes a move. **F** frames the selection and **Delete** deletes it.
+  A gamepad pans with the left stick and zooms with the triggers.
 - **UI Scene** opens the UI Designer (see [UI scenes](ui-scenes.md)).
 
 **File > New 3D Scene Tab**, **New 2D Scene Tab** and **New UI Scene Tab** do the same.
