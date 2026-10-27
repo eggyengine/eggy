@@ -72,6 +72,8 @@ pub const materials = @import("materials.zig");
 pub const Material = materials.Material;
 pub const lighting = @import("lighting.zig");
 pub const SceneLight = lighting.SceneLight;
+pub const post_process = @import("post_process.zig");
+pub const PostProcess = post_process.PostProcess;
 pub const particles = @import("particles.zig");
 pub const network = @import("network.zig");
 pub const mobile = @import("mobile/mobile.zig");
@@ -152,6 +154,8 @@ test {
     _ = @import("refs.zig");
     _ = materials;
     _ = lighting;
+    _ = post_process;
+    _ = @import("scene_post.zig");
     _ = @import("weeoui");
     _ = ui_scenes;
 }

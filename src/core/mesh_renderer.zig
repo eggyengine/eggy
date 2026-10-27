@@ -38,6 +38,12 @@ pub const Sources = struct {
     ui_billboards: ?*const @import("ui_scenes/billboards.zig").Frame = null,
 };
 
+/// The lights' exposure, fallback light and shadow light, and whether the post pass maps tones
+/// (so lit surfaces skip their own curve).
+fn environmentOf(lights: lighting.Frame) [4]f32 {
+    return .{ lights.options[0], lights.options[1], lights.options[2], if (lights.post.mapsTones()) 1 else 0 };
+}
+
 /// Scene passes accumulated by the host during this frame, including editor camera views.
 pub const Stats = struct { draw_calls: usize = 0, meshes: usize = 0, triangles: u64 = 0, culled: usize = 0 };
 
@@ -223,7 +229,7 @@ pub const MeshRenderer = struct {
         // draw; then upload them and the camera.
         std.mem.sort(mesh.Drawable, sorted, {}, drawnBefore);
         try upload(self.instances[self.slot], std.mem.sliceAsBytes(sorted));
-        const camera = CameraUniforms{ .view_projection = view_projection, .options = .{ if (srgb) 1 else 0, 0, 0, 0 }, .outline = outline_color, .outline_size = .{ viewport_px[0], viewport_px[1], outline_width_px, 0 }, .eye = .{ eye[0], eye[1], eye[2], 0 }, .light_info = .{ @floatFromInt(sources.lights.count), 0, 0, 0 }, .lights = sources.lights.lights, .ambient = sources.lights.ambient, .environment = sources.lights.options, .shadow_matrix = self.shadow.matrix, .shadow_params = self.shadow.params };
+        const camera = CameraUniforms{ .view_projection = view_projection, .options = .{ if (srgb) 1 else 0, 0, 0, 0 }, .outline = outline_color, .outline_size = .{ viewport_px[0], viewport_px[1], outline_width_px, 0 }, .eye = .{ eye[0], eye[1], eye[2], 0 }, .light_info = .{ @floatFromInt(sources.lights.count), 0, 0, 0 }, .lights = sources.lights.lights, .ambient = sources.lights.ambient, .environment = environmentOf(sources.lights.*), .shadow_matrix = self.shadow.matrix, .shadow_params = self.shadow.params };
         try upload(self.uniforms[self.slot], std.mem.asBytes(&camera));
 
         cmd.setGraphicsPipeline(self.pipeline);

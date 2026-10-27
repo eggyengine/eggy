@@ -484,9 +484,12 @@ fn addEngine(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.buil
     const world_shader = b.path("src/core/shaders/world_draw.slang");
     const world_vertex = vitellus_build.compileSlang(b, vitellus, target, world_shader, "vertexMain", .vertex) orelse return null;
     const world_fragment = vitellus_build.compileSlang(b, vitellus, target, world_shader, "fragmentMain", .fragment) orelse return null;
-    const resolve_shader = b.path("src/core/shaders/scene_resolve.slang");
-    const resolve_vertex = vitellus_build.compileSlang(b, vitellus, target, resolve_shader, "vertexMain", .vertex) orelse return null;
-    const resolve_fragment = vitellus_build.compileSlang(b, vitellus, target, resolve_shader, "fragmentMain", .fragment) orelse return null;
+    const post_shader = b.path("src/core/shaders/scene_post.slang");
+    const post_vertex = vitellus_build.compileSlang(b, vitellus, target, post_shader, "vertexMain", .vertex) orelse return null;
+    const post_prefilter = vitellus_build.compileSlang(b, vitellus, target, post_shader, "bloomPrefilter", .fragment) orelse return null;
+    const post_down = vitellus_build.compileSlang(b, vitellus, target, post_shader, "bloomDown", .fragment) orelse return null;
+    const post_up = vitellus_build.compileSlang(b, vitellus, target, post_shader, "bloomUp", .fragment) orelse return null;
+    const post_grade = vitellus_build.compileSlang(b, vitellus, target, post_shader, "gradeMain", .fragment) orelse return null;
     const shader_files = b.addWriteFiles();
     _ = shader_files.addCopyFile(viewport_vertex, "viewport3d.vert");
     _ = shader_files.addCopyFile(viewport_fragment, "viewport3d.frag");
@@ -502,8 +505,11 @@ fn addEngine(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.buil
     _ = shader_files.addCopyFile(grid_fragment, "grid.frag");
     _ = shader_files.addCopyFile(world_vertex, "world.vert");
     _ = shader_files.addCopyFile(world_fragment, "world.frag");
-    _ = shader_files.addCopyFile(resolve_vertex, "scene_resolve.vert");
-    _ = shader_files.addCopyFile(resolve_fragment, "scene_resolve.frag");
+    _ = shader_files.addCopyFile(post_vertex, "scene_post.vert");
+    _ = shader_files.addCopyFile(post_prefilter, "bloom_prefilter.frag");
+    _ = shader_files.addCopyFile(post_down, "bloom_down.frag");
+    _ = shader_files.addCopyFile(post_up, "bloom_up.frag");
+    _ = shader_files.addCopyFile(post_grade, "grade.frag");
     const shader_module = b.createModule(.{
         .root_source_file = shader_files.add("root.zig",
             \\pub const viewport_vertex = @embedFile("viewport3d.vert");
@@ -520,8 +526,11 @@ fn addEngine(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.buil
             \\pub const grid_fragment = @embedFile("grid.frag");
             \\pub const world_vertex = @embedFile("world.vert");
             \\pub const world_fragment = @embedFile("world.frag");
-            \\pub const resolve_vertex = @embedFile("scene_resolve.vert");
-            \\pub const resolve_fragment = @embedFile("scene_resolve.frag");
+            \\pub const post_vertex = @embedFile("scene_post.vert");
+            \\pub const bloom_prefilter = @embedFile("bloom_prefilter.frag");
+            \\pub const bloom_down = @embedFile("bloom_down.frag");
+            \\pub const bloom_up = @embedFile("bloom_up.frag");
+            \\pub const grade_fragment = @embedFile("grade.frag");
             \\
         ),
         .target = target,

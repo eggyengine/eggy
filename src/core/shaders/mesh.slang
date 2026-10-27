@@ -49,7 +49,7 @@ cbuffer Camera : register(b0, space0) {
     float4 eye;
     float4 light_info;       // x: number of scene lights
     float4 ambient;
-    float4 environment;      // exposure multiplier, fallback light, shadow-light index, reserved
+    float4 environment;      // exposure multiplier, fallback light, shadow-light index, post pass maps tones
     float4 shadow_matrix0;
     float4 shadow_matrix1;
     float4 shadow_matrix2;
@@ -179,8 +179,9 @@ float4 fragmentMain(VertexOutput input) : SV_Target0 {
     }
     color += input.emissive_cutoff.rgb;
     color *= environment.x;
-    // Fit HDR direct lighting into the output range without hard-clipping bright surfaces.
-    if (input.material.z < 0.5)
+    // Fit HDR direct lighting into the output range without hard-clipping bright surfaces,
+    // unless the post pass maps the whole image's tones.
+    if (input.material.z < 0.5 && environment.w < 0.5)
         color = saturate((color * (2.51 * color + 0.03)) / (color * (2.43 * color + 0.59) + 0.14));
     // sRGB targets encode linear output themselves; other targets need explicit encoding.
     color = options.x > 0.5 ? color : pow(max(color, 0.0), float3(1.0 / 2.2, 1.0 / 2.2, 1.0 / 2.2));
