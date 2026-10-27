@@ -23,7 +23,8 @@ scene streaming is not implemented.
 ## Create files in Assets
 
 Use New in the Assets toolbar, or New > in the right-click menu. Both offer Scene,
-Input Map, Material, Animation Clip, UI Scene, Tilemap and Folder, along with file types
+Input Map, Material, Animation Clip, UI Scene, Post Shader, Surface Shader, Tilemap and
+Folder, along with file types
 declared by the game's plugins. Write code and other text files in your code editor. New
 files get unique names and can be undone.
 Right-click a folder to create inside it; right-click a file to create beside it.

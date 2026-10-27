@@ -18,7 +18,6 @@ no output devices, threads, sessions, files, fake handles, or successful empty r
 
 | App service | Requests |
 | --- | --- |
-| `materials.applyEffect` | postprocessing effects |
 | `particles` | emission and stopping |
 | `network` | connection, listening, messages, polling, disconnection |
 | `navigation` | paths and destinations; no physics or collision access |
@@ -51,6 +50,7 @@ stages synchronous scene replacement for the end of the gameplay update.
 | [World sprites and text](../how-to/world-drawing.md) | Depth-tested atlas sprites and camera-facing glyphs | Same scene renderer |
 | [Sound and 3D audio](../guides/play-sound.md): `AudioSource`, `AudioListener`, `app.audio()` | WAV, FLAC, MP3 and Ogg Vorbis through miniaudio; buses; Asset Preview playback | Same API |
 | [Animation](audio-and-animation.md#animation): `Animator`, `app.animation()` | Authored `.clip.zon` clips and imported model clips (bones, blend shapes, baked frames), with blending; Animation panel | Same API; packaged models keep their rigs |
+| [Post-processing and shaders](../guides/post-processing-and-shaders.md): `PostProcess`, Slang `.slang` files | HDR rendering, tone mapping, bloom and grading; project post passes and material surface shaders, compiled while the editor runs | Same; shaders compiled when the game is built |
 | [2D](../guides/make-a-2d-game.md): `Sprite`, `SpriteAnimator`, `Tilemap` | 2D Scene panel with handles, sprite-sheet preview and tile painting | Same API |
 | Editor context, panels, commands, actions | Desktop only | Not run or linked |
 | Missing-backend contracts listed above | `NotImplemented` | `NotImplemented` |
@@ -74,6 +74,7 @@ through the Android plugin.
 | Manually feeding `Input.handle(event)` | `try Input.handle(event)`; device/host failures are explicit |
 | `app.materials.assign(...)`, `app.lighting.setLight(...)` | `app.materials().assign(...)`, `app.lighting().setLight(...)`; borrowed current-world services |
 | `app.audio.play(...)` | `app.audio().play(...)`; buses are now `master`, `music`, `effects`, `dialogue` and `ui` |
+| `app.materials().applyEffect(...)` | Set the `Environment`'s `post`, or a camera's `PostProcess` |
 | `app.animation.play(entity, .{ .model, .name }, ...)` | `app.animation().play(entity, .{ .imported = ... }, ...)`; a clip is an `AssetRef(.animation)`, not a name |
 
 Rebuild the editor and game library together after updating the engine. Their ABI is

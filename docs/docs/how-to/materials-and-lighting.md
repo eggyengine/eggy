@@ -39,6 +39,9 @@ Models retain imported base-color, metallic, roughness, and emissive factors in 
 packaged vertices. An assigned Material overrides those factors. The model format changed:
 rebuild packaged models rather than reusing older `.eggmodel` files.
 
+A material's **shader** slot takes a surface shader, which changes the surface before it is
+lit; see [Post-processing and shaders](../guides/post-processing-and-shaders.md).
+
 Alpha below `alpha_cutoff` is discarded; this is cutout transparency, not translucent
 blending. Normal maps and metallic/roughness texture maps are not implemented.
 
@@ -65,9 +68,10 @@ half-angles in degrees and must satisfy `0 <= inner < outer < 90`. Parent transf
 apply to all light types.
 
 Lighting uses a GGX metallic/roughness BRDF, native lux/candela strengths with a shared
-exposure reference of 1000, and an ACES fitted tone mapper. Emissive surfaces are included
-before exposure and tone mapping. Unlit materials bypass the BRDF and tone mapping,
-but still receive global exposure.
+exposure reference of 1000. Emissive surfaces are included before exposure. With the
+Environment's default **surface** tone mapping, lit surfaces fit themselves with an ACES
+curve and unlit materials are not mapped; the other tone mappings map the whole image
+afterwards. See [Post-processing and shaders](../guides/post-processing-and-shaders.md).
 
 Up to sixteen lights can be active; exceeding this reports an error rather than silently
 dropping lights. Scenes without authored lights retain a fixed preview light by default.
@@ -88,7 +92,8 @@ try app.lighting().setEnvironment(.{
 
 Positive exposure EV doubles brightness per stop; negative EV halves it. Disabling
 `default_light` removes the fallback light, not the ambient term. Multiple Environment
-components without a resource override report an error.
+components without a resource override report an error. The Environment's `post` holds the
+scene's tone mapping, bloom and colour grading.
 
 ## Directional shadows
 
