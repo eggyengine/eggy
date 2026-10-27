@@ -13,6 +13,7 @@ pub const layer_step_m: f32 = 0.001;
 pub const Sprite = struct {
     /// Marks it in the editor (nf-md-image_outline).
     pub const icon = "\u{f0976}";
+    pub const category = "2D";
     /// Drawn where its `Transform` puts it.
     pub const dependencies = .{Transform};
 

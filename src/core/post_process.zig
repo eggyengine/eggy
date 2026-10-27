@@ -40,6 +40,7 @@ pub const Pass = struct {
 pub const PostProcess = struct {
     /// Marks it in the editor (nf-md-image_filter_hdr).
     pub const icon = "\u{f02f9}";
+    pub const category = "Rendering";
     pub const dependencies = .{camera.Camera};
     tone_mapping: ToneMapping = .surface,
     bloom: Bloom = .{},

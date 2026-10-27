@@ -7,6 +7,7 @@ const math = @import("eggenvector");
 pub const Transform = struct {
     /// Marks it in the editor (nf-md-axis_arrow).
     pub const icon = "\u{f0d49}";
+    pub const category = "Scene";
     position: [3]f32 = .{ 0, 0, 0 },
     /// Turns about x, then y, then z, in degrees.
     rotation_deg: [3]f32 = .{ 0, 0, 0 },

@@ -447,6 +447,7 @@ pub const HotGame = struct {
             .title = try arena.dupeSentinel(u8, std.mem.span(source.title), 0),
             .extension = try arena.dupeSentinel(u8, std.mem.span(source.extension), 0),
             .contents = try arena.dupe(u8, source.contents[0..source.contents_len]),
+            .category = try arena.dupeSentinel(u8, std.mem.span(source.category), 0),
         };
         const ui_widgets = try arena.alloc(eggy.plugins.UiWidget, game.ui_widget_count);
         for (ui_widgets, game.ui_widgets[0..game.ui_widget_count]) |*widget, source| widget.* = .{
@@ -920,7 +921,7 @@ fn copyComponentTypes(arena: std.mem.Allocator, types: []const api.ComponentType
                 .parts = try copyParts(arena, field_source.parts[0..field_source.part_count]),
             };
         }
-        info.* = .{ .name = try arena.dupeSentinel(u8, std.mem.span(source.name), 0), .owner = try arena.dupeSentinel(u8, std.mem.span(source.owner), 0), .fields = fields, .addable = source.addable, .dependencies = try arena.dupe(usize, source.dependencies[0..source.dependency_count]), .icon = try arena.dupeSentinel(u8, std.mem.span(source.icon), 0) };
+        info.* = .{ .name = try arena.dupeSentinel(u8, std.mem.span(source.name), 0), .owner = try arena.dupeSentinel(u8, std.mem.span(source.owner), 0), .fields = fields, .addable = source.addable, .dependencies = try arena.dupe(usize, source.dependencies[0..source.dependency_count]), .icon = try arena.dupeSentinel(u8, std.mem.span(source.icon), 0), .category = try arena.dupeSentinel(u8, std.mem.span(source.category), 0) };
     }
     return infos;
 }

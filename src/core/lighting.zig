@@ -16,6 +16,7 @@ pub const Light = union(enum) {
 pub const Environment = struct {
     /// Marks it in the editor (nf-md-earth).
     pub const icon = "\u{f01e7}";
+    pub const category = "Lighting";
     ambient_color: [3]f32 = @splat(1),
     ambient_intensity: f32 = 0.03,
     exposure_ev: f32 = 0,
@@ -36,6 +37,7 @@ pub const Environment = struct {
 pub const SceneLight = struct {
     /// Marks it in the editor (nf-md-lightbulb_on_outline).
     pub const icon = "\u{f06e9}";
+    pub const category = "Lighting";
     pub const dependencies = .{transform.Transform};
     kind: enum { directional, point, spot } = .directional,
     color: [3]f32 = @splat(1),

@@ -47,7 +47,7 @@ if (app.world.get(camera, eggy.PostProcess)) |post| {
 A post shader runs once for every pixel of the image, before bloom and tone mapping, so it
 sees the scene's real light values.
 
-1. In Assets, choose **New > Post Shader**. It makes a `.slang` file that fades the image
+1. In Assets, choose **New > Rendering > Post Shader**. It makes a `.slang` file that fades the image
    towards grey.
 2. Open it in your code editor:
 
@@ -85,7 +85,7 @@ Up to four passes run, each reading what the one before it wrote.
 A surface shader changes how a material's surface looks before it is lit: patterns,
 pulsing glows, colour by height. Eggy still lights and shadows the result.
 
-1. Choose **New > Surface Shader**. It makes a `.slang` file with a slow glow.
+1. Choose **New > Rendering > Surface Shader**. It makes a `.slang` file with a slow glow.
 2. Edit it:
 
    ```slang

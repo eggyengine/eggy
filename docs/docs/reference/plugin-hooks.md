@@ -114,7 +114,14 @@ Rotation fields use degrees unless their name ends `_rad`. Changing the rotation
 display preserves the field's stored type. Clicking outside the colour picker keeps
 the colour; Cancel restores it. Controls read world values every frame.
 
-Add component offers types whose fields all have defaults. A component's `dependencies`
+Add component offers types whose fields all have defaults. Before anything is typed it lists
+them by category, each category's types popping out beside it; typing searches them all. A
+component's `pub const category = "Physics";` puts it in that category, shared with Eggy's
+own (Scene, Rendering, Lighting, Animation, UI, Audio, 2D) or a new one; without one it goes
+under its plugin's name (the game's under Game). Its `pub const icon`, a Nerd Font
+character, marks it there and in the Inspector.
+
+A component's `dependencies`
 are added with it when editing or loading a scene; the Inspector prevents removing a
 component still needed by another. `Mesh`, `Camera`, `SceneLight`, `Sprite`, `Tilemap`,
 `UiBillboard`, and `SceneInstance` depend on `Transform`, `SpriteAnimator` on `Sprite`, and
@@ -309,12 +316,14 @@ pub const editor_file_types = [_]eggy.plugins.EditorFileType{.{
     .title = "Material",
     .extension = ".material.zon",
     .contents = ".{ .roughness = 0.5 }\n",
+    .category = "Rendering",
 }};
 ```
 
-This declaration adds a template under the plugin's name in both Assets New menus.
-Eggy's built-in kinds are Scene, Input Map, Material, Animation Clip, UI Scene, Post Shader,
-Surface Shader, Tilemap, and Folder.
+This declaration adds a template to both Assets New menus, in its category's submenu. New
+lists Scene, then Eggy's categories (Rendering: Material, Surface Shader and Post Shader; 2D:
+Tilemap; Animation: Animation Clip; UI: UI Scene; Input: Input Map), then any categories
+plugins add, then Folder.
 
 | Field | Contract |
 | --- | --- |
@@ -322,6 +331,7 @@ Surface Shader, Tilemap, and Folder.
 | `title` | Display name; must not contain path separators |
 | `extension` | Suffix; must not contain path separators |
 | `contents` | Initial file bytes; omit for an empty file |
+| `category` | The submenu it is in, shared with Eggy's or a new one; omit for one named after the plugin |
 
 The example creates `Material.material.zon` in the chosen folder, adding a number if
 the name exists. Templates remain available when the plugin is disabled. File creation

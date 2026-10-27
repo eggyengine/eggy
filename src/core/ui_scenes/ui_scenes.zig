@@ -41,6 +41,7 @@ pub const support: @import("../support.zig").Support = .available;
 pub const UiScreen = struct {
     /// Marks it in the editor (nf-md-view_dashboard).
     pub const icon = "\u{f056e}";
+    pub const category = "UI";
     scene: AssetRef(.ui) = .{},
     /// Screens with higher layers draw over those with lower ones.
     layer: i16 = 0,
@@ -54,6 +55,7 @@ pub const UiScreen = struct {
 pub const UiBillboard = struct {
     /// Marks it in the editor (nf-md-billboard).
     pub const icon = "\u{f1010}";
+    pub const category = "UI";
     pub const dependencies = .{Transform};
     scene: AssetRef(.ui) = .{},
     /// How wide its face is, in metres; its height follows the scene's design size.

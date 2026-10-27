@@ -10,11 +10,13 @@
 //!
 //! A component can depend on others, listed in its `dependencies`: adding it adds them, and the
 //! editor won't remove one while another needs it. Its `icon`, a Nerd Font character, marks it
-//! in the editor (`default_icon` otherwise).
+//! in the editor (`default_icon` otherwise), and its `category` groups it in Add component (under
+//! its plugin's name otherwise).
 //!
 //!     pub const Spin = struct {
 //!         pub const dependencies = .{eggy.Transform};
 //!         pub const icon = "\u{f0464}"; // nf-md-rotate_3d_variant
+//!         pub const category = "Animation";
 //!         speed: f32 = 1,
 //!     };
 const std = @import("std");
@@ -138,6 +140,8 @@ pub const Info = struct {
     addable: bool,
     /// Its `icon`: a Nerd Font character, as UTF-8.
     icon: [:0]const u8 = default_icon,
+    /// Its `category`, which groups it in the editor's Add component; empty for none.
+    category: [:0]const u8 = "",
     /// The components it depends on (its `dependencies`), as indices among the same types.
     dependencies: []const usize = &.{},
 };
@@ -302,7 +306,8 @@ fn infoOf(comptime T: type, comptime owner: [:0]const u8) Info {
     }
     const frozen = fields;
     const icon: [:0]const u8 = if (@hasDecl(T, "icon")) T.icon ++ "" else default_icon;
-    return .{ .name = shortName(T), .owner = owner, .fields = &frozen, .addable = addable, .icon = icon };
+    const category: [:0]const u8 = if (@hasDecl(T, "category")) T.category ++ "" else "";
+    return .{ .name = shortName(T), .owner = owner, .fields = &frozen, .addable = addable, .icon = icon, .category = category };
 }
 
 fn kindOf(comptime T: type) Kind {

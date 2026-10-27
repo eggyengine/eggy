@@ -28,6 +28,7 @@ pub const support: api.Support = .available;
 pub const Animator = struct {
     /// Marks it in the editor (nf-md-animation_play).
     pub const icon = "\u{f093a}";
+    pub const category = "Animation";
     clip: AssetRef(.animation) = .{},
     /// An imported clip of the entity's model; unset for none.
     model_clip: AssetRef(.animation) = .{},

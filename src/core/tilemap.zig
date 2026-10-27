@@ -10,6 +10,7 @@ const sprite = @import("sprite.zig");
 pub const Tilemap = struct {
     /// Marks it in the editor (nf-md-grid).
     pub const icon = "\u{f02c1}";
+    pub const category = "2D";
     /// Drawn where its `Transform` puts it, its top-left corner at the entity.
     pub const dependencies = .{Transform};
 

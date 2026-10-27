@@ -9,7 +9,7 @@ in the **UI Designer** panel, and change what it shows from your game's code.
 
 ## Make a UI scene
 
-1. In the Assets panel choose **New > UI Scene**.
+1. In the Assets panel choose **New > UI > UI Scene**.
 2. Double-click it. The UI Designer opens in a **UI** tab of its own, with its three panels
    side by side. Switch back to the **3D** tab to see the world, or right-click the UI tab and
    choose **Pop out into window** to keep both on screen.

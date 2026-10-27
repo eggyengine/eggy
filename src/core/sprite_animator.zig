@@ -9,6 +9,7 @@ const Sprite = @import("sprite.zig").Sprite;
 pub const SpriteAnimator = struct {
     /// Marks it in the editor (nf-md-filmstrip).
     pub const icon = "\u{f0231}";
+    pub const category = "2D";
     /// It sets its `Sprite`'s region.
     pub const dependencies = .{Sprite};
 

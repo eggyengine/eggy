@@ -69,8 +69,8 @@ the top of the Inspector. Then press Add component:
 
 Add these two:
 
-- Transform sets where the entity is, how it is turned and how big it is. Set its position's Y to `0.5`, so the cube sits on the floor.
-- Mesh sets what it looks like. Pick the Cube shape and an orange colour (R `1`, G `0.55`, B `0.1`).
+- Transform (under Scene) sets where the entity is, how it is turned and how big it is. Set its position's Y to `0.5`, so the cube sits on the floor.
+- Mesh (under Rendering) sets what it looks like. Pick the Cube shape and an orange colour (R `1`, G `0.55`, B `0.1`).
 
 ![The Player entity: an orange cube with a Transform and a Mesh](/img/first-game/player.png)
 
@@ -168,7 +168,7 @@ then swaps it in without closing the editor. If the build fails, the Console say
 
 ## 7. Add the player component and try the game {#make-the-cube-a-player}
 
-Select Player in the Hierarchy, press Add component, and add Player. Its fields
+Select Player in the Hierarchy, press Add component, and add Player (under Game, or type its name). Its fields
 come from the struct, with their defaults. You can change them here:
 
 ![The Player entity with the Player component added](/img/first-game/player-component.png)

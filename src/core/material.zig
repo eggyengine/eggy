@@ -7,6 +7,7 @@ const AssetRef = @import("refs.zig").AssetRef;
 pub const Material = struct {
     /// Marks it in the editor (nf-md-palette).
     pub const icon = "\u{f03d8}";
+    pub const category = "Rendering";
     file: AssetRef(.material) = .{},
     color: [4]f32 = @splat(1),
     texture: AssetRef(.image) = .{},

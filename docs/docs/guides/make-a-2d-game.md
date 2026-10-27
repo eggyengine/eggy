@@ -99,7 +99,7 @@ pub fn update(self: *Game, app: *eggy.App) !void {
 
 A tilemap is a grid of tiles cut from one tileset image, saved in a `.tilemap.zon` file.
 
-1. In Assets, choose **New > Tilemap**. It makes an empty 16 by 16 map.
+1. In Assets, choose **New > 2D > Tilemap**. It makes an empty 16 by 16 map.
 2. Open the file and set `columns` and `rows` to how your tileset is cut.
 3. Add a **Tilemap** to an entity. Drag the map file onto **map** and the tileset image onto
    **tileset**. The map's top-left corner sits at the entity.

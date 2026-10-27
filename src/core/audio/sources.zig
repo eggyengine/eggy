@@ -14,6 +14,7 @@ const audio = @import("voices.zig");
 pub const AudioSource = struct {
     /// Marks it in the editor (nf-md-volume_high).
     pub const icon = "\u{f057e}";
+    pub const category = "Audio";
     sound: AssetRef(.audio) = .{},
     playing: bool = true,
     repeat: audio.Repeat = .once,
@@ -37,6 +38,7 @@ pub const AudioSource = struct {
 pub const AudioListener = struct {
     /// Marks it in the editor (nf-md-headphones).
     pub const icon = "\u{f02cb}";
+    pub const category = "Audio";
 };
 
 /// Place the listener, start, update and end `AudioSource`s' voices, and free voices that

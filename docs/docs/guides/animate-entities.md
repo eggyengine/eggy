@@ -8,7 +8,7 @@ Console.
 
 ## Make a clip and give it to an entity
 
-1. In the Assets panel choose **New > Animation Clip**. It creates a `.clip.zon` file with
+1. In the Assets panel choose **New > Animation > Animation Clip**. It creates a `.clip.zon` file with
    one second and no tracks.
 2. Select an entity, add an **Animator** in the Inspector and drop the clip on its **Clip**
    field. A model's own animations show under the model in Assets; drop one on **Model

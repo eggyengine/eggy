@@ -71,6 +71,7 @@ const file_types = blk: {
         .extension = source.extension.ptr,
         .contents = source.contents.ptr,
         .contents_len = source.contents.len,
+        .category = source.category.ptr,
     };
     break :blk list;
 };
@@ -123,7 +124,7 @@ const component_types = blk: {
             field.* = .{ .name = source.name.ptr, .kind = @backingInt(source.kind), .options = &frozen_options, .option_count = frozen_options.len, .editable = source.editable, .requires = source.requires.ptr, .accepts = @backingInt(source.accepts), .parts = source.parts.ptr, .part_count = source.parts.len };
         }
         const frozen_fields = fields;
-        component_type.* = .{ .name = info.name.ptr, .owner = info.owner.ptr, .fields = &frozen_fields, .field_count = frozen_fields.len, .addable = info.addable, .dependencies = info.dependencies.ptr, .dependency_count = info.dependencies.len, .icon = info.icon.ptr };
+        component_type.* = .{ .name = info.name.ptr, .owner = info.owner.ptr, .fields = &frozen_fields, .field_count = frozen_fields.len, .addable = info.addable, .dependencies = info.dependencies.ptr, .dependency_count = info.dependencies.len, .icon = info.icon.ptr, .category = info.category.ptr };
     }
     break :blk types;
 };

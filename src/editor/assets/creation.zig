@@ -22,51 +22,58 @@ pub const Entry = union(enum) {
     }
 };
 
-/// Eggy's own: what a game is made of. Plain text files belong in the code editor, not here;
-/// plugins add their own kinds with `editor_file_types`.
+/// Eggy's own: what a game is made of, in the order their categories show in New. Plain text
+/// files belong in the code editor, not here; plugins add their own kinds with `editor_file_types`.
 const builtins = [_]Entry{
     .scene,
-    .{ .file = .{
-        .key = "eggy/input_map",
-        .title = "Input Map",
-        .extension = ".inmap.zon",
-        .contents = ".{\n    .version = 1,\n    .controls = .{},\n}\n",
-    } },
     .{ .file = .{
         .key = "eggy/material",
         .title = "Material",
         .extension = ".material.zon",
         .contents = ".{\n    .color = .{ 1, 1, 1, 1 },\n    .metallic = 0,\n    .roughness = 1,\n    .texture = \"\",\n    .emissive_color = .{ 0, 0, 0 },\n    .unlit = false,\n    .alpha_cutoff = 0.01,\n    .shader = \"\",\n}\n",
-    } },
-    .{ .file = .{
-        .key = "eggy/animation_clip",
-        .title = "Animation Clip",
-        .extension = ".clip.zon",
-        .contents = ".{\n    .format_version = 1,\n    .duration_s = 1,\n    .tracks = .{},\n}\n",
-    } },
-    .{ .file = .{
-        .key = "eggy/ui_scene",
-        .title = "UI Scene",
-        .extension = eggy.assets.ui_scene.extension,
-        .contents = eggy.assets.ui_scene.template,
-    } },
-    .{ .file = .{
-        .key = "eggy/post_shader",
-        .title = "Post Shader",
-        .extension = ".slang",
-        .contents = post_shader_template,
+        .category = "Rendering",
     } },
     .{ .file = .{
         .key = "eggy/surface_shader",
         .title = "Surface Shader",
         .extension = ".slang",
         .contents = surface_shader_template,
+        .category = "Rendering",
+    } },
+    .{ .file = .{
+        .key = "eggy/post_shader",
+        .title = "Post Shader",
+        .extension = ".slang",
+        .contents = post_shader_template,
+        .category = "Rendering",
     } },
     .{ .file = .{
         .key = "eggy/tilemap",
         .title = "Tilemap",
         .extension = eggy.assets.tilemap.extension,
         .contents = eggy.assets.tilemap.template,
+        .category = "2D",
+    } },
+    .{ .file = .{
+        .key = "eggy/animation_clip",
+        .title = "Animation Clip",
+        .extension = ".clip.zon",
+        .contents = ".{\n    .format_version = 1,\n    .duration_s = 1,\n    .tracks = .{},\n}\n",
+        .category = "Animation",
+    } },
+    .{ .file = .{
+        .key = "eggy/ui_scene",
+        .title = "UI Scene",
+        .extension = eggy.assets.ui_scene.extension,
+        .contents = eggy.assets.ui_scene.template,
+        .category = "UI",
+    } },
+    .{ .file = .{
+        .key = "eggy/input_map",
+        .title = "Input Map",
+        .extension = ".inmap.zon",
+        .contents = ".{\n    .version = 1,\n    .controls = .{},\n}\n",
+        .category = "Input",
     } },
     .folder,
 };
@@ -142,7 +149,10 @@ pub fn at(index: usize, plugins: []const FileType) ?Entry {
 test "built-in input maps are valid ZON and plugin templates extend the same catalog" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
-    _ = try eggy.input.asset.File.parse(arena.allocator(), try arena.allocator().dupeSentinel(u8, builtins[1].file.contents, 0));
+    const input_map = for (builtins) |entry| {
+        if (entry == .file and std.mem.eql(u8, entry.file.key, "eggy/input_map")) break entry.file;
+    } else unreachable;
+    _ = try eggy.input.asset.File.parse(arena.allocator(), try arena.allocator().dupeSentinel(u8, input_map.contents, 0));
     const plugins = [_]FileType{.{ .key = "game/material", .title = "Material", .extension = ".material.zon", .contents = ".{}" }};
     try std.testing.expectEqualStrings("Material", at(builtins.len, &plugins).?.label());
     try std.testing.expect(at(count(&plugins), &plugins) == null);

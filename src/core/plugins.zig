@@ -61,10 +61,12 @@
 //!     pub const input_maps = .{PlayerInput}; // an eggy.input.Map or FileMap
 //!     // in a hook: try app.input.map(PlayerInput).pressed(.jump)
 //!
-//! File templates extend both Assets > New menus without a creation hook:
+//! File templates extend both Assets > New menus without a creation hook, each in its
+//! `category`'s submenu:
 //!
 //!     pub const editor_file_types = [_]eggy.plugins.EditorFileType{.{
 //!         .key = "material", .title = "Material", .extension = ".material.zon", .contents = ".{}\n",
+//!         .category = "Rendering",
 //!     }};
 //!
 //! And platforms for File > Export, beside Eggy's own, with the settings each shows there and the
@@ -297,6 +299,9 @@ pub const EditorFileType = struct {
     title: [:0]const u8,
     extension: [:0]const u8,
     contents: []const u8 = "",
+    /// The submenu of New it is in, shared with Eggy's own (`Rendering`, `2D`...) or a new one;
+    /// empty for one named after the plugin.
+    category: [:0]const u8 = "",
 };
 
 /// A widget a plugin adds to UI scenes. In the Set's metadata the key is `<plugin>/<key>`.
@@ -464,7 +469,7 @@ pub fn Set(comptime types: anytype, comptime keys: []const [:0]const u8) type {
                         @compileError("editor file types need a key, title and path-free .extension");
                     const identity = std.fmt.comptimePrint("{s}/{s}", .{ key, file_type.key });
                     for (all) |previous| if (std.mem.eql(u8, previous.key, identity)) @compileError("duplicate editor file type key");
-                    all = all ++ .{EditorFileType{ .key = identity, .title = file_type.title, .extension = file_type.extension, .contents = file_type.contents }};
+                    all = all ++ .{EditorFileType{ .key = identity, .title = file_type.title, .extension = file_type.extension, .contents = file_type.contents, .category = file_type.category }};
                 }
             };
             break :blk all;

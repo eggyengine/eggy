@@ -7,7 +7,7 @@ const std = @import("std");
 const eggy = @import("eggy");
 
 /// Bumped whenever these types change, so an editor refuses a library built for another.
-pub const version: u32 = 40;
+pub const version: u32 = 41;
 
 /// The library's one exported function: `fn () callconv(.c) *const Game`.
 pub const entry_symbol = "eggy_game";
@@ -62,6 +62,8 @@ pub const FileType = extern struct {
     extension: [*:0]const u8,
     contents: [*]const u8,
     contents_len: usize,
+    /// Its submenu in Assets > New; empty for its plugin's.
+    category: [*:0]const u8,
 };
 
 /// A platform a plugin adds to File > Export (`eggy.plugins.ExportPlatform`).
@@ -121,6 +123,8 @@ pub const ComponentType = extern struct {
     dependency_count: usize,
     /// Its icon, a Nerd Font character as UTF-8.
     icon: [*:0]const u8,
+    /// Its category in Add component; empty for none.
+    category: [*:0]const u8,
 };
 
 /// An entity of the app's world (`eggy.ecs.EntityId`).
