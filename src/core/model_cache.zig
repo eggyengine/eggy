@@ -145,6 +145,19 @@ pub const ModelCache = struct {
         self.entries.clearRetainingCapacity();
     }
 
+    /// Forget the model at `path`, so it loads again when next drawn (its file changed). The
+    /// GPU must be done with it. Does nothing for one never loaded.
+    ///
+    /// ```zig
+    /// try graphics.queue.waitIdle();
+    /// models.forget(tilemap_key, &textures);
+    /// ```
+    pub fn forget(self: *ModelCache, path: []const u8, textures: *TextureCache) void {
+        const removed = self.entries.fetchRemove(path) orelse return;
+        if (removed.value) |gpu| gpu.deinit(self.gpa, textures);
+        self.gpa.free(removed.key);
+    }
+
     /// Load the model at `path` and put it, and its textures, on the GPU.
     fn upload(self: *ModelCache, path: []const u8, textures: *TextureCache) ?Gpu {
         const loader = self.loader orelse return null;

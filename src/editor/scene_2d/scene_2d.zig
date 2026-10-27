@@ -3,7 +3,7 @@
 //! right or middle button to pan, click an entity to select it and drag it to move it (snapped to
 //! the grid when Snap is on). The selection's corners scale it (Shift: evenly) and the knob above
 //! it turns it (in 15 degree steps when snapping); the arrow keys nudge it a grid step. F frames
-//! the selection and Delete deletes it. On a gamepad the left stick pans, the triggers zoom
+//! the selection and Delete deletes it. A selected `Tilemap` is painted with `tile_brush.zig`. On a gamepad the left stick pans, the triggers zoom
 //! (right in, left out) and holding the left shoulder pans faster. The editor renders the world
 //! into the panel (`shot`); the grid, the pointer's place and the handles are drawn over it.
 const std = @import("std");
@@ -13,6 +13,7 @@ const sdl3 = eggy.sdl_adapter.sdl;
 const scene_view = @import("../scene_view/scene_view.zig");
 const page_style = @import("../page_style.zig");
 const handles = @import("handles.zig");
+pub const tile_brush = @import("tile_brush.zig");
 
 /// What the editor renders this frame: the world seen through `view`, into `rect` (logical
 /// points of the panel's window), drawn in at `mark` of the page's vertices, under the grid.
@@ -49,6 +50,8 @@ pub const Scene2d = struct {
     selected: ?eggy.ecs.EntityId = null,
     /// A corner or the knob being dragged.
     reshaping: ?Reshape = null,
+    /// Painting the selection's tilemap.
+    brush: tile_brush.Brush = .{},
 
     const Reshape = struct { entity: eggy.ecs.EntityId, drag: handles.Drag };
 
@@ -96,7 +99,8 @@ pub const Scene2d = struct {
     }
 
     /// Draw the panel: its toolbar, the viewport the world goes into, and the grid over it.
-    pub fn build(self: *Scene2d, context: *ui.Context) void {
+    /// With `app`, the tile brush's toggle and palette show under the toolbar for a tilemap.
+    pub fn build(self: *Scene2d, context: *ui.Context, app: ?*eggy.App, gpa: std.mem.Allocator) void {
         self.shown = false;
         // The toolbar: the grid, snapping, and back to the origin.
         context.begin(.row);
@@ -111,10 +115,12 @@ pub const Scene2d = struct {
         page_style.smallText(context, 12);
         context.end();
         page_style.restyle(context, .{ .direction = .row, .gap = 12, .align_items = .center });
+        if (app) |live| self.brush.build(context, live, gpa);
+        const brush_px: f32 = if (self.brush.target == null or app == null) 0 else if (self.brush.painting) 44 + tile_brush.palette_height_px else 40;
 
         // The viewport fills the rest: the world is drawn in where it starts, the grid over it.
         const b = context.builder();
-        const height = @max(80, page_style.pageHeight(context) - 44);
+        const height = @max(80, page_style.pageHeight(context) - 44 - brush_px);
         context.element(b.node(0, .{ .width = context.contentWidth(), .height = height }, .{ .custom = .{ .context = self, .draw = drawViewport } }, &.{}) catch return);
         self.shown = true;
     }
@@ -123,7 +129,7 @@ pub const Scene2d = struct {
     /// event was the panel's. A left press selects what is under it (its outermost scene
     /// instance) and starts moving it; the host records the move as one History step once
     /// `isMoving` turns false.
-    pub fn handle(self: *Scene2d, event: sdl3.events.Event, target: ?scene_view.Target) bool {
+    pub fn handle(self: *Scene2d, event: sdl3.events.Event, target: ?scene_view.Target, brush_env: ?tile_brush.Env) bool {
         if (!self.shown) return false;
         switch (event) {
             .mouse_wheel => |wheel| {
@@ -140,6 +146,11 @@ pub const Scene2d = struct {
                     return true;
                 }
                 const live = target orelse return true;
+                // Painting tiles takes the press while the brush is on and over its map.
+                if (brush_env) |env| if (self.mapPoint(self.worldAt(at))) |local| {
+                    const keys = sdl3.keyboard.getModState();
+                    if (self.brush.press(env, local, keys.shiftDown(), keys.altDown())) return true;
+                };
                 // The selection's corners and knob come before what is under them.
                 if (self.selectedBox()) |box| if (box.handleAt(self.worldAt(at), self.metresPerPx())) |taken| {
                     self.reshaping = startReshape(live, self.selected.?, taken, box, self.worldAt(at));
@@ -163,11 +174,16 @@ pub const Scene2d = struct {
                     if (target) |live| reshapeTo(live, reshape, self.worldAt(at), sdl3.keyboard.getModState().shiftDown(), self.snap);
                     return true;
                 }
+                if (self.brush.stroking()) {
+                    if (brush_env) |env| if (self.mapPoint(self.worldAt(at))) |local| self.brush.paint(env, local, sdl3.keyboard.getModState().shiftDown());
+                    return true;
+                }
                 const move = self.moving orelse return false;
                 if (target) |live| self.moveTo(live, move, self.worldAt(at));
                 return true;
             },
             .mouse_button_up => {
+                if (brush_env) |env| if (self.brush.release(env)) return true;
                 const used = self.panning != null or self.moving != null or self.reshaping != null;
                 self.panning = null;
                 self.moving = null;
@@ -224,6 +240,19 @@ pub const Scene2d = struct {
             .x = self.area.x + self.area.w / 2 + (world[0] - self.centre[0]) * px_per_metre,
             .y = self.area.y + self.area.h / 2 - (world[1] - self.centre[1]) * px_per_metre,
         };
+    }
+
+    /// The world point `world` in the brush's tilemap's own space (tiles, y up from its top
+    /// edge); null without a tilemap drawn here.
+    fn mapPoint(self: *const Scene2d, world: [2]f32) ?[2]f32 {
+        const entity = (self.brush.target orelse return null).entity;
+        for (self.drawn) |drawable| {
+            if (drawable.entity_id != entity.id or drawable.entity_generation != entity.generation) continue;
+            const to_local = eggy.transform.invert(drawable.model) orelse return null;
+            const local = eggy.transform.apply(to_local, .{ world[0], world[1], drawable.model[3][2] }, 1);
+            return .{ local[0], local[1] };
+        }
+        return null;
     }
 
     /// The selection's box, from what was drawn last; null when it isn't drawn here.

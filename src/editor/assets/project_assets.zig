@@ -418,6 +418,17 @@ pub const ProjectAssets = struct {
 
     fn loadModel(context: *anyopaque, gpa: std.mem.Allocator, key: []const u8) !assets.Model {
         const self: *ProjectAssets = @ptrCast(@alignCast(context));
+        // A tilemap is drawn as the model its tiles make.
+        if (try self.fileOf(gpa, try assets.id.parse(key))) |found| {
+            defer gpa.free(found.path);
+            if (found.kind == .tilemap) {
+                const text = try readAsset(context, gpa, key);
+                defer gpa.free(text);
+                const map = try assets.tilemap.parse(gpa, text);
+                defer map.deinit(gpa);
+                return map.buildModel(gpa);
+            }
+        }
         const source = (try self.geometryOf(try assets.id.parse(key))) orelse return error.FileNotFound;
         defer source.deinit(self.gpa);
         var imported = try self.importModel(gpa, source);

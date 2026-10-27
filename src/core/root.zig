@@ -39,6 +39,8 @@ pub const sprite = @import("sprite.zig");
 pub const Sprite = sprite.Sprite;
 pub const sprite_animator = @import("sprite_animator.zig");
 pub const SpriteAnimator = sprite_animator.SpriteAnimator;
+pub const tilemap = @import("tilemap.zig");
+pub const Tilemap = tilemap.Tilemap;
 pub const camera = @import("camera.zig");
 pub const Camera = camera.Camera;
 pub const max_drawables = @import("mesh_renderer.zig").max_drawables;
@@ -133,6 +135,7 @@ test {
     _ = @import("mesh.zig");
     _ = sprite;
     _ = sprite_animator;
+    _ = tilemap;
     _ = @import("mesh_renderer.zig");
     _ = @import("model_cache.zig");
     _ = @import("texture_cache.zig");

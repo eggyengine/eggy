@@ -13,6 +13,7 @@ const Material = @import("material.zig").Material;
 const Animator = @import("animation.zig").Animator;
 const Sprite = @import("sprite.zig").Sprite;
 const SpriteAnimator = @import("sprite_animator.zig").SpriteAnimator;
+const Tilemap = @import("tilemap.zig").Tilemap;
 
 /// The shapes there are, each about a metre across, centred on the entity. A `plane` faces up
 /// (+y); a `quad` faces the front (+z), as sprites do.
@@ -167,6 +168,12 @@ pub fn gather(world: *ecs.World, out: []Drawable) usize {
         out[count] = spriteDrawable(world, view.entity, view.get(*const Sprite)) orelse continue;
         count += 1;
     }
+    var tilemaps = world.query(.{ *const Tilemap, *const Transform });
+    while (tilemaps.next()) |view| {
+        if (count == out.len) break;
+        out[count] = tilemapDrawable(world, view.entity, view.get(*const Tilemap)) orelse continue;
+        count += 1;
+    }
     return count;
 }
 
@@ -190,7 +197,32 @@ pub fn gatherAlloc(gpa: std.mem.Allocator, world: *ecs.World) ![]Drawable {
     while (sprites.next()) |view| {
         try result.append(gpa, spriteDrawable(world, view.entity, view.get(*const Sprite)) orelse continue);
     }
+    var tilemaps = world.query(.{ *const Tilemap, *const Transform });
+    while (tilemaps.next()) |view| {
+        try result.append(gpa, tilemapDrawable(world, view.entity, view.get(*const Tilemap)) orelse continue);
+    }
     return result.toOwnedSlice(gpa);
+}
+
+/// A tilemap as its map file's model, unlit and painted with its tileset; none without both.
+fn tilemapDrawable(world: *ecs.World, entity: ecs.EntityId, tilemap: *const Tilemap) ?Drawable {
+    if (tilemap.map.len == 0 or tilemap.tileset.len == 0) return null;
+    var world_matrix: [4][4]f32 = undefined;
+    for (&world_matrix, transform_zig.worldMatrix(world, entity).data) |*column, data| column.* = data;
+    return .{
+        .model = tilemap.placed(world_matrix),
+        .color = tilemap.color,
+        .shape = .quad,
+        .entity_id = entity.id,
+        .entity_generation = entity.generation,
+        .model_file = &tilemap.map.buffer,
+        .model_file_len = tilemap.map.len,
+        .texture_file = &tilemap.tileset.buffer,
+        .texture_file_len = tilemap.tileset.len,
+        .material_params = .{ 0, 1, 1, 1 },
+        .emissive_cutoff = .{ 0, 0, 0, tilemap.alpha_cutoff },
+        .casts_shadow = 0,
+    };
 }
 
 /// A sprite as an unlit quad showing its part of its image (its animator's frame, if it has

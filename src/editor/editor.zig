@@ -70,7 +70,8 @@ const animation_dock = @import("animation_dock/animation_dock.zig");
 const ui_designer = @import("ui_designer/ui_designer.zig");
 const AssetPreview = @import("asset_preview.zig").AssetPreview;
 const AssetPreviewRequest = @import("asset_preview.zig").Request;
-const Scene2d = @import("scene_2d/scene_2d.zig").Scene2d;
+const Scene2dPanel = @import("scene_2d/scene_2d.zig");
+const Scene2d = Scene2dPanel.Scene2d;
 /// The 3D Scene panel or the flat 2D one.
 const ScenePanel = enum { scene, flat };
 const tab_views = @import("tab_views.zig");
@@ -497,6 +498,7 @@ pub fn Editor(comptime project: type) type {
             self.camera_preview.deinit();
             if (self.model_view) |*view| view.deinit();
             if (self.scene_2d_view) |*view| view.deinit();
+            self.scene_2d.brush.deinit(self.gpa);
             self.gpa.free(self.drawables);
             self.gpa.free(self.drawables_2d);
             self.overlay.deinit();
@@ -601,6 +603,7 @@ pub fn Editor(comptime project: type) type {
             // The tab shown last frame decides whose Scene camera, 2D view and UI scene are in use.
             self.followTabs();
             self.scene_2d.selected = self.entity_editor.selected;
+            if (self.tileBrushEnv()) |env| self.scene_2d.brush.follow(env, self.entity_editor.selected) else self.scene_2d.brush.target = null;
             const look: scene_view.SceneView.Look = if (!self.play_mode.playing()) .editing else if (self.workspace.simulating) .simulating else .playing;
             self.scene_view.update(self.sceneTarget(), if (self.workspace.placed.scene) |placed| placed.rect else null, look);
             self.workspace.scene_overlay = self.scene_view.overlay();
@@ -710,7 +713,7 @@ pub fn Editor(comptime project: type) type {
                         });
                     } else page_ui.muted("Open a project to preview its files.") else page_ui.muted("Open a project to preview its files."),
                     panels.ui_properties_page => if (self.uiDesignerEnv()) |env| self.ui_designer.buildProperties(page_ui, env, self.dragging(page_ui.builder().allocator)) else page_ui.muted("Open a project to design UI."),
-                    panels.scene_2d_page => self.scene_2d.build(page_ui),
+                    panels.scene_2d_page => self.scene_2d.build(page_ui, if (self.tileBrushEnv() != null) &self.app else null, self.gpa),
                     else => if (self.game) |*game| {
                         var editor_context = extensions.context(self);
                         game.editorPanelUi(index - panels.first_plugin_page, &editor_context, page_ui);
@@ -1688,6 +1691,10 @@ pub fn Editor(comptime project: type) type {
                     try self.ui_designer.restore(env, io, files, change.path, change.text.value(direction));
                 },
                 .file_text => |change| try files.writeFile(io, .{ .sub_path = change.path, .data = change.text.value(direction) }),
+                .tilemap => |change| {
+                    try files.writeFile(io, .{ .sub_path = change.path, .data = change.text.value(direction) });
+                    try self.reloadTilemap(change.path);
+                },
                 .layout => |change| {
                     const text = change.value(direction);
                     if (!layout_file.restore(self.gpa, text, &self.workspace.dock, &self.workspace.tabs)) return error.ParseZon;
@@ -3111,7 +3118,7 @@ pub fn Editor(comptime project: type) type {
                 // ponytail: only the Inspector is exposed to screen readers; give plugin pages AccessKit too once one adapter can serve several contexts.
                 if (index == panels.console_page and self.console.terminal.handle(input)) continue;
                 if (index == panels.asset_preview_page and self.asset_preview.handle(input)) continue;
-                if (index == panels.scene_2d_page and self.scene_2d.handle(curr_event, self.sceneTarget())) continue;
+                if (index == panels.scene_2d_page and self.scene_2d.handle(curr_event, self.sceneTarget(), self.tileBrushEnv())) continue;
                 // Assets' right-clicks, double-clicks and keys, before its UI.
                 if (index == panels.assets_page) {
                     const result = switch (input) {
@@ -3376,6 +3383,24 @@ pub fn Editor(comptime project: type) type {
                 .scene => self.scene_view.camera.frame(.{ placed[3][0], placed[3][1], placed[3][2] }, radius),
                 .flat => self.scene_2d.frame(.{ placed[3][0], placed[3][1] }, radius),
             }
+        }
+
+        /// What the 2D panel's tile brush paints through: none without a project and a game, or
+        /// while the game plays.
+        fn tileBrushEnv(self: *Self) ?Scene2dPanel.tile_brush.Env {
+            if (self.play_mode.playing()) return null;
+            const opened = self.project orelse return null;
+            const game = if (self.game) |*loaded| loaded else return null;
+            return .{ .gpa = self.gpa, .app = &self.app, .game = game, .assets = self.project_assets orelse return null, .project_dir = opened.dir, .history = &self.history, .now_ms = self.workspace.time_ms };
+        }
+
+        /// Draw the tilemap file at `path` (in the project) as it now is: its model is built again.
+        fn reloadTilemap(self: *Self, path: []const u8) !void {
+            const loaders = self.project_assets orelse return;
+            var buffer: [eggy.assets.id.key_len]u8 = undefined;
+            const key = loaders.keyOf(&buffer, path) orelse return;
+            try self.app.graphics.queue.waitIdle();
+            self.app.graphics.models.forget(key, &self.app.graphics.textures);
         }
 
         /// Whether the playing game has the Scene panel (and the gamepad), rather than the editor.

@@ -100,6 +100,17 @@ pub const Data = struct {
 
     fn loadModel(context: *anyopaque, gpa: std.mem.Allocator, path: []const u8) !eggy.assets.Model {
         const self: *Data = @ptrCast(@alignCast(context));
+        // A tilemap is copied as it is, and drawn as the model its tiles make.
+        const root = @import("root");
+        if (comptime @hasDecl(root, "eggy_asset_ids")) {
+            if (root.eggy_asset_ids.findId(try eggy.assets.id.parse(path))) |entry| if (entry.kind == @backingInt(eggy.assets.Kind.tilemap)) {
+                const text = try readCopy(context, gpa, path);
+                defer gpa.free(text);
+                const map = try eggy.assets.tilemap.parse(gpa, text);
+                defer map.deinit(gpa);
+                return map.buildModel(gpa);
+            };
+        }
         return self.readPackaged(eggy.assets.Model, eggy.assets.model, gpa, path);
     }
 

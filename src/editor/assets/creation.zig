@@ -50,6 +50,12 @@ const builtins = [_]Entry{
         .extension = eggy.assets.ui_scene.extension,
         .contents = eggy.assets.ui_scene.template,
     } },
+    .{ .file = .{
+        .key = "eggy/tilemap",
+        .title = "Tilemap",
+        .extension = eggy.assets.tilemap.extension,
+        .contents = eggy.assets.tilemap.template,
+    } },
     .folder,
 };
 

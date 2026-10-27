@@ -86,7 +86,7 @@
 //!
 //! Eggy's own components (`builtin_components`: `Transform`, `Mesh`, which the scene draws, and
 //! `Camera`, which the runtime looks through, and `SceneInstance`, a scene file made under an
-//! entity, `Animator`, which plays clips, `AudioSource` and `AudioListener`, which play sound, `Sprite`, an image drawn flat, and `SpriteAnimator`, which flips it through a sheet's frames)
+//! entity, `Animator`, which plays clips, `AudioSource` and `AudioListener`, which play sound, `Sprite`, an image drawn flat, `SpriteAnimator`, which flips it through a sheet's frames, and `Tilemap`, a grid of tiles)
 //! are listed first in every project, owned by `eggy`.
 //!
 //! A project can turn plugins off (not the game): one that is off doesn't start, and none of its
@@ -113,7 +113,7 @@ const DrawContext = @import("game_ui/game_ui.zig").DrawContext;
 const ui_scenes = @import("ui_scenes/ui_scenes.zig");
 
 /// The components every project has, before its plugins' own.
-pub const builtin_components = .{ @import("transform.zig").Transform, @import("mesh.zig").Mesh, @import("camera.zig").Camera, @import("scene_instance.zig").SceneInstance, @import("material.zig").Material, @import("lighting.zig").SceneLight, @import("lighting.zig").Environment, @import("animation.zig").Animator, ui_scenes.UiScreen, ui_scenes.UiBillboard, @import("audio/audio.zig").AudioSource, @import("audio/audio.zig").AudioListener, @import("sprite.zig").Sprite, @import("sprite_animator.zig").SpriteAnimator };
+pub const builtin_components = .{ @import("transform.zig").Transform, @import("mesh.zig").Mesh, @import("camera.zig").Camera, @import("scene_instance.zig").SceneInstance, @import("material.zig").Material, @import("lighting.zig").SceneLight, @import("lighting.zig").Environment, @import("animation.zig").Animator, ui_scenes.UiScreen, ui_scenes.UiBillboard, @import("audio/audio.zig").AudioSource, @import("audio/audio.zig").AudioListener, @import("sprite.zig").Sprite, @import("sprite_animator.zig").SpriteAnimator, @import("tilemap.zig").Tilemap };
 
 /// Eggy's own platforms in File > Export, in the order it lists them.
 /// Android comes from the Android plugin (`plugins/android/`), as a platform of its own.
