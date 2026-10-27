@@ -36,7 +36,7 @@ const builtins = [_]Entry{
         .key = "eggy/material",
         .title = "Material",
         .extension = ".material.zon",
-        .contents = ".{\n    .color = .{ 1, 1, 1, 1 },\n    .metallic = 0,\n    .roughness = 1,\n    .texture = \"\",\n    .emissive_color = .{ 0, 0, 0 },\n    .unlit = false,\n    .alpha_cutoff = 0.01,\n}\n",
+        .contents = ".{\n    .color = .{ 1, 1, 1, 1 },\n    .metallic = 0,\n    .roughness = 1,\n    .texture = \"\",\n    .emissive_color = .{ 0, 0, 0 },\n    .unlit = false,\n    .alpha_cutoff = 0.01,\n    .shader = \"\",\n}\n",
     } },
     .{ .file = .{
         .key = "eggy/animation_clip",
@@ -51,6 +51,18 @@ const builtins = [_]Entry{
         .contents = eggy.assets.ui_scene.template,
     } },
     .{ .file = .{
+        .key = "eggy/post_shader",
+        .title = "Post Shader",
+        .extension = ".slang",
+        .contents = post_shader_template,
+    } },
+    .{ .file = .{
+        .key = "eggy/surface_shader",
+        .title = "Surface Shader",
+        .extension = ".slang",
+        .contents = surface_shader_template,
+    } },
+    .{ .file = .{
         .key = "eggy/tilemap",
         .title = "Tilemap",
         .extension = eggy.assets.tilemap.extension,
@@ -58,6 +70,36 @@ const builtins = [_]Entry{
     } },
     .folder,
 };
+
+/// A pass over the image, which a `PostProcess` lists in its `passes`.
+const post_shader_template =
+    \\#include "eggy"
+    \\
+    \\// Runs for every pixel of the scene's light, before bloom and tone mapping.
+    \\// `input.values` are the four values the pass is given in its PostProcess.
+    \\float4 post(PostInput input) {
+    \\    float3 color = sceneColor(input.uv);
+    \\    // Fade towards grey by the pass's first value.
+    \\    color = lerp(color, luminance(color).xxx, saturate(input.values.x));
+    \\    return float4(color, 1.0);
+    \\}
+    \\
+;
+
+/// How a material's surface looks before it is lit, which a material names as its `shader`.
+const surface_shader_template =
+    \\#include "eggy"
+    \\
+    \\// Runs for every point drawn with a material using this shader. Start from the surface
+    \\// the material describes, change what you need, and Eggy lights the result.
+    \\Surface surface(SurfaceInput input) {
+    \\    Surface shown = defaultSurface(input);
+    \\    // A slow glow in the surface's own colour.
+    \\    shown.emissive += shown.base_color * (0.25 + 0.25 * sin(input.time_s * 2.0));
+    \\    return shown;
+    \\}
+    \\
+;
 
 /// How many entries are Eggy's own; the plugins' follow, in plugin order.
 pub const builtin_count = builtins.len;

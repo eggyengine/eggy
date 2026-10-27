@@ -15,6 +15,9 @@ pub const Material = struct {
     emissive_color: [3]f32 = @splat(0),
     unlit: bool = false,
     alpha_cutoff: f32 = 0.01,
+    /// A surface shader (`Surface surface(SurfaceInput input)`) that changes how the surface
+    /// looks before it is lit; none draws it as these fields say.
+    shader: AssetRef(.shader) = .{},
 
     pub fn validate(self: Material) error{InvalidMaterial}!void {
         for (self.color) |value| if (!std.math.isFinite(value) or value < 0 or value > 1) return error.InvalidMaterial;

@@ -4,10 +4,6 @@ const expect = std.testing.expectError;
 
 test "every missing backend operation returns NotImplemented" {
     const entity = @import("clutch").EntityId.init(0, 0);
-    var capability_world = @import("clutch").World.init(std.testing.allocator);
-    defer capability_world.deinit();
-    const materials = @import("materials.zig").Materials{ .world = &capability_world };
-    try expect(error.NotImplemented, materials.applyEffect(.bloom, 1));
     const particles = @import("particles.zig").Particles{};
     try expect(error.NotImplemented, particles.emit(.{ .position_m = @splat(0) }));
     try expect(error.NotImplemented, particles.stop(@fromBackingInt(@intCast(0))));

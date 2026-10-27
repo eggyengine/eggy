@@ -155,21 +155,24 @@ pub fn aimNewLight(world: *ecs.World, entity: ecs.EntityId) void {
     world.markChanged(entity, transform.Transform);
 }
 
+const default_environment = Environment{};
+
 /// Gather up to sixteen validated lights. A light whose values don't validate is left out and
 /// counted in `invalid`, so one bad light doesn't stop the rest; overflow, a second shadow caster
 /// and a second environment are explicit errors.
 pub fn gather(world: *ecs.World) !Frame {
     var result = Frame{};
-    var environment = if (world.getResource(Environment)) |value| value.* else Environment{};
+    // Borrowed, so the post passes' shader keys stay pointing into the world.
+    var environment: *const Environment = if (world.getResource(Environment)) |value| value else &default_environment;
     if (world.getResource(Environment) == null) {
         var environments = world.query(.{*const Environment});
-        if (environments.next()) |view| environment = view.get(*const Environment).*;
+        if (environments.next()) |view| environment = view.get(*const Environment);
         if (environments.next() != null) return error.MultipleEnvironments;
     }
     try environment.validate();
     result.ambient = .{ environment.ambient_color[0], environment.ambient_color[1], environment.ambient_color[2], environment.ambient_intensity };
     result.options = .{ std.math.exp2(environment.exposure_ev), if (environment.default_light) 1 else 0, -1, 0 };
-    result.post = (try post_process.forActiveCamera(world, environment.post)).frame();
+    result.post = (try post_process.forActiveCamera(world, &environment.post)).frame();
     var lights = world.query(.{ *const SceneLight, *const transform.Transform });
     while (lights.next()) |view| {
         const light = view.get(*const SceneLight).*;

@@ -17,6 +17,8 @@ const TextureCache = texture_cache.TextureCache;
 const frames_in_flight = @import("weeoui_vitellus").frames_in_flight;
 const lighting = @import("lighting.zig");
 const Deformation = @import("deformation.zig").Deformation;
+const ShaderCache = @import("shader_cache.zig").ShaderCache;
+const ShaderPipelines = @import("shader_pipelines.zig").ShaderPipelines;
 
 /// The most visible meshes in one pass; overflow is an explicit rendering error.
 pub const max_drawables = 4096;
@@ -72,6 +74,14 @@ pub const MeshRenderer = struct {
     shadow_pipeline: vit.GraphicsPipeline,
     /// The posed corners of animated models, one buffer each per entity.
     deformation: Deformation,
+    /// What colour pipelines need beyond the built-in one: one per material surface shader.
+    device: vit.Device,
+    format: vit.Format,
+    sample_count: u32,
+    shaderSource: *const fn ([]const u8, []const u8) vit.ShaderModule,
+    surfaces: ShaderPipelines = .{},
+    /// The last surface shader reported as not a surface shader, so it is logged once.
+    wrong_role_reported: u64 = 0,
 
     /// Build the shapes and a pipeline drawing into `format`, with a `.d32_float` depth buffer,
     /// painting with textures bound as `texture_layout` describes (`TextureCache.layout`).
@@ -154,6 +164,10 @@ pub const MeshRenderer = struct {
             .shadow_pipeline_layout = shadow_pipeline_layout,
             .shadow_pipeline = shadow_pipeline,
             .deformation = Deformation.init(std.heap.c_allocator, device),
+            .device = device,
+            .format = format,
+            .sample_count = sample_count,
+            .shaderSource = shaderSource,
         };
     }
 
@@ -165,6 +179,7 @@ pub const MeshRenderer = struct {
     /// renderer.deinit();
     /// ```
     pub fn deinit(self: *MeshRenderer) void {
+        self.surfaces.deinit();
         self.deformation.deinit();
         self.shadow_pipeline.deinit();
         self.shadow_pipeline_layout.deinit();
@@ -236,15 +251,21 @@ pub const MeshRenderer = struct {
         const camera = CameraUniforms{ .view_projection = view_projection, .options = .{ if (srgb) 1 else 0, 0, 0, 0 }, .outline = outline_color, .outline_size = .{ viewport_px[0], viewport_px[1], outline_width_px, 0 }, .eye = .{ eye[0], eye[1], eye[2], 0 }, .light_info = .{ @floatFromInt(sources.lights.count), sources.time_s, 0, 0 }, .lights = sources.lights.lights, .ambient = sources.lights.ambient, .environment = environmentOf(sources.lights.*), .shadow_matrix = self.shadow.matrix, .shadow_params = self.shadow.params };
         try upload(self.uniforms[self.slot], std.mem.asBytes(&camera));
 
+        // Vitellus binds groups through the pipeline set, so the mesh pipeline goes first; surface
+        // shaders' pipelines share its layout and keep the groups.
         cmd.setGraphicsPipeline(self.pipeline);
         cmd.setBindGroup(0, self.groups[self.slot], &.{});
         cmd.setVertexBuffer(1, self.instances[self.slot], 0);
 
-        // One instanced draw per run of the same shape or model file and texture, per part.
+        // One instanced draw per run of the same shape or model file and texture, per part,
+        // each surface shader's runs together under its pipeline.
         var start: usize = 0;
         while (start < sorted.len) {
             var end = start + 1;
             while (end < sorted.len and !drawnBefore({}, sorted[start], sorted[end])) end += 1;
+            const shader = sorted[start].shaderFile() orelse "";
+            if (start == 0 or !std.mem.eql(u8, shader, sorted[start - 1].shaderFile() orelse ""))
+                cmd.setGraphicsPipeline(if (shader.len == 0) self.pipeline else self.surfacePipeline(shader, sources.shaders) orelse self.pipeline);
             self.drawRun(cmd, sources, sorted[start], @intCast(start), @intCast(end - start));
             start = end;
         }
@@ -256,6 +277,29 @@ pub const MeshRenderer = struct {
                 self.drawRun(cmd, sources, drawable, @intCast(i), 1);
             }
         };
+    }
+
+    // The colour pipeline for surface shader `key`, made the first time; null (Eggy's own
+    // surface) when it doesn't load or isn't a surface shader.
+    fn surfacePipeline(self: *MeshRenderer, key: []const u8, cache: *ShaderCache) ?vit.GraphicsPipeline {
+        const loaded = cache.get(key) orelse return null;
+        if (self.surfaces.get(key, cache.revision)) |known| return known;
+        if (loaded.role != .surface) {
+            const hash = std.hash.Wyhash.hash(0, key);
+            if (self.wrong_role_reported != hash) std.log.err("material shader {s} is a {t} shader, not a surface shader: drawn without it", .{ key, loaded.role });
+            self.wrong_role_reported = hash;
+            return null;
+        }
+        const vs = vit.Shader.init(self.device, .{ .label = "mesh", .stage = .vertex, .source = self.shaderSource(shaders.mesh_vertex, "vertexMain") }) catch |err| {
+            std.log.err("cannot make surface {s}: {t}", .{ key, err });
+            return null;
+        };
+        defer vs.deinit();
+        const pipeline = pipelineOf(self.device, self.format, self.pipeline_layout, "surface shader", vs, loaded.fragment, .drawn, self.sample_count) catch |err| {
+            std.log.err("cannot make surface {s}: {t}", .{ key, err });
+            return null;
+        };
+        return self.surfaces.put(key, pipeline);
     }
 
     /// Record depth outside the color pass, with separate storage for in-flight shadow draws.
@@ -379,10 +423,13 @@ test "visibility partition retains every entity for a second viewport" {
     try std.testing.expectEqual(@as(u8, 7), ids);
 }
 
-/// The order meshes are drawn in: built-in shapes first, by shape, then model files, by path,
+/// The order meshes are drawn in: those with Eggy's own surface first, then by surface shader;
+/// within those, built-in shapes first, by shape, then model files, by path,
 /// and those alike by texture. Two that neither comes before are drawn in one go.
 fn drawnBefore(_: void, a: mesh.Drawable, b: mesh.Drawable) bool {
     if (a.material_failed != b.material_failed) return !a.material_failed;
+    const by_shader = std.mem.order(u8, a.shaderFile() orelse "", b.shaderFile() orelse "");
+    if (by_shader != .eq) return by_shader == .lt;
     const by_source = sourceOrder(a, b);
     if (by_source != .eq) return by_source == .lt;
     const by_texture = std.mem.order(u8, a.textureFile() orelse "", b.textureFile() orelse "");
@@ -421,6 +468,11 @@ fn makePipeline(device: vit.Device, format: vit.Format, layout: vit.PipelineLayo
     defer vs.deinit();
     const fs = try vit.Shader.init(device, .{ .label = label, .stage = .fragment, .source = shaderSource(fragment, fragment_entry) });
     defer fs.deinit();
+    return pipelineOf(device, format, layout, label, vs, fs, depth, sample_count);
+}
+
+/// `makePipeline` from shaders already made.
+fn pipelineOf(device: vit.Device, format: vit.Format, layout: vit.PipelineLayout, label: []const u8, vs: vit.Shader, fs: vit.Shader, depth: DepthUse, sample_count: u32) !vit.GraphicsPipeline {
     const vertex_attributes = [_]vit.hal.pipeline.VertexAttribute{
         .{ .location = 0, .format = .float32x3, .offset = @offsetOf(mesh.Vertex, "position") },
         .{ .location = 1, .format = .float32x3, .offset = @offsetOf(mesh.Vertex, "normal") },

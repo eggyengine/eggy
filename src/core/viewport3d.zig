@@ -220,7 +220,7 @@ pub const Preview = struct {
         const scissor = previewScissor(scene, clip, window, extent) orelse return;
         try self.post.begin(cmd);
         try self.drawPass(cmd, scene, clip, window, renderExtent(extent, self.settings.render_scale), drawables, sources, view, selected, grid);
-        try self.post.draw(cmd, sources.lights.post, .{
+        try self.post.draw(cmd, .{ .post = sources.lights.post, .shaders = sources.shaders, .time_s = sources.time_s }, .{
             .destination = target,
             .extent = extent,
             .scissor = scissor,

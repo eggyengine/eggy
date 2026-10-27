@@ -1302,6 +1302,8 @@ test "input maps open their own editor and New menus work inside empty narrow fo
     panel.file_types = &.{.{ .key = "game/material", .title = "An extraordinarily long material template title", .extension = ".material.zon", .contents = ".{}" }};
     for ([_]bool{ true, false }) |new_only| for ([_]usize{ 1, creation.count(panel.file_types) - 1 }) |creation_index| {
         panel.menu = .{ .at = .{ .x = 190, .y = 590 }, .entry = null, .new_only = new_only, .new_open = true };
+        // The list scrolls once it outgrows its height: scrolled to its end for the last entry.
+        panel.new_menu_scroll.offset = .{ .x = 0, .y = if (creation_index == 1) 0 else 1000 };
         const viewport = ui.Rect{ .x = 0, .y = 0, .w = 200, .h = 600 };
         context.newFrame(viewport);
         _ = panel.build(&context, dir, null, &icons, null);

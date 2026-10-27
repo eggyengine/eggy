@@ -94,6 +94,9 @@ pub const Drawable = extern struct {
     casts_shadow: u32 = 1,
     /// The part of the texture drawn across the shape: left, top, right, bottom.
     uv_rect: [4]f32 = .{ 0, 0, 1, 1 },
+    /// The material's surface shader's identity key, if any; borrowed like `material_file`.
+    shader_file: ?[*]const u8 = null,
+    shader_file_len: u32 = 0,
 
     /// Reconstruct the source entity ID by value, without checking that it is still alive.
     /// Resolve it only against the world from which this drawable was gathered.
@@ -141,6 +144,16 @@ pub const Drawable = extern struct {
             self.texture_file = &material.texture.buffer;
             self.texture_file_len = material.texture.len;
         }
+        if (material.shader.len != 0) {
+            self.shader_file = &material.shader.buffer;
+            self.shader_file_len = material.shader.len;
+        }
+    }
+
+    /// The surface shader's identity key, or null for Eggy's own surface.
+    pub fn shaderFile(self: Drawable) ?[]const u8 {
+        const file = self.shader_file orelse return null;
+        return file[0..self.shader_file_len];
     }
 };
 
