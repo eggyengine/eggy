@@ -57,7 +57,7 @@ pub const Direction = @import("action.zig").Direction;
 pub const resources = @import("resources/resources.zig");
 pub const scenes = @import("scenes/scenes.zig");
 pub const Support = @import("support.zig").Support;
-pub const audio = @import("audio.zig");
+pub const audio = @import("audio/audio.zig");
 pub const animation = @import("animation.zig");
 pub const animation_preview = @import("animation_preview.zig");
 pub const ClipCache = @import("clip_cache.zig").ClipCache;
@@ -90,6 +90,7 @@ test {
     _ = @import("mobile/mobile.zig");
     _ = @import("log/crash_report.zig");
     _ = @import("capabilities_test.zig");
+    _ = audio;
     _ = editor;
     _ = game_ui;
     _ = graphics_settings;

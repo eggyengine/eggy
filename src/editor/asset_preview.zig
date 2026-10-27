@@ -1,8 +1,8 @@
 //! The Asset Preview panel: the file selected in Assets, shown as itself. Images fit the panel
 //! over a checkerboard (GIFs play), UI scenes are drawn as the game draws them, and any file that
 //! reads as text (code, scenes, settings) shows in a terminal view to scroll, select and copy.
-//! Models can be turned and played in a viewer (`model_preview.zig`); sounds and videos show
-//! what they are. It reads the file again when it changes.
+//! Models can be turned and played in a viewer (`model_preview.zig`), sounds played from their
+//! waveform (`sound_preview.zig`); videos show what they are. It reads the file again when it changes.
 const std = @import("std");
 const eggy = @import("eggy");
 const ui = eggy.ui;
@@ -11,6 +11,7 @@ const ProjectAssets = @import("assets/project_assets.zig").ProjectAssets;
 const TerminalView = @import("terminal_view.zig").TerminalView;
 const ModelPreview = @import("model_preview.zig").ModelPreview;
 const ModelRequest = @import("model_preview.zig").Request;
+const SoundPreview = @import("sound_preview.zig").SoundPreview;
 const page_style = @import("page_style.zig");
 
 /// The most of a text file shown.
@@ -24,6 +25,8 @@ const Shown = union(enum) {
     ui_scene: []const u8,
     /// A font, by asset key: a sample of text in it.
     font: []const u8,
+    /// A sound, by asset key: its waveform, to play.
+    sound: []const u8,
     model,
     text,
     /// A file it can't show, described.
@@ -54,6 +57,7 @@ pub const AssetPreview = struct {
     version: u64 = 0,
     /// Where the UI scene's area went in the last frame's layout.
     scene_area: ui.Rect = .{ .x = 0, .y = 0, .w = 0, .h = 0 },
+    sound: SoundPreview = .{},
 
     pub fn init(gpa: std.mem.Allocator, mono: *const ui.Font) AssetPreview {
         return .{ .gpa = gpa, .images = .{ .gpa = gpa }, .text = .init(gpa, mono), .model = .init(gpa) };
@@ -120,6 +124,8 @@ pub const AssetPreview = struct {
         }
         self.refresh(request.project_dir, path);
         const shown = self.kindOf(arena, request.assets, path);
+        // What plays stops once another file shows.
+        if (shown != .sound) self.sound.stop(request.app);
         context.muted(self.details(context, request, shown, path));
         page_style.smallText(context, 12);
 
@@ -129,6 +135,7 @@ pub const AssetPreview = struct {
             .image => |key| self.image(context, request, key, height),
             .ui_scene => |key| self.uiScene(context, request, key, height),
             .font => |key| self.fontSample(context, request, key),
+            .sound => |key| self.sound.build(self.gpa, context, .{ .key = key, .version = self.version, .app = request.app }),
             .model => self.model.build(context, self.modelRequest(request, path, null, height)),
             .text => self.text.add(context, self.contents.items, self.version, height),
             .described => |note| {
@@ -189,7 +196,7 @@ pub const AssetPreview = struct {
         if (kind == .font and key.len > 0) return .{ .font = key };
         if (kind == .folder) return .{ .described = "A folder: open it in Assets to see what it holds." };
         if (kind == .model) return .model;
-        if (kind == .audio) return .{ .described = "A sound. Eggy can't play sounds yet, so it can't be listened to here." };
+        if (kind == .audio and key.len > 0) return .{ .sound = key };
         for (video_extensions) |video| if (std.ascii.eqlIgnoreCase(extension, video)) {
             return .{ .described = "A video. Eggy can't play videos yet, so it can't be watched here." };
         };
@@ -207,6 +214,14 @@ pub const AssetPreview = struct {
         if (shown == .image) if (self.images.get(request.app.resources(), context.font, shown.image)) |loaded| {
             const frames = loaded.frames.len;
             return std.fmt.allocPrint(arena, "{s} image, {d} x {d}{s}, {s}", .{ kind, loaded.width, loaded.height, if (frames > 1) std.fmt.allocPrint(arena, ", {d} frames", .{frames}) catch "" else "", size }) catch size;
+        };
+        if (shown == .sound) if (self.sound.infoOf(self.gpa, .{ .key = shown.sound, .version = self.version, .app = request.app })) |info| {
+            const layout = switch (info.channels) {
+                1 => "mono",
+                2 => "stereo",
+                else => std.fmt.allocPrint(arena, "{d} channels", .{info.channels}) catch "",
+            };
+            return std.fmt.allocPrint(arena, "{s} sound, {d:.1} s, {s}, {d:.1} kHz, {s}", .{ kind, info.duration_s, layout, @as(f32, @floatFromInt(info.sample_rate_hz)) / 1000, size }) catch size;
         };
         if (shown == .text and self.contents.items.len < self.size) return std.fmt.allocPrint(arena, "{s}, {s} (the first {d} KB shown)", .{ kind, size, max_text_bytes / 1024 }) catch size;
         return std.fmt.allocPrint(arena, "{s}, {s}", .{ kind, size }) catch size;

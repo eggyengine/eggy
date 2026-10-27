@@ -158,7 +158,7 @@ Read the failing operation's error and ownership contract in the
   The [mouse and window guide](../how-to/sdl3.md#failures-and-reloads) shows how to log it.
 
 Support queries distinguish implemented capabilities from contracts. For example,
-`eggy.audio.support` remains `.not_implemented`, while `eggy.input.controller_support`
+`eggy.particles.support` remains `.not_implemented`, while `eggy.input.controller_support`
 is `.available`. The latter does not guarantee a device is attached or supports rumble.
 Choose an explicit alternate experience for an optional feature; do not suppress a
 required subsystem failure just to keep returning success.

@@ -3,15 +3,6 @@ const std = @import("std");
 const expect = std.testing.expectError;
 
 test "every missing backend operation returns NotImplemented" {
-    const audio = @import("audio.zig").Audio{};
-    try expect(error.NotImplemented, audio.play(.init("jump.ogg"), .{}));
-    try expect(error.NotImplemented, audio.pause(@fromBackingInt(@intCast(0))));
-    try expect(error.NotImplemented, audio.unpause(@fromBackingInt(@intCast(0))));
-    try expect(error.NotImplemented, audio.stop(@fromBackingInt(@intCast(0))));
-    try expect(error.NotImplemented, audio.setGain(@fromBackingInt(@intCast(0)), 0.5));
-    try expect(error.NotImplemented, audio.setBusGain(.master, 1));
-    try expect(error.NotImplemented, audio.setListener(@splat(0), .{ 0, 0, -1 }, .{ 0, 1, 0 }));
-
     const entity = @import("clutch").EntityId.init(0, 0);
     var capability_world = @import("clutch").World.init(std.testing.allocator);
     defer capability_world.deinit();

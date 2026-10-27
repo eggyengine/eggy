@@ -1074,6 +1074,8 @@ pub fn Editor(comptime project: type) type {
             self.play_mode.paused = paused;
             self.workspace.paused = paused;
             self.app.input.cancel();
+            // Sounds hold where they are with the game.
+            self.app.audio().hold(paused);
         }
 
         /// Keep the selected entity's Transform as it is in play, for when play stops (Ctrl+Shift+K).
@@ -3371,6 +3373,7 @@ test {
     _ = @import("ui_designer/ui_designer.zig");
     _ = @import("asset_preview.zig");
     _ = @import("model_preview.zig");
+    _ = @import("sound_preview.zig");
     _ = @import("scene_tabs.zig");
     _ = @import("play_camera_prompt.zig");
     _ = @import("scene_2d.zig");

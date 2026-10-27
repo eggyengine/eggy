@@ -62,8 +62,8 @@ traversal, empty segments, backslashes, and a file of the wrong kind are rejecte
 An empty path means an unset reference.
 
 A reference stores its path by value and loads nothing. Inspector slots accept matching
-dragged files. An audio reference is valid data even though
-[playback is not implemented](../reference/audio-and-animation.md).
+dragged files. An audio reference plays through an `AudioSource` or
+[`app.audio()`](../guides/play-sound.md).
 
 ## Read bytes, images, or models
 

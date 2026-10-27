@@ -6,10 +6,8 @@ title: Audio and animation contracts
 
 # Audio and animation contracts
 
-Audio and animation have no playback backends. Their support queries return
-`.not_implemented`; playback, stopping, seeking, gain changes, and blending return
-`error.NotImplemented`. No output device, decoder, animation importer, or skinning
-backend is created.
+Sound plays through miniaudio: see [Play sound and 3D audio](../guides/play-sound.md) for the
+`AudioSource` and `AudioListener` components and `app.audio()`.
 
 ## Asset references
 
@@ -22,22 +20,7 @@ pub const CharacterAssets = struct {
 
 List the component in your plugin's `components` to edit it in the Inspector. The slots
 accept files of the matching kind and scenes store the paths. Setting a slot does not
-load or play the resource.
-
-## Audio requests
-
-`app.audio.play(sound, options)` describes a playback request and would return a `Voice`
-only after a backend actually starts it. Options describe linear gain, `.once`/`.loop`,
-an optional world position in metres, and a bus. Listener placement is explicit rather
-than inferred from a global camera.
-
-The remaining contract operations are `pause`, `unpause`, `stop`, `setGain`,
-`setBusGain`, and `setListener`. They also fail explicitly today; stopping an unsupported
-voice is not a successful no-op. Do not construct fake handles to make a call look successful.
-
-Check `eggy.audio.support` when deciding whether to offer sound controls. Disable
-unsupported controls or propagate the failure with context. Do not repeatedly attempt
-playback and log the same unsupported error every frame.
+load the resource: `app.audio().play(footstep, .{})` reads the sound the first time it plays.
 
 ## Animation requests
 
