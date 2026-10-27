@@ -112,7 +112,9 @@ pub const Preview = struct {
                 .{ .location = 1, .format = .float32x3, .offset = @offsetOf(Vertex, "color") },
             } }},
             .color_targets = &.{.{ .format = format }},
-            .depth_stencil = .{ .format = .d32_float, .depth_write = true, .depth_compare = .less },
+            // The backdrop leaves depth cleared: written at any depth below 1, it would hide what
+            // lies past that depth (0.999 is only 100 m away with a 0.1 m near plane).
+            .depth_stencil = .{ .format = .d32_float, .depth_write = false, .depth_compare = .always },
             .raster = .{ .cull_mode = .none },
             .layout = pipeline_layout,
             .multisample = .{ .count = sample_count },
@@ -336,7 +338,7 @@ fn previewScissor(scene: ui.Rect, clip: ui.Rect, window: ui.Rect, extent: vit.Ex
     return .{ .x = left, .y = top, .width = right - left, .height = bottom - top };
 }
 
-/// A gradient across the scene, darker at the bottom, behind everything (at the far plane).
+/// A gradient across the scene, darker at the bottom, drawn first and behind everything.
 fn backdropVertices() [6]Vertex {
     const corners = [_][2]f32{ .{ -1, -1 }, .{ 1, -1 }, .{ 1, 1 }, .{ -1, 1 } };
     const colors = [_][3]f32{
