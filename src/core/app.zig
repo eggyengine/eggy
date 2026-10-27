@@ -434,6 +434,7 @@ pub const App = struct {
         inline for (.{ .PreUpdate, .Update, .PostUpdate }) |stage| try self.world.runStage(stage);
         // Clips play after the game's systems, by the game's (scaled, pause-held) time.
         @import("animation.zig").step(&self.world, &self.graphics.clips, self.time.delta_s);
+        @import("sprite_animator.zig").step(&self.world, self.time.delta_s);
         // Sound sources and the listener follow where their entities ended up.
         audio_zig.step(&self.world, self.audio());
         self.world.tick();

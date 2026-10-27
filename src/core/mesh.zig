@@ -12,6 +12,7 @@ const assets = @import("eggy_assets");
 const Material = @import("material.zig").Material;
 const Animator = @import("animation.zig").Animator;
 const Sprite = @import("sprite.zig").Sprite;
+const SpriteAnimator = @import("sprite_animator.zig").SpriteAnimator;
 
 /// The shapes there are, each about a metre across, centred on the entity. A `plane` faces up
 /// (+y); a `quad` faces the front (+z), as sprites do.
@@ -192,23 +193,26 @@ pub fn gatherAlloc(gpa: std.mem.Allocator, world: *ecs.World) ![]Drawable {
     return result.toOwnedSlice(gpa);
 }
 
-/// A sprite as an unlit quad showing its part of its image; none without an image.
+/// A sprite as an unlit quad showing its part of its image (its animator's frame, if it has
+/// one, so the editor shows it too); none without an image.
 fn spriteDrawable(world: *ecs.World, entity: ecs.EntityId, sprite: *const Sprite) ?Drawable {
     if (sprite.image.len == 0) return null;
+    var shown = sprite.*;
+    if (world.get(entity, SpriteAnimator)) |animator| shown.region = animator.region(animator.frame());
     var world_matrix: [4][4]f32 = undefined;
     for (&world_matrix, transform_zig.worldMatrix(world, entity).data) |*column, data| column.* = data;
     return .{
-        .model = sprite.placed(world_matrix),
-        .color = sprite.color,
+        .model = shown.placed(world_matrix),
+        .color = shown.color,
         .shape = .quad,
         .entity_id = entity.id,
         .entity_generation = entity.generation,
         .texture_file = &sprite.image.buffer,
         .texture_file_len = sprite.image.len,
         .material_params = .{ 0, 1, 1, 1 },
-        .emissive_cutoff = .{ 0, 0, 0, sprite.alpha_cutoff },
+        .emissive_cutoff = .{ 0, 0, 0, shown.alpha_cutoff },
         .casts_shadow = 0,
-        .uv_rect = sprite.uvRect(),
+        .uv_rect = shown.uvRect(),
     };
 }
 
