@@ -52,7 +52,7 @@ pub const Panel = enum(u32) {
 pub const max_copies = 8;
 
 /// The panels each workspace tab can have its own of: every 3D tab its Scene and the panels
-/// around it, every 2D tab its 2D Scene, every UI tab the UI Designer's three, and every asset
+/// around it, every 2D tab its 2D Scene and the same panels around it, every UI tab the UI Designer's three, and every asset
 /// tab its Asset Preview (copy 0 shows the Assets selection; each other copy, one file). Copy 0
 /// is the panel's own id; copy n takes an id from the gap between the built-in panels and
 /// `plugin_first`.

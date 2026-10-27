@@ -12,7 +12,7 @@ Press **+** on the bar, choose **File > New Tab...** or press **Ctrl+T**, then p
 - **3D Scene** opens a new tab laid out like the first: the Scene in the middle, the
   Hierarchy on its left, the Inspector on its right, and the Console, Assets and Animation
   below it.
-- **2D Scene** opens the **2D Scene** panel: the world seen flat from the front, X to the
+- **2D Scene** opens the same layout with the **2D Scene** panel in the middle: the world seen flat from the front, X to the
   right and Y up, as a 2D game sees it. Scroll to zoom, drag with the right or middle button
   to pan, and click an entity to select it. Drag it to move it; with **Snap** on it lands on
   the grid. Drag a corner of the selection to scale it (hold **Shift** to keep its

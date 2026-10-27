@@ -11,7 +11,7 @@ const dock = eggy.ui.dock;
 pub const Kind = enum(u8) {
     /// The world in 3D: the Scene panel and what works on it.
     scene_3d,
-    /// The world seen flat, for 2D games: the 2D Scene panel.
+    /// The world seen flat, for 2D games: the 2D Scene panel and what works on it.
     scene_2d,
     /// The UI Designer's panels.
     ui,
