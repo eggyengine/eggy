@@ -70,7 +70,7 @@ const animation_dock = @import("animation_dock/animation_dock.zig");
 const ui_designer = @import("ui_designer/ui_designer.zig");
 const AssetPreview = @import("asset_preview.zig").AssetPreview;
 const AssetPreviewRequest = @import("asset_preview.zig").Request;
-const Scene2d = @import("scene_2d.zig").Scene2d;
+const Scene2d = @import("scene_2d/scene_2d.zig").Scene2d;
 /// The 3D Scene panel or the flat 2D one.
 const ScenePanel = enum { scene, flat };
 const tab_views = @import("tab_views.zig");
@@ -600,6 +600,7 @@ pub fn Editor(comptime project: type) type {
             if (self.project) |opened| self.entity_editor.keepView(&self.app, self.gamePtr(), opened.dir, self.openScenePath() orelse "");
             // The tab shown last frame decides whose Scene camera, 2D view and UI scene are in use.
             self.followTabs();
+            self.scene_2d.selected = self.entity_editor.selected;
             const look: scene_view.SceneView.Look = if (!self.play_mode.playing()) .editing else if (self.workspace.simulating) .simulating else .playing;
             self.scene_view.update(self.sceneTarget(), if (self.workspace.placed.scene) |placed| placed.rect else null, look);
             self.workspace.scene_overlay = self.scene_view.overlay();
@@ -2206,6 +2207,16 @@ pub fn Editor(comptime project: type) type {
                     self.frameSelected(if (over_scene) .scene else .flat);
                     return .run;
                 },
+                // The arrow keys nudge the selection a grid step in the 2D panel.
+                .up, .down, .left, .right => if (over_flat) if (self.sceneTarget()) |target| {
+                    const steps: [2]f32 = switch (key) {
+                        .up => .{ 0, 1 },
+                        .down => .{ 0, -1 },
+                        .left => .{ -1, 0 },
+                        else => .{ 1, 0 },
+                    };
+                    if (self.scene_2d.nudge(target, steps)) return .run;
+                },
                 // Delete (or Backspace) deletes the selection, as the Hierarchy's Delete does.
                 .delete, .backspace => if (self.entity_editor.selected != null) {
                     self.entity_editor.deleteSelected(&self.app, self.gamePtr());
@@ -3411,7 +3422,7 @@ test {
     _ = @import("sound_preview.zig");
     _ = @import("scene_tabs.zig");
     _ = @import("play_camera_prompt.zig");
-    _ = @import("scene_2d.zig");
+    _ = @import("scene_2d/scene_2d.zig");
     _ = @import("assets/png_writer.zig");
     _ = @import("tab_bar.zig");
     _ = @import("workspace_tabs.zig");

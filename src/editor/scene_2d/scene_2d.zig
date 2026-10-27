@@ -1,15 +1,18 @@
 //! The 2D Scene panel: the world seen flat from the front (its XY plane, Y up) through an
 //! orthographic camera, as a 2D game sees it. Scroll to zoom about the pointer, drag with the
 //! right or middle button to pan, click an entity to select it and drag it to move it (snapped to
-//! the grid when Snap is on). F frames the selection and Delete deletes it. On a gamepad the left stick pans, the triggers zoom (right in,
-//! left out) and holding the left shoulder pans faster. The editor renders the world into the panel (`shot`); the grid and
-//! the pointer's place are drawn over it.
+//! the grid when Snap is on). The selection's corners scale it (Shift: evenly) and the knob above
+//! it turns it (in 15 degree steps when snapping); the arrow keys nudge it a grid step. F frames
+//! the selection and Delete deletes it. On a gamepad the left stick pans, the triggers zoom
+//! (right in, left out) and holding the left shoulder pans faster. The editor renders the world
+//! into the panel (`shot`); the grid, the pointer's place and the handles are drawn over it.
 const std = @import("std");
 const eggy = @import("eggy");
 const ui = eggy.ui;
 const sdl3 = eggy.sdl_adapter.sdl;
-const scene_view = @import("scene_view/scene_view.zig");
-const page_style = @import("page_style.zig");
+const scene_view = @import("../scene_view/scene_view.zig");
+const page_style = @import("../page_style.zig");
+const handles = @import("handles.zig");
 
 /// What the editor renders this frame: the world seen through `view`, into `rect` (logical
 /// points of the panel's window), drawn in at `mark` of the page's vertices, under the grid.
@@ -42,6 +45,12 @@ pub const Scene2d = struct {
     /// Where the pointer was last while panning.
     panning: ?ui.Vec2 = null,
     moving: ?Move = null,
+    /// What the editor has selected, for its handles; it sets this each frame.
+    selected: ?eggy.ecs.EntityId = null,
+    /// A corner or the knob being dragged.
+    reshaping: ?Reshape = null,
+
+    const Reshape = struct { entity: eggy.ecs.EntityId, drag: handles.Drag };
 
     /// An entity being dragged: where it and the pointer started, and how world moves become
     /// moves in its parent's space.
@@ -71,9 +80,19 @@ pub const Scene2d = struct {
         return .{ .rect = self.area, .view = self.view(), .mark = self.mark orelse return null };
     }
 
-    /// Whether an entity is being dragged, so the scene isn't recorded mid-move.
+    /// Whether an entity is being moved, scaled or turned, so the scene isn't recorded mid-drag.
     pub fn isMoving(self: *const Scene2d) bool {
-        return self.moving != null;
+        return self.moving != null or self.reshaping != null;
+    }
+
+    /// Move the selection `steps` grid steps along x and y (onto the grid when snapping).
+    /// Returns whether there was a selection with a Transform to move.
+    pub fn nudge(self: *const Scene2d, target: scene_view.Target, steps: [2]f32) bool {
+        const entity = self.selected orelse return false;
+        const move = startMove(target, entity, .{ 0, 0 }) orelse return false;
+        const step = self.gridStep();
+        self.moveTo(target, move, .{ steps[0] * step, steps[1] * step });
+        return true;
     }
 
     /// Draw the panel: its toolbar, the viewport the world goes into, and the grid over it.
@@ -121,6 +140,11 @@ pub const Scene2d = struct {
                     return true;
                 }
                 const live = target orelse return true;
+                // The selection's corners and knob come before what is under them.
+                if (self.selectedBox()) |box| if (box.handleAt(self.worldAt(at), self.metresPerPx())) |taken| {
+                    self.reshaping = startReshape(live, self.selected.?, taken, box, self.worldAt(at));
+                    return true;
+                };
                 const picked = scene_view.picking.pick(self.drawn, &live.app.graphics.models, &live.app.ui_scenes, live.app.resources(), self.view(), self.area, at);
                 live.selected.* = scene_view.instanceRoot(live, picked);
                 if (live.selected.*) |entity| self.moving = startMove(live, entity, self.worldAt(at));
@@ -135,14 +159,19 @@ pub const Scene2d = struct {
                     self.panning = at;
                     return true;
                 }
+                if (self.reshaping) |reshape| {
+                    if (target) |live| reshapeTo(live, reshape, self.worldAt(at), sdl3.keyboard.getModState().shiftDown(), self.snap);
+                    return true;
+                }
                 const move = self.moving orelse return false;
                 if (target) |live| self.moveTo(live, move, self.worldAt(at));
                 return true;
             },
             .mouse_button_up => {
-                const used = self.panning != null or self.moving != null;
+                const used = self.panning != null or self.moving != null or self.reshaping != null;
                 self.panning = null;
                 self.moving = null;
+                self.reshaping = null;
                 return used;
             },
             else => return false,
@@ -182,6 +211,28 @@ pub const Scene2d = struct {
         const metres_per_px = self.height_m / @max(1, self.area.h);
         self.centre[0] -= dx * metres_per_px;
         self.centre[1] += dy * metres_per_px;
+    }
+
+    fn metresPerPx(self: *const Scene2d) f32 {
+        return self.height_m / @max(1, self.area.h);
+    }
+
+    /// Where on the panel the world point `world` (on the XY plane) is.
+    fn screenAt(self: *const Scene2d, world: [2]f32) ui.Vec2 {
+        const px_per_metre = 1 / self.metresPerPx();
+        return .{
+            .x = self.area.x + self.area.w / 2 + (world[0] - self.centre[0]) * px_per_metre,
+            .y = self.area.y + self.area.h / 2 - (world[1] - self.centre[1]) * px_per_metre,
+        };
+    }
+
+    /// The selection's box, from what was drawn last; null when it isn't drawn here.
+    fn selectedBox(self: *const Scene2d) ?handles.Box {
+        const entity = self.selected orelse return null;
+        for (self.drawn) |drawable| {
+            if (drawable.entity_id == entity.id and drawable.entity_generation == entity.generation) return .of(drawable.model);
+        }
+        return null;
     }
 
     /// The world point (on the XY plane) under `at` on the panel.
@@ -232,6 +283,62 @@ fn startMove(target: scene_view.Target, entity: eggy.ecs.EntityId, world: [2]f32
     return .{ .entity = entity, .from_world = world, .from_position = position, .to_local = to_local };
 }
 
+/// Take `handle` of `entity`'s `box` with the pointer at `world`: read its rotation and scale.
+/// Null when it has no Transform.
+fn startReshape(target: scene_view.Target, entity: eggy.ecs.EntityId, handle: handles.Handle, box: handles.Box, world: [2]f32) ?Scene2d.Reshape {
+    const component = target.game.builtinComponent("Transform") orelse return null;
+    var buffer: [160]u8 = undefined;
+    const rotation_deg = scene_view.parseVector(target.game.readField(target.app, entity, component, 1, &buffer) orelse return null) orelse return null;
+    const scale = scene_view.parseVector(target.game.readField(target.app, entity, component, 2, &buffer) orelse return null) orelse return null;
+    return .{ .entity = entity, .drag = .{ .handle = handle, .box = box, .from = world, .rotation_deg = rotation_deg, .scale = scale } };
+}
+
+/// Write what dragging `reshape`'s handle to `world` makes of its entity's rotation or scale.
+fn reshapeTo(target: scene_view.Target, reshape: Scene2d.Reshape, world: [2]f32, uniform: bool, snap: bool) void {
+    const component = target.game.builtinComponent("Transform") orelse return;
+    const field: usize, const value = switch (reshape.drag.apply(world, uniform, snap)) {
+        .rotation_deg => |v| .{ 1, v },
+        .scale => |v| .{ 2, v },
+    };
+    var text: [160]u8 = undefined;
+    const zon = std.fmt.bufPrintSentinel(&text, ".{{ {d}, {d}, {d} }}", .{ value[0], value[1], value[2] }, 0) catch return;
+    _ = target.game.writeField(target.app, reshape.entity, component, field, zon);
+}
+
+/// The selection's box, a square on each corner and the knob on its stalk.
+fn drawHandles(self: *const Scene2d, c: *ui.Canvas) !void {
+    const box = self.selectedBox() orelse return;
+    const accent = c.theme.primary;
+    var corners: [4]ui.Vec2 = undefined;
+    for (&corners, box.corners()) |*at, world| at.* = self.screenAt(world);
+    for (corners, 0..) |from, i| try line(c, from, corners[(i + 1) % 4], 1.5, accent);
+    const top = self.screenAt(.{ (box.corners()[2][0] + box.corners()[3][0]) / 2, (box.corners()[2][1] + box.corners()[3][1]) / 2 });
+    const knob = self.screenAt(box.knob(self.metresPerPx()));
+    try line(c, top, knob, 1.5, accent);
+    try c.roundRect(.{ .x = knob.x - 6, .y = knob.y - 6, .w = 12, .h = 12 }, accent, 6);
+    for (corners) |at| {
+        try c.rect(.{ .x = at.x - 5, .y = at.y - 5, .w = 10, .h = 10 }, c.theme.background);
+        try c.roundRectStroke(.{ .x = at.x - 5, .y = at.y - 5, .w = 10, .h = 10 }, accent, 0, 1.5);
+    }
+}
+
+/// A straight line `width` points wide from `from` to `to`.
+fn line(c: *ui.Canvas, from: ui.Vec2, to: ui.Vec2, width: f32, color: [3]f32) !void {
+    const dx = to.x - from.x;
+    const dy = to.y - from.y;
+    const length = @sqrt(dx * dx + dy * dy);
+    if (length < 0.001) return;
+    const nx = -dy / length * width / 2;
+    const ny = dx / length * width / 2;
+    const colour = [4]f32{ color[0], color[1], color[2], 1 };
+    const a = [2]f32{ from.x + nx, from.y + ny };
+    const b = [2]f32{ to.x + nx, to.y + ny };
+    const d = [2]f32{ to.x - nx, to.y - ny };
+    const e = [2]f32{ from.x - nx, from.y - ny };
+    try c.triangle(.{ a, b, d }, @splat(colour));
+    try c.triangle(.{ a, d, e }, @splat(colour));
+}
+
 // Keep where the viewport was laid out and where in the page's drawing the world goes in, then
 // draw the grid over it: lines every step, the axes through the origin in their colours.
 fn drawViewport(context: *const anyopaque, c: *ui.Canvas, r: ui.Rect) anyerror!void {
@@ -262,6 +369,7 @@ fn drawViewport(context: *const anyopaque, c: *ui.Canvas, r: ui.Rect) anyerror!v
         if (origin_y >= r.y and origin_y <= r.y + r.h) try c.rectAlpha(.{ .x = r.x, .y = origin_y - 0.5, .w = r.w, .h = 1.5 }, .{ 0.86, 0.3, 0.3 }, 0.8);
         if (origin_x >= r.x and origin_x <= r.x + r.w) try c.rectAlpha(.{ .x = origin_x - 0.5, .y = r.y, .w = 1.5, .h = r.h }, .{ 0.4, 0.78, 0.35 }, 0.8);
     }
+    try drawHandles(self, c);
     try c.roundRectStroke(r, c.theme.border, 0, 1);
 }
 

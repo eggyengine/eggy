@@ -5,7 +5,7 @@
 const std = @import("std");
 const panels = @import("panels.zig");
 const scene_view = @import("scene_view/scene_view.zig");
-const Scene2d = @import("scene_2d.zig").Scene2d;
+const Scene2d = @import("scene_2d/scene_2d.zig").Scene2d;
 const ui_designer = @import("ui_designer/ui_designer.zig");
 const log = std.log.scoped(.tabs);
 
