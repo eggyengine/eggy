@@ -2,9 +2,10 @@
 //! of the whole project, folders opening in place; as a grid it is one folder's tiles, with a
 //! path to climb back up. A filter searches every folder by name. A scene (`.scene.zon`) opens
 //! with a double-click, a code or text file opens in the code editor chosen in Preferences, and
-//! any other file (or a model's part) shows in the Asset Preview, in a window of its own. A right-click opens a menu (open, rename,
-//! duplicate, delete, copy path, show in the file manager, and new folders and scenes); F2
-//! renames and Delete deletes the selected entry.
+//! any other file (or a model's part) shows in the Asset Preview, in a window of its own. A right-click opens a menu (open, open in
+//! the IDE, rename, duplicate, delete, copy path, show in the file manager, and new folders and
+//! scenes); F2 renames and Delete deletes the selected entry. The toolbar's Open in IDE opens the
+//! selected file, or the folder shown, in the code editor chosen in Preferences.
 //!
 //! A model file opens, in the list or (double-clicked) in the grid, into what it holds: its
 //! geometry, one entry for each animation clip and one image for each material's texture. Those
@@ -52,7 +53,7 @@ pub const Action = union(enum) {
     copy_path: []const u8,
     /// Show this file or folder in the system's file manager.
     reveal: []const u8,
-    /// Open this code or text file in the code editor people chose.
+    /// Open this file or folder ("" for the project) in the code editor people chose.
     open_code: []const u8,
     /// Show the selected entry (`path`) in the Asset Preview, popped out into a window.
     preview: []const u8,
@@ -65,13 +66,15 @@ pub const Action = union(enum) {
 /// What an event routed to the panel did: whether the panel used it, and the action it led to.
 pub const Handled = struct { used: bool, action: ?Action = null };
 
-const MenuItem = enum(u32) { open, rename, duplicate, delete, copy_path, reveal, extract, new_files };
+const MenuItem = enum(u32) { open, open_in_ide, rename, duplicate, delete, copy_path, reveal, extract, new_files };
 const menu_id_base: u32 = item_id_base - 32;
 const creation_id_base: u32 = 0x6E00_0000;
 const menu_root_id: u32 = menu_id_base - 8;
 const new_root_id: u32 = menu_id_base - 9;
 /// The List and Grid buttons' ids: `view_id_base` plus the view.
 const view_id_base: u32 = menu_id_base - 4;
+/// The toolbar's Open in IDE button.
+const ide_button_id: u32 = menu_id_base - 10;
 /// The zone below the files a drag moves up into.
 const up_zone_id: u32 = view_id_base - 1;
 const NameEdit = ui.TextEdit(128);
@@ -413,6 +416,7 @@ pub const AssetsPanel = struct {
         page_style.restyle(context, .{ .grow = 1 });
         for ([_]View{ .list, .grid }) |view| self.viewButton(context, icons, view);
         if (context.buttonVariant("New", .outline)) self.menu = .{ .at = context.pointer, .entry = null, .new_only = true };
+        if (self.ideButton(context, icons)) |target| action = .{ .open_code = target };
         context.end();
         page_style.restyle(context, .{ .direction = .row, .gap = 4, .align_items = .center });
 
@@ -597,6 +601,21 @@ pub const AssetsPanel = struct {
         context.element(element);
     }
 
+    /// The toolbar's Open in IDE: when pressed, the selected file (a model's part has none), else
+    /// the folder shown.
+    fn ideButton(self: *AssetsPanel, context: *ui.Context, icons: *const Icons) ?[]const u8 {
+        const b = context.builder();
+        const id = ide_button_id;
+        const element = b.node(id, .{ .width = 24, .height = 24, .padding = .{ .left = 4, .right = 4, .top = 4, .bottom = 4 } }, highlight(b.allocator, id, false, false), &.{
+            b.node(0, .{ .width = 16, .height = 16 }, icons.paint(.code, context.theme), &.{}) catch return null,
+        }) catch return null;
+        element.cursor = .pointer;
+        element.accessibility = .{ .role = .button, .label = "Open in IDE" };
+        context.element(element);
+        if (!context.activated(id)) return null;
+        return if (self.selected.items.len > 0 and !self.selected_virtual) self.selected.items else self.folder.items;
+    }
+
     /// One tile of the grid: the icon above the name.
     fn tile(self: *AssetsPanel, context: *ui.Context, icons: *const Icons, item: Shown, index: usize, open_scene: ?[]const u8) void {
         const b = context.builder();
@@ -663,12 +682,16 @@ pub const AssetsPanel = struct {
             add(&choices, context, .copy_path, "Copy path");
         } else {
             if (entry.kind == .scene or entry.kind == .input_map or entry.kind == .code or entry.kind == .text or entry.kind == .material or entry.kind == .animation) add(&choices, context, .open, "Open");
+            add(&choices, context, .open_in_ide, "Open in IDE");
             add(&choices, context, .rename, "Rename");
             add(&choices, context, .duplicate, "Duplicate");
             add(&choices, context, .delete, "Delete");
             add(&choices, context, .copy_path, "Copy path");
             add(&choices, context, .reveal, "Show in file manager");
-        } else add(&choices, context, .reveal, "Show in file manager");
+        } else {
+            add(&choices, context, .open_in_ide, "Open in IDE");
+            add(&choices, context, .reveal, "Show in file manager");
+        }
         // New files go in a folder, which a model's part isn't.
         const in_model = if (menu.entry) |entry| entry.virtual else false;
         if (!in_model) choices.append(arena, .{ .id = menu_id_base + @backingInt(MenuItem.new_files), .label = "New", .kind = .submenu }) catch |err| {
@@ -710,6 +733,7 @@ pub const AssetsPanel = struct {
                     .ui => .{ .open_ui_scene = menu.entry.?.path },
                     else => .{ .open_code = menu.entry.?.path },
                 },
+                .open_in_ide => .{ .open_code = if (menu.entry) |entry| entry.path else self.folder.items },
                 .rename => blk: {
                     self.startRename(menu.entry.?.path);
                     break :blk null;

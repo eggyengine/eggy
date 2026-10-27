@@ -86,8 +86,10 @@ pub const Outcome = union(enum) {
     /// Edit > Undo (Ctrl+Z) and Redo (Ctrl+Shift+Z, Ctrl+Y).
     undo,
     redo,
-    /// File > Open Project Folder: show the project in the system's file manager.
-    open_project_folder,
+    /// File > Open in > File Manager: show the project in the system's file manager.
+    open_in_file_manager,
+    /// File > Open in > IDE: open the project's folder in the code editor people chose.
+    open_in_ide,
     /// File > Upgrade Editor: move the project to the newest Eggy.
     upgrade_editor,
     /// File > Link Developer Eggy (Upgrade Editor with Shift held): link the project to the
@@ -938,7 +940,8 @@ pub const Workspace = struct {
                 .new_project => return .new_project,
                 .open_project => return .open_project,
                 .open_project_linked => return .open_project_linked,
-                .open_project_folder => return .open_project_folder,
+                .open_in_file_manager => return .open_in_file_manager,
+                .open_in_ide => return .open_in_ide,
                 .upgrade_editor => return .upgrade_editor,
                 .link_developer => return .link_developer,
                 .devtools => return .toggle_devtools,

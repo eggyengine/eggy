@@ -2246,8 +2246,15 @@ pub fn Editor(comptime project: type) type {
                         sdl3.dialog.showOpenFolder(Self, pickedProject, self, self.app.window.window, null, false);
                     }
                 },
-                .open_project_folder => if (self.project) |opened| file_manager.showFolder(self.gpa, opened.dir) catch |err| {
+                .open_in_file_manager => if (self.project) |opened| file_manager.showFolder(self.gpa, opened.dir) catch |err| {
                     std.log.err("cannot show {s} in the file manager: {t}", .{ opened.dir, err });
+                },
+                .open_in_ide => if (self.project) |opened| {
+                    const choice = preferences.editor(&self.app.preference_values).code_editor;
+                    code_editor.openFolder(self.gpa, choice, opened.dir) catch |err| {
+                        std.log.err("cannot open {s} in {t}: {t}. Pick another code editor in Edit > Preferences.", .{ opened.dir, choice, err });
+                        self.workspace.toast("Couldn't open the IDE: see the Console");
+                    };
                 },
                 .upgrade_editor => if (self.upgrades.can_upgrade) try self.upgradeEditor() else self.upgrades.logUnavailable(.upgrade),
                 .toggle_devtools => self.toggleDevtools(),
