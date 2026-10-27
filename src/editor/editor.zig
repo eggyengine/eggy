@@ -2224,6 +2224,10 @@ pub fn Editor(comptime project: type) type {
                     };
                     if (self.scene_2d.nudge(target, steps)) return .run;
                 },
+                // W, E, R and T pick the 2D Scene's tool, as they do the Scene's.
+                .w, .e, .r, .t => if (over_flat and !curr_event.key_down.repeat) {
+                    if (self.scene_2d.shortcut(key, curr_event.key_down.mod)) return .run;
+                },
                 // Delete (or Backspace) deletes the selection, as the Hierarchy's Delete does.
                 .delete, .backspace => if (self.entity_editor.selected != null) {
                     self.entity_editor.deleteSelected(&self.app, self.gamePtr());

@@ -1,11 +1,14 @@
 //! The 2D Scene panel: the world seen flat from the front (its XY plane, Y up) through an
 //! orthographic camera, as a 2D game sees it. Scroll to zoom about the pointer, drag with the
 //! right or middle button to pan, click an entity to select it and drag it to move it (snapped to
-//! the grid when Snap is on). The selection's corners scale it (Shift: evenly) and the knob above
-//! it turns it (in 15 degree steps when snapping); the arrow keys nudge it a grid step. F frames
-//! the selection and Delete deletes it. A selected `Tilemap` is painted with `tile_brush.zig`. On a gamepad the left stick pans, the triggers zoom
-//! (right in, left out) and holding the left shoulder pans faster. The editor renders the world
-//! into the panel (`shot`); the grid, the pointer's place and the handles are drawn over it.
+//! the grid when snapping). The tool picked on the floating toolbar (the Scene's, `toolbar.zig`;
+//! W, E, R and T) sets the selection's handles: its corners scale it (Shift: evenly) and the knob
+//! above it turns it (in 15 degree steps when snapping); Ctrl turns snapping round while
+//! dragging. The arrow keys nudge it a grid step. F frames the selection and Delete deletes it. A
+//! selected `Tilemap` is painted with `tile_brush.zig`. On a gamepad the left stick pans, the
+//! triggers zoom (right in, left out) and holding the left shoulder pans faster. The editor
+//! renders the world into the panel (`shot`); the grid, the handles, the toolbar and the
+//! pointer's place are drawn over it.
 const std = @import("std");
 const eggy = @import("eggy");
 const ui = eggy.ui;
@@ -13,6 +16,7 @@ const sdl3 = eggy.sdl_adapter.sdl;
 const scene_view = @import("../scene_view/scene_view.zig");
 const page_style = @import("../page_style.zig");
 const handles = @import("handles.zig");
+const toolbar = scene_view.toolbar;
 pub const tile_brush = @import("tile_brush.zig");
 
 /// What the editor renders this frame: the world seen through `view`, into `rect` (logical
@@ -31,8 +35,10 @@ pub const Scene2d = struct {
     /// The world point at the panel's centre, and how many metres its height shows.
     centre: [2]f32 = .{ 0, 0 },
     height_m: f32 = 12,
-    grid: bool = true,
-    snap: bool = false,
+    /// The floating toolbar: the tool, snapping and the grid. Scaling and turning both show at first.
+    tools: toolbar.State = .{ .panel = .scene_2d, .tool = .universal },
+    /// The toolbar's drag by its grip: where the pointer and the toolbar were when it began.
+    toolbar_drag: ?struct { from: ui.Vec2, offset: ui.Vec2 } = null,
     /// Where the viewport was laid out last frame, the page's vertex count where it was painted,
     /// and whether it was built this frame.
     area: ui.Rect = .{ .x = 0, .y = 0, .w = 0, .h = 0 },
@@ -83,6 +89,51 @@ pub const Scene2d = struct {
         return .{ .rect = self.area, .view = self.view(), .mark = self.mark orelse return null };
     }
 
+    /// The toolbar button `button` was pressed: pick a tool, switch snapping or the grid, go back
+    /// to the origin, fold, or start dragging the toolbar by its grip.
+    pub fn press(self: *Scene2d, button: toolbar.Button) void {
+        switch (button) {
+            .grip => self.toolbar_drag = .{ .from = self.pointer, .offset = self.tools.offset },
+            .move => self.tools.tool = .move,
+            .rotate => self.tools.tool = .rotate,
+            .scale => self.tools.tool = .scale,
+            .universal => self.tools.tool = .universal,
+            .snap => self.tools.snapping = !self.tools.snapping,
+            .grid => self.tools.grid = !self.tools.grid,
+            .frame_origin => {
+                self.centre = .{ 0, 0 };
+                self.height_m = 12;
+            },
+            .fold => self.tools.folded = !self.tools.folded,
+            // The Scene's own; this toolbar doesn't show them.
+            .space, .game_camera => {},
+        }
+    }
+
+    /// W, E, R or T (without Ctrl or Alt) picks the tool, as over the Scene. Returns whether it did.
+    pub fn shortcut(self: *Scene2d, key: sdl3.keycode.Keycode, mod: sdl3.keycode.KeyModifier) bool {
+        if (mod.controlDown() or mod.altDown()) return false;
+        self.tools.tool = switch (key) {
+            .w => .move,
+            .e => .rotate,
+            .r => .scale,
+            .t => .universal,
+            else => return false,
+        };
+        return true;
+    }
+
+    /// Whether a drag snaps now: the toolbar's setting, turned round while Ctrl is held.
+    fn snapping(self: *const Scene2d) bool {
+        return self.tools.snapping != sdl3.keyboard.getModState().controlDown();
+    }
+
+    /// Where the toolbar's top left corner is on the panel.
+    fn toolbarCorner(self: *const Scene2d) ui.Vec2 {
+        const at = toolbar.keepInside(self.tools, self.tools.offset, self.area);
+        return .{ .x = self.area.x + at.x, .y = self.area.y + at.y };
+    }
+
     /// Whether an entity is being moved, scaled or turned, so the scene isn't recorded mid-drag.
     pub fn isMoving(self: *const Scene2d) bool {
         return self.moving != null or self.reshaping != null;
@@ -98,31 +149,42 @@ pub const Scene2d = struct {
         return true;
     }
 
-    /// Draw the panel: its toolbar, the viewport the world goes into, and the grid over it.
-    /// With `app`, the tile brush's toggle and palette show under the toolbar for a tilemap.
+    /// Draw the panel: the viewport the world goes into, with the grid, the toolbar and the
+    /// pointer's place floating over it. With `app`, the tile brush's toggle and palette show
+    /// above it for a tilemap.
     pub fn build(self: *Scene2d, context: *ui.Context, app: ?*eggy.App, gpa: std.mem.Allocator) void {
         self.shown = false;
-        // The toolbar: the grid, snapping, and back to the origin.
-        context.begin(.row);
-        _ = context.toggle("Grid", &self.grid);
-        _ = context.toggle("Snap", &self.snap);
-        if (context.buttonVariant("Frame origin", .outline)) {
-            self.centre = .{ 0, 0 };
-            self.height_m = 12;
-        }
-        const at = self.worldAt(self.pointer);
-        context.muted(std.fmt.allocPrint(context.builder().allocator, "x {d:.2}  y {d:.2}   {d:.1} m tall", .{ at[0], at[1], self.height_m }) catch "");
-        page_style.smallText(context, 12);
-        context.end();
-        page_style.restyle(context, .{ .direction = .row, .gap = 12, .align_items = .center });
         if (app) |live| self.brush.build(context, live, gpa);
         const brush_px: f32 = if (self.brush.target == null or app == null) 0 else if (self.brush.painting) 44 + tile_brush.palette_height_px else 40;
 
-        // The viewport fills the rest: the world is drawn in where it starts, the grid over it.
+        // The viewport fills the rest: the world is drawn in where it starts, the grid over it,
+        // and the toolbar and the pointer's place float over that (where it was laid out last).
         const b = context.builder();
-        const height = @max(80, page_style.pageHeight(context) - 44 - brush_px);
-        context.element(b.node(0, .{ .width = context.contentWidth(), .height = height }, .{ .custom = .{ .context = self, .draw = drawViewport } }, &.{}) catch return);
+        const height = @max(80, page_style.pageHeight(context) - brush_px);
+        const floating = self.overlay(b) catch return;
+        context.element(b.node(0, .{ .width = context.contentWidth(), .height = height }, .{ .custom = .{ .context = self, .draw = drawViewport } }, floating) catch return);
         self.shown = true;
+    }
+
+    /// The toolbar, its tooltip, and the pointer's place in the bottom left corner.
+    fn overlay(self: *const Scene2d, b: ui.Layout.Builder) ![]const *ui.Layout.Element {
+        var parts: std.ArrayList(*ui.Layout.Element) = .empty;
+        try parts.append(b.allocator, try toolbar.element(b, self.tools, self.area));
+        const corner = self.toolbarCorner();
+        if (self.toolbar_drag == null and self.hovered) if (toolbar.buttonAt(self.tools, corner, self.pointer)) |button| {
+            const tip = try ui.widgets.tooltip(b, toolbar.describe(button, self.tools));
+            tip.style.z_index = 30;
+            tip.overlay = .{ .point = .init(corner.x, corner.y + toolbar.size(self.tools).y + 4) };
+            try parts.append(b.allocator, tip);
+        };
+        const at = self.worldAt(self.pointer);
+        const place = try std.fmt.allocPrint(b.allocator, "x {d:.2}   y {d:.2}   {d:.1} m tall", .{ at[0], at[1], self.height_m });
+        const label = try b.node(0, .{ .padding = .{ .left = 8, .right = 8, .top = 3, .bottom = 3 }, .z_index = 20 }, .{ .surface = .popover }, &.{
+            try b.node(0, .{}, .{ .text = .{ .value = place, .size = 12, .tone = .muted } }, &.{}),
+        });
+        label.overlay = .{ .point = .init(self.area.x + 8, self.area.y + @max(0, self.area.h - 30)) };
+        try parts.append(b.allocator, label);
+        return parts.items;
     }
 
     /// Zoom, pan, select and move, for an event the workspace let through. Returns whether the
@@ -145,6 +207,12 @@ pub const Scene2d = struct {
                     self.panning = at;
                     return true;
                 }
+                // The toolbar floats over everything else.
+                if (toolbar.buttonAt(self.tools, self.toolbarCorner(), at)) |button| {
+                    self.pointer = at;
+                    self.press(button);
+                    return true;
+                }
                 const live = target orelse return true;
                 // Painting tiles takes the press while the brush is on and over its map.
                 if (brush_env) |env| if (self.mapPoint(self.worldAt(at))) |local| {
@@ -152,7 +220,7 @@ pub const Scene2d = struct {
                     if (self.brush.press(env, local, keys.shiftDown(), keys.altDown())) return true;
                 };
                 // The selection's corners and knob come before what is under them.
-                if (self.selectedBox()) |box| if (box.handleAt(self.worldAt(at), self.metresPerPx())) |taken| {
+                if (self.selectedBox()) |box| if (box.handleAt(self.worldAt(at), self.metresPerPx(), self.handlesShown())) |taken| {
                     self.reshaping = startReshape(live, self.selected.?, taken, box, self.worldAt(at));
                     return true;
                 };
@@ -165,13 +233,17 @@ pub const Scene2d = struct {
                 const at = ui.Vec2{ .x = motion.x, .y = motion.y };
                 self.pointer = at;
                 self.hovered = self.area.contains(at.x, at.y);
+                if (self.toolbar_drag) |moving| {
+                    self.tools.offset = toolbar.keepInside(self.tools, .{ .x = moving.offset.x + at.x - moving.from.x, .y = moving.offset.y + at.y - moving.from.y }, self.area);
+                    return true;
+                }
                 if (self.panning) |from| {
                     self.panBy(at.x - from.x, at.y - from.y);
                     self.panning = at;
                     return true;
                 }
                 if (self.reshaping) |reshape| {
-                    if (target) |live| reshapeTo(live, reshape, self.worldAt(at), sdl3.keyboard.getModState().shiftDown(), self.snap);
+                    if (target) |live| reshapeTo(live, reshape, self.worldAt(at), sdl3.keyboard.getModState().shiftDown(), self.snapping());
                     return true;
                 }
                 if (self.brush.stroking()) {
@@ -184,7 +256,8 @@ pub const Scene2d = struct {
             },
             .mouse_button_up => {
                 if (brush_env) |env| if (self.brush.release(env)) return true;
-                const used = self.panning != null or self.moving != null or self.reshaping != null;
+                const used = self.panning != null or self.moving != null or self.reshaping != null or self.toolbar_drag != null;
+                self.toolbar_drag = null;
                 self.panning = null;
                 self.moving = null;
                 self.reshaping = null;
@@ -255,6 +328,17 @@ pub const Scene2d = struct {
         return null;
     }
 
+    /// The handles the tool picked shows: Move none, Rotate the knob, Scale the corners, and
+    /// Universal both.
+    fn handlesShown(self: *const Scene2d) handles.Shown {
+        return switch (self.tools.tool) {
+            .move => .{ .corners = false, .knob = false },
+            .rotate => .{ .corners = false, .knob = true },
+            .scale => .{ .corners = true, .knob = false },
+            .universal => .{ .corners = true, .knob = true },
+        };
+    }
+
     /// The selection's box, from what was drawn last; null when it isn't drawn here.
     fn selectedBox(self: *const Scene2d) ?handles.Box {
         const entity = self.selected orelse return null;
@@ -288,7 +372,7 @@ pub const Scene2d = struct {
         const along = eggy.transform.apply(move.to_local, .{ world[0] - move.from_world[0], world[1] - move.from_world[1], 0 }, 0);
         var position = move.from_position;
         for (&position, along) |*value, delta| value.* += delta;
-        if (self.snap) {
+        if (self.snapping()) {
             const step = self.gridStep();
             for (position[0..2]) |*value| value.* = @round(value.* / step) * step;
         }
@@ -334,21 +418,25 @@ fn reshapeTo(target: scene_view.Target, reshape: Scene2d.Reshape, world: [2]f32,
     _ = target.game.writeField(target.app, reshape.entity, component, field, zon);
 }
 
-/// The selection's box, a square on each corner and the knob on its stalk.
+/// The selection's box, and the handles its tool shows: a square on each corner, the knob on
+/// its stalk.
 fn drawHandles(self: *const Scene2d, c: *ui.Canvas) !void {
     const box = self.selectedBox() orelse return;
     const accent = c.theme.primary;
+    const shown = self.handlesShown();
     var corners: [4]ui.Vec2 = undefined;
     for (&corners, box.corners()) |*at, world| at.* = self.screenAt(world);
     for (corners, 0..) |from, i| try line(c, from, corners[(i + 1) % 4], 1.5, accent);
-    const top = self.screenAt(.{ (box.corners()[2][0] + box.corners()[3][0]) / 2, (box.corners()[2][1] + box.corners()[3][1]) / 2 });
-    const knob = self.screenAt(box.knob(self.metresPerPx()));
-    try line(c, top, knob, 1.5, accent);
-    try c.roundRect(.{ .x = knob.x - 6, .y = knob.y - 6, .w = 12, .h = 12 }, accent, 6);
-    for (corners) |at| {
+    if (shown.knob) {
+        const top = self.screenAt(.{ (box.corners()[2][0] + box.corners()[3][0]) / 2, (box.corners()[2][1] + box.corners()[3][1]) / 2 });
+        const knob = self.screenAt(box.knob(self.metresPerPx()));
+        try line(c, top, knob, 1.5, accent);
+        try c.roundRect(.{ .x = knob.x - 6, .y = knob.y - 6, .w = 12, .h = 12 }, accent, 6);
+    }
+    if (shown.corners) for (corners) |at| {
         try c.rect(.{ .x = at.x - 5, .y = at.y - 5, .w = 10, .h = 10 }, c.theme.background);
         try c.roundRectStroke(.{ .x = at.x - 5, .y = at.y - 5, .w = 10, .h = 10 }, accent, 0, 1.5);
-    }
+    };
 }
 
 /// A straight line `width` points wide from `from` to `to`.
@@ -377,7 +465,7 @@ fn drawViewport(context: *const anyopaque, c: *ui.Canvas, r: ui.Rect) anyerror!v
     const outer = c.clip;
     defer c.clip = outer;
     c.clip = if (outer) |within| within.intersection(r) else r;
-    if (self.grid) {
+    if (self.tools.grid) {
         const step = self.gridStep();
         const px_per_metre = r.h / self.height_m;
         const left = self.centre[0] - r.w / 2 / px_per_metre;

@@ -319,6 +319,8 @@ pub const SceneView = struct {
             .snap => self.tools.snapping = !self.tools.snapping,
             .game_camera => self.tools.through_game_camera = !self.tools.through_game_camera,
             .fold => self.tools.folded = !self.tools.folded,
+            // The 2D Scene's own; the Scene's toolbar doesn't show them.
+            .grid, .frame_origin => {},
         }
     }
 

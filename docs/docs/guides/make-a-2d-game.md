@@ -13,8 +13,15 @@ Add an entity with a **Camera**, set its `projection` to `orthographic`, and pla
 of the scene (a `Transform` position of `0, 0, 10` works). `orthographic_height_m` is how many
 metres of the world fit the window's height.
 
-Open the 2D view with the **+** on the tab bar and **2D Scene**. Scroll to zoom, drag with the
-right or middle button to pan, and turn on **Snap** to keep things on the grid.
+Open the 2D view with the **+** on the tab bar and **2D Scene**. It opens with the Hierarchy,
+Inspector, Console and Assets around it, as a 3D tab does. Scroll to zoom and drag with the
+right or middle button to pan.
+
+The toolbar floating in the panel's corner works like the 3D Scene's: pick **Move**,
+**Rotate**, **Scale** or both (**W**, **E**, **R**, **T**), turn snapping to the grid on or
+off (hold **Ctrl** while dragging to do the opposite), show or hide the grid, and go back to
+the origin. Drag its grip to move it, or fold it away with its last button. Where the pointer
+is in the world shows in the bottom left corner.
 
 ## Draw a sprite
 
@@ -36,11 +43,12 @@ filtering** to **Nearest (pixelated)**.
 
 ## Move, scale and turn things
 
-Click an entity in the 2D Scene panel to select it and drag it to move it. Its box shows a
-square on each corner and a knob above it:
+Click an entity in the 2D Scene panel to select it and drag it to move it. With **Scale**
+picked its box shows a square on each corner, with **Rotate** a knob above it, and with both
+picked, both:
 
 - Drag a corner to scale it. Hold **Shift** to keep its proportions.
-- Drag the knob to turn it. With **Snap** on, it turns in 15 degree steps.
+- Drag the knob to turn it. With snapping on, it turns in 15 degree steps.
 - The arrow keys nudge it one grid step.
 - **F** frames it and **Delete** deletes it.
 

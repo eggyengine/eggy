@@ -37,18 +37,23 @@ pub const Box = struct {
         return add(self.centre, scale(up, length(self.half_y) + knob_gap_px * metres_per_px));
     }
 
-    /// The handle within reach of `at`, if any: the knob first, then the nearest corner.
-    pub fn handleAt(self: Box, at: [2]f32, metres_per_px: f32) ?Handle {
+    /// The handle within reach of `at`, if any, of those `shown`: the knob first, then the
+    /// nearest corner.
+    pub fn handleAt(self: Box, at: [2]f32, metres_per_px: f32, shown: Shown) ?Handle {
         const reach = reach_px * metres_per_px;
-        if (length(sub(at, self.knob(metres_per_px))) <= reach) return .turn;
-        for (self.corners(), 0..) |corner, i| {
+        if (shown.knob and length(sub(at, self.knob(metres_per_px))) <= reach) return .turn;
+        if (shown.corners) for (self.corners(), 0..) |corner, i| {
             if (length(sub(at, corner)) <= reach) return .{ .corner = @intCast(i) };
-        }
+        };
         return null;
     }
 };
 
 pub const Handle = union(enum) { corner: u2, turn };
+
+/// Which handles the tool picked shows on the box.
+pub const Shown = struct { corners: bool, knob: bool };
+const all: Shown = .{ .corners = true, .knob = true };
 
 /// A handle being dragged: the box and the pointer when it was taken, and the Transform's
 /// rotation and scale then.
@@ -118,10 +123,12 @@ fn unit(v: [2]f32) [2]f32 {
 
 const two_by_one = Box.of(.{ .{ 2, 0, 0, 0 }, .{ 0, 1, 0, 0 }, .{ 0, 0, 1, 0 }, .{ 3, 0, 0, 1 } });
 
-test "corners and the knob are found near the pointer, and nothing far from them" {
-    try std.testing.expectEqual(Handle{ .corner = 2 }, two_by_one.handleAt(.{ 4.02, 0.5 }, 0.01).?);
-    try std.testing.expectEqual(Handle.turn, two_by_one.handleAt(.{ 3, 0.5 + knob_gap_px * 0.01 }, 0.01).?);
-    try std.testing.expect(two_by_one.handleAt(.{ 3, 0 }, 0.01) == null);
+test "corners and the knob are found near the pointer, and nothing far from them or hidden" {
+    try std.testing.expectEqual(Handle{ .corner = 2 }, two_by_one.handleAt(.{ 4.02, 0.5 }, 0.01, all).?);
+    try std.testing.expectEqual(Handle.turn, two_by_one.handleAt(.{ 3, 0.5 + knob_gap_px * 0.01 }, 0.01, all).?);
+    try std.testing.expect(two_by_one.handleAt(.{ 3, 0 }, 0.01, all) == null);
+    try std.testing.expect(two_by_one.handleAt(.{ 4.02, 0.5 }, 0.01, .{ .corners = false, .knob = true }) == null);
+    try std.testing.expect(two_by_one.handleAt(.{ 3, 0.5 + knob_gap_px * 0.01 }, 0.01, .{ .corners = true, .knob = false }) == null);
 }
 
 test "dragging a corner outwards scales by how much farther it went, uniformly with Shift" {

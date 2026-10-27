@@ -12,13 +12,16 @@ Press **+** on the bar, choose **File > New Tab...** or press **Ctrl+T**, then p
 - **3D Scene** opens a new tab laid out like the first: the Scene in the middle, the
   Hierarchy on its left, the Inspector on its right, and the Console, Assets and Animation
   below it.
-- **2D Scene** opens the same layout with the **2D Scene** panel in the middle: the world seen flat from the front, X to the
-  right and Y up, as a 2D game sees it. Scroll to zoom, drag with the right or middle button
-  to pan, and click an entity to select it. Drag it to move it; with **Snap** on it lands on
-  the grid. Drag a corner of the selection to scale it (hold **Shift** to keep its
-  proportions) or the knob above it to turn it; the arrow keys nudge it a grid step.
-  **Ctrl+Z** undoes each change. **F** frames the selection and **Delete** deletes it.
-  A gamepad pans with the left stick and zooms with the triggers.
+- **2D Scene** opens the same layout with the **2D Scene** panel in the middle: the world
+  seen flat from the front, X to the right and Y up, as a 2D game sees it. Scroll to zoom,
+  drag with the right or middle button to pan, and click an entity to select it. Drag it to
+  move it. Its floating toolbar works like the 3D Scene's: **Move**, **Rotate**, **Scale** or
+  both (**W**, **E**, **R**, **T**) choose the selection's handles, a corner to scale it
+  (hold **Shift** to keep its proportions) and a knob to turn it, and its other buttons snap
+  to the grid, show the grid, and go back to the origin. The arrow keys nudge the selection a
+  grid step. **Ctrl+Z** undoes each change. **F** frames the selection and **Delete** deletes
+  it. A gamepad pans with the left stick and zooms with the triggers. See
+  [Make a 2D game](make-a-2d-game.md).
 - **UI Scene** opens the UI Designer (see [UI scenes](ui-scenes.md)).
 
 **File > New 3D Scene Tab**, **New 2D Scene Tab** and **New UI Scene Tab** do the same.
