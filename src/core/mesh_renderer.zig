@@ -428,6 +428,7 @@ fn makePipeline(device: vit.Device, format: vit.Format, layout: vit.PipelineLayo
         .{ .location = 8, .format = .float32x4, .offset = @offsetOf(mesh.Drawable, "surface_color") },
         .{ .location = 9, .format = .float32x4, .offset = @offsetOf(mesh.Drawable, "material_params") },
         .{ .location = 10, .format = .float32x4, .offset = @offsetOf(mesh.Drawable, "emissive_cutoff") },
+        .{ .location = 14, .format = .float32x4, .offset = @offsetOf(mesh.Drawable, "uv_rect") },
     };
     // The selection passes read fewer attributes, but WGSL keeps every input the shader
     // declares and WebGPU rejects a pipeline missing any; SPIR-V drops the ones unused.

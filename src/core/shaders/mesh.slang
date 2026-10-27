@@ -16,6 +16,7 @@ struct VertexInput {
     [[vk::location(11)]] float4 imported_color;
     [[vk::location(12)]] float2 imported_material;
     [[vk::location(13)]] float3 imported_emissive;
+    [[vk::location(14)]] float4 uv_rect; // the part of the texture drawn: left, top, right, bottom
 };
 
 struct VertexOutput {
@@ -90,7 +91,7 @@ VertexOutput vertexMain(VertexInput input) {
     output.normal = (cof0 * input.normal.x + cof1 * input.normal.y + cof2 * input.normal.z) * (determinant < 0 ? -1.0 : 1.0);
     bool authored = input.material_params.w > 0.5;
     output.color = input.color * (authored ? input.surface_color : input.imported_color);
-    output.uv = input.uv;
+    output.uv = lerp(input.uv_rect.xy, input.uv_rect.zw, input.uv);
     output.world = world.xyz;
     output.material = authored ? input.material_params : float4(input.imported_material, 0, 0);
     output.emissive_cutoff = authored ? input.emissive_cutoff : float4(input.imported_emissive, 0.01);

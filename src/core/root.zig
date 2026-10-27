@@ -35,6 +35,8 @@ pub const assets = @import("eggy_assets");
 pub const model_cache = @import("model_cache.zig");
 pub const texture_cache = @import("texture_cache.zig");
 pub const Mesh = mesh.Mesh;
+pub const sprite = @import("sprite.zig");
+pub const Sprite = sprite.Sprite;
 pub const camera = @import("camera.zig");
 pub const Camera = camera.Camera;
 pub const max_drawables = @import("mesh_renderer.zig").max_drawables;
@@ -127,6 +129,7 @@ test {
     _ = @import("name.zig");
     _ = @import("transform.zig");
     _ = @import("mesh.zig");
+    _ = sprite;
     _ = @import("mesh_renderer.zig");
     _ = @import("model_cache.zig");
     _ = @import("texture_cache.zig");
