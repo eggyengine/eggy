@@ -29,6 +29,10 @@ pub const Sources = struct {
     models: *ModelCache,
     textures: *TextureCache,
     materials: *@import("material_cache.zig").MaterialCache,
+    /// Project shaders: materials' surfaces and post passes.
+    shaders: *@import("shader_cache.zig").ShaderCache,
+    /// Seconds the game has run, for shaders.
+    time_s: f32 = 0,
     /// The authored clips entities play; null (no authored clip plays) until the host sets it.
     clips: ?*@import("clip_cache.zig").ClipCache = null,
     lights: *const lighting.Frame,
@@ -229,7 +233,7 @@ pub const MeshRenderer = struct {
         // draw; then upload them and the camera.
         std.mem.sort(mesh.Drawable, sorted, {}, drawnBefore);
         try upload(self.instances[self.slot], std.mem.sliceAsBytes(sorted));
-        const camera = CameraUniforms{ .view_projection = view_projection, .options = .{ if (srgb) 1 else 0, 0, 0, 0 }, .outline = outline_color, .outline_size = .{ viewport_px[0], viewport_px[1], outline_width_px, 0 }, .eye = .{ eye[0], eye[1], eye[2], 0 }, .light_info = .{ @floatFromInt(sources.lights.count), 0, 0, 0 }, .lights = sources.lights.lights, .ambient = sources.lights.ambient, .environment = environmentOf(sources.lights.*), .shadow_matrix = self.shadow.matrix, .shadow_params = self.shadow.params };
+        const camera = CameraUniforms{ .view_projection = view_projection, .options = .{ if (srgb) 1 else 0, 0, 0, 0 }, .outline = outline_color, .outline_size = .{ viewport_px[0], viewport_px[1], outline_width_px, 0 }, .eye = .{ eye[0], eye[1], eye[2], 0 }, .light_info = .{ @floatFromInt(sources.lights.count), sources.time_s, 0, 0 }, .lights = sources.lights.lights, .ambient = sources.lights.ambient, .environment = environmentOf(sources.lights.*), .shadow_matrix = self.shadow.matrix, .shadow_params = self.shadow.params };
         try upload(self.uniforms[self.slot], std.mem.asBytes(&camera));
 
         cmd.setGraphicsPipeline(self.pipeline);
@@ -363,7 +367,7 @@ test "visibility partition retains every entity for a second viewport" {
         .{ .model = identity, .color = @splat(1), .shape = .sphere, .entity_id = 2, .entity_generation = 0 },
     };
     drawables[0].model[3][0] = 100;
-    const sources = Sources{ .models = undefined, .textures = undefined, .materials = undefined, .lights = undefined, .stats = undefined };
+    const sources = Sources{ .models = undefined, .textures = undefined, .materials = undefined, .shaders = undefined, .lights = undefined, .stats = undefined };
     try std.testing.expectEqual(@as(usize, 2), visibleFirst(&drawables, sources, identity).len);
     var other_view = identity;
     other_view[3][0] = -100;

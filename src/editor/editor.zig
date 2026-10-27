@@ -409,6 +409,7 @@ pub fn Editor(comptime project: type) type {
                 errdefer loaders.deinit();
                 app.graphics.models.loader = loaders.models();
                 app.graphics.textures.loader = loaders.textures();
+                app.graphics.shaders.loader = loaders.shaders();
                 app.resource_provider = loaders.resources();
                 break :blk loaders;
             } else null;
@@ -572,6 +573,8 @@ pub fn Editor(comptime project: type) type {
                 if (self.play_mode.running() and self.extension_state.pauseDue(sdl3.timer.getMillisecondsSinceInit())) self.setPaused(true);
                 if (self.play_mode.running()) {
                     self.app.time.tick(sdl3.timer.getNanosecondsSinceInit());
+                    // Shaders follow game time, so they hold still while editing or paused.
+                    self.app.graphics.time_s = @floatCast(self.app.time.elapsed_s);
                     try self.app.advanceInput();
                     game.update(&self.app);
                     self.app.input.endFrame();

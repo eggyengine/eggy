@@ -84,6 +84,7 @@ pub fn Runtime(comptime project: type) type {
             if (data) |packaged| {
                 app.graphics.models.loader = packaged.models();
                 app.graphics.textures.loader = packaged.textures();
+                app.graphics.shaders.loader = packaged.shaders();
                 app.resource_provider = packaged.resources();
                 if (@hasDecl(project, "icon")) setWindowIcon(gpa, packaged, app.window.window, project.icon);
             }
@@ -191,6 +192,7 @@ pub fn Runtime(comptime project: type) type {
             try self.app.updateWorld();
             self.app.input.endFrame();
             self.app.graphics.lights = try eggy.lighting.gather(&self.app.world);
+            self.app.graphics.time_s = @floatCast(self.app.time.elapsed_s);
             eggy.lighting.reportInvalid(self.app.graphics.lights, &self.invalid_lights_reported);
             // UI scenes on entities: screens over the view, billboards in the scene.
             self.plugins.gatherUiScenes(&self.app);

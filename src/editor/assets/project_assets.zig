@@ -367,6 +367,30 @@ pub const ProjectAssets = struct {
         return .{ .context = self, .load = loadImage };
     }
 
+    /// A loader for `eggy.shader_cache.ShaderCache`; `self` must outlive it.
+    /// Editor-only: each `.slang` is made whole (`eggy.shader_compose`) and compiled to SPIR-V
+    /// as it is first used; Slang's diagnostics are logged and the error returned.
+    ///
+    /// ```zig
+    /// app.graphics.shaders.loader = project_assets.shaders();
+    /// ```
+    pub fn shaders(self: *ProjectAssets) eggy.shader_cache.Loader {
+        return .{ .context = self, .load = loadShader };
+    }
+
+    fn loadShader(context: *anyopaque, gpa: std.mem.Allocator, key: []const u8) !eggy.shader_cache.Compiled {
+        const self: *ProjectAssets = @ptrCast(@alignCast(context));
+        const found = try self.fileOf(gpa, try assets.id.parse(key)) orelse return error.FileNotFound;
+        defer gpa.free(found.path);
+        if (found.kind != .shader) return error.WrongAssetKind;
+        const source = try readAsset(context, gpa, key);
+        defer gpa.free(source);
+        const whole = try eggy.shader_compose.compose(gpa, source, std.fs.path.basename(found.path));
+        defer gpa.free(whole);
+        const role = try eggy.shader_compose.roleOf(source);
+        return .{ .bytes = try eggy.slangc.compileSource(gpa, whole, eggy.shader_compose.Role.entry_point, .fragment, .spirv), .role = role };
+    }
+
     fn readAsset(context: *anyopaque, gpa: std.mem.Allocator, key: []const u8) ![:0]u8 {
         const self: *ProjectAssets = @ptrCast(@alignCast(context));
         const id = try assets.id.parse(key);
@@ -601,4 +625,35 @@ test "providers read on other threads while files move and the catalog syncs" {
     clip_reader.join();
     try std.testing.expectEqual(@as(u32, 0), wrong.load(.monotonic));
     try std.testing.expectEqualStrings(&note_key, project.keyOf(&note_key, "resources/note.txt").?);
+}
+
+test "composed post and surface shaders compile with Slang" {
+    const compose = eggy.shader_compose;
+    const slangc = eggy.slangc;
+    const gpa = std.testing.allocator;
+    const sources = [_][]const u8{
+        \\#include "eggy"
+        \\float4 post(PostInput input) {
+        \\    float3 color = sceneColor(input.uv);
+        \\    return float4(lerp(color, luminance(color).xxx, input.values.x), 1.0);
+        \\}
+        ,
+        \\#include "eggy"
+        \\Surface surface(SurfaceInput input) {
+        \\    Surface shown = defaultSurface(input);
+        \\    shown.emissive += shown.base_color * (0.5 + 0.5 * sin(input.time_s));
+        \\    return shown;
+        \\}
+        ,
+    };
+    for (sources) |source| {
+        const whole = try compose.compose(gpa, source, "test.slang");
+        defer gpa.free(whole);
+        const spirv = slangc.compileSource(gpa, whole, compose.Role.entry_point, .fragment, .spirv) catch |err| switch (err) {
+            error.ShaderCompilerUnavailable => return error.SkipZigTest,
+            else => return err,
+        };
+        defer gpa.free(spirv);
+        try std.testing.expectEqualSlices(u8, &.{ 0x03, 0x02, 0x23, 0x07 }, spirv[0..4]);
+    }
 }

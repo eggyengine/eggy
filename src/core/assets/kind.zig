@@ -25,6 +25,8 @@ pub const Kind = enum(u8) {
     font,
     /// A grid of tiles from a tileset (`.tilemap.zon`), which a `Tilemap` draws.
     tilemap,
+    /// A Slang shader (`.slang`) that includes "eggy": a post pass, or a material's surface.
+    shader,
 
     /// The kind of the file at `path`; `any` for a kind Eggy doesn't know.
     /// Does not inspect the filesystem or infer folders. Ordinary extensions ignore case;
@@ -48,6 +50,7 @@ pub const Kind = enum(u8) {
             .{ &.{ ".wav", ".ogg", ".mp3", ".flac" }, .audio },
             .{ &.{ ".glb", ".gltf", ".obj", ".fbx", ".dae", ".3ds", ".ply", ".stl" }, .model },
             .{ &.{ ".ttf", ".otf" }, .font },
+            .{ &.{".slang"}, .shader },
         };
         for (kinds) |entry| for (entry[0]) |known| {
             if (std.ascii.eqlIgnoreCase(extension, known)) return entry[1];
@@ -92,6 +95,7 @@ test "a file's kind comes from its name" {
     try std.testing.expectEqual(Kind.ui, Kind.of("ui/hud.ui.zon"));
     try std.testing.expectEqual(Kind.tilemap, Kind.of("levels/cave.tilemap.zon"));
     try std.testing.expectEqual(Kind.font, Kind.of("ui/Title.OTF"));
+    try std.testing.expectEqual(Kind.shader, Kind.of("shaders/water.slang"));
     try std.testing.expect(Kind.isTexture("art/Wood.PNG"));
     try std.testing.expect(!Kind.isTexture("art/logo.svg"));
 }

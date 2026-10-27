@@ -6,6 +6,7 @@ const models = @import("src/build/models.zig");
 const game_export = @import("src/build/export.zig");
 const build_runner = @import("src/build/runner.zig");
 const game_resources = @import("src/build/resources.zig");
+const game_shaders = @import("src/build/shaders.zig");
 const game_metadata = @import("src/build/metadata.zig");
 const sdl_build = @import("src/build/sdl.zig");
 const sdk_setup = @import("src/build/sdk_setup.zig");
@@ -203,7 +204,8 @@ fn addProject(b: *std.Build, engine: *std.Build, emscripten: Emscripten, target:
     const runtime = engine.modules.get("eggy_runtime").?;
     const own = b == engine;
     const files = if (own) &.{} else game_resources.entries(b);
-    const prepared = models.prepare(b, engine, target, optimize, files) orelse return null;
+    var prepared = models.prepare(b, engine, target, optimize, files) orelse return null;
+    prepared.directory = game_shaders.addCompiled(b, engine, vitellusDependency(engine, target, optimize, emscripten), target, files, prepared.directory) orelse return null;
 
     // The project module: the game's name and its plugin types, the game first. The editor's
     // game library has every plugin; the runtime leaves dev plugins out when exporting.
@@ -443,26 +445,36 @@ const Engine = struct {
     plugins: []const *std.Build.Module,
 };
 
-/// Publish Eggy's modules (`eggy`, `eggy_runtime`, and `eggy_editor` on desktop) and the runtime
-/// libraries games install beside their executables. Null until Slang has been fetched.
-fn addEngine(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builtin.Optimize, emscripten: Emscripten) ?Engine {
-    // The web build renders with WebGPU, takes WGSL, and is linked by emcc instead of Zig.
-    const web = target.result.os.tag == .emscripten;
+/// Slang's prebuilt library, which compiles shaders at run time, is glibc-only on Linux.
+fn slangAtRunTime(target: std.Build.ResolvedTarget) bool {
+    return !target.result.abi.isAndroid() and (target.result.os.tag != .linux or target.result.abi.isGnu());
+}
+
+/// Vitellus as Eggy builds with it for `target`; `engine` is Eggy's own builder. The same
+/// arguments give the same dependency, for `addEngine` and a game's shaders alike.
+fn vitellusDependency(engine: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builtin.Optimize, emscripten: Emscripten) *std.Build.Dependency {
     // On Windows DirectX 12 comes first, running the SPIR-V shaders through SPIRV-Cross and DXC.
     const windows = target.result.os.tag == .windows;
-    const android = target.result.abi.isAndroid();
-    // Slang's prebuilt library, which compiles shaders at run time, is glibc-only on Linux.
-    const slang = !android and (target.result.os.tag != .linux or target.result.abi.isGnu());
-    const vitellus = b.dependency("vitellus", .{
+    return engine.dependency("vitellus", .{
         .target = target,
         .optimize = optimize,
         .dx12 = true,
         .enable_dxc = windows,
         .enable_spirv_cross = windows,
-        .vk = !web,
+        .vk = target.result.os.tag != .emscripten,
         .emsdk = emscripten.emsdk,
-        .enable_slang = slang,
+        .enable_slang = slangAtRunTime(target),
     });
+}
+
+/// Publish Eggy's modules (`eggy`, `eggy_runtime`, and `eggy_editor` on desktop) and the runtime
+/// libraries games install beside their executables. Null until Slang has been fetched.
+fn addEngine(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builtin.Optimize, emscripten: Emscripten) ?Engine {
+    // The web build renders with WebGPU, takes WGSL, and is linked by emcc instead of Zig.
+    const web = target.result.os.tag == .emscripten;
+    const android = target.result.abi.isAndroid();
+    const slang = slangAtRunTime(target);
+    const vitellus = vitellusDependency(b, target, optimize, emscripten);
 
     // Built-in shaders: WGSL on the web, SPIR-V elsewhere.
     const viewport_shader = b.path("src/core/shaders/viewport3d.slang");

@@ -34,6 +34,9 @@ pub const mesh = @import("mesh.zig");
 pub const assets = @import("eggy_assets");
 pub const model_cache = @import("model_cache.zig");
 pub const texture_cache = @import("texture_cache.zig");
+pub const shader_cache = @import("shader_cache.zig");
+/// A project shader's `#include "eggy"` and role, made whole for compiling.
+pub const shader_compose = @import("shaders/compose.zig");
 pub const Mesh = mesh.Mesh;
 pub const sprite = @import("sprite.zig");
 pub const Sprite = sprite.Sprite;
@@ -141,6 +144,8 @@ test {
     _ = @import("mesh_renderer.zig");
     _ = @import("model_cache.zig");
     _ = @import("texture_cache.zig");
+    _ = shader_cache;
+    _ = shader_compose;
     _ = @import("clip_cache.zig");
     _ = @import("deformation.zig");
     _ = animation;

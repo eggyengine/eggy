@@ -79,6 +79,16 @@ pub const Data = struct {
         return .{ .context = self, .load = loadTexture };
     }
 
+    /// A loader for `eggy.shader_cache.ShaderCache` reading the shaders the build compiled.
+    /// Borrows `self`; `data` must remain open while the cache can request shaders.
+    ///
+    /// ```zig
+    /// app.graphics.shaders.loader = data.shaders();
+    /// ```
+    pub fn shaders(self: *Data) eggy.shader_cache.Loader {
+        return .{ .context = self, .load = loadShader };
+    }
+
     /// The files packaging copied unchanged (scenes...), addressed by identity.
     /// Borrows `self`; each successful read allocates null-terminated bytes with the supplied
     /// allocator. Invalid identities, missing files and read/size errors propagate.
@@ -136,7 +146,8 @@ pub const Data = struct {
             }
         }
         if (bundled) {
-            return self.readBundled(gpa, path);
+            var key: [eggy.assets.id.key_len]u8 = undefined;
+            return self.readBundled(gpa, try packagedName(&key, path));
         }
         const io = self.io;
         var file = try self.openPackaged(path);
@@ -146,10 +157,28 @@ pub const Data = struct {
         return reader.interface.allocRemainingAlignedSentinel(gpa, .limited(64 << 20), .of(u8), 0);
     }
 
+    // The copied source says what the shader does; the build compiled it beside it.
+    fn loadShader(context: *anyopaque, gpa: std.mem.Allocator, path: []const u8) !eggy.shader_cache.Compiled {
+        const self: *Data = @ptrCast(@alignCast(context));
+        const source = try readCopy(context, gpa, path);
+        defer gpa.free(source);
+        const role = try eggy.shader_compose.roleOf(source);
+        var key: [eggy.assets.id.key_len]u8 = undefined;
+        var name_buffer: [eggy.assets.id.key_len + 8]u8 = undefined;
+        const name = try std.fmt.bufPrint(&name_buffer, "{s}.frag", .{eggy.assets.id.key(&key, try eggy.assets.id.parse(path))});
+        if (bundled) {
+            const bytes = try self.readBundled(gpa, name);
+            defer gpa.free(bytes);
+            return .{ .bytes = try gpa.dupe(u8, bytes), .role = role };
+        }
+        return .{ .bytes = try self.dir.readFileAlloc(self.io, name, gpa, .limited(16 << 20)), .role = role };
+    }
+
     /// Decode an identity-addressed payload using the requested format.
     fn readPackaged(self: *Data, comptime T: type, comptime format: type, gpa: std.mem.Allocator, path: []const u8) !T {
+        var key: [eggy.assets.id.key_len]u8 = undefined;
         if (bundled) {
-            const bytes = try self.readBundled(gpa, path);
+            const bytes = try self.readBundled(gpa, try packagedName(&key, path));
             defer gpa.free(bytes);
             var reader: std.Io.Reader = .fixed(bytes);
             return format.read(gpa, &reader);
@@ -162,11 +191,15 @@ pub const Data = struct {
         return format.read(gpa, &reader.interface);
     }
 
+    /// The canonical file name of identity `path`, rejecting anything else.
+    fn packagedName(key: *[eggy.assets.id.key_len]u8, path: []const u8) ![]const u8 {
+        return eggy.assets.id.key(key, try eggy.assets.id.parse(path));
+    }
+
+    /// `data/<name>` from Android's assets or the browser's preload; `name` is already checked.
     fn readBundled(_: *Data, gpa: std.mem.Allocator, name: []const u8) ![:0]u8 {
-        var key: [eggy.assets.id.key_len]u8 = undefined;
-        const canonical = eggy.assets.id.key(&key, try eggy.assets.id.parse(name));
         var path_buffer: [128]u8 = undefined;
-        const path = try std.fmt.bufPrintSentinel(&path_buffer, "data/{s}", .{canonical}, 0);
+        const path = try std.fmt.bufPrintSentinel(&path_buffer, "data/{s}", .{name}, 0);
         // SDL reads Android's AssetManager or Emscripten's preloaded filesystem.
         const stream = sdl3.c.SDL_IOFromFile(path, "rb") orelse return error.AssetNotFound;
         defer _ = sdl3.c.SDL_CloseIO(stream);
