@@ -16,6 +16,7 @@ const game_plugins = @import("src/build/game_plugins.zig");
 const mingw_fortify = @import("src/build/mingw_fortify.zig");
 const builtin_plugins = @import("src/build/builtin_plugins.zig");
 const audio_build = @import("src/build/audio.zig");
+const buzz_build = @import("src/build/buzz.zig");
 
 /// Configure Eggy's own runtime/editor, tests, package resources and API-reference steps.
 /// Zig owns `b` and invokes this once per build-graph evaluation; games use `addGame` instead.
@@ -605,6 +606,8 @@ fn addEngine(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.buil
     engine.link_libc = true;
     // Sound: miniaudio decodes, mixes and places voices in 3D; SDL plays the mix.
     engine.linkLibrary(audio_build.addMixer(b, target, optimize, if (web) emscripten.include else null));
+    // The dev console's scripting language (`src/core/dev_console/`).
+    engine.addImport("buzz", buzz_build.module(b, target, optimize));
     // Libraries loaded at runtime, for `installRuntimeLibraries`: Vitellus's (DXC, Slang), and on
     // Windows AccessKit's DLL, which Weeoui links.
     var vitellus_libraries = vitellus.builder.named_lazy_paths.iterator();

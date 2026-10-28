@@ -61,6 +61,18 @@
             .url = "https://github.com/mackron/miniaudio/archive/refs/tags/0.11.25.tar.gz",
             .hash = "N-V-__8AAHNWwAASlNuYbrP1-3UqXdwbYvZ_6nIJhpAcRMfi",
         },
+        .pcre2 = .{
+            .url = "https://github.com/PCRE2Project/pcre2/archive/52c08847921a324c804cabf2814549f50bce1265.tar.gz",
+            .hash = "N-V-__8AAOot0QBw0iKYJID6miFGeAwjJjcwdz6n1PcRxSOt",
+        },
+        .buzz = .{
+            .url = "git+https://github.com/buzz-language/buzz#14731dc9d05abff98de551ed741858f2eaf10683",
+            .hash = "buzz-0.6.0-OoaeWJ2HRgAo7Pr1-Xd_BMNM5uiy74KMN-vrbm1F9ODA",
+        },
+        .mir = .{
+            .url = "https://github.com/vnmakarov/mir/archive/477d820e7b3054980ea1b936ecb2945c0e6465e8.tar.gz",
+            .hash = "N-V-__8AADEDBgMQnKuOdwBaHQ1zE_oloF3b5dMpuIgPXT_T",
+        },
     },
     .paths = .{
         "build.zig",

@@ -17,6 +17,7 @@ const Overlay = @import("game_ui/game_ui.zig").Overlay;
 const render = @import("render_settings.zig");
 const graphics_control = @import("graphics_control.zig");
 const GraphicsSettingsUi = @import("game_ui/graphics_settings.zig").GraphicsSettingsUi;
+const DevConsole = @import("dev_console/dev_console.zig").DevConsole;
 const ui_scenes = @import("ui_scenes/ui_scenes.zig");
 const audio_zig = @import("audio/audio.zig");
 
@@ -55,6 +56,8 @@ pub const App = struct {
     ui_layer: ?*Overlay = null,
     /// The player's graphics menu: F10 opens it, or `graphics_settings_ui.open()` (see `GraphicsSettingsUi`).
     graphics_settings_ui: GraphicsSettingsUi = .{},
+    /// The dev console: ` shows it over the game, or `dev_console.open()` (see `eggy.dev_console`).
+    dev_console: DevConsole = .{},
     /// The mixer and device sound plays through (see `audio`); null only for hosts without one.
     audio_host: ?*audio_zig.Host = null,
     draw2d: @import("draw2d.zig").Draw2d = .{},
@@ -179,6 +182,7 @@ pub const App = struct {
         if (self.resource_jobs) |jobs| jobs.destroy();
         if (self.audio_host) |host| host.destroy();
         self.clearGameUi();
+        self.dev_console.deinit(self.world.allocator);
         self.debug_draw.deinit(self.world.allocator);
         self.draw2d.deinit();
         self.graphics.ui_billboards = null;

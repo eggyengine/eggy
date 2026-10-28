@@ -37,6 +37,8 @@ pub const Plugin = struct {
     pub fn editorPanelUi(self: *Self, panel: usize, editor: *eggy.editor.Context, ui: *eggy.ui.Context) !void { ... }
     pub const editor_commands = [_]eggy.plugins.EditorCommand{.{ .key = "reset", .title = "Reset" }};
     pub fn editorCommand(self: *Self, command: usize, editor: *eggy.editor.Context) !void { ... }
+    pub const console_commands = [_]eggy.dev_console.Command{.{ .name = "god", .help = "Never take damage" }};
+    pub fn consoleCommand(self: *Self, command: usize, app: *eggy.App, call: *eggy.dev_console.Call) !void { ... }
     pub const export_platforms = [_]eggy.plugins.ExportPlatform{.{ .key = "pi", .title = "Raspberry Pi", .target = "aarch64-linux-gnu" }};
     pub fn exportUi(self: *Self, platform: eggy.plugins.ExportTarget, editor: *eggy.editor.Context, ui: *eggy.ui.Context) !void { ... }
     pub fn exportArgs(self: *Self, platform: eggy.plugins.ExportTarget, args: *eggy.plugins.ExportArgs) !void { ... }
@@ -58,6 +60,7 @@ pub const Plugin = struct {
 | `editorBarAction` | Presses an entry declared in `editor_menus` or `editor_status_items` |
 | `editorBarState` | Optional. Fills in an entry's label, checkmark and enabled state each frame |
 | `editorCommand` | Invokes a declared View-menu command. `command` is the zero-based index in this type's `editor_commands`. |
+| `consoleCommand` | Runs a declared dev console command typed into the console. `command` is the zero-based index in this type's `console_commands`. See [Console commands](#console-commands). |
 | `exportUi` | Builds extra settings in File > Export for the platform shown, whichever it is. See [Export platforms](#export-platforms). |
 | `exportArgs` | Adds `zig build export` arguments when an export starts, for whichever platform. |
 | `uiWidget` | Draws one of the type's `ui_widgets` in a UI scene node. See [UI widgets](#ui-widgets). |
@@ -89,6 +92,7 @@ keeps running. See [Diagnose and handle errors](../how-to/handle-errors.md).
 | `pub const Preferences = struct { volume: f32 = 0.8 };` | Defaulted settings read with `app.preferences(Preferences)` |
 | `pub const editor_panels = [_]eggy.plugins.EditorPanel{...};` | Dock-panel metadata paired with `editorPanelUi` |
 | `pub const editor_commands = [_]eggy.plugins.EditorCommand{...};` | View-menu metadata paired with `editorCommand` |
+| `pub const console_commands = [_]eggy.dev_console.Command{...};` | Dev console commands paired with `consoleCommand` |
 | `pub const editor_menus = [_]eggy.plugins.EditorMenu{...};` | Menus on the top bar, or rows added to a built-in menu, paired with `editorBarAction` |
 | `pub const editor_status_items = [_]eggy.plugins.EditorStatusItem{...};` | Buttons and menus on the bottom status bar, paired with `editorBarAction` |
 | `pub const editor_file_types = [_]eggy.plugins.EditorFileType{...};` | Templates in both Assets New menus |
@@ -217,6 +221,49 @@ pub const Plugin = struct {
   the library is rebuilt.
 - The bars hold up to 4096 menus, status items, and rows of each kind. An editor that finds
   more shows none and logs why.
+
+## Console commands
+
+The dev console opens as a bar along the bottom of the game with the ` key (in an exported game and in editor Play), and sits under the editor's Console panel. A line typed there runs Eggy's own commands (`help`, `clear`, `run`, `entities`, `get`, `set`, `timescale`), then the game's and its plugins', and runs anything else as [Buzz](https://buzz-lang.dev) in a session that keeps what earlier lines declared. Tab completes commands, entity names, `Component.field` paths and Buzz names.
+
+To learn Buzz scripting from the start, see [Your first Buzz script](../guides/buzz/first-script.md).
+
+```zig
+pub const Game = struct {
+    lives: u32 = 3,
+
+    pub const console_commands = [_]eggy.dev_console.Command{
+        .{ .name = "lives", .help = "Show or set the lives left", .usage = "[count]" },
+    };
+
+    pub fn consoleCommand(self: *Game, command: usize, app: *eggy.App, call: *eggy.dev_console.Call) !void {
+        _ = app;
+        switch (command) {
+            0 => {
+                if (call.arg(0)) |text| self.lives = try std.fmt.parseInt(u32, text, 10);
+                call.print("lives: {d}", .{self.lives});
+            },
+            else => unreachable,
+        }
+    }
+};
+```
+
+| `Call` | Meaning |
+| --- | --- |
+| `arg(i)` | The `i`th word after the name, or null. Quoted words keep their spaces. |
+| `rest(i)` | The line from the `i`th word on, as it was typed (for ZON with spaces in it) |
+| `print(fmt, args)` | Writes a line of output to the console |
+| `arena` | Freed once the command returns |
+
+- A name is one word, and unique: two plugins can't declare the same one, nor take one of Eggy's. Both are compile errors.
+- An error returned from `consoleCommand` shows in the console as the command's failure.
+- Buzz reaches commands through `run("lives 9")`, which returns whether the command ran.
+- `app.dev_console` opens and closes the console from code (`open`, `close`, `toggle`), and its `toggle_key` changes or turns off the key.
+- `run <path.buzz>` runs a Buzz script file in the same session, so the functions and variables it declares stay for later lines, which makes it a simple way to load mods. Paths start from the working directory: the project's folder in the editor, and the folder the game was started from once built. Tab completes the paths of `.buzz` files there. A script can call `run("...")` for commands, but can't run another script.
+- The Dev console project setting (`.dev_console = false` in `eggy.zon`) turns the ` key off, in Play and the built game.
+- Buzz runs on desktop only. On the web and Android the console runs commands alone.
+- The console isn't sandboxed: a line can do anything the game can.
 
 ## Editor panels
 

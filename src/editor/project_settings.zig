@@ -61,6 +61,8 @@ pub const ProjectSettings = struct {
     /// file has (the last valid choice, while a number field is half typed).
     graphics: eggy.graphics_settings.Form = .{},
     saved_graphics: render_settings.Settings = .{},
+    /// Whether the dev console can show over the game.
+    dev_console: bool = true,
     /// What this machine offers, with the game's window and frame limit choices always shown:
     /// they are for the built game, not the editor's own window.
     caps: render_settings.Capabilities,
@@ -126,6 +128,7 @@ pub const ProjectSettings = struct {
         self.name = config.name;
         self.graphics.load(config.graphics);
         self.saved_graphics = config.graphics;
+        self.dev_console = config.dev_console;
         self.gpa.free(self.written);
         self.written = try self.gpa.dupe(u8, text);
 
@@ -192,6 +195,9 @@ pub const ProjectSettings = struct {
         _ = context.select("##icon", self.icons, &self.icon);
         general.end(context);
         if (self.icon != 0) self.iconPreviews(context);
+        general.begin(context, "Dev console", "Opens a console over the game with `, in Play and the built game.");
+        _ = context.toggle("##dev console", &self.dev_console);
+        general.end(context);
         setting_rows.endGroup(context);
 
         groupHeading(context, "Graphics", "What the game starts with. Players can change these in the game.");
@@ -312,6 +318,7 @@ pub const ProjectSettings = struct {
             .version = self.version.text(),
             .default_scene = if (self.scene == 0) null else self.scenes[self.scene],
             .icon = if (self.icon == 0) null else self.icons[self.icon],
+            .dev_console = self.dev_console,
             .graphics = graphics,
             .metadata = .{ .company = self.company.text(), .description = self.description.text(), .copyright = self.copyright.text(), .extra = extra.items },
         };
@@ -332,29 +339,40 @@ pub const ProjectSettings = struct {
     }
 };
 
-/// The graphics `eggy.zon`'s `text` asks for (the project's defaults), for applying the
-/// config that undo or redo just wrote. Parse and allocation errors propagate.
+/// What of `eggy.zon` the editor puts to use as it changes: the project's graphics defaults,
+/// and whether the dev console can show over the game.
+pub const Applied = struct {
+    graphics: render_settings.Settings,
+    dev_console: bool,
+
+    fn of(config: eggy.project.Config) Applied {
+        return .{ .graphics = config.graphics, .dev_console = config.dev_console };
+    }
+};
+
+/// What `eggy.zon`'s `text` asks for, for applying the config that undo or redo just wrote.
+/// Parse and allocation errors propagate.
 ///
 /// ```zig
-/// _ = try app.setGraphicsDefaults(try graphicsIn(gpa, change.value(direction)));
+/// _ = try app.setGraphicsDefaults((try appliedIn(gpa, change.value(direction))).graphics);
 /// ```
-pub fn graphicsIn(gpa: std.mem.Allocator, text: []const u8) !render_settings.Settings {
+pub fn appliedIn(gpa: std.mem.Allocator, text: []const u8) !Applied {
     var arena_state = std.heap.ArenaAllocator.init(gpa);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
-    return (try eggy.project.parse(arena, try arena.dupeSentinel(u8, text, 0))).graphics;
+    return .of(try eggy.project.parse(arena, try arena.dupeSentinel(u8, text, 0)));
 }
 
-/// The graphics in the `eggy.zon` of the project in `project_dir`, which the editor makes its
-/// defaults as it opens the project. I/O and parse errors propagate.
-pub fn loadGraphics(gpa: std.mem.Allocator, project_dir: []const u8) !render_settings.Settings {
+/// What the `eggy.zon` of the project in `project_dir` asks for, which the editor applies as it
+/// opens the project. I/O and parse errors propagate.
+pub fn loadApplied(gpa: std.mem.Allocator, project_dir: []const u8) !Applied {
     var threaded: std.Io.Threaded = .init_single_threaded;
     const io = threaded.io();
     var project = try std.Io.Dir.cwd().openDir(io, project_dir, .{});
     defer project.close(io);
     var arena_state = std.heap.ArenaAllocator.init(gpa);
     defer arena_state.deinit();
-    return (try eggy.project.load(arena_state.allocator(), io, project)).graphics;
+    return .of(try eggy.project.load(arena_state.allocator(), io, project));
 }
 
 /// One icon preview with its caption under it, or a note where it didn't load.
@@ -509,11 +527,11 @@ test "graphics are saved in eggy.zon, kept by other edits, and read back after u
     const second = (try settings.save()).?;
     defer gpa.free(second.before);
     defer gpa.free(second.after);
-    try std.testing.expectEqual(chosen, try loadGraphics(gpa, dir));
+    try std.testing.expectEqual(chosen, (try loadApplied(gpa, dir)).graphics);
 
     // Undo restores the earlier file, whose graphics the editor then makes the defaults.
-    try std.testing.expectEqual(render_settings.Settings{}, try graphicsIn(gpa, first.before));
-    try std.testing.expectEqual(chosen, try graphicsIn(gpa, second.before));
+    try std.testing.expectEqual(render_settings.Settings{}, (try appliedIn(gpa, first.before)).graphics);
+    try std.testing.expectEqual(chosen, (try appliedIn(gpa, second.before)).graphics);
     try tmp.dir.writeFile(std.testing.io, .{ .sub_path = eggy.project.file_name, .data = first.before });
     try settings.reload();
     try std.testing.expectEqual(render_settings.Settings{}, settings.saved_graphics);
@@ -537,11 +555,11 @@ test "a half typed or invalid number is not written to eggy.zon, and says why" {
     defer gpa.free(change.before);
     defer gpa.free(change.after);
     try std.testing.expect(settings.graphics.message_kind == .failed);
-    try std.testing.expectEqual(render_settings.Settings{}, try loadGraphics(gpa, dir));
+    try std.testing.expectEqual(render_settings.Settings{}, (try loadApplied(gpa, dir)).graphics);
     try std.testing.expect(try settings.save() == null);
 
     // A number half typed keeps the last good choice too.
     try settings.graphics.width.set("12x");
     try std.testing.expect(try settings.save() == null);
-    try std.testing.expectEqual(render_settings.Settings{}, try loadGraphics(gpa, dir));
+    try std.testing.expectEqual(render_settings.Settings{}, (try loadApplied(gpa, dir)).graphics);
 }

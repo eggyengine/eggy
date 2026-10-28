@@ -34,6 +34,11 @@ const commands = blk: {
     for (&list, Plugins.editor_commands) |*command, source| command.* = .{ .key = source.key.ptr, .title = source.title.ptr };
     break :blk list;
 };
+const console_commands = blk: {
+    var list: [Plugins.console_commands.len]api.ConsoleCommand = undefined;
+    for (&list, Plugins.console_commands) |*command, source| command.* = .{ .name = source.name.ptr, .help = source.help.ptr, .usage = source.usage.ptr };
+    break :blk list;
+};
 const bar_menus = blk: {
     var list: [Plugins.editor_menus.len]api.Menu = undefined;
     for (&list, Plugins.editor_menus) |*menu, source| menu.* = .{ .key = source.key.ptr, .title = source.title.ptr, .extends = if (source.extends) |builtin| @backingInt(builtin) else -1, .item_count = source.items.len };
@@ -157,6 +162,9 @@ const game = api.Game{
     .file_types = &file_types,
     .file_type_count = file_types.len,
     .editor_command = editorCommand,
+    .console_commands = &console_commands,
+    .console_command_count = console_commands.len,
+    .console_command = consoleCommand,
     .menus = &bar_menus,
     .menu_count = bar_menus.len,
     .menu_items = &bar_menu_items,
@@ -357,6 +365,11 @@ fn editorUi(state_ptr: *anyopaque, editor_ptr: *anyopaque, context: *anyopaque) 
 fn editorPanelUi(state_ptr: *anyopaque, panel: usize, editor_ptr: *anyopaque, context: *anyopaque) callconv(.c) void {
     stateOf(state_ptr).plugins.editorPanelUi(panel, @ptrCast(@alignCast(editor_ptr)), @ptrCast(@alignCast(context))) catch |err| return report(.editor_panel_ui, err);
     recovered(.editor_panel_ui);
+}
+
+fn consoleCommand(state_ptr: *anyopaque, command: usize, app_ptr: *anyopaque, call_ptr: *anyopaque) callconv(.c) bool {
+    const commands_through = stateOf(state_ptr).plugins.consoleCommands();
+    return commands_through.run(commands_through.context, command, @ptrCast(@alignCast(app_ptr)), @ptrCast(@alignCast(call_ptr)));
 }
 
 fn editorCommand(state_ptr: *anyopaque, command: usize, editor_ptr: *anyopaque) callconv(.c) void {

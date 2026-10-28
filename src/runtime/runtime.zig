@@ -71,6 +71,7 @@ pub fn Runtime(comptime project: type) type {
             var app = try eggy.App.initForProject(process_init, project.name, project.name, .runtime, graphics_defaults);
             errdefer app.deinit();
             app.storage = try eggy.storage.Storage.init(gpa, process_init.io, project.name);
+            if (@hasDecl(project, "dev_console")) app.dev_console.setEnabled(project.dev_console);
             if (@hasDecl(project, "input_bindings")) try app.input_backend.?.state.readOverrides(project.input_bindings);
             // Model and image files, and scenes, as packaging made them.
             const data: ?*packaged_assets.Data = packaged_assets.Data.open(gpa, process_init.io) catch |err| blk: {
@@ -222,11 +223,12 @@ pub fn Runtime(comptime project: type) type {
                     .frame_slot = self.app.graphics.surface.slot,
                 };
                 try self.plugins.draw(&self.app, draw);
-                if (has_ui or self.app.graphics_settings_ui.isOpen()) {
+                if (has_ui or self.app.graphics_settings_ui.isOpen() or self.app.dev_console.isOpen()) {
                     const layer = try self.app.gameUi();
                     layer.begin(draw, ui_time_ms);
                     if (has_ui) try self.plugins.gameUi(&self.app, &layer.context);
                     self.app.graphics_settings_ui.draw(&self.app, &layer.context);
+                    eggy.dev_console.overlay.draw(&self.app.dev_console, &self.app, self.plugins.consoleCommands(), &layer.context);
                     if (try layer.render(draw)) self.app.input.cancel();
                     try layer.syncClipboard();
                     const window = self.app.window.window;
@@ -262,6 +264,7 @@ pub fn Runtime(comptime project: type) type {
             const lifecycle = try self.app.event(curr_event);
             if (lifecycle != .run) return lifecycle;
             if (eggy.game_ui.syntheticTouchMouse(curr_event)) return .run;
+            if (eggy.dev_console.overlay.event(&self.app.dev_console, &self.app, curr_event, false)) return .run;
             if (self.app.graphics_settings_ui.event(&self.app, curr_event)) return .run;
             const width, const height = try self.app.window.window.getSize();
             self.app.input.viewport_points = .{ @floatFromInt(width), @floatFromInt(height) };

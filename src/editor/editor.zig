@@ -28,6 +28,7 @@ const PlayCameraPrompt = @import("play_camera_prompt.zig").PlayCameraPrompt;
 const window_placement = @import("window_placement.zig");
 const source_stamp = @import("projects/source_stamp.zig");
 const Console = @import("console.zig").Console;
+const CommandLine = @import("console.zig").CommandLine;
 const panels = @import("panels.zig");
 
 /// `std.Options.logFn` for editor executables: keeps every message for the Console panel.
@@ -286,15 +287,18 @@ pub fn Editor(comptime project: type) type {
             var app = try eggy.App.initForProject(process_init, title, project.name, .editor, .{});
             errdefer app.deinit();
             app.storage = try eggy.storage.Storage.init(gpa, process_init.io, project.name);
+            // The dev console's lines show among the Console panel's messages.
+            app.dev_console.log_output = true;
             const opened_project = try openProject(gpa, app.window.window, args);
             errdefer if (opened_project) |opened| freeProject(gpa, opened);
-            // The project's graphics defaults, before anything is drawn.
+            // The project's graphics defaults, before anything is drawn, and its dev console setting.
             if (opened_project) |opened| {
-                const wanted = project_settings_zig.loadGraphics(gpa, opened.dir) catch |err| blk: {
-                    std.log.warn("cannot read the graphics settings from {s}: {t}", .{ eggy.project.file_name, err });
-                    break :blk app.graphics_options.defaults;
+                const wanted = project_settings_zig.loadApplied(gpa, opened.dir) catch |err| blk: {
+                    std.log.warn("cannot read the project's settings from {s}: {t}", .{ eggy.project.file_name, err });
+                    break :blk project_settings_zig.Applied{ .graphics = app.graphics_options.defaults, .dev_console = true };
                 };
-                _ = app.setGraphicsDefaults(wanted) catch |err| std.log.err("cannot use the project's graphics defaults: {t}", .{err});
+                _ = app.setGraphicsDefaults(wanted.graphics) catch |err| std.log.err("cannot use the project's graphics defaults: {t}", .{err});
+                app.dev_console.setEnabled(wanted.dev_console);
             }
             // Every project has its resources and scene folders.
             if (opened_project) |opened| {
@@ -689,7 +693,8 @@ pub fn Editor(comptime project: type) type {
                 switch (index) {
                     panels.inspector_page => self.buildInspector(),
                     panels.console_page => {
-                        if (self.console.build(page_ui, if (self.project) |opened| opened.dir else null)) |source| self.openDiagnostic(source);
+                        const command_line = CommandLine{ .app = &self.app, .commands = if (self.game) |*game| game.consoleCommands() else .none };
+                        if (self.console.build(page_ui, if (self.project) |opened| opened.dir else null, command_line)) |source| self.openDiagnostic(source);
                     },
                     panels.hierarchy_page => {
                         self.entity_editor.buildHierarchy(page_ui, &self.app, self.gamePtr());
@@ -770,6 +775,7 @@ pub fn Editor(comptime project: type) type {
                 }) |change| {
                     self.history.recordProjectSettings(change.before, change.after, self.workspace.time_ms);
                     self.setGraphicsDefaults(settings.saved_graphics);
+                    self.app.dev_console.setEnabled(settings.dev_console);
                     self.refreshProjectIcon();
                 };
             }
@@ -1660,7 +1666,9 @@ pub fn Editor(comptime project: type) type {
                         if (self.plugins_window) |window| window.reloadInstalled();
                         self.rebuildForPlugins();
                     }
-                    self.setGraphicsDefaults(try project_settings_zig.graphicsIn(self.gpa, change.value(direction)));
+                    const applied = try project_settings_zig.appliedIn(self.gpa, change.value(direction));
+                    self.setGraphicsDefaults(applied.graphics);
+                    self.app.dev_console.setEnabled(applied.dev_console);
                     self.refreshProjectIcon();
                 },
                 .plugins => |change| {
@@ -1897,7 +1905,7 @@ pub fn Editor(comptime project: type) type {
                 try self.scene.render(&self.app.graphics, frame.cmd, pixelSize(rect), shown, self.scene_view.view, self.entity_editor.selected, !self.scene_view.throughGameCamera());
                 const game_overlay = self.build_window == null and self.play_mode.playing() and !self.workspace.simulating;
                 const has_screens = self.app.ui_scenes.screen_count != 0;
-                const has_game_overlay = game_overlay and if (self.game) |*game| game.hasDraw() or game.hasGameUi() or has_screens else false;
+                const has_game_overlay = game_overlay and if (self.game) |*game| game.hasDraw() or game.hasGameUi() or has_screens or self.app.dev_console.isOpen() else false;
                 if (has_game_overlay or self.app.debug_draw.line_count != 0 or self.app.debug_draw.label_count != 0) {
                     const logical = self.workspace.placed.scene.?.rect;
                     const draw_context = eggy.DrawContext{
@@ -1911,10 +1919,11 @@ pub fn Editor(comptime project: type) type {
                     };
                     if (has_game_overlay) if (self.game) |*game| {
                         game.draw(&self.app, draw_context);
-                        if (game.hasGameUi() or has_screens) {
+                        if (game.hasGameUi() or has_screens or self.app.dev_console.isOpen()) {
                             const layer = try self.app.gameUi();
                             layer.begin(draw_context, sdl3.timer.getMillisecondsSinceInit());
                             game.gameUi(&self.app, &layer.context);
+                            eggy.dev_console.overlay.draw(&self.app.dev_console, &self.app, game.consoleCommands(), &layer.context);
                             if (try layer.render(draw_context)) self.app.input.cancel();
                             try layer.syncClipboard();
                         }
@@ -3123,6 +3132,8 @@ pub fn Editor(comptime project: type) type {
                 };
                 if (!wanted) continue;
                 // ponytail: only the Inspector is exposed to screen readers; give plugin pages AccessKit too once one adapter can serve several contexts.
+                // Tab completes in the dev console's prompt, rather than moving the focus on.
+                if (index == panels.console_page and input == .key_down and self.app.dev_console.prompt.takeTab(input.key_down.key == .tab, input.key_down.modifiers.shift)) continue;
                 if (index == panels.console_page and self.console.terminal.handle(input)) continue;
                 if (index == panels.asset_preview_page and self.asset_preview.handle(input)) continue;
                 if (index == panels.scene_2d_page and self.scene_2d.handle(curr_event, self.sceneTarget(), self.tileBrushEnv())) continue;

@@ -1,6 +1,7 @@
 //! The Console's clickable terminal lines with level filters and selectable diagnostic details.
 const std = @import("std");
-const ui = @import("eggy").ui;
+const eggy = @import("eggy");
+const ui = eggy.ui;
 const console_log = @import("console_log.zig");
 const terminal_view = @import("terminal_view.zig");
 const diagnostic = @import("diagnostic.zig");
@@ -18,6 +19,15 @@ const chip_padding: f32 = 10;
 const chip_gap: f32 = 6;
 const chip_text_size: f32 = 12;
 const dot_size: f32 = 7;
+/// Room under the messages for the dev console's prompt and the candidates under it.
+const command_line_height: f32 = 32 + 22 + 12;
+
+/// The dev console's prompt under the messages: what it runs on and with. Its output is logged
+/// (`DevConsole.log_output`), so it shows among the messages.
+pub const CommandLine = struct {
+    app: *eggy.App,
+    commands: eggy.dev_console.Commands,
+};
 
 /// A level chip's paint state, for the frame it is drawn in.
 const LevelChip = struct {
@@ -106,25 +116,25 @@ pub const Console = struct {
         self.hidden.deinit(self.gpa);
     }
 
-    /// Draw the panel's page into `context`.
+    /// Draw the panel's page into `context`, with `command_line`'s prompt at the bottom if given.
     /// Call in an active UI frame. `project_dir` enables source links, or null disables them.
     /// A clicked location borrows cached diagnostic text until the next refresh/deinit;
     /// consume it promptly. Failures populate `context.err` and return null.
     ///
     /// ```zig
     /// // Editor panel builder, after context.newFrame:
-    /// if (console.build(context, project_dir)) |source| {
+    /// if (console.build(context, project_dir, null)) |source| {
     ///     std.log.info("open {s}:{d}:{d}", .{ source.path, source.line, source.column });
     /// }
     /// ```
-    pub fn build(self: *Console, context: *ui.Context, project_dir: ?[]const u8) ?diagnostic.Location {
-        return self.buildPage(context, project_dir) catch |err| {
+    pub fn build(self: *Console, context: *ui.Context, project_dir: ?[]const u8, command_line: ?CommandLine) ?diagnostic.Location {
+        return self.buildPage(context, project_dir, command_line) catch |err| {
             context.err = context.err orelse err;
             return null;
         };
     }
 
-    fn buildPage(self: *Console, context: *ui.Context, project_dir: ?[]const u8) !?diagnostic.Location {
+    fn buildPage(self: *Console, context: *ui.Context, project_dir: ?[]const u8, command_line: ?CommandLine) !?diagnostic.Location {
         self.terminal.area = null;
         const arena = context.builder().allocator;
         // Filtering whole entries keeps source context visible even when Info is switched off.
@@ -152,7 +162,7 @@ pub const Console = struct {
         restyle(context, .{ .direction = .row, .gap = 6, .align_items = .center });
 
         // The list takes what the details, dragged to the height wanted, leave of the page.
-        const available = @max(120, context.viewport.h - 114);
+        const available = @max(120, context.viewport.h - 114 - if (command_line != null) command_line_height else 0);
         const detail_height = std.math.clamp(self.detail_height, min_detail_height, @max(min_detail_height, available - 44 - grip_height - min_list_height));
         try self.messageRows(context, if (self.selected != null) @max(min_list_height, available - detail_height - 44 - grip_height) else available);
         var source: ?diagnostic.Location = null;
@@ -177,6 +187,7 @@ pub const Console = struct {
                 if (changed) self.terminal.scroll_rows = self.terminal.content().len;
             }
         }
+        if (command_line) |line| line.app.dev_console.buildPrompt(line.app, line.commands, context, .{});
         return source;
     }
 
@@ -306,39 +317,39 @@ test "console summaries expand, link to project source, hide and restore through
         }
     };
     context.newFrame(viewport);
-    _ = console.build(&context, "/game");
+    _ = console.build(&context, "/game", null);
     _ = try context.render();
     const summary = Find.labelled(context.last_root.?, "error(zig_build): src/root.zig:69:9: error: broken hook").?;
     try std.testing.expectEqual(@as(?bool, false), summary.accessibility.expanded);
     const summary_id = summary.id;
     context.newFrame(viewport);
     context.a11y_clicked = summary_id;
-    _ = console.build(&context, "/game");
+    _ = console.build(&context, "/game", null);
     _ = try context.render();
     try std.testing.expect(console.selected != null);
     try std.testing.expect(std.mem.indexOf(u8, console.terminal.content(), "source context") != null);
     const source_id = Find.labelled(context.last_root.?, "Open src/root.zig:69:9").?.id;
     context.newFrame(viewport);
     context.a11y_clicked = source_id;
-    const source = console.build(&context, "/game").?;
+    const source = console.build(&context, "/game", null).?;
     _ = try context.render();
     try std.testing.expectEqualStrings("src/root.zig", source.path);
     try std.testing.expectEqual(@as(u32, 69), source.line);
     const hide_id = Find.labelled(context.last_root.?, "Hide message").?.id;
     context.newFrame(viewport);
     context.a11y_clicked = hide_id;
-    _ = console.build(&context, "/game");
+    _ = console.build(&context, "/game", null);
     _ = try context.render();
     try std.testing.expect(console.selected == null);
     try std.testing.expectEqual(@as(usize, 1), console.hidden.count());
     context.newFrame(viewport);
-    _ = console.build(&context, "/game");
+    _ = console.build(&context, "/game", null);
     _ = try context.render();
     try std.testing.expectEqual(@as(usize, 0), console.counts.shown);
     const restore_id = Find.labelled(context.last_root.?, "Show 1 hidden").?.id;
     context.newFrame(viewport);
     context.a11y_clicked = restore_id;
-    _ = console.build(&context, "/game");
+    _ = console.build(&context, "/game", null);
     _ = try context.render();
     try std.testing.expectEqual(@as(usize, 1), console.counts.shown);
     try std.testing.expectEqual(@as(usize, 0), console.hidden.count());
@@ -355,7 +366,7 @@ test "dragging the grip above the details makes them taller, and letting go stop
     try console.refresh();
     console.selected = console.shown.entries.items[0].id;
     context.newFrame(viewport);
-    _ = console.build(&context, null);
+    _ = console.build(&context, null, null);
     _ = try context.render();
     const grip = gripId(context.last_root.?).?;
 
@@ -365,11 +376,11 @@ test "dragging the grip above the details makes them taller, and letting go stop
     context.pressed_down = true;
     context.pointer_held = true;
     context.press = .{ .at = context.pointer, .widget = grip };
-    _ = console.build(&context, null);
+    _ = console.build(&context, null, null);
     _ = try context.render();
     context.newFrame(viewport);
     context.pointer.y = 250;
-    _ = console.build(&context, null);
+    _ = console.build(&context, null, null);
     _ = try context.render();
     try std.testing.expectEqual(@as(f32, 270), console.detail_height);
 
@@ -378,7 +389,7 @@ test "dragging the grip above the details makes them taller, and letting go stop
     context.active = 0;
     context.pointer_held = false;
     context.pointer.y = 100;
-    _ = console.build(&context, null);
+    _ = console.build(&context, null, null);
     _ = try context.render();
     try std.testing.expectEqual(@as(f32, 270), console.detail_height);
 }

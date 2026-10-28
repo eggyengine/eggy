@@ -89,6 +89,7 @@ pub const editor = @import("editor_api/editor_api.zig");
 pub const game_ui = @import("game_ui/game_ui.zig");
 pub const DrawContext = game_ui.DrawContext;
 pub const graphics_settings = @import("game_ui/graphics_settings.zig");
+pub const dev_console = @import("dev_console/dev_console.zig");
 pub const setting_rows = @import("game_ui/setting_rows.zig");
 pub const ui_hit_test = @import("ui_hit_test.zig");
 pub const ui_scenes = @import("ui_scenes/ui_scenes.zig");
@@ -96,6 +97,7 @@ pub const UiScreen = ui_scenes.UiScreen;
 pub const UiBillboard = ui_scenes.UiBillboard;
 
 test {
+    _ = dev_console;
     _ = @import("fatal_dialog.zig");
     _ = @import("log/log.zig");
     _ = @import("mobile/mobile.zig");

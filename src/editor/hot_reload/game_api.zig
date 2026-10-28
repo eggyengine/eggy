@@ -7,7 +7,7 @@ const std = @import("std");
 const eggy = @import("eggy");
 
 /// Bumped whenever these types change, so an editor refuses a library built for another.
-pub const version: u32 = 41;
+pub const version: u32 = 42;
 
 /// The library's one exported function: `fn () callconv(.c) *const Game`.
 pub const entry_symbol = "eggy_game";
@@ -25,6 +25,8 @@ pub const Panel = extern struct {
     title: [*:0]const u8,
 };
 pub const Command = extern struct { key: [*:0]const u8, title: [*:0]const u8 };
+/// A dev console command the game or a plugin lists (`eggy.dev_console.Command`).
+pub const ConsoleCommand = extern struct { name: [*:0]const u8, help: [*:0]const u8, usage: [*:0]const u8 };
 
 /// A menu row (`eggy.plugins.EditorMenuItem`). A menu's rows, and a status item's, sit together
 /// in `Game.menu_items` / `Game.status_menu_items`, in declaration order.
@@ -172,6 +174,11 @@ pub const Game = extern struct {
     file_types: [*]const FileType,
     file_type_count: usize,
     editor_command: *const fn (state: *anyopaque, command: usize, editor: *anyopaque) callconv(.c) void,
+    /// The plugins' dev console commands, and running `command` of them on `app` (an `*eggy.App`)
+    /// with `call` (an `*eggy.dev_console.Call`); false when its hook failed, having said why in `call`.
+    console_commands: [*]const ConsoleCommand,
+    console_command_count: usize,
+    console_command: *const fn (state: *anyopaque, command: usize, app: *anyopaque, call: *anyopaque) callconv(.c) bool,
     /// The plugins' menus and status bar entries, whose rows follow in declaration order.
     menus: [*]const Menu,
     menu_count: usize,
