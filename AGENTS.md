@@ -54,6 +54,7 @@ Run `zig fmt` on changed files. `PascalCase` types, `camelCase` functions, four-
 - Name for meaning, with units where ambiguous (`time_ms`). Prefer enums and tagged unions to bool flags. Validate at boundaries.
 - Keep control flow straight: steps in order, guard clauses, `errdefer` visible, no swallowed errors.
 - Give each meaningful block one short comment above it saying why; no narration. Update comments with behaviour.
+- No subheaders: don't break editor panels, docs guides or messages into titled sections or bold run-in labels. Group with spacing and plain sentences; add a heading only when the content is long enough to need navigating.
 
 ## Testing
 
