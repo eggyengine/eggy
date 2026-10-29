@@ -181,6 +181,11 @@ plugin.addImport("noise", noise.module("noise"));
 Don't fetch your own copy of Eggy this way: `addPlugin` already gives the plugin
 `@import("eggy")`, and it must be the game's Eggy.
 
+A library that also works without Eggy can pin its own Vitellus, Weeoui, Clutch or
+Eggenvector. Inside a game, every module the game and its plugins import gets Eggy's copy
+of these in place of its own, whatever version it pinned, so their types are the ones
+Eggy's API uses.
+
 To use another package's published plugin, fetch it and add its module to `.plugins`.
 Replace the example URL and module name with the package you want:
 
@@ -232,6 +237,7 @@ that the window shows before anyone installs it:
 | `dev` | `false` | Leave the plugin out of exported games |
 | `readme` | `"README.md"` | The read-me, relative to this file |
 | `package` | Worked out | Where to fetch the package, as `zig fetch` takes it, inside `repository` |
+| `libraries` | `.{}` | Other modules the package publishes, which games that install the plugin can `@import` by name |
 | `minimum_eggy_version` | None | The oldest Eggy the plugin works with |
 
 People install the plugin by its `eggy.zon`'s raw address, for example

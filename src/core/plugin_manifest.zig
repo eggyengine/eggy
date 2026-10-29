@@ -45,6 +45,9 @@ pub const Manifest = struct {
     package: ?[]const u8 = null,
     /// The oldest Eggy it works with, semver.
     minimum_eggy_version: ?[]const u8 = null,
+    /// Other modules its package publishes, which a game that installs it imports by name
+    /// (`@import("nido")`) without changing its `build.zig`.
+    libraries: []const []const u8 = &.{},
 
     /// `package` for a plugin that ships inside Eggy: games get its module from Eggy itself.
     pub const package_in_eggy = "eggy";
@@ -79,7 +82,8 @@ const File = struct { plugin: Manifest };
 
 /// The manifest in `source` (a plugin's `eggy.zon`), its strings in `arena`. Fails with
 /// `error.NotAPlugin` when `source` has no `.plugin` section, `error.ParseZon` when it isn't ZON,
-/// and `error.InvalidVersion` or `error.InvalidModule` when those fields can't be used.
+/// and `error.InvalidVersion` or `error.InvalidModule` (for `module` or a library) when those
+/// fields can't be used.
 ///
 /// ```zig
 /// const manifest = try plugin_manifest.parse(arena, source);
@@ -96,6 +100,7 @@ pub fn parse(arena: std.mem.Allocator, source: [:0]const u8) !Manifest {
     if (manifest.package) |package| if (!manifest.inEggy() and !packageInRepository(package, manifest.repository)) return error.PackageOutsideRepository;
     if (manifest.minimum_eggy_version) |minimum| _ = std.SemanticVersion.parse(minimum) catch return error.InvalidVersion;
     if (!isIdentifier(manifest.module)) return error.InvalidModule;
+    for (manifest.libraries) |library| if (!isIdentifier(library)) return error.InvalidModule;
     return manifest;
 }
 
@@ -169,6 +174,9 @@ test "a plugin's eggy.zon gives its manifest, around whatever else it holds" {
     const home = ".repository = \"https://github.com/rat/stats\", .fingerprint = 1";
     try std.testing.expectError(error.InvalidVersion, parse(arena.allocator(), ".{ .plugin = .{ .title = \"T\", .module = \"m\", .version = \"one\", " ++ home ++ " } }"));
     try std.testing.expectError(error.InvalidModule, parse(arena.allocator(), ".{ .plugin = .{ .title = \"T\", .module = \"my-plugin\", .version = \"1.0.0\", " ++ home ++ " } }"));
+    try std.testing.expectError(error.InvalidModule, parse(arena.allocator(), ".{ .plugin = .{ .title = \"T\", .module = \"m\", .libraries = .{\"my-lib\"}, .version = \"1.0.0\", " ++ home ++ " } }"));
+    const with_library = try parse(arena.allocator(), ".{ .plugin = .{ .title = \"T\", .module = \"m\", .libraries = .{\"nido\"}, .version = \"1.0.0\", " ++ home ++ " } }");
+    try std.testing.expectEqualStrings("nido", with_library.libraries[0]);
     // A package from somewhere else than the repository it names is refused.
     try std.testing.expectError(error.PackageOutsideRepository, parse(arena.allocator(), ".{ .plugin = .{ .title = \"T\", .module = \"m\", .version = \"1.0.0\", .package = \"git+https://github.com/mallory/stats#v1\", " ++ home ++ " } }"));
 }

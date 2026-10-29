@@ -13,6 +13,7 @@ const sdk_setup = @import("src/build/sdk_setup.zig");
 const android_build = @import("src/build/android.zig");
 const web_build = @import("src/build/web.zig");
 const game_plugins = @import("src/build/game_plugins.zig");
+const shared_libraries = @import("src/build/shared_libraries.zig");
 const mingw_fortify = @import("src/build/mingw_fortify.zig");
 const builtin_plugins = @import("src/build/builtin_plugins.zig");
 const audio_build = @import("src/build/audio.zig");
@@ -226,6 +227,14 @@ fn addProject(b: *std.Build, engine: *std.Build, emscripten: Emscripten, target:
         runtime_modules.append(b.allocator, plugin.module) catch @panic("OOM");
         runtime_keys.append(b.allocator, key) catch @panic("OOM");
     }
+    // The libraries installed plugins' packages offer, for the game to import as they are named,
+    // unless its build.zig already imports something by that name.
+    for (plugins) |plugin| for (plugin.libraries) |library| {
+        if (!options.game.import_table.contains(library.name)) options.game.addImport(library.name, library.module);
+    };
+    // A package that brings its own Vitellus, Weeoui, Clutch or Eggenvector uses Eggy's here.
+    shared_libraries.share(b, eggy, all_modules.items);
+    shared_libraries.share(b, eggy, &.{options.game});
     const project = b.createModule(.{ .root_source_file = b.addWriteFiles().add("eggy_project.zig", projectSource(b, options.name, all_modules.items.len, all_keys.items).items), .target = target, .optimize = optimize });
     project.addImport("game", options.game);
     project.addImport("eggy_asset_ids", prepared.ids);
