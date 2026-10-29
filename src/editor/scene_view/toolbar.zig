@@ -1,20 +1,27 @@
-//! The Scene panel's floating toolbar: icon buttons for the gizmo (Move, Rotate, Scale,
-//! Universal), whether it works in the world's axes or the entity's own, snapping, and looking
-//! through the game's camera. Drag its grip to move it inside the panel; its last button folds it
-//! down to the grip.
+//! The Scene and 2D Scene panels' floating toolbar: icon buttons for the tool (Move, Rotate,
+//! Scale, Universal) and snapping, then in the Scene whether the gizmo works in the world's axes or
+//! the entity's own and looking through the game's camera, and in the 2D Scene the grid and going
+//! back to the origin. Drag its grip to move it inside the panel; its last button folds it down
+//! to the grip.
 const std = @import("std");
 const ui = @import("eggy").ui;
 const L = ui.Layout;
 const gizmo = @import("gizmo.zig");
 
-pub const Button = enum(u32) { grip, move, rotate, scale, universal, space, snap, game_camera, fold };
+pub const Button = enum(u32) { grip, move, rotate, scale, universal, space, snap, game_camera, grid, frame_origin, fold };
+
+/// Which panel a toolbar floats over, which sets its buttons.
+pub const Panel = enum { scene, scene_2d };
 
 /// What the toolbar shows and where.
 pub const State = struct {
+    panel: Panel = .scene,
     tool: gizmo.Tool = .move,
     space: gizmo.Space = .world,
     snapping: bool = false,
     through_game_camera: bool = false,
+    /// The 2D Scene's grid shown.
+    grid: bool = true,
     /// Folded down to its grip and the button that unfolds it.
     folded: bool = false,
     /// Where its top left corner is, from the Scene panel's.
@@ -51,18 +58,34 @@ pub fn describe(button: Button, state: State) []const u8 {
         .move => "Move (W)",
         .rotate => "Rotate (E)",
         .scale => "Scale (R)",
-        .universal => "Move and rotate (T)",
+        .universal => if (state.panel == .scene) "Move and rotate (T)" else "Scale and turn by the corners and knob (T)",
         .space => if (state.space == .world) "World axes (click for the entity's own)" else "The entity's own axes (click for the world's)",
         .snap => if (state.snapping) "Snapping on (Ctrl turns it off while dragging)" else "Snapping off (Ctrl snaps while dragging)",
         .game_camera => if (state.through_game_camera) "Looking through the game's camera" else "Look through the game's camera",
+        .grid => if (state.grid) "Hide the grid" else "Show the grid",
+        .frame_origin => "Back to the origin",
         .fold => if (state.folded) "Show the toolbar" else "Hide the toolbar",
     };
 }
 
-/// The buttons shown: all of them, or folded, just the grip and the one that unfolds.
+/// The buttons shown: the panel's, or folded, just the grip and the one that unfolds.
 fn shown(state: State) []const Button {
     if (state.folded) return &.{ .grip, .fold };
-    return std.enums.values(Button);
+    return switch (state.panel) {
+        .scene => &.{ .grip, .move, .rotate, .scale, .universal, .space, .snap, .game_camera, .fold },
+        .scene_2d => &.{ .grip, .move, .rotate, .scale, .universal, .snap, .grid, .frame_origin, .fold },
+    };
+}
+
+/// The button under `at` on a toolbar whose top left corner is at `corner`, if any.
+pub fn buttonAt(state: State, corner: ui.Vec2, at: ui.Vec2) ?Button {
+    const across = at.x - corner.x - padding_pt;
+    const down = at.y - corner.y - padding_pt;
+    if (across < 0 or down < 0 or down > button_pt) return null;
+    const index: usize = @intFromFloat(across / (button_pt + gap_pt));
+    const buttons = shown(state);
+    if (index >= buttons.len or across - @as(f32, @floatFromInt(index)) * (button_pt + gap_pt) > button_pt) return null;
+    return buttons[index];
 }
 
 /// The toolbar's size, for keeping it inside the panel.
@@ -126,7 +149,8 @@ fn pressed(button: Button, state: State) bool {
         .space => state.space == .local,
         .snap => state.snapping,
         .game_camera => state.through_game_camera,
-        .grip, .fold => false,
+        .grid => state.grid,
+        .grip, .frame_origin, .fold => false,
     };
 }
 
@@ -186,6 +210,23 @@ const Look = struct {
                 // A film camera: a body and a lens.
                 try outlineRect(c, .{ .x = m.x - 8, .y = m.y - 4, .w = 11, .h = 9 }, 1.3, ink);
                 try c.triangle(.{ .{ m.x + 3, m.y }, .{ m.x + 8, m.y - 4 }, .{ m.x + 8, m.y + 4 } }, .{ ink, ink, ink });
+            },
+            .grid => {
+                // A square ruled in thirds.
+                try outlineRect(c, .{ .x = m.x - 7, .y = m.y - 7, .w = 14, .h = 14 }, 1.3, ink);
+                for ([_]f32{ -7.0 / 3.0, 7.0 / 3.0 }) |at| {
+                    try line(c, .{ .x = m.x + at, .y = m.y - 7 }, .{ .x = m.x + at, .y = m.y + 7 }, 1, ink);
+                    try line(c, .{ .x = m.x - 7, .y = m.y + at }, .{ .x = m.x + 7, .y = m.y + at }, 1, ink);
+                }
+            },
+            .frame_origin => {
+                // The origin in a viewfinder: four corner brackets round a dot.
+                for ([_][2]f32{ .{ -1, -1 }, .{ 1, -1 }, .{ 1, 1 }, .{ -1, 1 } }) |d| {
+                    const corner = ui.Vec2{ .x = m.x + d[0] * 7, .y = m.y + d[1] * 7 };
+                    try line(c, corner, .{ .x = corner.x - d[0] * 4, .y = corner.y }, 1.5, ink);
+                    try line(c, corner, .{ .x = corner.x, .y = corner.y - d[1] * 4 }, 1.5, ink);
+                }
+                try dotAt(c, m, 2, .{ ink[0], ink[1], ink[2] });
             },
             .fold => try chevron(c, m, if (self.folded) 1 else -1, ink),
         }
@@ -251,6 +292,19 @@ test "every button is told apart by its id, and other ids are none of them" {
     try std.testing.expectEqual(Button.scale, buttonOf(first_id + 3).?);
     try std.testing.expect(buttonOf(first_id + 40) == null);
     try std.testing.expect(buttonOf(12) == null);
+}
+
+test "the 2D Scene's toolbar has the grid and the origin where the Scene's has its axes and camera" {
+    const flat = State{ .panel = .scene_2d };
+    try std.testing.expectEqual(size(State{}).x, size(flat).x);
+    const corner = ui.Vec2{ .x = 10, .y = 10 };
+    // Seventh button along: past six buttons and their gaps, and the padding.
+    const seventh = ui.Vec2{ .x = 10 + padding_pt + 6 * (button_pt + gap_pt) + 4, .y = 20 };
+    try std.testing.expectEqual(Button.grid, buttonAt(flat, corner, seventh).?);
+    try std.testing.expectEqual(Button.game_camera, buttonAt(.{}, corner, .{ .x = seventh.x + button_pt + gap_pt, .y = 20 }).?);
+    try std.testing.expectEqual(Button.grip, buttonAt(flat, corner, .{ .x = 15, .y = 20 }).?);
+    try std.testing.expect(buttonAt(flat, corner, .{ .x = 15, .y = 50 }) == null);
+    try std.testing.expectEqual(Button.fold, buttonAt(.{ .panel = .scene_2d, .folded = true }, corner, .{ .x = 10 + padding_pt + button_pt + gap_pt + 2, .y = 20 }).?);
 }
 
 test "the toolbar stays inside the panel, folded or not" {

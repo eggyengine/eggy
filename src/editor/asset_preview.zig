@@ -1,8 +1,10 @@
 //! The Asset Preview panel: the file selected in Assets, shown as itself. Images fit the panel
 //! over a checkerboard (GIFs play), UI scenes are drawn as the game draws them, and any file that
 //! reads as text (code, scenes, settings) shows in a terminal view to scroll, select and copy.
-//! Models can be turned and played in a viewer (`model_preview.zig`); sounds and videos show
-//! what they are. It reads the file again when it changes.
+//! Models can be turned and played in a viewer (`model_preview.zig`), sounds played from their
+//! waveform (`sound_preview.zig`); videos show what they are. An image can be cut into a sprite
+//! sheet's grid, numbered as a `SpriteAnimator` numbers its frames. It reads the file again when
+//! it changes.
 const std = @import("std");
 const eggy = @import("eggy");
 const ui = eggy.ui;
@@ -11,6 +13,7 @@ const ProjectAssets = @import("assets/project_assets.zig").ProjectAssets;
 const TerminalView = @import("terminal_view.zig").TerminalView;
 const ModelPreview = @import("model_preview.zig").ModelPreview;
 const ModelRequest = @import("model_preview.zig").Request;
+const SoundPreview = @import("sound_preview.zig").SoundPreview;
 const page_style = @import("page_style.zig");
 
 /// The most of a text file shown.
@@ -24,6 +27,8 @@ const Shown = union(enum) {
     ui_scene: []const u8,
     /// A font, by asset key: a sample of text in it.
     font: []const u8,
+    /// A sound, by asset key: its waveform, to play.
+    sound: []const u8,
     model,
     text,
     /// A file it can't show, described.
@@ -54,6 +59,11 @@ pub const AssetPreview = struct {
     version: u64 = 0,
     /// Where the UI scene's area went in the last frame's layout.
     scene_area: ui.Rect = .{ .x = 0, .y = 0, .w = 0, .h = 0 },
+    sound: SoundPreview = .{},
+    /// The grid an image is cut into, when it is shown as a sprite sheet.
+    sheet: Sheet = .{},
+
+    const Sheet = struct { shown: bool = false, columns: u16 = 1, rows: u16 = 1 };
 
     pub fn init(gpa: std.mem.Allocator, mono: *const ui.Font) AssetPreview {
         return .{ .gpa = gpa, .images = .{ .gpa = gpa }, .text = .init(gpa, mono), .model = .init(gpa) };
@@ -120,6 +130,8 @@ pub const AssetPreview = struct {
         }
         self.refresh(request.project_dir, path);
         const shown = self.kindOf(arena, request.assets, path);
+        // What plays stops once another file shows.
+        if (shown != .sound) self.sound.stop(request.app);
         context.muted(self.details(context, request, shown, path));
         page_style.smallText(context, 12);
 
@@ -129,6 +141,7 @@ pub const AssetPreview = struct {
             .image => |key| self.image(context, request, key, height),
             .ui_scene => |key| self.uiScene(context, request, key, height),
             .font => |key| self.fontSample(context, request, key),
+            .sound => |key| self.sound.build(self.gpa, context, .{ .key = key, .version = self.version, .app = request.app }),
             .model => self.model.build(context, self.modelRequest(request, path, null, height)),
             .text => self.text.add(context, self.contents.items, self.version, height),
             .described => |note| {
@@ -189,7 +202,7 @@ pub const AssetPreview = struct {
         if (kind == .font and key.len > 0) return .{ .font = key };
         if (kind == .folder) return .{ .described = "A folder: open it in Assets to see what it holds." };
         if (kind == .model) return .model;
-        if (kind == .audio) return .{ .described = "A sound. Eggy can't play sounds yet, so it can't be listened to here." };
+        if (kind == .audio and key.len > 0) return .{ .sound = key };
         for (video_extensions) |video| if (std.ascii.eqlIgnoreCase(extension, video)) {
             return .{ .described = "A video. Eggy can't play videos yet, so it can't be watched here." };
         };
@@ -207,6 +220,14 @@ pub const AssetPreview = struct {
         if (shown == .image) if (self.images.get(request.app.resources(), context.font, shown.image)) |loaded| {
             const frames = loaded.frames.len;
             return std.fmt.allocPrint(arena, "{s} image, {d} x {d}{s}, {s}", .{ kind, loaded.width, loaded.height, if (frames > 1) std.fmt.allocPrint(arena, ", {d} frames", .{frames}) catch "" else "", size }) catch size;
+        };
+        if (shown == .sound) if (self.sound.infoOf(self.gpa, .{ .key = shown.sound, .version = self.version, .app = request.app })) |info| {
+            const layout = switch (info.channels) {
+                1 => "mono",
+                2 => "stereo",
+                else => std.fmt.allocPrint(arena, "{d} channels", .{info.channels}) catch "",
+            };
+            return std.fmt.allocPrint(arena, "{s} sound, {d:.1} s, {s}, {d:.1} kHz, {s}", .{ kind, info.duration_s, layout, @as(f32, @floatFromInt(info.sample_rate_hz)) / 1000, size }) catch size;
         };
         if (shown == .text and self.contents.items.len < self.size) return std.fmt.allocPrint(arena, "{s}, {s} (the first {d} KB shown)", .{ kind, size, max_text_bytes / 1024 }) catch size;
         return std.fmt.allocPrint(arena, "{s}, {s}", .{ kind, size }) catch size;
@@ -234,10 +255,21 @@ pub const AssetPreview = struct {
         const w: f32 = @floatFromInt(loaded.width);
         const h: f32 = @floatFromInt(loaded.height);
         // Small images are enlarged to whole multiples, so pixel art stays crisp.
-        var fit = @min(width / w, height / h);
+        // As a sprite sheet: how many frames across and down, numbered over the image.
+        context.begin(.row);
+        _ = context.toggle("Sprite sheet", &self.sheet.shown);
+        if (self.sheet.shown) {
+            stepper(context, "Columns", &self.sheet.columns);
+            stepper(context, "Rows", &self.sheet.rows);
+        }
+        context.end();
+        page_style.restyle(context, .{ .direction = .row, .gap = 8, .align_items = .center });
+
+        var fit = @min(width / w, (height - 40) / h);
         if (fit > 1) fit = @floor(fit);
         const b = context.builder();
-        const picture = b.node(0, .{ .width = w * fit, .height = h * fit }, .{ .image = loaded.frameAt(request.time_ms) }, &.{}) catch return;
+        const grid = b.node(0, .{ .width = w * fit, .height = h * fit }, .{ .custom = .{ .context = &self.sheet, .draw = drawSheetGrid } }, &.{}) catch return;
+        const picture = b.node(0, .{ .width = w * fit, .height = h * fit }, .{ .image = loaded.frameAt(request.time_ms) }, if (self.sheet.shown) &.{grid} else &.{}) catch return;
         picture.accessibility = .{ .role = .image, .label = std.fs.path.basename(self.path.items) };
         const board = b.node(0, .{ .width = w * fit, .height = h * fit }, .{ .custom = .{ .context = context, .draw = drawCheckerboard } }, &.{picture}) catch return;
         context.element(board);
@@ -325,6 +357,34 @@ fn drawCheckerboard(_: *const anyopaque, c: *ui.Canvas, r: ui.Rect) anyerror!voi
             try c.rect(.{ .x = r.x + x, .y = r.y + y, .w = @min(square, r.w - x), .h = @min(square, r.h - y) }, .{ 0.6, 0.6, 0.6 });
         }
     }
+}
+
+/// `label`, then buttons taking one from and adding one to `value` (1 to 256).
+fn stepper(context: *ui.Context, comptime label: []const u8, value: *u16) void {
+    context.muted(std.fmt.allocPrint(context.builder().allocator, label ++ " {d}", .{value.*}) catch label);
+    if (context.buttonVariant("-##less " ++ label, .outline)) value.* = @max(1, value.* - 1);
+    if (context.buttonVariant("+##more " ++ label, .outline)) value.* = @min(256, value.* + 1);
+}
+
+// The sheet's grid over the image, each frame numbered in its top-left corner.
+fn drawSheetGrid(context: *const anyopaque, c: *ui.Canvas, r: ui.Rect) anyerror!void {
+    const sheet: *const AssetPreview.Sheet = @ptrCast(@alignCast(context));
+    const columns: f32 = @floatFromInt(sheet.columns);
+    const rows: f32 = @floatFromInt(sheet.rows);
+    const cell_w = r.w / columns;
+    const cell_h = r.h / rows;
+    for (1..sheet.columns) |i| try c.rectAlpha(.{ .x = r.x + cell_w * @as(f32, @floatFromInt(i)), .y = r.y, .w = 1, .h = r.h }, c.theme.primary, 0.9);
+    for (1..sheet.rows) |i| try c.rectAlpha(.{ .x = r.x, .y = r.y + cell_h * @as(f32, @floatFromInt(i)), .w = r.w, .h = 1 }, c.theme.primary, 0.9);
+    // Numbers only where they fit.
+    if (cell_w < 16 or cell_h < 14) return;
+    var buffer: [8]u8 = undefined;
+    for (0..sheet.rows) |row| for (0..sheet.columns) |column| {
+        const label = std.fmt.bufPrint(&buffer, "{d}", .{row * sheet.columns + column}) catch continue;
+        const x = r.x + cell_w * @as(f32, @floatFromInt(column)) + 2;
+        const y = r.y + cell_h * @as(f32, @floatFromInt(row)) + 1;
+        try c.rectAlpha(.{ .x = x - 1, .y = y, .w = c.font.measure(label, 10) + 3, .h = 12 }, .{ 0, 0, 0 }, 0.55);
+        try c.text(x, y, label, 10, .{ 1, 1, 1 });
+    };
 }
 
 // Keep where the UI scene's placeholder was laid out, for the next frame.

@@ -11,6 +11,7 @@ const ModelCache = @import("model_cache.zig").ModelCache;
 const TextureCache = @import("texture_cache.zig").TextureCache;
 const Sources = @import("mesh_renderer.zig").Sources;
 const MaterialCache = @import("material_cache.zig").MaterialCache;
+const ShaderCache = @import("shader_cache.zig").ShaderCache;
 const render = @import("render_settings.zig");
 const backend_config = @import("graphics_backend.zig");
 
@@ -32,6 +33,10 @@ pub const Graphics = struct {
     /// The images meshes are painted with, likewise; set its `loader`.
     textures: TextureCache,
     materials: MaterialCache,
+    /// Project shaders, for materials' surfaces and post passes; set its `loader`.
+    shaders: ShaderCache,
+    /// Seconds the game has run, which shaders are given; the host sets it each frame.
+    time_s: f32 = 0,
     /// The authored animation clips entities play, shared by every scene drawn; set its `resources`.
     clips: @import("clip_cache.zig").ClipCache,
     lights: @import("lighting.zig").Frame = .{},
@@ -151,6 +156,7 @@ pub const Graphics = struct {
             .models = .init(allocator, device),
             .textures = textures,
             .materials = .{ .gpa = allocator },
+            .shaders = .{ .gpa = allocator, .device = device, .shaderSource = viewport3d.shaderSource },
             .clips = .{ .gpa = allocator },
             .render_settings = settings,
             .cached_caps = caps,
@@ -203,10 +209,10 @@ pub const Graphics = struct {
     /// const asset_sources = graphics.sources();
     /// ```
     pub fn sources(self: *Graphics) Sources {
-        return .{ .models = &self.models, .textures = &self.textures, .materials = &self.materials, .clips = &self.clips, .lights = &self.lights, .stats = &self.stats, .world_draw = self.world_draw, .ui_billboards = self.ui_billboards };
+        return .{ .models = &self.models, .textures = &self.textures, .materials = &self.materials, .clips = &self.clips, .shaders = &self.shaders, .time_s = self.time_s, .lights = &self.lights, .stats = &self.stats, .world_draw = self.world_draw, .ui_billboards = self.ui_billboards };
     }
 
-    /// Forget every model file and image, so each loads again when next drawn: their files may
+    /// Forget every model file, image and shader, so each loads again when next drawn: their files may
     /// have changed. Waits for the GPU to finish with them.
     /// Host-only cache invalidation: invalidates all cached GPU handles and model bounds.
     /// Queue-idle errors are ignored; do not call while recording draws using those assets.
@@ -218,6 +224,7 @@ pub const Graphics = struct {
         self.queue.waitIdle() catch {};
         self.models.forgetAll(&self.textures);
         self.materials.forgetAll();
+        self.shaders.forgetAll();
         self.clips.forgetAll();
         self.textures.forgetAll();
     }
@@ -270,6 +277,7 @@ pub const Graphics = struct {
         self.materials.deinit();
         self.clips.deinit();
         self.preview.deinit();
+        self.shaders.deinit();
         self.textures.deinit();
         if (self.surface_active) self.surface.deinit();
         self.queue.deinit();

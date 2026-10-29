@@ -1,6 +1,6 @@
 //! `Mesh`: the shape an entity is drawn as (built in, or a model file of the project), its
 //! colour, and the image painted on it (a model's own textures, without one). A built-in component, drawn by `mesh_renderer.zig` wherever the entity's `Transform`
-//! puts it. `gather` lists what to draw; it
+//! puts it. `gather` lists what to draw, `Sprite`s among it as quads; it
 //! runs where the component types are known (the runtime, or the editor's game library).
 const std = @import("std");
 const ecs = @import("clutch");
@@ -11,9 +11,13 @@ const AssetRef = @import("refs.zig").AssetRef;
 const assets = @import("eggy_assets");
 const Material = @import("material.zig").Material;
 const Animator = @import("animation.zig").Animator;
+const Sprite = @import("sprite.zig").Sprite;
+const SpriteAnimator = @import("sprite_animator.zig").SpriteAnimator;
+const Tilemap = @import("tilemap.zig").Tilemap;
 
-/// The shapes there are, each about a metre across, centred on the entity.
-pub const Shape = enum(u32) { cube, sphere, plane, cylinder, cone };
+/// The shapes there are, each about a metre across, centred on the entity. A `plane` faces up
+/// (+y); a `quad` faces the front (+z), as sprites do.
+pub const Shape = enum(u32) { cube, sphere, plane, cylinder, cone, quad };
 
 /// What a `Mesh` is: one of the built-in shapes, or a model file of the project.
 pub const Source = union(enum) {
@@ -22,6 +26,7 @@ pub const Source = union(enum) {
     plane,
     cylinder,
     cone,
+    quad,
     model: AssetRef(.model),
 
     /// The built-in `shape`, as a `Mesh`'s shape.
@@ -40,6 +45,7 @@ pub const Source = union(enum) {
 pub const Mesh = struct {
     /// Marks it in the editor (nf-md-cube_outline).
     pub const icon = "\u{f01a7}";
+    pub const category = "Rendering";
     /// Drawn where its `Transform` puts it.
     pub const dependencies = .{Transform};
 
@@ -87,6 +93,11 @@ pub const Drawable = extern struct {
     /// Zero for what only the editor draws (its stand-ins for lights and cameras), which mustn't
     /// throw shadows over the scene.
     casts_shadow: u32 = 1,
+    /// The part of the texture drawn across the shape: left, top, right, bottom.
+    uv_rect: [4]f32 = .{ 0, 0, 1, 1 },
+    /// The material's surface shader's identity key, if any; borrowed like `material_file`.
+    shader_file: ?[*]const u8 = null,
+    shader_file_len: u32 = 0,
 
     /// Reconstruct the source entity ID by value, without checking that it is still alive.
     /// Resolve it only against the world from which this drawable was gathered.
@@ -134,6 +145,16 @@ pub const Drawable = extern struct {
             self.texture_file = &material.texture.buffer;
             self.texture_file_len = material.texture.len;
         }
+        if (material.shader.len != 0) {
+            self.shader_file = &material.shader.buffer;
+            self.shader_file_len = material.shader.len;
+        }
+    }
+
+    /// The surface shader's identity key, or null for Eggy's own surface.
+    pub fn shaderFile(self: Drawable) ?[]const u8 {
+        const file = self.shader_file orelse return null;
+        return file[0..self.shader_file_len];
     }
 };
 
@@ -155,6 +176,18 @@ pub fn gather(world: *ecs.World, out: []Drawable) usize {
         out[count] = drawable(world, view.entity, view.get(*const Mesh)) orelse continue;
         count += 1;
     }
+    var sprites = world.query(.{ *const Sprite, *const Transform });
+    while (sprites.next()) |view| {
+        if (count == out.len) break;
+        out[count] = spriteDrawable(world, view.entity, view.get(*const Sprite)) orelse continue;
+        count += 1;
+    }
+    var tilemaps = world.query(.{ *const Tilemap, *const Transform });
+    while (tilemaps.next()) |view| {
+        if (count == out.len) break;
+        out[count] = tilemapDrawable(world, view.entity, view.get(*const Tilemap)) orelse continue;
+        count += 1;
+    }
     return count;
 }
 
@@ -174,7 +207,59 @@ pub fn gatherAlloc(gpa: std.mem.Allocator, world: *ecs.World) ![]Drawable {
     while (meshes.next()) |view| {
         try result.append(gpa, drawable(world, view.entity, view.get(*const Mesh)) orelse continue);
     }
+    var sprites = world.query(.{ *const Sprite, *const Transform });
+    while (sprites.next()) |view| {
+        try result.append(gpa, spriteDrawable(world, view.entity, view.get(*const Sprite)) orelse continue);
+    }
+    var tilemaps = world.query(.{ *const Tilemap, *const Transform });
+    while (tilemaps.next()) |view| {
+        try result.append(gpa, tilemapDrawable(world, view.entity, view.get(*const Tilemap)) orelse continue);
+    }
     return result.toOwnedSlice(gpa);
+}
+
+/// A tilemap as its map file's model, unlit and painted with its tileset; none without both.
+fn tilemapDrawable(world: *ecs.World, entity: ecs.EntityId, tilemap: *const Tilemap) ?Drawable {
+    if (tilemap.map.len == 0 or tilemap.tileset.len == 0) return null;
+    var world_matrix: [4][4]f32 = undefined;
+    for (&world_matrix, transform_zig.worldMatrix(world, entity).data) |*column, data| column.* = data;
+    return .{
+        .model = tilemap.placed(world_matrix),
+        .color = tilemap.color,
+        .shape = .quad,
+        .entity_id = entity.id,
+        .entity_generation = entity.generation,
+        .model_file = &tilemap.map.buffer,
+        .model_file_len = tilemap.map.len,
+        .texture_file = &tilemap.tileset.buffer,
+        .texture_file_len = tilemap.tileset.len,
+        .material_params = .{ 0, 1, 1, 1 },
+        .emissive_cutoff = .{ 0, 0, 0, tilemap.alpha_cutoff },
+        .casts_shadow = 0,
+    };
+}
+
+/// A sprite as an unlit quad showing its part of its image (its animator's frame, if it has
+/// one, so the editor shows it too); none without an image.
+fn spriteDrawable(world: *ecs.World, entity: ecs.EntityId, sprite: *const Sprite) ?Drawable {
+    if (sprite.image.len == 0) return null;
+    var shown = sprite.*;
+    if (world.get(entity, SpriteAnimator)) |animator| shown.region = animator.region(animator.frame());
+    var world_matrix: [4][4]f32 = undefined;
+    for (&world_matrix, transform_zig.worldMatrix(world, entity).data) |*column, data| column.* = data;
+    return .{
+        .model = shown.placed(world_matrix),
+        .color = shown.color,
+        .shape = .quad,
+        .entity_id = entity.id,
+        .entity_generation = entity.generation,
+        .texture_file = &sprite.image.buffer,
+        .texture_file_len = sprite.image.len,
+        .material_params = .{ 0, 1, 1, 1 },
+        .emissive_cutoff = .{ 0, 0, 0, shown.alpha_cutoff },
+        .casts_shadow = 0,
+        .uv_rect = shown.uvRect(),
+    };
 }
 
 fn drawable(world: *ecs.World, entity: ecs.EntityId, mesh: *const Mesh) ?Drawable {
@@ -239,6 +324,7 @@ pub const Geometry = struct {
                 .cube => try builder.cube(),
                 .sphere => try builder.sphere(),
                 .plane => try builder.quad(.{ 0, 0, 0 }, .{ 0, 1, 0 }, .{ 1, 0, 0 }, .{ 0, 0, -1 }),
+                .quad => try builder.quad(.{ 0, 0, 0 }, .{ 0, 0, 1 }, .{ 1, 0, 0 }, .{ 0, 1, 0 }),
                 .cylinder => try builder.lathe(.{ 0.5, 0.5 }),
                 .cone => try builder.lathe(.{ 0.5, 0 }),
             }

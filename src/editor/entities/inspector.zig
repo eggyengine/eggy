@@ -53,9 +53,14 @@ pub const Details = struct {
     };
     pub const Addable = struct {
         index: usize,
+        /// What the search matches and lists: its name and owner.
         label: []const u8,
+        /// Its name alone, as its category's popout lists it; `label` when empty.
+        name: []const u8 = "",
         /// The component's icon (`eggy.components.Info.icon`), drawn before its label.
         icon: []const u8 = eggy.components.default_icon,
+        /// The category it pops out of before anything is typed.
+        category: []const u8 = "Other",
     };
 };
 
@@ -67,10 +72,17 @@ pub const Action = union(enum) {
 };
 
 const SearchEdit = ui.TextEdit(64);
+/// Add component's search while it is open: whether it has had the keyboard yet, and the
+/// category popped out (its row's id; 0 for none).
+const Search = struct { edit: SearchEdit, focused: bool = false, open_category: u32 = 0 };
 /// The most component types the search lists at once.
 const max_listed = 12;
 /// The listed types' element ids: `pick_id_base` plus their place in the list.
 const pick_id_base: u32 = 0x6D00_0000;
+/// The category rows' ids: `category_id_base` plus their place among the categories.
+const category_id_base: u32 = pick_id_base + 0x1_0000;
+/// The open category's popout.
+const category_popout_id: u32 = category_id_base - 1;
 const NameEdit = ui.TextEdit(eggy.Name.max_len);
 /// The share of the Inspector's width a field's controls take, beside its name, and how narrow
 /// and wide they get.
@@ -90,8 +102,7 @@ pub const EntityInspector = struct {
     folded: std.AutoHashMapUnmanaged(usize, void) = .empty,
     /// The entity the state above is for.
     shown: ?ecs.EntityId = null,
-    /// Add component's search while it is open, and whether it has had the keyboard yet.
-    search: ?struct { edit: SearchEdit, focused: bool = false } = null,
+    search: ?Search = null,
 
     const name_key = std.math.maxInt(u32);
     const search_key = std.math.maxInt(u32) - 1;
@@ -312,8 +323,14 @@ pub const EntityInspector = struct {
             }
         }
 
-        // The types whose name holds what was typed, ignoring case.
+        // Before anything is typed, the types by category; then those whose name holds what was
+        // typed, ignoring case.
         const query = std.mem.trim(u8, search.edit.text(), " ");
+        if (query.len == 0) {
+            const picked = categoryMenu(context, search, addable, width) orelse return null;
+            self.search = null;
+            return picked;
+        }
         var listed: usize = 0;
         var picked: ?usize = null;
         for (addable) |choice| {
@@ -335,6 +352,54 @@ pub const EntityInspector = struct {
             page_style.smallText(context, 12);
         }
         if (picked != null) self.search = null;
+        return picked;
+    }
+
+    /// A row per category of `addable`, in the order their first types come; pointing at or
+    /// pressing one pops its types out beside it. Returns the index of the type picked.
+    fn categoryMenu(context: *ui.Context, search: *Search, addable: []const Details.Addable, width: f32) ?usize {
+        const b = context.builder();
+        const arena = b.allocator;
+        var categories: std.ArrayList([]const u8) = .empty;
+        for (addable) |choice| {
+            for (categories.items) |known| {
+                if (std.mem.eql(u8, known, choice.category)) break;
+            } else categories.append(arena, choice.category) catch return null;
+        }
+
+        // While the pointer is on the popout, the category under it (where the popout flips
+        // back over the rows) doesn't take over.
+        const on_popout = if (context.last_bounds.get(category_popout_id)) |popout| popout.rect.contains(context.pointer.x, context.pointer.y) else false;
+        var picked: ?usize = null;
+        for (categories.items, 0..) |category, c| {
+            const id = category_id_base + @as(u32, @intCast(c));
+            const pointed = if (context.last_bounds.get(id)) |row| row.rect.contains(context.pointer.x, context.pointer.y) else false;
+            if ((pointed and !on_popout) or context.activated(id)) search.open_category = id;
+            const open = search.open_category == id;
+            const label = page_style.fitText(arena, context.font, category, 13, width - 48);
+            const row = b.node(id, .{ .height = 24 }, .{ .menu_item = .{ .label = label, .submenu = true, .hot = open } }, &.{}) catch return null;
+            row.cursor = .pointer;
+            row.accessibility = .{ .role = .menu_item, .label = category, .expanded = open };
+            if (!open) {
+                context.element(row);
+                continue;
+            }
+
+            // Its types, each with its icon, beside the row.
+            const popout_width = @min(240, width);
+            var items: std.ArrayList(ui.widgets.MenuItem) = .empty;
+            for (addable, 0..) |choice, i| if (std.mem.eql(u8, choice.category, category)) {
+                const pick = pick_id_base + @as(u32, @intCast(i));
+                if (context.activated(pick)) picked = choice.index;
+                const name = page_style.fitText(arena, context.font, if (choice.name.len > 0) choice.name else choice.label, 14, popout_width - 64);
+                const iconed = std.fmt.allocPrint(arena, "{s}  {s}", .{ choice.icon, name }) catch return null;
+                items.append(arena, .{ .id = pick, .label = iconed }) catch return null;
+            };
+            const popout = ui.widgets.menuItems(b, items.items, 0, 0) catch return null;
+            popout.id = category_popout_id;
+            popout.style.width = popout_width;
+            context.element(b.node(0, .{}, .none, &.{ row, ui.widgets.anchorTo(popout, row, .right, 150) }) catch return null);
+        }
         return picked;
     }
 };
@@ -484,6 +549,52 @@ test "the component search lists only the types that match, ignoring case" {
     // One row, the component's icon (the default here) before its name.
     try std.testing.expectEqual(@as(usize, 1), labels.items.len);
     try std.testing.expectEqualStrings(eggy.components.default_icon ++ "  Orbit", labels.items[0]);
+}
+
+test "before anything is typed, components pop out of their categories" {
+    var context = try ui.Context.init(std.testing.allocator);
+    defer context.deinit();
+    var inspector = EntityInspector.init(std.testing.allocator);
+    defer inspector.deinit();
+    const details = Details{ .entity = .init(1, 0), .name = "", .components = &.{}, .addable = &.{
+        .{ .index = 0, .label = "Camera (eggy)", .name = "Camera", .category = "Rendering" },
+        .{ .index = 1, .label = "Orbit (game)", .name = "Orbit", .category = "Game" },
+        .{ .index = 2, .label = "Mesh (eggy)", .name = "Mesh", .category = "Rendering" },
+    } };
+    inspector.shown = details.entity;
+    inspector.search = .{ .edit = try SearchEdit.init(""), .focused = true };
+    const viewport = ui.Rect{ .x = 0, .y = 0, .w = 220, .h = 400 };
+    var labels: std.ArrayList([]const u8) = .empty;
+    defer labels.deinit(std.testing.allocator);
+
+    // A row per category, in the order their first types come, and nothing popped out.
+    context.newFrame(viewport);
+    _ = inspector.build(&context, details);
+    _ = try context.render();
+    try collectMenuItems(context.last_root.?, &labels);
+    try std.testing.expectEqual(@as(usize, 2), labels.items.len);
+    try std.testing.expectEqualStrings("Rendering", labels.items[0]);
+    try std.testing.expectEqualStrings("Game", labels.items[1]);
+
+    // Pointing at Rendering pops out its two types, by name, inside the narrow Inspector.
+    context.handle(.{ .pointer_move = context.last_bounds.get(category_id_base).?.rect.center() });
+    context.newFrame(viewport);
+    _ = inspector.build(&context, details);
+    _ = try context.render();
+    try ui_checks.expectFits(context.last_root.?, context.font, viewport);
+    labels.clearRetainingCapacity();
+    try collectMenuItems(context.last_root.?, &labels);
+    try std.testing.expectEqual(@as(usize, 4), labels.items.len);
+    try std.testing.expectEqualStrings(eggy.components.default_icon ++ "  Mesh", labels.items[2]);
+
+    // Pressing Mesh adds it and closes the search.
+    const mesh = context.last_bounds.get(pick_id_base + 2).?.rect.center();
+    context.handle(.{ .pointer_move = mesh });
+    context.handle(.{ .pointer_down = .{ .position = mesh, .button = .left, .clicks = 1 } });
+    context.handle(.{ .pointer_up = .{ .position = mesh, .button = .left } });
+    context.newFrame(viewport);
+    try std.testing.expectEqual(@as(usize, 2), inspector.build(&context, details).?.add_component);
+    try std.testing.expect(inspector.search == null);
 }
 
 fn collectMenuItems(element: *const ui.Layout.Element, labels: *std.ArrayList([]const u8)) !void {

@@ -17,7 +17,9 @@ const Overlay = @import("game_ui/game_ui.zig").Overlay;
 const render = @import("render_settings.zig");
 const graphics_control = @import("graphics_control.zig");
 const GraphicsSettingsUi = @import("game_ui/graphics_settings.zig").GraphicsSettingsUi;
+const DevConsole = @import("dev_console/dev_console.zig").DevConsole;
 const ui_scenes = @import("ui_scenes/ui_scenes.zig");
+const audio_zig = @import("audio/audio.zig");
 
 const web = builtin.os.tag == .emscripten;
 const android = builtin.abi.isAndroid();
@@ -54,7 +56,10 @@ pub const App = struct {
     ui_layer: ?*Overlay = null,
     /// The player's graphics menu: F10 opens it, or `graphics_settings_ui.open()` (see `GraphicsSettingsUi`).
     graphics_settings_ui: GraphicsSettingsUi = .{},
-    audio: @import("audio.zig").Audio = .{},
+    /// The dev console: ` shows it over the game, or `dev_console.open()` (see `eggy.dev_console`).
+    dev_console: DevConsole = .{},
+    /// The mixer and device sound plays through (see `audio`); null only for hosts without one.
+    audio_host: ?*audio_zig.Host = null,
     draw2d: @import("draw2d.zig").Draw2d = .{},
     /// UI scenes' caches, what code changed about them and their presses (see `uiScenes`).
     ui_scenes: ui_scenes.State = .{},
@@ -96,6 +101,12 @@ pub const App = struct {
         const init_flags = sdl3.InitFlags{ .video = true, .gamepad = true, .sensor = mobile_zig.is_mobile, .haptic = mobile_zig.is_mobile };
         try sdl3.init(init_flags);
         errdefer sdl3.quit(init_flags);
+        // Sound is optional: without an audio device the game runs, silently.
+        var all_flags = init_flags;
+        if (sdl3.init(.{ .audio = true })) {
+            all_flags.audio = true;
+        } else |_| std.log.warn("no audio, so the game plays silently: {s}", .{sdl3.c.SDL_GetError()});
+        errdefer if (all_flags.audio) sdl3.quit(.{ .audio = true });
         var options = if (config) |value|
             try graphics_control.State.init(gpa, process_init.io, value.project_name, value.scope, value.defaults)
         else
@@ -131,9 +142,11 @@ pub const App = struct {
         errdefer resource_jobs.destroy();
         options.defaults = options.defaults.supportedDefaults(graphics.capabilities());
         options.requested = graphics.render_settings;
+        const audio_host = try audio_zig.Host.create(gpa, all_flags.audio);
+        errdefer audio_host.destroy();
         if (builtin.os.tag == .windows) try window.window.show();
 
-        return .{ .window = window, .process_init = process_init, .init_flags = init_flags, .graphics = graphics, .graphics_options = options, .world = .init(gpa), .preference_values = .init(gpa), .input_backend = input_backend, .input = .{ .backend = input_backend.state.interface() }, .resource_jobs = resource_jobs, .draw2d = .{ .gpa = gpa } };
+        return .{ .window = window, .process_init = process_init, .init_flags = all_flags, .audio_host = audio_host, .graphics = graphics, .graphics_options = options, .world = .init(gpa), .preference_values = .init(gpa), .input_backend = input_backend, .input = .{ .backend = input_backend.state.interface() }, .resource_jobs = resource_jobs, .draw2d = .{ .gpa = gpa } };
     }
 
     /// Queue validated live choices; restart-only selections remain pending until next launch.
@@ -167,7 +180,9 @@ pub const App = struct {
     pub fn deinit(self: *App) void {
         self.stopWorld();
         if (self.resource_jobs) |jobs| jobs.destroy();
+        if (self.audio_host) |host| host.destroy();
         self.clearGameUi();
+        self.dev_console.deinit(self.world.allocator);
         self.debug_draw.deinit(self.world.allocator);
         self.draw2d.deinit();
         self.graphics.ui_billboards = null;
@@ -227,6 +242,16 @@ pub const App = struct {
     /// Borrow animation controls for the current world; do not retain across reset/reload.
     pub fn animation(self: *App) @import("animation.zig").Animation {
         return .{ .world = &self.world };
+    }
+
+    /// Borrow sound controls: play sound files, placed in the world or not, and set bus gains.
+    /// Every voice ends when the world resets. Do not retain across reset/reload.
+    ///
+    /// ```zig
+    /// _ = try app.audio().play(.init("resources/sounds/jump.ogg"), .{ .gain = 0.5 });
+    /// ```
+    pub fn audio(self: *App) audio_zig.Audio {
+        return .{ .host = self.audio_host, .resources = self.resources() };
     }
 
     /// Borrow UI scene controls: change what entities' `UiScreen`s and `UiBillboard`s show, and
@@ -352,6 +377,8 @@ pub const App = struct {
     pub fn resetWorld(self: *App) void {
         self.stopWorld();
         if (self.resource_jobs) |jobs| jobs.clear();
+        // Voices the old game made run its code, so they end while it is still loaded.
+        if (self.audio_host) |host| host.clear();
         self.clearGameUi();
         self.debug_draw.deinit(self.world.allocator);
         self.draw2d.deinit();
@@ -411,6 +438,9 @@ pub const App = struct {
         inline for (.{ .PreUpdate, .Update, .PostUpdate }) |stage| try self.world.runStage(stage);
         // Clips play after the game's systems, by the game's (scaled, pause-held) time.
         @import("animation.zig").step(&self.world, &self.graphics.clips, self.time.delta_s);
+        @import("sprite_animator.zig").step(&self.world, self.time.delta_s);
+        // Sound sources and the listener follow where their entities ended up.
+        audio_zig.step(&self.world, self.audio());
         self.world.tick();
         if (self.scene_transition.pending != null) if (self.sceneAccess()) |access| {
             if (try self.scene_transition.apply(&self.world, access, self.sceneInstances())) self.input.cancel();

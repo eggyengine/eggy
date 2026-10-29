@@ -86,8 +86,10 @@ pub const Outcome = union(enum) {
     /// Edit > Undo (Ctrl+Z) and Redo (Ctrl+Shift+Z, Ctrl+Y).
     undo,
     redo,
-    /// File > Open Project Folder: show the project in the system's file manager.
-    open_project_folder,
+    /// File > Open in > File Manager: show the project in the system's file manager.
+    open_in_file_manager,
+    /// File > Open in > IDE: open the project's folder in the code editor people chose.
+    open_in_ide,
     /// File > Upgrade Editor: move the project to the newest Eggy.
     upgrade_editor,
     /// File > Link Developer Eggy (Upgrade Editor with Shift held): link the project to the
@@ -382,7 +384,7 @@ pub const Workspace = struct {
         self.tabs = .init(&self.dock);
         self.live = .{};
         self.followed_root = 0xFF;
-        try self.addScenePreset(0);
+        try self.addScenePreset(.scene, 0);
         try self.dock.add(@backingInt(Panel.asset_preview), @backingInt(Panel.inspector), .center);
         for (self.plugin_panels, 0..) |panel, i| try self.dock.add(panels.pluginId(panel, i), @backingInt(Panel.inspector), .center);
         // The Inspector's tab back in front of those that joined it.
@@ -391,12 +393,15 @@ pub const Workspace = struct {
 
     /// The panels a 3D tab opens with, each its own copy.
     pub const scene_preset = [_]Panel{ .scene, .hierarchy, .inspector, .console, .assets, .animation };
+    /// The panels a 2D tab opens with: the 3D preset around the 2D Scene instead.
+    pub const flat_preset = [_]Panel{ .scene_2d, .hierarchy, .inspector, .console, .assets, .animation };
 
-    /// Lay out a 3D tab around copy `copy` of the Scene: the Hierarchy on its left, the Inspector
-    /// on its right, and the Console, Assets and Animation below it, all copy `copy`. Lands in
-    /// the main window's largest stack, so open and show the tab first.
-    fn addScenePreset(self: *Workspace, copy: u8) !void {
-        const scene = panels.copyId(.scene, copy);
+    /// Lay out a 3D or 2D tab around copy `copy` of `centre` (the Scene or the 2D Scene): the
+    /// Hierarchy on its left, the Inspector on its right, and the Console, Assets and Animation
+    /// below it, all copy `copy`. Lands in the main window's largest stack, so open and show the
+    /// tab first.
+    fn addScenePreset(self: *Workspace, centre: Panel, copy: u8) !void {
+        const scene = panels.copyId(centre, copy);
         const inspector = panels.copyId(.inspector, copy);
         const console = panels.copyId(.console, copy);
         try self.dock.add(scene, null, .center);
@@ -938,7 +943,8 @@ pub const Workspace = struct {
                 .new_project => return .new_project,
                 .open_project => return .open_project,
                 .open_project_linked => return .open_project_linked,
-                .open_project_folder => return .open_project_folder,
+                .open_in_file_manager => return .open_in_file_manager,
+                .open_in_ide => return .open_in_ide,
                 .upgrade_editor => return .upgrade_editor,
                 .link_developer => return .link_developer,
                 .devtools => return .toggle_devtools,
@@ -1051,16 +1057,16 @@ pub const Workspace = struct {
         };
     }
 
-    /// Open a new tab of `kind`, shown, with its own copy of the panels it is for: the 3D preset
-    /// (`addScenePreset`), a 2D Scene, or the UI Designer with its tree on the left and
+    /// Open a new tab of `kind`, shown, with its own copy of the panels it is for: the 3D or 2D
+    /// preset (`addScenePreset`), or the UI Designer with its tree on the left and
     /// properties on the right.
     fn newTab(self: *Workspace, kind: workspace_tabs.Kind) !void {
         switch (kind) {
             .scene_3d => _ = try self.openSceneTab(),
             .scene_2d => {
-                const copy = try self.freeCopy(&.{.scene_2d});
+                const copy = try self.freeCopy(&flat_preset);
                 _ = try self.tabs.open(&self.dock, .scene_2d);
-                try self.dock.add(panels.copyId(.scene_2d, copy), null, .center);
+                try self.addScenePreset(.scene_2d, copy);
             },
             .ui => {
                 const copy = try self.freeCopy(&.{ .ui_designer, .ui_tree, .ui_properties });
@@ -1081,7 +1087,7 @@ pub const Workspace = struct {
     pub fn openSceneTab(self: *Workspace) !u8 {
         const copy = try self.freeCopy(&scene_preset);
         _ = try self.tabs.open(&self.dock, .scene_3d);
-        try self.addScenePreset(copy);
+        try self.addScenePreset(.scene, copy);
         return copy;
     }
 
@@ -1375,21 +1381,26 @@ test "every new tab is a tab of its own, and the copy of its panel in the tab sh
     _ = workspace.run(.{ .command = .new_tab_ui });
     workspace.followShownTab();
     try std.testing.expect(workspace.tabs.isShown(workspace.tabs.ofPanel(&workspace.dock, panels.copyId(.ui_tree, 1)).?));
+    // Each 2D tab has the 3D preset of its own around its 2D Scene, taking the first copy none
+    // of those panels have open: the first 3D tab holds copy 0.
     _ = workspace.run(.{ .command = .new_tab_2d });
     _ = workspace.run(.{ .command = .new_tab_2d });
     workspace.followShownTab();
-    try std.testing.expect(workspace.tabs.isShown(workspace.tabs.ofPanel(&workspace.dock, panels.copyId(.scene_2d, 1)).?));
+    const two_d = workspace.tabs.active.?;
+    for (Workspace.flat_preset) |panel| try std.testing.expectEqual(@as(?usize, two_d), workspace.tabs.ofPanel(&workspace.dock, panels.copyId(panel, 2)));
+    try std.testing.expectEqual(@as(u8, 2), workspace.live.scene_2d);
+    try std.testing.expectEqual(@as(u8, 2), workspace.live.hierarchy);
     _ = workspace.run(.{ .command = .new_tab_3d });
     try std.testing.expectEqual(@as(usize, 6), workspace.tabs.count());
     workspace.followShownTab();
-    try std.testing.expectEqual(@as(u8, 1), workspace.live.scene);
-    try std.testing.expectEqual(@as(u8, 1), workspace.live.scene_2d);
+    try std.testing.expectEqual(@as(u8, 3), workspace.live.scene);
+    try std.testing.expectEqual(@as(u8, 2), workspace.live.scene_2d);
     // The new 3D tab has the 3D preset of its own: the Hierarchy left of its Scene, the Inspector
     // right, and the Console, Assets and Animation below; those copies are the live ones.
     const three_d = workspace.tabs.active.?;
-    for (Workspace.scene_preset) |panel| try std.testing.expectEqual(@as(?usize, three_d), workspace.tabs.ofPanel(&workspace.dock, panels.copyId(panel, 1)));
-    try std.testing.expectEqual(workspace.dock.nodeOf(panels.copyId(.console, 1)).?, workspace.dock.nodeOf(panels.copyId(.assets, 1)).?);
-    try std.testing.expectEqual(@as(u8, 1), workspace.live.inspector);
+    for (Workspace.scene_preset) |panel| try std.testing.expectEqual(@as(?usize, three_d), workspace.tabs.ofPanel(&workspace.dock, panels.copyId(panel, 3)));
+    try std.testing.expectEqual(workspace.dock.nodeOf(panels.copyId(.console, 3)).?, workspace.dock.nodeOf(panels.copyId(.assets, 3)).?);
+    try std.testing.expectEqual(@as(u8, 3), workspace.live.inspector);
     try std.testing.expectEqual(@as(u8, 1), workspace.live.ui);
     // Back on the first tab, its Scene is the live one again.
     workspace.tabs.show(&workspace.dock, 0);

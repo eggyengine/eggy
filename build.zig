@@ -6,6 +6,7 @@ const models = @import("src/build/models.zig");
 const game_export = @import("src/build/export.zig");
 const build_runner = @import("src/build/runner.zig");
 const game_resources = @import("src/build/resources.zig");
+const game_shaders = @import("src/build/shaders.zig");
 const game_metadata = @import("src/build/metadata.zig");
 const sdl_build = @import("src/build/sdl.zig");
 const sdk_setup = @import("src/build/sdk_setup.zig");
@@ -14,6 +15,8 @@ const web_build = @import("src/build/web.zig");
 const game_plugins = @import("src/build/game_plugins.zig");
 const mingw_fortify = @import("src/build/mingw_fortify.zig");
 const builtin_plugins = @import("src/build/builtin_plugins.zig");
+const audio_build = @import("src/build/audio.zig");
+const buzz_build = @import("src/build/buzz.zig");
 
 /// Configure Eggy's own runtime/editor, tests, package resources and API-reference steps.
 /// Zig owns `b` and invokes this once per build-graph evaluation; games use `addGame` instead.
@@ -202,7 +205,8 @@ fn addProject(b: *std.Build, engine: *std.Build, emscripten: Emscripten, target:
     const runtime = engine.modules.get("eggy_runtime").?;
     const own = b == engine;
     const files = if (own) &.{} else game_resources.entries(b);
-    const prepared = models.prepare(b, engine, target, optimize, files) orelse return null;
+    var prepared = models.prepare(b, engine, target, optimize, files) orelse return null;
+    prepared.directory = game_shaders.addCompiled(b, engine, vitellusDependency(engine, target, optimize, emscripten), target, files, prepared.directory) orelse return null;
 
     // The project module: the game's name and its plugin types, the game first. The editor's
     // game library has every plugin; the runtime leaves dev plugins out when exporting.
@@ -442,26 +446,36 @@ const Engine = struct {
     plugins: []const *std.Build.Module,
 };
 
-/// Publish Eggy's modules (`eggy`, `eggy_runtime`, and `eggy_editor` on desktop) and the runtime
-/// libraries games install beside their executables. Null until Slang has been fetched.
-fn addEngine(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builtin.Optimize, emscripten: Emscripten) ?Engine {
-    // The web build renders with WebGPU, takes WGSL, and is linked by emcc instead of Zig.
-    const web = target.result.os.tag == .emscripten;
+/// Slang's prebuilt library, which compiles shaders at run time, is glibc-only on Linux.
+fn slangAtRunTime(target: std.Build.ResolvedTarget) bool {
+    return !target.result.abi.isAndroid() and (target.result.os.tag != .linux or target.result.abi.isGnu());
+}
+
+/// Vitellus as Eggy builds with it for `target`; `engine` is Eggy's own builder. The same
+/// arguments give the same dependency, for `addEngine` and a game's shaders alike.
+fn vitellusDependency(engine: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builtin.Optimize, emscripten: Emscripten) *std.Build.Dependency {
     // On Windows DirectX 12 comes first, running the SPIR-V shaders through SPIRV-Cross and DXC.
     const windows = target.result.os.tag == .windows;
-    const android = target.result.abi.isAndroid();
-    // Slang's prebuilt library, which compiles shaders at run time, is glibc-only on Linux.
-    const slang = !android and (target.result.os.tag != .linux or target.result.abi.isGnu());
-    const vitellus = b.dependency("vitellus", .{
+    return engine.dependency("vitellus", .{
         .target = target,
         .optimize = optimize,
         .dx12 = true,
         .enable_dxc = windows,
         .enable_spirv_cross = windows,
-        .vk = !web,
+        .vk = target.result.os.tag != .emscripten,
         .emsdk = emscripten.emsdk,
-        .enable_slang = slang,
+        .enable_slang = slangAtRunTime(target),
     });
+}
+
+/// Publish Eggy's modules (`eggy`, `eggy_runtime`, and `eggy_editor` on desktop) and the runtime
+/// libraries games install beside their executables. Null until Slang has been fetched.
+fn addEngine(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builtin.Optimize, emscripten: Emscripten) ?Engine {
+    // The web build renders with WebGPU, takes WGSL, and is linked by emcc instead of Zig.
+    const web = target.result.os.tag == .emscripten;
+    const android = target.result.abi.isAndroid();
+    const slang = slangAtRunTime(target);
+    const vitellus = vitellusDependency(b, target, optimize, emscripten);
 
     // Built-in shaders: WGSL on the web, SPIR-V elsewhere.
     const viewport_shader = b.path("src/core/shaders/viewport3d.slang");
@@ -483,9 +497,12 @@ fn addEngine(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.buil
     const world_shader = b.path("src/core/shaders/world_draw.slang");
     const world_vertex = vitellus_build.compileSlang(b, vitellus, target, world_shader, "vertexMain", .vertex) orelse return null;
     const world_fragment = vitellus_build.compileSlang(b, vitellus, target, world_shader, "fragmentMain", .fragment) orelse return null;
-    const resolve_shader = b.path("src/core/shaders/scene_resolve.slang");
-    const resolve_vertex = vitellus_build.compileSlang(b, vitellus, target, resolve_shader, "vertexMain", .vertex) orelse return null;
-    const resolve_fragment = vitellus_build.compileSlang(b, vitellus, target, resolve_shader, "fragmentMain", .fragment) orelse return null;
+    const post_shader = b.path("src/core/shaders/scene_post.slang");
+    const post_vertex = vitellus_build.compileSlang(b, vitellus, target, post_shader, "vertexMain", .vertex) orelse return null;
+    const post_prefilter = vitellus_build.compileSlang(b, vitellus, target, post_shader, "bloomPrefilter", .fragment) orelse return null;
+    const post_down = vitellus_build.compileSlang(b, vitellus, target, post_shader, "bloomDown", .fragment) orelse return null;
+    const post_up = vitellus_build.compileSlang(b, vitellus, target, post_shader, "bloomUp", .fragment) orelse return null;
+    const post_grade = vitellus_build.compileSlang(b, vitellus, target, post_shader, "gradeMain", .fragment) orelse return null;
     const shader_files = b.addWriteFiles();
     _ = shader_files.addCopyFile(viewport_vertex, "viewport3d.vert");
     _ = shader_files.addCopyFile(viewport_fragment, "viewport3d.frag");
@@ -501,8 +518,11 @@ fn addEngine(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.buil
     _ = shader_files.addCopyFile(grid_fragment, "grid.frag");
     _ = shader_files.addCopyFile(world_vertex, "world.vert");
     _ = shader_files.addCopyFile(world_fragment, "world.frag");
-    _ = shader_files.addCopyFile(resolve_vertex, "scene_resolve.vert");
-    _ = shader_files.addCopyFile(resolve_fragment, "scene_resolve.frag");
+    _ = shader_files.addCopyFile(post_vertex, "scene_post.vert");
+    _ = shader_files.addCopyFile(post_prefilter, "bloom_prefilter.frag");
+    _ = shader_files.addCopyFile(post_down, "bloom_down.frag");
+    _ = shader_files.addCopyFile(post_up, "bloom_up.frag");
+    _ = shader_files.addCopyFile(post_grade, "grade.frag");
     const shader_module = b.createModule(.{
         .root_source_file = shader_files.add("root.zig",
             \\pub const viewport_vertex = @embedFile("viewport3d.vert");
@@ -519,8 +539,11 @@ fn addEngine(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.buil
             \\pub const grid_fragment = @embedFile("grid.frag");
             \\pub const world_vertex = @embedFile("world.vert");
             \\pub const world_fragment = @embedFile("world.frag");
-            \\pub const resolve_vertex = @embedFile("scene_resolve.vert");
-            \\pub const resolve_fragment = @embedFile("scene_resolve.frag");
+            \\pub const post_vertex = @embedFile("scene_post.vert");
+            \\pub const bloom_prefilter = @embedFile("bloom_prefilter.frag");
+            \\pub const bloom_down = @embedFile("bloom_down.frag");
+            \\pub const bloom_up = @embedFile("bloom_up.frag");
+            \\pub const grade_fragment = @embedFile("grade.frag");
             \\
         ),
         .target = target,
@@ -581,6 +604,10 @@ fn addEngine(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.buil
     engine.addImport("sdl3", sdl3.module("sdl3"));
     engine.addImport("vitellus_sdl3", sdl_adapter);
     engine.link_libc = true;
+    // Sound: miniaudio decodes, mixes and places voices in 3D; SDL plays the mix.
+    engine.linkLibrary(audio_build.addMixer(b, target, optimize, if (web) emscripten.include else null));
+    // The dev console's scripting language (`src/core/dev_console/`).
+    engine.addImport("buzz", buzz_build.module(b, target, optimize));
     // Libraries loaded at runtime, for `installRuntimeLibraries`: Vitellus's (DXC, Slang), and on
     // Windows AccessKit's DLL, which Weeoui links.
     var vitellus_libraries = vitellus.builder.named_lazy_paths.iterator();
@@ -588,6 +615,7 @@ fn addEngine(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.buil
         if (std.mem.startsWith(u8, entry.key_ptr.*, runtime_library_prefix)) b.addNamedLazyPath(entry.key_ptr.*, entry.value_ptr.*);
     }
     if (target.result.os.tag == .windows) b.addNamedLazyPath(runtime_library_prefix ++ "bin/accesskit.dll", weeoui.namedLazyPath("accesskit_dll"));
+    if (slang and !web) if (slangGlslang(vitellus, target)) |library| b.addNamedLazyPath(b.fmt("{s}{s}", .{ runtime_library_prefix, library.installed }), library.path);
     switch (target.result.os.tag) {
         .linux => {
             engine.linkSystemLibrary("m", .{});
@@ -771,6 +799,21 @@ fn installEditorLibraries(b: *std.Build, engine: *std.Build) *std.Build.Step {
     }
     b.getInstallStep().dependOn(step);
     return step;
+}
+
+/// Slang's glslang library, which run-time Slang needs to emit SPIR-V (it holds `spirv-opt`), from
+/// the Slang release Vitellus uses, and where it goes beside the app. Null until it is fetched.
+// ponytail: Vitellus installs only slang-compiler; move this into its `addRuntimeLibrary` and drop it here.
+fn slangGlslang(vitellus: *std.Build.Dependency, target: std.Build.ResolvedTarget) ?struct { path: std.Build.LazyPath, installed: []const u8 } {
+    const arm = target.result.cpu.arch == .aarch64;
+    const package, const file, const installed = switch (target.result.os.tag) {
+        .linux => .{ if (arm) "slang_linux_aarch64" else "slang_linux_x86_64", "lib/libslang-glslang-2026.18.2.so", "lib/libslang-glslang-2026.18.2.so" },
+        .macos => .{ if (arm) "slang_macos_aarch64" else "slang_macos_x86_64", "lib/libslang-glslang-2026.18.2.dylib", "lib/libslang-glslang-2026.18.2.dylib" },
+        .windows => .{ if (arm) "slang_windows_aarch64" else "slang_windows_x86_64", "bin/slang-glslang.dll", "bin/slang-glslang.dll" },
+        else => return null,
+    };
+    const slang = vitellus.builder.lazyDependency(package, .{}) orelse return null;
+    return .{ .path = slang.path(file), .installed = installed };
 }
 
 /// Install the shared runtime libraries for either executable and exported games.

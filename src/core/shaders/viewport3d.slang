@@ -1,4 +1,5 @@
-// The scene's backdrop: a gradient over the scene's part of the window, at the far plane.
+// The scene's backdrop: a gradient over the scene's part of the window, drawn first without
+// touching depth, so everything drawn after is in front of it.
 struct VertexInput {
     [[vk::location(0)]] float2 position : POSITION;
     [[vk::location(1)]] float3 color : COLOR0;

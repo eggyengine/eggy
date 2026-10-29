@@ -6,10 +6,8 @@ title: Audio and animation contracts
 
 # Audio and animation contracts
 
-Audio and animation have no playback backends. Their support queries return
-`.not_implemented`; playback, stopping, seeking, gain changes, and blending return
-`error.NotImplemented`. No output device, decoder, animation importer, or skinning
-backend is created.
+Sound plays through miniaudio: see [Play sound and 3D audio](../guides/play-sound.md) for the
+`AudioSource` and `AudioListener` components and `app.audio()`.
 
 ## Asset references
 
@@ -22,47 +20,47 @@ pub const CharacterAssets = struct {
 
 List the component in your plugin's `components` to edit it in the Inspector. The slots
 accept files of the matching kind and scenes store the paths. Setting a slot does not
-load or play the resource.
+load the resource: `app.audio().play(footstep, .{})` reads the sound the first time it plays.
 
-## Audio requests
+## Animation
 
-`app.audio.play(sound, options)` describes a playback request and would return a `Voice`
-only after a backend actually starts it. Options describe linear gain, `.once`/`.loop`,
-an optional world position in metres, and a bus. Listener placement is explicit rather
-than inferred from a global camera.
+An entity animates through its `Animator` component, which plays up to two clips together,
+both `AssetRef(.animation)`:
 
-The remaining contract operations are `pause`, `unpause`, `stop`, `setGain`,
-`setBusGain`, and `setListener`. They also fail explicitly today; stopping an unsupported
-voice is not a successful no-op. Do not construct fake handles to make a call look successful.
+- `clip`: an authored `.clip.zon` that moves the entity, its children and its model's
+  nodes. Make and key one in the [Animation panel](../guides/animate-entities.md).
+- `model_clip`: one of a model's own clips (bones, blend shapes or baked frames), which
+  only moves that model. A model's clips show under it in Assets.
 
-Check `eggy.audio.support` when deciding whether to offer sound controls. Disable
-unsupported controls or propagate the failure with context. Do not repeatedly attempt
-playback and log the same unsupported error every frame.
-
-## Animation requests
-
-An `eggy.animation.Clip` names a model and a clip within it:
+`app.animation()` drives it from code. An `eggy.animation.Clip` sets either or both:
 
 ```zig
-const run = eggy.animation.Clip{
-    .model = .init("resources/models/character.glb"),
-    .name = "run",
-};
+const walk = eggy.animation.Clip{ .imported = .init("resources/models/hero.glb/walk") };
+const idle = eggy.animation.Clip{ .imported = .init("resources/models/hero.glb/idle") };
+
+try app.animation().play(hero, walk, .{ .repeat = .loop });
+// Later, fade to idle over a fifth of a second.
+try app.animation().blendTo(hero, idle, 0.2, .{ .repeat = .loop });
 ```
 
-The name is borrowed for a request. `app.animation.play(entity, run, options)` describes
-the target, speed, repeat mode, and start time in seconds. `blendTo` supplies a transition
-duration in seconds; `seek` supplies a time, not an undocumented normalized fraction.
-`pause` and `stop` complete the small playback contract.
+| Call | What it does |
+| --- | --- |
+| `play(entity, clip, options)` | Starts `clip` now, adding an `Animator` if the entity has none. The options are `start_s`, `speed` and `repeat` (`once` or `loop`). |
+| `blendTo(entity, clip, duration_s, options)` | Fades from what plays to `clip` over `duration_s` seconds. |
+| `pause` / `unpause` | Holds the pose, then carries on. |
+| `stop` | Goes back to the first pose and holds it. |
+| `seek(entity, time_s)` | Jumps to a time in seconds. |
+| `setSpeed`, `setRepeat` | Change a playing animation. |
 
-These requests do not change an entity's pose today. Packaged `.eggmodel` data currently
-contains static geometry, parts, and textures, not skeletons or animation clips.
-No controller graphs, retargeting, root motion, or physics integration is implied.
-Check `eggy.animation.support` rather than assuming a model file enables animation.
+`play` and `blendTo` return `error.InvalidClip` for a clip that sets neither field, and
+`error.ModelMismatch` when `clip.model` is set to a model the entity doesn't draw. The others
+return `error.NoAnimator` for an entity without one. Animation follows game time, so a
+paused game holds its pose. Packaged `.eggmodel`s keep their rigs, so imported clips play in
+an exported game too. There are no controller graphs, retargeting or root motion.
 
 ## Component motion
 
-Game code can animate ordinary component values using frame time:
+Game code can also animate ordinary component values using frame time:
 
 ```zig
 pub fn bob(
@@ -81,5 +79,5 @@ pub fn bob(
 
 Call it from `update`. It follows gameplay time and editor Play/pause behavior.
 See [Input and gameplay time](../explanation/input-and-time.md),
-[Render entities and cameras](../how-to/render-scene.md), and the
-[capability support table](feature-support.md#capability-support).
+[Render entities and cameras](../how-to/render-scene.md), and
+[feature support](feature-support.md).

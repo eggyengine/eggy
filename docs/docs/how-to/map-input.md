@@ -17,7 +17,7 @@ open the project in the editor. To work without the editor, use the
 
 ## 1. Create an input-map asset {#create-an-input-map-asset}
 
-In Assets, choose New > Input Map (or right-click a folder and choose the same
+In Assets, choose New > Input > Input Map (or right-click a folder and choose the same
 submenu). Rename the new file to something like `player.inmap.zon`. Double-click it
 to open the Input Map editor.
 

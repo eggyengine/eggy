@@ -18,18 +18,13 @@ no output devices, threads, sessions, files, fake handles, or successful empty r
 
 | App service | Requests |
 | --- | --- |
-| `audio` | play, pause/unpause, stop, voice/bus gain, listener placement |
-| `animation` | play, blend, pause, stop, seek a named model clip |
-| `materials.applyEffect` | postprocessing effects |
 | `particles` | emission and stopping |
 | `network` | connection, listening, messages, polling, disconnection |
 | `navigation` | paths and destinations; no physics or collision access |
 | `localization` | locale selection and translated-text lookup |
 
-`eggy.audio.support` reports support without an App. Components can store sound references;
-`try app.audio.play(sound, .{})` returns `error.NotImplemented`. Animation references do
-not add skeletons or clips to `.eggmodel`. These contracts do not add components to the
-Inspector.
+`eggy.particles.support` and the others report support without an App. These contracts do
+not add components to the Inspector.
 
 Working low-level graphics (`eggy.vit`), UI (`eggy.ui`), math (`eggy.math`), ECS
 (`eggy.ecs`), scene formats, and asset formats remain available directly. SDL controllers,
@@ -53,11 +48,14 @@ stages synchronous scene replacement for the end of the gameplay update.
 | Materials and directional/point scene lights | Implemented; Inspector components and reusable material assets | Shared renderer, up to sixteen lights |
 | [Debug drawing and CPU profiling](../how-to/debug-and-profile.md) | World-space overlays, named samples/counters; DevTools Game tab | Same frame-owned collectors and drawing |
 | [World sprites and text](../how-to/world-drawing.md) | Depth-tested atlas sprites and camera-facing glyphs | Same scene renderer |
+| [Sound and 3D audio](../guides/play-sound.md): `AudioSource`, `AudioListener`, `app.audio()` | WAV, FLAC, MP3 and Ogg Vorbis through miniaudio; buses; Asset Preview playback | Same API |
+| [Animation](audio-and-animation.md#animation): `Animator`, `app.animation()` | Authored `.clip.zon` clips and imported model clips (bones, blend shapes, baked frames), with blending; Animation panel | Same API; packaged models keep their rigs |
+| [Post-processing and shaders](../guides/post-processing-and-shaders.md): `PostProcess`, Slang `.slang` files | HDR rendering, tone mapping, bloom and grading; project post passes and material surface shaders, compiled while the editor runs | Same; shaders compiled when the game is built |
+| [2D](../guides/make-a-2d-game.md): `Sprite`, `SpriteAnimator`, `Tilemap` | 2D Scene panel with handles, sprite-sheet preview and tile painting | Same API |
 | Editor context, panels, commands, actions | Desktop only | Not run or linked |
 | Missing-backend contracts listed above | `NotImplemented` | `NotImplemented` |
 
-See [Audio and animation contracts](audio-and-animation.md) for request syntax and working alternatives
-to those unimplemented playback contracts.
+See [Play sound and 3D audio](../guides/play-sound.md) for sound.
 Browser builds preload packaged resources through Emscripten, then read them synchronously
 through SDL. Keep the generated `.data` file beside the WebAssembly, JavaScript and HTML.
 Android APKs contain the same packaged data and read it through SDL's AssetManager adapter;
@@ -75,6 +73,9 @@ through the Android plugin.
 | Custom cache loader returning `?Model`/`?Texture` | Return an error union; author resource access uses the C-safe bridge |
 | Manually feeding `Input.handle(event)` | `try Input.handle(event)`; device/host failures are explicit |
 | `app.materials.assign(...)`, `app.lighting.setLight(...)` | `app.materials().assign(...)`, `app.lighting().setLight(...)`; borrowed current-world services |
+| `app.audio.play(...)` | `app.audio().play(...)`; buses are now `master`, `music`, `effects`, `dialogue` and `ui` |
+| `app.materials().applyEffect(...)` | Set the `Environment`'s `post`, or a camera's `PostProcess` |
+| `app.animation.play(entity, .{ .model, .name }, ...)` | `app.animation().play(entity, .{ .imported = ... }, ...)`; a clip is an `AssetRef(.animation)`, not a name |
 
 Rebuild the editor and game library together after updating the engine. Their ABI is
 checked, not mixed across revisions. Native World/query APIs, transforms, simple polling,

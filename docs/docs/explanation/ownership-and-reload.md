@@ -27,8 +27,9 @@ object can leave it pointing at an old location.
 
 Store IDs or value references and resolve them again when needed. In the editor an
 entity can be deleted between frames; `app.world.isAlive(entity)` checks a stored ID.
-An `AssetRef` stores an asset path and kind. It does not own loaded bytes or imply
-that an audio or animation backend exists.
+An `AssetRef` stores an asset path and kind. It does not own loaded bytes.
+A `Voice` from `app.audio()` is a handle: every voice ends when the world resets
+(Play, Stop and reload), and calls on an ended voice do nothing.
 
 For concrete lookup and cleanup patterns, use
 [Find entities safely](../how-to/render-scene.md#find-entities-safely) and

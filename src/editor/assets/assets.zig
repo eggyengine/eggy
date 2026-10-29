@@ -2,9 +2,10 @@
 //! of the whole project, folders opening in place; as a grid it is one folder's tiles, with a
 //! path to climb back up. A filter searches every folder by name. A scene (`.scene.zon`) opens
 //! with a double-click, a code or text file opens in the code editor chosen in Preferences, and
-//! any other file (or a model's part) shows in the Asset Preview, in a window of its own. A right-click opens a menu (open, rename,
-//! duplicate, delete, copy path, show in the file manager, and new folders and scenes); F2
-//! renames and Delete deletes the selected entry.
+//! any other file (or a model's part) shows in the Asset Preview, in a window of its own. A right-click opens a menu (open, open in
+//! the IDE, rename, duplicate, delete, copy path, show in the file manager, and new folders and
+//! scenes); F2 renames and Delete deletes the selected entry. The toolbar's Open in IDE opens the
+//! selected file, or the folder shown, in the code editor chosen in Preferences.
 //!
 //! A model file opens, in the list or (double-clicked) in the grid, into what it holds: its
 //! geometry, one entry for each animation clip and one image for each material's texture. Those
@@ -52,7 +53,7 @@ pub const Action = union(enum) {
     copy_path: []const u8,
     /// Show this file or folder in the system's file manager.
     reveal: []const u8,
-    /// Open this code or text file in the code editor people chose.
+    /// Open this file or folder ("" for the project) in the code editor people chose.
     open_code: []const u8,
     /// Show the selected entry (`path`) in the Asset Preview, popped out into a window.
     preview: []const u8,
@@ -65,13 +66,19 @@ pub const Action = union(enum) {
 /// What an event routed to the panel did: whether the panel used it, and the action it led to.
 pub const Handled = struct { used: bool, action: ?Action = null };
 
-const MenuItem = enum(u32) { open, rename, duplicate, delete, copy_path, reveal, extract, new_files };
+const MenuItem = enum(u32) { open, open_in_ide, rename, duplicate, delete, copy_path, reveal, extract, new_files };
 const menu_id_base: u32 = item_id_base - 32;
 const creation_id_base: u32 = 0x6E00_0000;
 const menu_root_id: u32 = menu_id_base - 8;
 const new_root_id: u32 = menu_id_base - 9;
+/// The New menu's open category, beside it.
+const new_submenu_root_id: u32 = menu_id_base - 11;
+/// The New menu's category rows: this plus their place among the categories.
+const new_category_id_base: u32 = creation_id_base + 0x1_0000;
 /// The List and Grid buttons' ids: `view_id_base` plus the view.
 const view_id_base: u32 = menu_id_base - 4;
+/// The toolbar's Open in IDE button.
+const ide_button_id: u32 = menu_id_base - 10;
 /// The zone below the files a drag moves up into.
 const up_zone_id: u32 = view_id_base - 1;
 const NameEdit = ui.TextEdit(128);
@@ -119,7 +126,7 @@ pub const AssetsPanel = struct {
     menu_scroll: L.ScrollState = .{},
     new_menu_scroll: L.ScrollState = .{},
     /// The right-click menu: where, and for which entry (none: the folder shown).
-    menu: ?struct { at: ui.Vec2, entry: ?listing.Entry, new_only: bool = false, new_open: bool = false } = null,
+    menu: ?struct { at: ui.Vec2, entry: ?listing.Entry, new_only: bool = false, new_open: bool = false, new_category: u32 = 0 } = null,
     /// Owns the menu's entry's text.
     menu_arena: std.heap.ArenaAllocator,
     /// The entry being renamed, and its new name as typed.
@@ -413,6 +420,7 @@ pub const AssetsPanel = struct {
         page_style.restyle(context, .{ .grow = 1 });
         for ([_]View{ .list, .grid }) |view| self.viewButton(context, icons, view);
         if (context.buttonVariant("New", .outline)) self.menu = .{ .at = context.pointer, .entry = null, .new_only = true };
+        if (self.ideButton(context, icons)) |target| action = .{ .open_code = target };
         context.end();
         page_style.restyle(context, .{ .direction = .row, .gap = 4, .align_items = .center });
 
@@ -597,6 +605,21 @@ pub const AssetsPanel = struct {
         context.element(element);
     }
 
+    /// The toolbar's Open in IDE: when pressed, the selected file (a model's part has none), else
+    /// the folder shown.
+    fn ideButton(self: *AssetsPanel, context: *ui.Context, icons: *const Icons) ?[]const u8 {
+        const b = context.builder();
+        const id = ide_button_id;
+        const element = b.node(id, .{ .width = 24, .height = 24, .padding = .{ .left = 4, .right = 4, .top = 4, .bottom = 4 } }, highlight(b.allocator, id, false, false), &.{
+            b.node(0, .{ .width = 16, .height = 16 }, icons.paint(.code, context.theme), &.{}) catch return null,
+        }) catch return null;
+        element.cursor = .pointer;
+        element.accessibility = .{ .role = .button, .label = "Open in IDE" };
+        context.element(element);
+        if (!context.activated(id)) return null;
+        return if (self.selected.items.len > 0 and !self.selected_virtual) self.selected.items else self.folder.items;
+    }
+
     /// One tile of the grid: the icon above the name.
     fn tile(self: *AssetsPanel, context: *ui.Context, icons: *const Icons, item: Shown, index: usize, open_scene: ?[]const u8) void {
         const b = context.builder();
@@ -663,12 +686,16 @@ pub const AssetsPanel = struct {
             add(&choices, context, .copy_path, "Copy path");
         } else {
             if (entry.kind == .scene or entry.kind == .input_map or entry.kind == .code or entry.kind == .text or entry.kind == .material or entry.kind == .animation) add(&choices, context, .open, "Open");
+            add(&choices, context, .open_in_ide, "Open in IDE");
             add(&choices, context, .rename, "Rename");
             add(&choices, context, .duplicate, "Duplicate");
             add(&choices, context, .delete, "Delete");
             add(&choices, context, .copy_path, "Copy path");
             add(&choices, context, .reveal, "Show in file manager");
-        } else add(&choices, context, .reveal, "Show in file manager");
+        } else {
+            add(&choices, context, .open_in_ide, "Open in IDE");
+            add(&choices, context, .reveal, "Show in file manager");
+        }
         // New files go in a folder, which a model's part isn't.
         const in_model = if (menu.entry) |entry| entry.virtual else false;
         if (!in_model) choices.append(arena, .{ .id = menu_id_base + @backingInt(MenuItem.new_files), .label = "New", .kind = .submenu }) catch |err| {
@@ -710,6 +737,7 @@ pub const AssetsPanel = struct {
                     .ui => .{ .open_ui_scene = menu.entry.?.path },
                     else => .{ .open_code = menu.entry.?.path },
                 },
+                .open_in_ide => .{ .open_code = if (menu.entry) |entry| entry.path else self.folder.items },
                 .rename => blk: {
                     self.startRename(menu.entry.?.path);
                     break :blk null;
@@ -739,12 +767,19 @@ pub const AssetsPanel = struct {
     }
 
     fn newMenu(self: *AssetsPanel, context: *ui.Context, items: []const ui.widgets.MenuItem, at: ui.Vec2, folder: []const u8) ?Action {
-        const popup = ui.widgets.menuItems(context.builder(), items, 0, 0) catch |err| {
+        const popup = ui.widgets.menuItems(context.builder(), items, 0, self.menu.?.new_category) catch |err| {
             context.err = err;
             return null;
         };
-        // A long list (many plugins' templates) scrolls rather than running off the page.
         const width = @min(200, context.viewport.w);
+        // The open category's panel, named so a press on it is on the menu, and above this one
+        // where it flips back over it near the page's edge.
+        for (popup.children) |child| if (child.overlay != null) {
+            child.id = new_submenu_root_id;
+            child.style.width = width;
+            child.style.z_index = 220;
+        };
+        // A long list (many plugins' categories) scrolls rather than running off the page.
         var content_height: f32 = 8;
         for (items) |item| content_height += switch (item.kind) {
             .separator => 9,
@@ -764,9 +799,18 @@ pub const AssetsPanel = struct {
             .y = @max(context.viewport.y, @min(at.y, context.viewport.y + context.viewport.h - height)),
         } };
         context.element(popup);
-        for (items) |item| if (item.kind == .item and context.activated(item.id)) {
+
+        // A category opens beside its row when pointed at or pressed; Scene and Folder close it.
+        const on_submenu = if (context.last_bounds.get(new_submenu_root_id)) |panel| panel.rect.contains(context.pointer.x, context.pointer.y) else false;
+        if (!on_submenu) for (items) |item| if (item.id != 0) {
+            const bounds = context.last_bounds.get(item.id) orelse continue;
+            if (!bounds.rect.contains(context.pointer.x, context.pointer.y) and !context.activated(item.id)) continue;
+            self.menu.?.new_category = if (item.kind == .submenu) item.id else 0;
+        };
+
+        for (items) |item| for (if (item.kind == .submenu) item.items else (&item)[0..1]) |leaf| if (leaf.kind == .item and context.activated(leaf.id)) {
             self.menu = null;
-            return switch (creation.at(item.id - creation_id_base, self.file_types).?) {
+            return switch (creation.at(leaf.id - creation_id_base, self.file_types).?) {
                 .scene => .{ .create_scene = folder },
                 .folder => .{ .create_folder = folder },
                 .file => |file_type| .{ .create_file = .{ .folder = folder, .file_type = file_type } },
@@ -787,7 +831,7 @@ pub const AssetsPanel = struct {
 
     fn onMenu(self: *const AssetsPanel, context: *const ui.Context, at: ui.Vec2) bool {
         _ = self;
-        for ([_]u32{ menu_root_id, new_root_id }) |id| {
+        for ([_]u32{ menu_root_id, new_root_id, new_submenu_root_id }) |id| {
             if (context.last_bounds.get(id)) |target| if (target.rect.contains(at.x, at.y)) return true;
         }
         return false;
@@ -1006,27 +1050,48 @@ const ui_checks = @import("../ui_checks.zig");
 /// The tallest the New menu grows before it scrolls: about ten rows.
 const new_menu_max_height: f32 = 330;
 
-/// The New menu's rows: Eggy's own, then each plugin's templates under its name. Items' ids are
-/// `creation_id_base` plus their place in `creation`'s catalog. In the frame's arena, as last
-/// frame's hit-test tree must survive a game-library swap.
+/// The New menu's rows: Scene, a submenu per category (Eggy's, then any new ones plugins add,
+/// with a plugin's uncategorised templates under its name), then Folder. Templates' ids are
+/// `creation_id_base` plus their place in `creation`'s catalog, categories'
+/// `new_category_id_base` plus theirs. In the frame's arena, as last frame's hit-test tree must
+/// survive a game-library swap.
 fn newMenuItems(context: *ui.Context, file_types: []const eggy.plugins.EditorFileType) ![]ui.widgets.MenuItem {
     const arena = context.builder().allocator;
-    var items: std.ArrayList(ui.widgets.MenuItem) = .empty;
-    var owner: ?[]const u8 = null;
+    var top: std.ArrayList(ui.widgets.MenuItem) = .empty;
+    var bottom: std.ArrayList(ui.widgets.MenuItem) = .empty;
+    var categories: std.ArrayList([]const u8) = .empty;
+    var groups: std.ArrayList(std.ArrayList(ui.widgets.MenuItem)) = .empty;
     for (0..creation.count(file_types)) |i| {
         const entry = creation.at(i, file_types).?;
-        if (i >= creation.builtin_count) {
-            const from = creation.ownerOf(entry.file);
-            if (owner == null or !std.mem.eql(u8, owner.?, from)) {
-                if (owner == null) try items.append(arena, .{ .kind = .separator });
-                try items.append(arena, .{ .kind = .label, .label = try displayName(arena, from) });
-                owner = from;
-            }
-        }
         const label = page_style.fitText(arena, context.font, entry.label(), 14, @max(0, @min(200, context.viewport.w) - 40));
-        try items.append(arena, .{ .id = creation_id_base + @as(u32, @intCast(i)), .label = try arena.dupe(u8, label) });
+        const item = ui.widgets.MenuItem{ .id = creation_id_base + @as(u32, @intCast(i)), .label = try arena.dupe(u8, label) };
+        const file_type = switch (entry) {
+            .scene => {
+                try top.append(arena, item);
+                continue;
+            },
+            .folder => {
+                try bottom.append(arena, .{ .kind = .separator });
+                try bottom.append(arena, item);
+                continue;
+            },
+            .file => |file_type| file_type,
+        };
+        const category = if (file_type.category.len > 0) file_type.category else try displayName(arena, creation.ownerOf(file_type));
+        const group = for (categories.items, 0..) |known, g| {
+            if (std.mem.eql(u8, known, category)) break g;
+        } else blk: {
+            try categories.append(arena, category);
+            try groups.append(arena, .empty);
+            break :blk groups.items.len - 1;
+        };
+        try groups.items[group].append(arena, item);
     }
-    return items.items;
+    for (categories.items, groups.items, 0..) |category, group, g| {
+        try top.append(arena, .{ .id = new_category_id_base + @as(u32, @intCast(g)), .label = category, .kind = .submenu, .items = group.items });
+    }
+    try top.appendSlice(arena, bottom.items);
+    return top.items;
 }
 
 /// A plugin key as a heading: `my_physics` as "My physics", the game's as "Game".
@@ -1250,6 +1315,12 @@ test "double-clicking a code file asks to open it in the code editor" {
     try std.testing.expectEqualStrings("main.zig", opened.action.?.open_code);
 }
 
+/// The New menu's category row holding template `id`, or 0 for a row of its own.
+fn categoryOf(items: []const ui.widgets.MenuItem, id: u32) u32 {
+    for (items) |item| for (item.items) |leaf| if (leaf.id == id) return item.id;
+    return 0;
+}
+
 test "input maps open their own editor and New menus work inside empty narrow folders" {
     const gpa = std.testing.allocator;
     const io = std.testing.io;
@@ -1276,14 +1347,20 @@ test "input maps open their own editor and New menus work inside empty narrow fo
     panel.view = .grid;
     panel.enter("resources/input");
     panel.file_types = &.{.{ .key = "game/material", .title = "An extraordinarily long material template title", .extension = ".material.zon", .contents = ".{}" }};
-    for ([_]bool{ true, false }) |new_only| for ([_]usize{ 1, creation.count(panel.file_types) - 1 }) |creation_index| {
-        panel.menu = .{ .at = .{ .x = 190, .y = 590 }, .entry = null, .new_only = new_only, .new_open = true };
+    // Scene, an Eggy template (Material, under Rendering) and the plugin's (under Game).
+    for ([_]bool{ true, false }) |new_only| for ([_]usize{ 0, 1, creation.count(panel.file_types) - 1 }) |creation_index| {
+        const id = creation_id_base + @as(u32, @intCast(creation_index));
         const viewport = ui.Rect{ .x = 0, .y = 0, .w = 200, .h = 600 };
+        // Off the menu, so the last press doesn't point at another category.
+        context.handle(.{ .pointer_move = .{ .x = -1, .y = -1 } });
         context.newFrame(viewport);
+        const category = categoryOf(try newMenuItems(&context, panel.file_types), id);
+        try std.testing.expectEqual(creation_index == 0, category == 0);
+        panel.menu = .{ .at = .{ .x = 190, .y = 590 }, .entry = null, .new_only = new_only, .new_open = true, .new_category = category };
         _ = panel.build(&context, dir, null, &icons, null);
         _ = try context.render();
         try ui_checks.expectFits(context.last_root.?, context.font, viewport);
-        const create_at = context.last_bounds.get(creation_id_base + @as(u32, @intCast(creation_index))).?.rect.center();
+        const create_at = context.last_bounds.get(id).?.rect.center();
         const press = ui.input.Event{ .pointer_down = .{ .position = create_at, .button = .left, .clicks = 1 } };
         try std.testing.expect(!panel.pointer(&context, press).used);
         try std.testing.expect(panel.drag == null);
@@ -1291,6 +1368,11 @@ test "input maps open their own editor and New menus work inside empty narrow fo
         context.handle(.{ .pointer_up = .{ .position = create_at, .button = .left } });
         context.newFrame(viewport);
         const action = panel.build(&context, dir, null, &icons, null).?;
+        if (creation_index == 0) {
+            try std.testing.expectEqualStrings("resources/input", action.create_scene);
+            _ = try context.render();
+            continue;
+        }
         try std.testing.expectEqualStrings("resources/input", action.create_file.folder);
         try std.testing.expectEqualStrings(creation.at(creation_index, panel.file_types).?.file.extension, action.create_file.file_type.extension);
         try std.testing.expectEqualStrings(creation.at(creation_index, panel.file_types).?.file.contents, action.create_file.file_type.contents);

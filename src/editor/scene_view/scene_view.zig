@@ -22,6 +22,8 @@ const light_direction = @import("light_direction.zig");
 pub const stand_ins = @import("stand_ins.zig");
 pub const toolbar = @import("toolbar.zig");
 pub const SceneCamera = @import("scene_camera.zig").SceneCamera;
+/// A gamepad stick with its resting wobble removed, shared by both Scene panels.
+pub const deadZone = @import("scene_camera.zig").deadZone;
 
 /// What the dock draws over the Scene panel this frame.
 pub const Overlay = struct {
@@ -317,6 +319,8 @@ pub const SceneView = struct {
             .snap => self.tools.snapping = !self.tools.snapping,
             .game_camera => self.tools.through_game_camera = !self.tools.through_game_camera,
             .fold => self.tools.folded = !self.tools.folded,
+            // The 2D Scene's own; the Scene's toolbar doesn't show them.
+            .grid, .frame_origin => {},
         }
     }
 

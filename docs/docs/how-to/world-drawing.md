@@ -19,7 +19,9 @@ try app.draw2d.worldText("Checkpoint", .{ 2, 2, -3 }, 0.3);
 The sprite's position is its centre. Its default plane is world XY, with Z given by
 `depth_m`; width and height are metres. Set `billboard = true` to face each view's
 camera, or rotate it in its plane with `rotation_deg`. For 2D games, use an
-[orthographic camera](render-scene.md#cameras-and-custom-drawing).
+[orthographic camera](render-scene.md#cameras-and-custom-drawing). These drawings last one
+frame; for sprites placed in a scene and edited in the 2D Scene panel, use the `Sprite`
+component instead ([Make a 2D game](../guides/make-a-2d-game.md)).
 
 ## Atlas regions and ordering
 

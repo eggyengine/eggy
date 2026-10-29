@@ -40,7 +40,9 @@ pub const Command = enum(u32) {
     new_project = first_id + 0x100,
     open_project,
     open_project_linked,
-    open_project_folder,
+    /// File > Open in > File Manager and > IDE: the project's folder in either.
+    open_in_file_manager,
+    open_in_ide,
     upgrade_editor,
     link_developer,
     save,
@@ -63,6 +65,8 @@ pub const Command = enum(u32) {
     new_tab_ui,
     oopsies,
 };
+/// File > Open in: a row whose submenu opens on press or hover, not a command.
+const open_in_row: u32 = first_id + 0x1F0;
 /// Window menu items: `window_item_first` + panel id.
 const window_item_first: u32 = first_id + 0x200;
 /// The "..." menu's rows: `overflow_first` + the folded menu's index in `menu_order`.
@@ -135,13 +139,17 @@ pub const Menubar = struct {
         window_items[window_items.len - 2] = .{ .kind = .separator };
         window_items[window_items.len - 1] = .{ .id = @backingInt(Command.reset_layout), .label = "Reset Layout" };
 
+        const open_in_items = try gpa.dupe(widgets.MenuItem, &.{
+            .{ .id = @backingInt(Command.open_in_file_manager), .label = "File Manager", .disabled = !project.open },
+            .{ .id = @backingInt(Command.open_in_ide), .label = "IDE", .disabled = !project.open },
+        });
         const file_items = try gpa.dupe(widgets.MenuItem, &.{
             .{ .id = @backingInt(Command.new_project), .label = "New Project...", .shortcut = "Ctrl+N" },
             if (project.shift_held)
                 .{ .id = @backingInt(Command.open_project_linked), .label = "Open Project with Developer Eggy...", .disabled = !project.developer_known }
             else
                 .{ .id = @backingInt(Command.open_project), .label = "Open Project...", .shortcut = "Ctrl+O" },
-            .{ .id = @backingInt(Command.open_project_folder), .label = "Open Project Folder", .disabled = !project.open },
+            .{ .id = open_in_row, .label = "Open in", .kind = .submenu, .items = open_in_items, .disabled = !project.open },
             .{ .id = @backingInt(Command.save), .label = "Save", .shortcut = "Ctrl+S" },
             .{ .kind = .separator },
             .{ .id = @backingInt(Command.new_tab), .label = "New Tab...", .shortcut = "Ctrl+T" },
@@ -224,8 +232,8 @@ pub const Menubar = struct {
             return .{ .plugin_bar = found.action };
         };
         if (self.open == 0) return null;
-        // A folded menu's row opens it beside the "..." menu, which stays open.
-        if (self.isOverflowRow(id)) {
+        // A submenu's row (a folded menu's, in the "..." menu) opens it beside, and the menu stays open.
+        if (self.isSubmenuRow(id)) {
             self.open_submenu = id;
             return .handled;
         }
@@ -238,21 +246,21 @@ pub const Menubar = struct {
         return .{ .command = command };
     }
 
-    /// The pointer moved onto element `id`: over a folded menu's row, open that menu beside it.
-    /// Returns whether that changed anything.
-    /// Pass the hit-tested element ID; only an open overflow menu reacts.
+    /// The pointer moved onto element `id`: over a submenu's row (a folded menu's, in the "..."
+    /// menu), open it beside. Returns whether that changed anything.
+    /// Pass the hit-tested element ID; only an open menu reacts.
     ///
     /// ```zig
     /// _ = menubar.hover(hit_id); // Host pointer-motion route.
     /// ```
     pub fn hover(self: *Menubar, id: u32) bool {
-        if (self.open != @backingInt(Menu.more) or !self.isOverflowRow(id) or self.open_submenu == id) return false;
+        if (self.open == 0 or !self.isSubmenuRow(id) or self.open_submenu == id) return false;
         self.open_submenu = id;
         return true;
     }
 
-    fn isOverflowRow(self: *const Menubar, id: u32) bool {
-        return id >= overflow_first and id < overflow_first + self.menu_count;
+    fn isSubmenuRow(self: *const Menubar, id: u32) bool {
+        return id == open_in_row or (id >= overflow_first and id < overflow_first + self.menu_count);
     }
 };
 

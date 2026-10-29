@@ -22,6 +22,18 @@ pub fn open(gpa: std.mem.Allocator, choice: Choice, project_dir: []const u8, fil
     try openPosition(gpa, choice, project_dir, file, null);
 }
 
+/// Open the project in `project_dir` (absolute) as a workspace in `choice`; the system's default
+/// shows the folder in the file manager instead. Fails when the editor isn't on the PATH.
+///
+/// ```zig
+/// try code_editor.openFolder(gpa, .vscode, "/home/me/game");
+/// ```
+pub fn openFolder(gpa: std.mem.Allocator, choice: Choice, project_dir: []const u8) !void {
+    if (choice == .system) return file_manager.showFolder(gpa, project_dir);
+    const program = command(choice) orelse return error.NoCodeEditorCommand;
+    try start(gpa, project_dir, &.{ program, project_dir });
+}
+
 /// Open the one-based source position. The system default opens the file without positioning.
 /// `project_dir` is the workspace/cwd and `file` is absolute; both are borrowed.
 /// Zero line/column returns `InvalidSourcePosition`; allocation/launch failures propagate.

@@ -1,4 +1,5 @@
-//! The 3D scene: a backdrop, and the world's meshes over it (`mesh_renderer.zig`).
+//! The 3D scene: a backdrop, and the world's meshes over it (`mesh_renderer.zig`), rendered in
+//! HDR and post-processed into its target (`scene_post.zig`).
 const std = @import("std");
 const vit = @import("vitellus");
 const ui = @import("weeoui");
@@ -11,7 +12,7 @@ const mesh_renderer = @import("mesh_renderer.zig");
 const MeshRenderer = mesh_renderer.MeshRenderer;
 const Grid = @import("grid.zig").Grid;
 const Settings = @import("render_settings.zig").Settings;
-const Resolve = @import("scene_resolve.zig").Resolve;
+const scene_post = @import("scene_post.zig");
 const billboards = @import("ui_scenes/billboards.zig");
 
 const Vertex = extern struct {
@@ -30,7 +31,8 @@ const vertex_data = backdropVertices();
 
 pub const Preview = struct {
     settings: Settings,
-    resolve: ?Resolve = null,
+    /// The HDR target the scene draws into, and the passes grading it into `draw`'s target.
+    post: scene_post.ScenePost,
     /// The backdrop's two triangles.
     geometry: vit.Buffer,
     /// One per frame in flight, so `draw` never rewrites a transform the GPU is still reading.
@@ -51,7 +53,8 @@ pub const Preview = struct {
     device: vit.Device,
     texture_layout: vit.BindGroupLayout,
 
-    /// The backdrop and meshes for a target in `format` at `extent`, painting with textures
+    /// The backdrop and meshes for a target in `format` at `extent` (graded into it from an HDR
+    /// target of their own), painting with textures
     /// bound as `texture_layout` describes (`TextureCache.layout`).
     /// Host renderer setup: `extent` is the nonzero physical-pixel depth-buffer size.
     /// The device/layout must remain alive; GPU/shader/allocation errors propagate.
@@ -63,6 +66,7 @@ pub const Preview = struct {
     /// ```
     pub fn init(device: vit.Device, format: vit.Format, extent: vit.Extent2D, texture_layout: vit.BindGroupLayout, settings: Settings) !Preview {
         const sample_count = settings.anti_aliasing.samples();
+        const hdr = scene_post.hdr_format;
         const render_extent = renderExtent(extent, settings.render_scale);
         const geometry = try vit.Buffer.init(device, .{
             .label = "scene backdrop",
@@ -111,8 +115,10 @@ pub const Preview = struct {
                 .{ .location = 0, .format = .float32x2, .offset = @offsetOf(Vertex, "position") },
                 .{ .location = 1, .format = .float32x3, .offset = @offsetOf(Vertex, "color") },
             } }},
-            .color_targets = &.{.{ .format = format }},
-            .depth_stencil = .{ .format = .d32_float, .depth_write = true, .depth_compare = .less },
+            .color_targets = &.{.{ .format = hdr }},
+            // The backdrop leaves depth cleared: written at any depth below 1, it would hide what
+            // lies past that depth (0.999 is only 100 m away with a 0.1 m near plane).
+            .depth_stencil = .{ .format = .d32_float, .depth_write = false, .depth_compare = .always },
             .raster = .{ .cull_mode = .none },
             .layout = pipeline_layout,
             .multisample = .{ .count = sample_count },
@@ -122,19 +128,17 @@ pub const Preview = struct {
         errdefer depth.deinit();
         const depth_view = try vit.TextureView.init(device, .{ .texture = depth, .aspect = .depth });
         errdefer depth_view.deinit();
-        var meshes = try MeshRenderer.init(device, format, shaderSource, texture_layout, sample_count, settings.shadow_quality);
+        var meshes = try MeshRenderer.init(device, hdr, shaderSource, texture_layout, sample_count, settings.shadow_quality);
         errdefer meshes.deinit();
-        var grid = try Grid.init(device, format, shaderSource, sample_count);
+        var grid = try Grid.init(device, hdr, shaderSource, sample_count);
         errdefer grid.deinit();
-        var world_draw = try @import("world_draw.zig").Renderer.init(device, format, sample_count, texture_layout, shaderSource);
+        var world_draw = try @import("world_draw.zig").Renderer.init(device, hdr, sample_count, texture_layout, shaderSource);
         errdefer world_draw.deinit();
-        var resolve: ?Resolve = null;
-        errdefer if (resolve) |*made| made.deinit();
-        if (settings.anti_aliasing != .off or settings.render_scale != 1)
-            resolve = try Resolve.init(device, format, render_extent, sample_count, settings.anti_aliasing == .fxaa, shaderSource);
+        var post = try scene_post.ScenePost.init(device, format, render_extent, sample_count, settings.anti_aliasing == .fxaa, shaderSource);
+        errdefer post.deinit();
         return .{
             .settings = settings,
-            .resolve = resolve,
+            .post = post,
             .geometry = geometry,
             .uniforms = uniforms,
             .group_layout = group_layout,
@@ -165,7 +169,7 @@ pub const Preview = struct {
         errdefer depth.deinit();
         const depth_view = try vit.TextureView.init(device, .{ .texture = depth, .aspect = .depth });
         errdefer depth_view.deinit();
-        if (self.resolve) |*resolve| try resolve.resize(render_extent);
+        try self.post.resize(render_extent);
         self.depth_view.deinit();
         self.depth.deinit();
         self.depth = depth;
@@ -181,7 +185,7 @@ pub const Preview = struct {
     /// preview.deinit();
     /// ```
     pub fn deinit(self: *Preview) void {
-        if (self.resolve) |*resolve| resolve.deinit();
+        self.post.deinit();
         self.grid.deinit();
         self.world_draw.deinit();
         if (self.billboards) |*painter| painter.deinit();
@@ -201,7 +205,7 @@ pub const Preview = struct {
     /// Draw the backdrop and `drawables` (sorted in place), seen from `view` with `selected`'s
     /// outlined, into `scene` of `target`, a window `window` big at `extent` pixels, cut to
     /// `clip`, with model files and textures from `sources`, and the editor's ground grid when
-    /// `grid` says. Call outside a render pass.
+    /// `grid` says, post-processed as `sources.lights.post` says. Call outside a render pass.
     /// Host-only: `scene`, `clip` and `window` share logical UI coordinates; `extent` is
     /// the physical-pixel target/depth size. `srgb` says the target encodes sRGB itself.
     /// The target must already be in color-attachment state and match the configured
@@ -214,14 +218,20 @@ pub const Preview = struct {
     /// ```
     pub fn draw(self: *Preview, cmd: vit.CommandBuffer, target: vit.TextureView, scene: ui.Rect, clip: ui.Rect, window: ui.Rect, extent: vit.Extent2D, srgb: bool, drawables: []mesh.Drawable, sources: mesh_renderer.Sources, view: camera.View, selected: ?ecs.EntityId, grid: bool) !void {
         const scissor = previewScissor(scene, clip, window, extent) orelse return;
-        if (self.resolve) |*resolve| {
-            try resolve.begin(cmd);
-            try self.drawPass(cmd, target, scene, clip, window, renderExtent(extent, self.settings.render_scale), srgb, drawables, sources, view, selected, grid);
-            try resolve.draw(cmd, target, extent, scissor);
-        } else try self.drawPass(cmd, target, scene, clip, window, extent, srgb, drawables, sources, view, selected, grid);
+        try self.post.begin(cmd);
+        try self.drawPass(cmd, scene, clip, window, renderExtent(extent, self.settings.render_scale), drawables, sources, view, selected, grid);
+        try self.post.draw(cmd, .{ .post = sources.lights.post, .shaders = sources.shaders, .time_s = sources.time_s }, .{
+            .destination = target,
+            .extent = extent,
+            .scissor = scissor,
+            .scene_uv = .{ (scene.x - window.x) / window.w, (scene.y - window.y) / window.h, scene.w / window.w, scene.h / window.h },
+            .srgb = srgb,
+        });
     }
 
-    fn drawPass(self: *Preview, cmd: vit.CommandBuffer, target: vit.TextureView, scene: ui.Rect, clip: ui.Rect, window: ui.Rect, extent: vit.Extent2D, srgb: bool, drawables: []mesh.Drawable, sources: mesh_renderer.Sources, view: camera.View, selected: ?ecs.EntityId, grid: bool) !void {
+    // The scene in linear HDR light, into the post target.
+    fn drawPass(self: *Preview, cmd: vit.CommandBuffer, scene: ui.Rect, clip: ui.Rect, window: ui.Rect, extent: vit.Extent2D, drawables: []mesh.Drawable, sources: mesh_renderer.Sources, view: camera.View, selected: ?ecs.EntityId, grid: bool) !void {
+        const srgb = true;
         const scissor = previewScissor(scene, clip, window, extent) orelse return;
         try self.meshes.prepare(cmd, drawables, sources);
         try self.meshes.renderShadow(cmd, drawables, sources, view, scene.w / scene.h, self.settings);
@@ -251,7 +261,7 @@ pub const Preview = struct {
         self.depth_initialized = true;
         try cmd.beginRenderPass(.{
             .label = "3D preview",
-            .color_attachments = &.{if (self.resolve) |*resolve| resolve.attachment() else .{ .view = target, .load_op = .load, .store_op = .store }},
+            .color_attachments = &.{self.post.attachment()},
             .depth_stencil_attachment = .{ .view = self.depth_view, .depth_clear = 1, .depth_store_op = .discard },
         });
         errdefer cmd.endRenderPass();
@@ -336,7 +346,7 @@ fn previewScissor(scene: ui.Rect, clip: ui.Rect, window: ui.Rect, extent: vit.Ex
     return .{ .x = left, .y = top, .width = right - left, .height = bottom - top };
 }
 
-/// A gradient across the scene, darker at the bottom, behind everything (at the far plane).
+/// A gradient across the scene, darker at the bottom, drawn first and behind everything.
 fn backdropVertices() [6]Vertex {
     const corners = [_][2]f32{ .{ -1, -1 }, .{ 1, -1 }, .{ 1, 1 }, .{ -1, 1 } };
     const colors = [_][3]f32{

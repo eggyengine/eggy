@@ -28,6 +28,7 @@ const PlayCameraPrompt = @import("play_camera_prompt.zig").PlayCameraPrompt;
 const window_placement = @import("window_placement.zig");
 const source_stamp = @import("projects/source_stamp.zig");
 const Console = @import("console.zig").Console;
+const CommandLine = @import("console.zig").CommandLine;
 const panels = @import("panels.zig");
 
 /// `std.Options.logFn` for editor executables: keeps every message for the Console panel.
@@ -70,7 +71,10 @@ const animation_dock = @import("animation_dock/animation_dock.zig");
 const ui_designer = @import("ui_designer/ui_designer.zig");
 const AssetPreview = @import("asset_preview.zig").AssetPreview;
 const AssetPreviewRequest = @import("asset_preview.zig").Request;
-const Scene2d = @import("scene_2d.zig").Scene2d;
+const Scene2dPanel = @import("scene_2d/scene_2d.zig");
+const Scene2d = Scene2dPanel.Scene2d;
+/// The 3D Scene panel or the flat 2D one.
+const ScenePanel = enum { scene, flat };
 const tab_views = @import("tab_views.zig");
 const scene_tabs = @import("scene_tabs.zig");
 /// The Preferences section File > Project Settings opens.
@@ -210,6 +214,8 @@ pub fn Editor(comptime project: type) type {
         scene_view: scene_view.SceneView = .{},
         /// When the scene camera last flew, to fly by the time since.
         camera_tick_ns: u64 = 0,
+        /// The Scene panel a gamepad steers: the one the pointer was over last.
+        gamepad_panel: ScenePanel = .scene,
         /// Draws the main window's UI into the frame `Graphics` already started.
         overlay: weeoui_vitellus.Renderer,
         /// The OS window for each of the dock's pop-out windows that is open.
@@ -281,15 +287,18 @@ pub fn Editor(comptime project: type) type {
             var app = try eggy.App.initForProject(process_init, title, project.name, .editor, .{});
             errdefer app.deinit();
             app.storage = try eggy.storage.Storage.init(gpa, process_init.io, project.name);
+            // The dev console's lines show among the Console panel's messages.
+            app.dev_console.log_output = true;
             const opened_project = try openProject(gpa, app.window.window, args);
             errdefer if (opened_project) |opened| freeProject(gpa, opened);
-            // The project's graphics defaults, before anything is drawn.
+            // The project's graphics defaults, before anything is drawn, and its dev console setting.
             if (opened_project) |opened| {
-                const wanted = project_settings_zig.loadGraphics(gpa, opened.dir) catch |err| blk: {
-                    std.log.warn("cannot read the graphics settings from {s}: {t}", .{ eggy.project.file_name, err });
-                    break :blk app.graphics_options.defaults;
+                const wanted = project_settings_zig.loadApplied(gpa, opened.dir) catch |err| blk: {
+                    std.log.warn("cannot read the project's settings from {s}: {t}", .{ eggy.project.file_name, err });
+                    break :blk project_settings_zig.Applied{ .graphics = app.graphics_options.defaults, .dev_console = true };
                 };
-                _ = app.setGraphicsDefaults(wanted) catch |err| std.log.err("cannot use the project's graphics defaults: {t}", .{err});
+                _ = app.setGraphicsDefaults(wanted.graphics) catch |err| std.log.err("cannot use the project's graphics defaults: {t}", .{err});
+                app.dev_console.setEnabled(wanted.dev_console);
             }
             // Every project has its resources and scene folders.
             if (opened_project) |opened| {
@@ -404,6 +413,7 @@ pub fn Editor(comptime project: type) type {
                 errdefer loaders.deinit();
                 app.graphics.models.loader = loaders.models();
                 app.graphics.textures.loader = loaders.textures();
+                app.graphics.shaders.loader = loaders.shaders();
                 app.resource_provider = loaders.resources();
                 break :blk loaders;
             } else null;
@@ -493,6 +503,7 @@ pub fn Editor(comptime project: type) type {
             self.camera_preview.deinit();
             if (self.model_view) |*view| view.deinit();
             if (self.scene_2d_view) |*view| view.deinit();
+            self.scene_2d.brush.deinit(self.gpa);
             self.gpa.free(self.drawables);
             self.gpa.free(self.drawables_2d);
             self.overlay.deinit();
@@ -566,6 +577,8 @@ pub fn Editor(comptime project: type) type {
                 if (self.play_mode.running() and self.extension_state.pauseDue(sdl3.timer.getMillisecondsSinceInit())) self.setPaused(true);
                 if (self.play_mode.running()) {
                     self.app.time.tick(sdl3.timer.getNanosecondsSinceInit());
+                    // Shaders follow game time, so they hold still while editing or paused.
+                    self.app.graphics.time_s = @floatCast(self.app.time.elapsed_s);
                     try self.app.advanceInput();
                     game.update(&self.app);
                     self.app.input.endFrame();
@@ -578,7 +591,16 @@ pub fn Editor(comptime project: type) type {
             self.keepLayout();
             // The scene camera flies by the keys held, over the time since the last frame.
             const now_ns = sdl3.timer.getNanosecondsSinceInit();
-            if (self.camera_tick_ns != 0) self.scene_view.camera.fly(@as(f32, @floatFromInt(now_ns - self.camera_tick_ns)) / std.time.ns_per_s);
+            if (self.camera_tick_ns != 0) {
+                const seconds = @as(f32, @floatFromInt(now_ns - self.camera_tick_ns)) / std.time.ns_per_s;
+                self.scene_view.camera.fly(seconds);
+                // Gamepads steer the Scene panel the pointer was over last, unless the game has them.
+                if (self.scene_view.camera.hovered) self.gamepad_panel = .scene else if (self.scene_2d.hovered) self.gamepad_panel = .flat;
+                if (!self.gameHasScene()) if (self.app.input_backend) |backend| for (backend.state.devices.values()) |device| switch (self.gamepadPanel()) {
+                    .scene => self.scene_view.camera.steer(device.raw, seconds),
+                    .flat => self.scene_2d.steer(device.raw, seconds),
+                };
+            }
             self.camera_tick_ns = now_ns;
             // Scene instances' entities, then what the Scene panel is seen from, and the
             // selection's gizmo over it.
@@ -587,6 +609,8 @@ pub fn Editor(comptime project: type) type {
             if (self.project) |opened| self.entity_editor.keepView(&self.app, self.gamePtr(), opened.dir, self.openScenePath() orelse "");
             // The tab shown last frame decides whose Scene camera, 2D view and UI scene are in use.
             self.followTabs();
+            self.scene_2d.selected = self.entity_editor.selected;
+            if (self.tileBrushEnv()) |env| self.scene_2d.brush.follow(env, self.entity_editor.selected) else self.scene_2d.brush.target = null;
             const look: scene_view.SceneView.Look = if (!self.play_mode.playing()) .editing else if (self.workspace.simulating) .simulating else .playing;
             self.scene_view.update(self.sceneTarget(), if (self.workspace.placed.scene) |placed| placed.rect else null, look);
             self.workspace.scene_overlay = self.scene_view.overlay();
@@ -669,7 +693,8 @@ pub fn Editor(comptime project: type) type {
                 switch (index) {
                     panels.inspector_page => self.buildInspector(),
                     panels.console_page => {
-                        if (self.console.build(page_ui, if (self.project) |opened| opened.dir else null)) |source| self.openDiagnostic(source);
+                        const command_line = CommandLine{ .app = &self.app, .commands = if (self.game) |*game| game.consoleCommands() else .none };
+                        if (self.console.build(page_ui, if (self.project) |opened| opened.dir else null, command_line)) |source| self.openDiagnostic(source);
                     },
                     panels.hierarchy_page => {
                         self.entity_editor.buildHierarchy(page_ui, &self.app, self.gamePtr());
@@ -696,7 +721,7 @@ pub fn Editor(comptime project: type) type {
                         });
                     } else page_ui.muted("Open a project to preview its files.") else page_ui.muted("Open a project to preview its files."),
                     panels.ui_properties_page => if (self.uiDesignerEnv()) |env| self.ui_designer.buildProperties(page_ui, env, self.dragging(page_ui.builder().allocator)) else page_ui.muted("Open a project to design UI."),
-                    panels.scene_2d_page => self.scene_2d.build(page_ui),
+                    panels.scene_2d_page => self.scene_2d.build(page_ui, if (self.tileBrushEnv() != null) &self.app else null, self.gpa),
                     else => if (self.game) |*game| {
                         var editor_context = extensions.context(self);
                         game.editorPanelUi(index - panels.first_plugin_page, &editor_context, page_ui);
@@ -750,6 +775,7 @@ pub fn Editor(comptime project: type) type {
                 }) |change| {
                     self.history.recordProjectSettings(change.before, change.after, self.workspace.time_ms);
                     self.setGraphicsDefaults(settings.saved_graphics);
+                    self.app.dev_console.setEnabled(settings.dev_console);
                     self.refreshProjectIcon();
                 };
             }
@@ -1074,6 +1100,8 @@ pub fn Editor(comptime project: type) type {
             self.play_mode.paused = paused;
             self.workspace.paused = paused;
             self.app.input.cancel();
+            // Sounds hold where they are with the game.
+            self.app.audio().hold(paused);
         }
 
         /// Keep the selected entity's Transform as it is in play, for when play stops (Ctrl+Shift+K).
@@ -1638,7 +1666,9 @@ pub fn Editor(comptime project: type) type {
                         if (self.plugins_window) |window| window.reloadInstalled();
                         self.rebuildForPlugins();
                     }
-                    self.setGraphicsDefaults(try project_settings_zig.graphicsIn(self.gpa, change.value(direction)));
+                    const applied = try project_settings_zig.appliedIn(self.gpa, change.value(direction));
+                    self.setGraphicsDefaults(applied.graphics);
+                    self.app.dev_console.setEnabled(applied.dev_console);
                     self.refreshProjectIcon();
                 },
                 .plugins => |change| {
@@ -1672,6 +1702,10 @@ pub fn Editor(comptime project: type) type {
                     try self.ui_designer.restore(env, io, files, change.path, change.text.value(direction));
                 },
                 .file_text => |change| try files.writeFile(io, .{ .sub_path = change.path, .data = change.text.value(direction) }),
+                .tilemap => |change| {
+                    try files.writeFile(io, .{ .sub_path = change.path, .data = change.text.value(direction) });
+                    try self.reloadTilemap(change.path);
+                },
                 .layout => |change| {
                     const text = change.value(direction);
                     if (!layout_file.restore(self.gpa, text, &self.workspace.dock, &self.workspace.tabs)) return error.ParseZon;
@@ -1871,7 +1905,7 @@ pub fn Editor(comptime project: type) type {
                 try self.scene.render(&self.app.graphics, frame.cmd, pixelSize(rect), shown, self.scene_view.view, self.entity_editor.selected, !self.scene_view.throughGameCamera());
                 const game_overlay = self.build_window == null and self.play_mode.playing() and !self.workspace.simulating;
                 const has_screens = self.app.ui_scenes.screen_count != 0;
-                const has_game_overlay = game_overlay and if (self.game) |*game| game.hasDraw() or game.hasGameUi() or has_screens else false;
+                const has_game_overlay = game_overlay and if (self.game) |*game| game.hasDraw() or game.hasGameUi() or has_screens or self.app.dev_console.isOpen() else false;
                 if (has_game_overlay or self.app.debug_draw.line_count != 0 or self.app.debug_draw.label_count != 0) {
                     const logical = self.workspace.placed.scene.?.rect;
                     const draw_context = eggy.DrawContext{
@@ -1885,10 +1919,11 @@ pub fn Editor(comptime project: type) type {
                     };
                     if (has_game_overlay) if (self.game) |*game| {
                         game.draw(&self.app, draw_context);
-                        if (game.hasGameUi() or has_screens) {
+                        if (game.hasGameUi() or has_screens or self.app.dev_console.isOpen()) {
                             const layer = try self.app.gameUi();
                             layer.begin(draw_context, sdl3.timer.getMillisecondsSinceInit());
                             game.gameUi(&self.app, &layer.context);
+                            eggy.dev_console.overlay.draw(&self.app.dev_console, &self.app, game.consoleCommands(), &layer.context);
                             if (try layer.render(draw_context)) self.app.input.cancel();
                             try layer.syncClipboard();
                         }
@@ -2152,7 +2187,12 @@ pub fn Editor(comptime project: type) type {
             };
 
             // While the game plays, the Scene panel is the game's: the mouse over it goes to it.
-            const game_has_scene = self.play_mode.playing() and !self.workspace.simulating;
+            const game_has_scene = self.gameHasScene();
+            // Otherwise a gamepad's south button frames the selection, as F does.
+            if (!game_has_scene and curr_event == .gamepad_button_down and curr_event.gamepad_button_down.button == .south) {
+                self.frameSelected(self.gamepadPanel());
+                return .run;
+            }
             if (game_has_scene) if (self.sceneRect(slot)) |rect| {
                 if (self.overScene(slot, curr_event) or ((self.game_input.mouse_captured or self.game_input.buttons != 0) and !eggy.game_ui.isTouchInput(curr_event) and pointerOf(curr_event) != null) or self.game_input.ownsTouch(curr_event)) {
                     if (self.game) |*game| try self.routeGameInput(game, curr_event, slot, rect);
@@ -2178,10 +2218,27 @@ pub fn Editor(comptime project: type) type {
                 return .run;
             };
             if (!game_has_scene and self.scene_view.camera.drag != null and eggy.game_ui.isInput(curr_event)) return .run;
-            if (!game_has_scene) if (curr_event == .key_down) if (curr_event.key_down.key) |key| if (self.scene_view.camera.hovered and self.scene_view.camera.drag == null and self.scene_view.drag == null) switch (key) {
+            // The same keys work over the 2D Scene panel, while it isn't panning or moving.
+            const over_scene = self.scene_view.camera.hovered and self.scene_view.camera.drag == null and self.scene_view.drag == null;
+            const over_flat = self.scene_2d.shown and self.scene_2d.hovered and self.scene_2d.panning == null and !self.scene_2d.isMoving();
+            if (!game_has_scene) if (curr_event == .key_down) if (curr_event.key_down.key) |key| if (over_scene or over_flat) switch (key) {
                 .f => {
-                    self.frameSelected();
+                    self.frameSelected(if (over_scene) .scene else .flat);
                     return .run;
+                },
+                // The arrow keys nudge the selection a grid step in the 2D panel.
+                .up, .down, .left, .right => if (over_flat) if (self.sceneTarget()) |target| {
+                    const steps: [2]f32 = switch (key) {
+                        .up => .{ 0, 1 },
+                        .down => .{ 0, -1 },
+                        .left => .{ -1, 0 },
+                        else => .{ 1, 0 },
+                    };
+                    if (self.scene_2d.nudge(target, steps)) return .run;
+                },
+                // W, E, R and T pick the 2D Scene's tool, as they do the Scene's.
+                .w, .e, .r, .t => if (over_flat and !curr_event.key_down.repeat) {
+                    if (self.scene_2d.shortcut(key, curr_event.key_down.mod)) return .run;
                 },
                 // Delete (or Backspace) deletes the selection, as the Hierarchy's Delete does.
                 .delete, .backspace => if (self.entity_editor.selected != null) {
@@ -2246,8 +2303,15 @@ pub fn Editor(comptime project: type) type {
                         sdl3.dialog.showOpenFolder(Self, pickedProject, self, self.app.window.window, null, false);
                     }
                 },
-                .open_project_folder => if (self.project) |opened| file_manager.showFolder(self.gpa, opened.dir) catch |err| {
+                .open_in_file_manager => if (self.project) |opened| file_manager.showFolder(self.gpa, opened.dir) catch |err| {
                     std.log.err("cannot show {s} in the file manager: {t}", .{ opened.dir, err });
+                },
+                .open_in_ide => if (self.project) |opened| {
+                    const choice = preferences.editor(&self.app.preference_values).code_editor;
+                    code_editor.openFolder(self.gpa, choice, opened.dir) catch |err| {
+                        std.log.err("cannot open {s} in {t}: {t}. Pick another code editor in Edit > Preferences.", .{ opened.dir, choice, err });
+                        self.workspace.toast("Couldn't open the IDE: see the Console");
+                    };
                 },
                 .upgrade_editor => if (self.upgrades.can_upgrade) try self.upgradeEditor() else self.upgrades.logUnavailable(.upgrade),
                 .toggle_devtools => self.toggleDevtools(),
@@ -3068,9 +3132,11 @@ pub fn Editor(comptime project: type) type {
                 };
                 if (!wanted) continue;
                 // ponytail: only the Inspector is exposed to screen readers; give plugin pages AccessKit too once one adapter can serve several contexts.
+                // Tab completes in the dev console's prompt, rather than moving the focus on.
+                if (index == panels.console_page and input == .key_down and self.app.dev_console.prompt.takeTab(input.key_down.key == .tab, input.key_down.modifiers.shift)) continue;
                 if (index == panels.console_page and self.console.terminal.handle(input)) continue;
                 if (index == panels.asset_preview_page and self.asset_preview.handle(input)) continue;
-                if (index == panels.scene_2d_page and self.scene_2d.handle(curr_event, self.sceneTarget())) continue;
+                if (index == panels.scene_2d_page and self.scene_2d.handle(curr_event, self.sceneTarget(), self.tileBrushEnv())) continue;
                 // Assets' right-clicks, double-clicks and keys, before its UI.
                 if (index == panels.assets_page) {
                     const result = switch (input) {
@@ -3323,14 +3389,46 @@ pub fn Editor(comptime project: type) type {
         }
 
         /// Point the scene camera at the entity selected in the Hierarchy, close enough to see it.
-        fn frameSelected(self: *Self) void {
+        /// Bring the selected entity into view in `panel`.
+        fn frameSelected(self: *Self, panel: ScenePanel) void {
             const entity = self.entity_editor.selected orelse return;
             const game = if (self.game) |*loaded| loaded else return;
             const placed = game.worldMatrix(&self.app, entity) orelse return;
             // Its size: the longest of its axes, as scaled.
             var radius: f32 = 0.5;
             for (placed[0..3]) |axis| radius = @max(radius, @sqrt(axis[0] * axis[0] + axis[1] * axis[1] + axis[2] * axis[2]));
-            self.scene_view.camera.frame(.{ placed[3][0], placed[3][1], placed[3][2] }, radius);
+            switch (panel) {
+                .scene => self.scene_view.camera.frame(.{ placed[3][0], placed[3][1], placed[3][2] }, radius),
+                .flat => self.scene_2d.frame(.{ placed[3][0], placed[3][1] }, radius),
+            }
+        }
+
+        /// What the 2D panel's tile brush paints through: none without a project and a game, or
+        /// while the game plays.
+        fn tileBrushEnv(self: *Self) ?Scene2dPanel.tile_brush.Env {
+            if (self.play_mode.playing()) return null;
+            const opened = self.project orelse return null;
+            const game = if (self.game) |*loaded| loaded else return null;
+            return .{ .gpa = self.gpa, .app = &self.app, .game = game, .assets = self.project_assets orelse return null, .project_dir = opened.dir, .history = &self.history, .now_ms = self.workspace.time_ms };
+        }
+
+        /// Draw the tilemap file at `path` (in the project) as it now is: its model is built again.
+        fn reloadTilemap(self: *Self, path: []const u8) !void {
+            const loaders = self.project_assets orelse return;
+            var buffer: [eggy.assets.id.key_len]u8 = undefined;
+            const key = loaders.keyOf(&buffer, path) orelse return;
+            try self.app.graphics.queue.waitIdle();
+            self.app.graphics.models.forget(key, &self.app.graphics.textures);
+        }
+
+        /// Whether the playing game has the Scene panel (and the gamepad), rather than the editor.
+        fn gameHasScene(self: *const Self) bool {
+            return self.play_mode.playing() and !self.workspace.simulating;
+        }
+
+        /// The panel a gamepad steers: the 2D one only while it is shown.
+        fn gamepadPanel(self: *const Self) ScenePanel {
+            return if (self.gamepad_panel == .flat and self.scene_2d.shown) .flat else .scene;
         }
 
         /// `rect` (in UI points) in window pixels.
@@ -3364,9 +3462,10 @@ test {
     _ = @import("ui_designer/ui_designer.zig");
     _ = @import("asset_preview.zig");
     _ = @import("model_preview.zig");
+    _ = @import("sound_preview.zig");
     _ = @import("scene_tabs.zig");
     _ = @import("play_camera_prompt.zig");
-    _ = @import("scene_2d.zig");
+    _ = @import("scene_2d/scene_2d.zig");
     _ = @import("assets/png_writer.zig");
     _ = @import("tab_bar.zig");
     _ = @import("workspace_tabs.zig");

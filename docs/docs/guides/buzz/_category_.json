@@ -1,0 +1,8 @@
+{
+  "label": "Buzz scripting",
+  "link": {
+    "type": "generated-index",
+    "slug": "/guides/buzz",
+    "description": "Type Buzz into the dev console, run script files, and give scripts commands of your own."
+  }
+}

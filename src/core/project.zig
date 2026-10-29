@@ -40,6 +40,9 @@ pub const Config = struct {
     icon: ?[]const u8 = null,
     /// What the built game says about itself, in its executable.
     metadata: Metadata = .{},
+    /// Whether the dev console shows over the game when its key is pressed, in the built game
+    /// and in editor Play (`eggy.dev_console`). The editor's Console panel keeps its own.
+    dev_console: bool = true,
     /// Shipped graphics defaults; a user's graphics preferences override them.
     graphics: @import("render_settings.zig").Settings = .{},
     /// The plugins installed from the editor's Plugins window, which `addGame` builds the game
@@ -75,6 +78,7 @@ pub fn write(writer: *std.Io.Writer, config: Config) std.Io.Writer.Error!void {
     try writer.print("    .name = \"{f}\",\n    .title = \"{f}\",\n    .version = \"{f}\",\n", .{ std.zig.fmtString(config.name), std.zig.fmtString(config.title), std.zig.fmtString(config.version) });
     if (config.default_scene) |scene| try writer.print("    // The scene the built game starts in.\n    .default_scene = \"{f}\",\n", .{std.zig.fmtString(scene)});
     if (config.icon) |icon| try writer.print("    // The project's icon.\n    .icon = \"{f}\",\n", .{std.zig.fmtString(icon)});
+    if (!config.dev_console) try writer.writeAll("    // Players can't open the dev console.\n    .dev_console = false,\n");
     try writer.writeAll("    .graphics = ");
     try std.zon.stringify.serialize(config.graphics, .{}, writer);
     try writer.writeAll(",\n");

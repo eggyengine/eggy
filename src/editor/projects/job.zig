@@ -142,6 +142,8 @@ pub const Job = struct {
     detail: std.ArrayList(u8) = .empty,
     /// Only grows (up to `max_output`), so `shown` catches up by copying what is new.
     output: std.ArrayList(u8) = .empty,
+    /// The process the worker is running and waiting on, which `deinit` kills to stop it.
+    running: ?*const export_process.Process = null,
 
     /// `output` as `status` last handed it out; only the thread calling `status` touches it.
     shown: std.ArrayList(u8) = .empty,
@@ -205,6 +207,13 @@ pub const Job = struct {
     /// ```
     pub fn deinit(self: *Job) void {
         const gpa = self.gpa;
+        // Kill the build's processes first: the worker's reads of their pipes don't see a cancel,
+        // and only end once every process holding the pipes is gone.
+        {
+            self.mutex.lockUncancelable(self.io());
+            defer self.mutex.unlock(self.io());
+            if (self.running) |process| process.terminate();
+        }
         self.worker.cancel(self.io());
         self.threaded.deinit();
         self.freeText();
@@ -558,14 +567,18 @@ pub const Job = struct {
             .stdin = .ignore,
             .stdout = .pipe,
             .stderr = .pipe,
-        }, self.action == .export_game) catch |err| {
+        }) catch |err| {
             if (progress_fds) |fds| {
                 for (fds) |fd| _ = std.c.close(fd);
             }
             return if (err == error.FileNotFound) error.ZigNotFound else err;
         };
         // Stop the build if the job is cancelled, or fails, before it ends.
-        defer process.stop(io_);
+        self.trackRunning(&process);
+        defer {
+            self.trackRunning(null);
+            process.stop(io_);
+        }
         const child = &process.child;
 
         // The child has the write end now; ours would keep the pipe open past the build.
@@ -603,8 +616,12 @@ pub const Job = struct {
             .stdin = .ignore,
             .stdout = .ignore,
             .stderr = .ignore,
-        }, self.action == .export_game) catch return null;
-        defer process.stop(io_);
+        }) catch return null;
+        self.trackRunning(&process);
+        defer {
+            self.trackRunning(null);
+            process.stop(io_);
+        }
         const term = process.child.wait(io_) catch return null;
         if (term != .exited or term.exited != 0) return null;
         const text = std.Io.Dir.cwd().readFileAlloc(io_, file, arena, .limited(64 * 1024)) catch return null;
@@ -612,6 +629,13 @@ pub const Job = struct {
         var lines = std.mem.tokenizeScalar(u8, text, '\n');
         while (lines.next()) |line| args.append(arena, line) catch return null;
         return if (args.items.len > 0) args.items else null;
+    }
+
+    /// Say which process the worker is running (null once it is done with it), for `deinit` to kill.
+    fn trackRunning(self: *Job, process: ?*const export_process.Process) void {
+        self.mutex.lockUncancelable(self.io());
+        defer self.mutex.unlock(self.io());
+        self.running = process;
     }
 
     /// Read a pipe through EOF, keeping progress output and streaming grouped diagnostics.
@@ -754,7 +778,7 @@ fn describe(err: anyerror) []const u8 {
     return switch (err) {
         error.ZigNotFound => "Zig 0.17 isn't on your PATH. Install it, then try again.",
         error.BuildFailed => "The project's build failed. Its output is below.",
-        error.ExportProcessGroupFailed => "The system could not isolate the export's processes for safe cancellation.",
+        error.ExportProcessGroupFailed => "The system could not isolate the build's processes for safe cancellation.",
         error.ProjectDirNotEmpty => "The project's folder isn't empty.",
         error.NotAProject => "That folder isn't an Eggy project: it has no eggy.zon.",
         error.UnreadableConfig => "The project's eggy.zon couldn't be read. It needs a .name (the package name) and a .title.",

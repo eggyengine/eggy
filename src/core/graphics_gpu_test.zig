@@ -237,6 +237,37 @@ fn rgbSum(pixels: []const u8) u64 {
     return total;
 }
 
+test "GPU sprite quads face the front and show only their texture region" {
+    if (comptime builtin.os.tag == .emscripten) return error.SkipZigTest;
+    if ((try sdl.getEnvironment()).getVariable("EGGY_GPU_TEST") == null) return error.SkipZigTest;
+    const gpa = std.testing.allocator;
+    const flags = sdl.InitFlags{ .video = true };
+    try sdl.init(flags);
+    defer sdl.quit(flags);
+    const window = adapter.Sdl3Window.init(try sdl.video.Window.init("Eggy sprite regions", 320, 240, .{ .vulkan = true }));
+    defer window.window.deinit();
+    var graphics = try Graphics.initWithSettings(gpa, window, .{ .backend = .vulkan, .anti_aliasing = .off, .width = 320, .height = 240 });
+    defer graphics.deinit();
+    var scene = try SceneTexture.init(&graphics);
+    defer scene.deinit();
+    defer graphics.queue.waitIdle() catch @panic("sprite GPU work did not finish");
+    var context: u8 = 0;
+    graphics.textures.loader = .{ .context = &context, .load = checker };
+    // Seen flat from the front, as the 2D Scene panel sees it.
+    const view = camera.View{ .eye = .{ 0, 0, 10 }, .forward = .{ 0, 0, -1 }, .up = .{ 0, 1, 0 }, .near = 0.1, .far = 100, .projection = .orthographic, .orthographic_height_m = 2 };
+    var quad = [_]mesh.Drawable{.{ .model = .{ .{ 1, 0, 0, 0 }, .{ 0, 1, 0, 0 }, .{ 0, 0, 1, 0 }, .{ 0, 0, 0, 1 } }, .color = @splat(1), .shape = .quad, .entity_id = 0, .entity_generation = 0, .texture_file = "checker.png", .texture_file_len = "checker.png".len, .material_params = .{ 0, 1, 1, 1 } }};
+    // The checker's top-left 2x2 cell is white, the one right of it black.
+    quad[0].uv_rect = .{ 0.2 / 63.0, 0.2 / 35.0, 1.8 / 63.0, 1.8 / 35.0 };
+    const white = try scenePixels(gpa, &graphics, &scene, &quad, view);
+    defer gpa.free(white);
+    quad[0].uv_rect = .{ 2.2 / 63.0, 0.2 / 35.0, 3.8 / 63.0, 1.8 / 35.0 };
+    const black = try scenePixels(gpa, &graphics, &scene, &quad, view);
+    defer gpa.free(black);
+    const middle = (64 * 128 + 64) * 4;
+    try std.testing.expect(white[middle] > 200);
+    try std.testing.expect(black[middle] < 40);
+}
+
 test "GPU imported skeletal morph and vertex clips pose each instance independently" {
     if (comptime builtin.os.tag == .emscripten) return error.SkipZigTest;
     if ((try sdl.getEnvironment()).getVariable("EGGY_GPU_TEST") == null) return error.SkipZigTest;

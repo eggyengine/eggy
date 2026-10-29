@@ -1,4 +1,7 @@
-// Metallic/roughness surfaces with direct scene lights and directional PCF shadows.
+// Metallic/roughness surfaces with direct scene lights and directional PCF shadows. A material's
+// surface shader is put in at "eggy: surface" (`compose.zig`), replacing `defaultSurface`.
+#include "eggy.slang"
+
 // No semantics on the varyings: Slang's WGSL numbers semantic'd inputs its own way, ignoring
 // vk::location, while without them it numbers them in order, as vk::location does.
 struct VertexInput {
@@ -16,6 +19,7 @@ struct VertexInput {
     [[vk::location(11)]] float4 imported_color;
     [[vk::location(12)]] float2 imported_material;
     [[vk::location(13)]] float3 imported_emissive;
+    [[vk::location(14)]] float4 uv_rect; // the part of the texture drawn: left, top, right, bottom
 };
 
 struct VertexOutput {
@@ -46,9 +50,9 @@ cbuffer Camera : register(b0, space0) {
     float4 outline;          // the selection outline's colour
     float4 outline_size;     // xy: the viewport in pixels; z: the outline's width in pixels
     float4 eye;
-    float4 light_info;       // x: number of scene lights
+    float4 light_info;       // x: number of scene lights, y: seconds the game has run
     float4 ambient;
-    float4 environment;      // exposure multiplier, fallback light, shadow-light index, reserved
+    float4 environment;      // exposure multiplier, fallback light, shadow-light index, post pass maps tones
     float4 shadow_matrix0;
     float4 shadow_matrix1;
     float4 shadow_matrix2;
@@ -90,7 +94,7 @@ VertexOutput vertexMain(VertexInput input) {
     output.normal = (cof0 * input.normal.x + cof1 * input.normal.y + cof2 * input.normal.z) * (determinant < 0 ? -1.0 : 1.0);
     bool authored = input.material_params.w > 0.5;
     output.color = input.color * (authored ? input.surface_color : input.imported_color);
-    output.uv = input.uv;
+    output.uv = lerp(input.uv_rect.xy, input.uv_rect.zw, input.uv);
     output.world = world.xyz;
     output.material = authored ? input.material_params : float4(input.imported_material, 0, 0);
     output.emissive_cutoff = authored ? input.emissive_cutoff : float4(input.imported_emissive, 0.01);
@@ -134,21 +138,43 @@ float visibility(float3 world, float ndl) {
     return visible / 9.0;
 }
 
+// eggy: surface
+#ifndef EGGY_SURFACE
+Surface surface(SurfaceInput input) {
+    return defaultSurface(input);
+}
+#endif
+
 [shader("pixel")]
 float4 fragmentMain(VertexOutput input) : SV_Target0 {
+    // The point as the material (and its surface shader) describes it.
     float4 texel = paint.Sample(paint_sampler, input.uv);
-    float alpha = input.color.a * texel.a;
+    SurfaceInput described;
+    described.world_position = input.world;
+    described.normal = unit(input.normal);
+    described.view_direction = unit(eye.xyz - input.world);
+    described.uv = input.uv;
+    described.color = float4(pow(max(input.color.rgb * texel.rgb, 0.0), float3(2.2, 2.2, 2.2)), input.color.a * texel.a);
+    described.metallic = saturate(input.material.x);
+    described.roughness = input.material.y;
+    described.emissive = input.emissive_cutoff.rgb;
+    described.unlit = input.material.z > 0.5;
+    described.time_s = light_info.y;
+    Surface shown = surface(described);
+    float alpha = shown.alpha;
     if (alpha < input.emissive_cutoff.w) discard;
-    float3 base = pow(max(input.color.rgb * texel.rgb, 0.0), float3(2.2, 2.2, 2.2));
-    float3 normal = unit(input.normal);
-    float3 view = unit(eye.xyz - input.world);
+    float3 base = max(shown.base_color, 0.0);
+    float3 normal = unit(shown.normal);
+    float3 view = described.view_direction;
+    float metallic = saturate(shown.metallic);
+    float roughness = clamp(shown.roughness, 0.05, 1.0);
     float3 color = base;
-    if (input.material.z < 0.5) {
-        color = base * ambient.rgb * ambient.w * (1.0 - saturate(input.material.x));
+    if (!shown.unlit) {
+        color = base * ambient.rgb * ambient.w * (1.0 - metallic);
         if (light_info.x < 0.5 && environment.y > 0.5) {
             // Keep scenes without authored lights visible in both the editor and runtime.
-            if (input.material.w > 0.5 || input.material.x > 0.0 || input.material.y < 0.999) {
-                color += surfaceLight(base, saturate(input.material.x), clamp(input.material.y, 0.05, 1.0), normal, view, unit(light.xyz), float3(3.0, 3.0, 3.0));
+            if (input.material.w > 0.5 || metallic > 0.0 || shown.roughness < 0.999) {
+                color += surfaceLight(base, metallic, roughness, normal, view, unit(light.xyz), float3(3.0, 3.0, 3.0));
             } else {
                 float lit = 0.3 + 0.7 * max(dot(normal, unit(light.xyz)), 0.0);
                 color = base * lit;
@@ -173,13 +199,14 @@ float4 fragmentMain(VertexOutput input) : SV_Target0 {
             if (shadow_params.w > 0.5 && i == int(shadow_params.z))
                 attenuation *= visibility(input.world, dot(normal, incoming));
             float3 radiance = current.color_intensity.rgb * current.color_intensity.w * 0.001 * attenuation;
-            color += surfaceLight(base, saturate(input.material.x), clamp(input.material.y, 0.05, 1.0), normal, view, incoming, radiance);
+            color += surfaceLight(base, metallic, roughness, normal, view, incoming, radiance);
         }
     }
-    color += input.emissive_cutoff.rgb;
+    color += max(shown.emissive, 0.0);
     color *= environment.x;
-    // Fit HDR direct lighting into the output range without hard-clipping bright surfaces.
-    if (input.material.z < 0.5)
+    // Fit HDR direct lighting into the output range without hard-clipping bright surfaces,
+    // unless the post pass maps the whole image's tones.
+    if (!shown.unlit && environment.w < 0.5)
         color = saturate((color * (2.51 * color + 0.03)) / (color * (2.43 * color + 0.59) + 0.14));
     // sRGB targets encode linear output themselves; other targets need explicit encoding.
     color = options.x > 0.5 ? color : pow(max(color, 0.0), float3(1.0 / 2.2, 1.0 / 2.2, 1.0 / 2.2));

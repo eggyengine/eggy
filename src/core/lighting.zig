@@ -2,6 +2,7 @@
 const std = @import("std");
 const ecs = @import("clutch");
 const transform = @import("transform.zig");
+const post_process = @import("post_process.zig");
 pub const support: @import("support.zig").Support = .available;
 pub const max_lights = 16;
 
@@ -15,13 +16,17 @@ pub const Light = union(enum) {
 pub const Environment = struct {
     /// Marks it in the editor (nf-md-earth).
     pub const icon = "\u{f01e7}";
+    pub const category = "Lighting";
     ambient_color: [3]f32 = @splat(1),
     ambient_intensity: f32 = 0.03,
     exposure_ev: f32 = 0,
     /// Preserve the editor/runtime's helpful light until a scene authors its own lights.
     default_light: bool = true,
+    /// The scene's post-processing; a camera's own `PostProcess` replaces it.
+    post: post_process.PostProcess = .{},
 
     pub fn validate(self: Environment) error{InvalidEnvironment}!void {
+        self.post.validate() catch return error.InvalidEnvironment;
         for (self.ambient_color) |value| if (!std.math.isFinite(value) or value < 0) return error.InvalidEnvironment;
         if (!std.math.isFinite(self.ambient_intensity) or self.ambient_intensity < 0 or
             !std.math.isFinite(self.exposure_ev) or @abs(self.exposure_ev) > 32) return error.InvalidEnvironment;
@@ -32,6 +37,7 @@ pub const Environment = struct {
 pub const SceneLight = struct {
     /// Marks it in the editor (nf-md-lightbulb_on_outline).
     pub const icon = "\u{f06e9}";
+    pub const category = "Lighting";
     pub const dependencies = .{transform.Transform};
     kind: enum { directional, point, spot } = .directional,
     color: [3]f32 = @splat(1),
@@ -80,6 +86,8 @@ pub const Frame = extern struct {
     ambient: [4]f32 = .{ 1, 1, 1, 0.03 },
     /// x: exposure multiplier, y: default-light enabled, z: shadow-light index (-1 for none).
     options: [4]f32 = .{ 1, 1, -1, 0 },
+    /// The post-processing the active camera sees (`post_process.forActiveCamera`).
+    post: post_process.Frame = .{},
 };
 
 /// Borrowed component access; obtain it from `app.lighting()`.
@@ -149,20 +157,24 @@ pub fn aimNewLight(world: *ecs.World, entity: ecs.EntityId) void {
     world.markChanged(entity, transform.Transform);
 }
 
+const default_environment = Environment{};
+
 /// Gather up to sixteen validated lights. A light whose values don't validate is left out and
 /// counted in `invalid`, so one bad light doesn't stop the rest; overflow, a second shadow caster
 /// and a second environment are explicit errors.
 pub fn gather(world: *ecs.World) !Frame {
     var result = Frame{};
-    var environment = if (world.getResource(Environment)) |value| value.* else Environment{};
+    // Borrowed, so the post passes' shader keys stay pointing into the world.
+    var environment: *const Environment = if (world.getResource(Environment)) |value| value else &default_environment;
     if (world.getResource(Environment) == null) {
         var environments = world.query(.{*const Environment});
-        if (environments.next()) |view| environment = view.get(*const Environment).*;
+        if (environments.next()) |view| environment = view.get(*const Environment);
         if (environments.next() != null) return error.MultipleEnvironments;
     }
     try environment.validate();
     result.ambient = .{ environment.ambient_color[0], environment.ambient_color[1], environment.ambient_color[2], environment.ambient_intensity };
     result.options = .{ std.math.exp2(environment.exposure_ev), if (environment.default_light) 1 else 0, -1, 0 };
+    result.post = (try post_process.forActiveCamera(world, &environment.post)).frame();
     var lights = world.query(.{ *const SceneLight, *const transform.Transform });
     while (lights.next()) |view| {
         const light = view.get(*const SceneLight).*;

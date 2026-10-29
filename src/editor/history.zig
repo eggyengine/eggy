@@ -61,6 +61,8 @@ pub const Step = union(enum) {
     ui_scene: struct { path: []u8, text: Texts },
     /// A plugin rewrote a file (`eggy.editor.Context.writeFile`): its text before and after.
     file_text: struct { path: []u8, text: Texts },
+    /// Tiles were painted in the 2D Scene panel: the `.tilemap.zon`'s text before and after.
+    tilemap: struct { path: []u8, text: Texts },
     /// The dock's panels were rearranged from `before` to `after` (layout snapshots).
     layout: Texts,
     /// Another scene was opened, or a new one made (`created`; undone, its file waits in
@@ -118,7 +120,7 @@ pub const Step = union(enum) {
                 gpa.free(step.text.before);
                 gpa.free(step.text.after);
             },
-            inline .animation_clip, .ui_scene, .file_text => |step| {
+            inline .animation_clip, .ui_scene, .file_text, .tilemap => |step| {
                 gpa.free(step.path);
                 gpa.free(step.text.before);
                 gpa.free(step.text.after);
@@ -183,6 +185,7 @@ pub const Step = union(enum) {
             .animation_clip => "an animation edit",
             .ui_scene => "a UI scene edit",
             .file_text => "a file edit",
+            .tilemap => "painting tiles",
             .open_scene => |step| if (step.created) "a new scene" else "opening a scene",
             .plugin => |step| if (step.on) "turning a plugin on" else "turning a plugin off",
         };

@@ -35,6 +35,7 @@ pub fn pick(drawn: []const eggy.mesh.Drawable, models: *const eggy.model_cache.M
         } else switch (drawable.shape) {
             .sphere => hitSphere(origin, along),
             .plane => hitBox(origin, along, .{ -0.5, -0.001, -0.5 }, .{ 0.5, 0.001, 0.5 }),
+            .quad => hitBox(origin, along, .{ -0.5, -0.5, -0.001 }, .{ 0.5, 0.5, 0.001 }),
             .cube, .cylinder, .cone => hitBox(origin, along, .{ -0.5, -0.5, -0.5 }, .{ 0.5, 0.5, 0.5 }),
         };
         const t = hit orelse continue;

@@ -45,6 +45,13 @@
 //! whether an entry is enabled or checked, and gives a status item its text. Both name an entry
 //! by its place in the plugin's own declaration.
 //!
+//! Commands for the dev console (` in the game, the Console panel in the editor), typed as their
+//! name then their words, dispatch their local index with what was typed. Names are global: two
+//! plugins can't declare the same one, nor take one of Eggy's own (`help`, `set`, ...):
+//!
+//!     pub const console_commands = [_]eggy.dev_console.Command{.{ .name = "god", .help = "Never take damage" }};
+//!     pub fn consoleCommand(self: *Self, command: usize, app: *eggy.App, call: *eggy.dev_console.Call) !void
+//!
 //! A plugin can declare preferences, which people set in the editor's Preferences window, kept in
 //! the project's `.eggy/` folder and baked into the runtime (see `preferences.zig`):
 //!
@@ -61,10 +68,12 @@
 //!     pub const input_maps = .{PlayerInput}; // an eggy.input.Map or FileMap
 //!     // in a hook: try app.input.map(PlayerInput).pressed(.jump)
 //!
-//! File templates extend both Assets > New menus without a creation hook:
+//! File templates extend both Assets > New menus without a creation hook, each in its
+//! `category`'s submenu:
 //!
 //!     pub const editor_file_types = [_]eggy.plugins.EditorFileType{.{
 //!         .key = "material", .title = "Material", .extension = ".material.zon", .contents = ".{}\n",
+//!         .category = "Rendering",
 //!     }};
 //!
 //! And platforms for File > Export, beside Eggy's own, with the settings each shows there and the
@@ -86,7 +95,8 @@
 //!
 //! Eggy's own components (`builtin_components`: `Transform`, `Mesh`, which the scene draws, and
 //! `Camera`, which the runtime looks through, and `SceneInstance`, a scene file made under an
-//! entity, `Animator`, which plays clips) are listed first in every project, owned by `eggy`.
+//! entity, `Animator`, which plays clips, `AudioSource` and `AudioListener`, which play sound, `Sprite`, an image drawn flat, `SpriteAnimator`, which flips it through a sheet's frames, and `Tilemap`, a grid of tiles)
+//! are listed first in every project, owned by `eggy`.
 //!
 //! A project can turn plugins off (not the game): one that is off doesn't start, and none of its
 //! hooks run, but its preferences and components stay known, so scenes keep their values. The
@@ -110,9 +120,11 @@ const components = @import("components.zig");
 const EditorContext = @import("editor_api/editor_api.zig").Context;
 const DrawContext = @import("game_ui/game_ui.zig").DrawContext;
 const ui_scenes = @import("ui_scenes/ui_scenes.zig");
+const console_commands_zig = @import("dev_console/commands.zig");
+const builtin_console_commands = @import("dev_console/builtin_commands.zig").list;
 
 /// The components every project has, before its plugins' own.
-pub const builtin_components = .{ @import("transform.zig").Transform, @import("mesh.zig").Mesh, @import("camera.zig").Camera, @import("scene_instance.zig").SceneInstance, @import("material.zig").Material, @import("lighting.zig").SceneLight, @import("lighting.zig").Environment, @import("animation.zig").Animator, ui_scenes.UiScreen, ui_scenes.UiBillboard };
+pub const builtin_components = .{ @import("transform.zig").Transform, @import("mesh.zig").Mesh, @import("camera.zig").Camera, @import("scene_instance.zig").SceneInstance, @import("material.zig").Material, @import("lighting.zig").SceneLight, @import("lighting.zig").Environment, @import("post_process.zig").PostProcess, @import("animation.zig").Animator, ui_scenes.UiScreen, ui_scenes.UiBillboard, @import("audio/audio.zig").AudioSource, @import("audio/audio.zig").AudioListener, @import("sprite.zig").Sprite, @import("sprite_animator.zig").SpriteAnimator, @import("tilemap.zig").Tilemap };
 
 /// Eggy's own platforms in File > Export, in the order it lists them.
 /// Android comes from the Android plugin (`plugins/android/`), as a platform of its own.
@@ -296,6 +308,9 @@ pub const EditorFileType = struct {
     title: [:0]const u8,
     extension: [:0]const u8,
     contents: []const u8 = "",
+    /// The submenu of New it is in, shared with Eggy's own (`Rendering`, `2D`...) or a new one;
+    /// empty for one named after the plugin.
+    category: [:0]const u8 = "",
 };
 
 /// A widget a plugin adds to UI scenes. In the Set's metadata the key is `<plugin>/<key>`.
@@ -404,6 +419,19 @@ pub fn Set(comptime types: anytype, comptime keys: []const [:0]const u8) type {
             break :blk all;
         };
 
+        /// Every plugin's `console_commands`, in plugin order; `consoleCommand` takes an index into it.
+        pub const console_commands: []const console_commands_zig.Command = blk: {
+            var all: []const console_commands_zig.Command = &.{};
+            for (list) |T| if (@hasDecl(T, "console_commands")) {
+                for (T.console_commands) |command| {
+                    if (command.name.len == 0 or std.mem.indexOfAny(u8, command.name, " \t\"") != null) @compileError("a console command's name is one word");
+                    for (builtin_console_commands ++ all) |previous| if (std.mem.eql(u8, previous.name, command.name)) @compileError("duplicate console command " ++ command.name);
+                    all = all ++ .{command};
+                }
+            };
+            break :blk all;
+        };
+
         /// Menus plugins add to the top bar or extend, keyed `<plugin>/<menu>`, their items keyed
         /// `<plugin>/<menu>/<item>`. Disabled plugins stay listed; dispatch skips them.
         pub const editor_menus: []const EditorMenu = blk: {
@@ -463,7 +491,7 @@ pub fn Set(comptime types: anytype, comptime keys: []const [:0]const u8) type {
                         @compileError("editor file types need a key, title and path-free .extension");
                     const identity = std.fmt.comptimePrint("{s}/{s}", .{ key, file_type.key });
                     for (all) |previous| if (std.mem.eql(u8, previous.key, identity)) @compileError("duplicate editor file type key");
-                    all = all ++ .{EditorFileType{ .key = identity, .title = file_type.title, .extension = file_type.extension, .contents = file_type.contents }};
+                    all = all ++ .{EditorFileType{ .key = identity, .title = file_type.title, .extension = file_type.extension, .contents = file_type.contents, .category = file_type.category }};
                 }
             };
             break :blk all;
@@ -740,6 +768,47 @@ pub fn Set(comptime types: anytype, comptime keys: []const [:0]const u8) type {
                 first += count;
             };
             return error.NoEditorCommand;
+        }
+
+        /// Run `console_commands[command]` on the plugin that declared it. Host-only: the index is
+        /// this Set's, never persisted. Returns PluginDisabled or NoConsoleCommandHook/NoConsoleCommand
+        /// as needed, or the hook's failure; `call` must not escape the call.
+        ///
+        /// ```zig
+        /// try plugins.consoleCommand(index, app, &call); // The console found `index` by name.
+        /// ```
+        pub fn consoleCommand(self: *Self, command: usize, app: *App, call: *console_commands_zig.Call) !void {
+            comptime var first: usize = 0;
+            inline for (list, 0..) |T, i| if (@hasDecl(T, "console_commands")) {
+                const count = T.console_commands.len;
+                if (command >= first and command < first + count) {
+                    if (!self.enabled[i]) return error.PluginDisabled;
+                    if (@hasDecl(T, "consoleCommand")) return self.instances[i].consoleCommand(command - first, app, call);
+                    return error.NoConsoleCommandHook;
+                }
+                first += count;
+            };
+            return error.NoConsoleCommand;
+        }
+
+        /// The console's view of these plugins' commands, run on this Set: what the runtime hands the
+        /// dev console. Valid while `self` doesn't move.
+        ///
+        /// ```zig
+        /// eggy.dev_console.overlay.draw(&app.dev_console, app, plugins.consoleCommands(), &layer.context);
+        /// ```
+        pub fn consoleCommands(self: *Self) console_commands_zig.Commands {
+            const Through = struct {
+                fn run(context: *anyopaque, command: usize, app: *App, call: *console_commands_zig.Call) bool {
+                    const plugins: *Self = @ptrCast(@alignCast(context));
+                    plugins.consoleCommand(command, app, call) catch |err| {
+                        call.print("failed: {t}", .{err});
+                        return false;
+                    };
+                    return true;
+                }
+            };
+            return .{ .context = self, .list = console_commands, .run = Through.run };
         }
 
         /// Run a menu row or status bar entry on the plugin that declared it. Host-only: indices
@@ -1314,4 +1383,38 @@ test "status text is cut on a character boundary" {
     state.setText(&long);
     try std.testing.expect(state.text().len <= EditorBarState.max_text);
     try std.testing.expect(std.unicode.utf8ValidateSlice(state.text()));
+}
+
+test "console commands are listed in plugin order and run on the plugin that declares them" {
+    const Game = struct {
+        pub const console_commands = [_]console_commands_zig.Command{.{ .name = "god" }};
+        gods: u32 = 0,
+        pub fn consoleCommand(self: *@This(), command: usize, _: *App, call: *console_commands_zig.Call) !void {
+            try std.testing.expectEqual(@as(usize, 0), command);
+            try std.testing.expectEqualStrings("on", call.arg(0).?);
+            self.gods += 1;
+        }
+    };
+    const Weather = struct {
+        pub const console_commands = [_]console_commands_zig.Command{ .{ .name = "rain" }, .{ .name = "snow" } };
+        last: usize = 9,
+        pub fn consoleCommand(self: *@This(), command: usize, _: *App, _: *console_commands_zig.Call) !void {
+            self.last = command;
+        }
+    };
+    const Plugins = Set(.{ Game, Weather }, &.{ "game", "weather" });
+    try std.testing.expectEqual(@as(usize, 3), Plugins.console_commands.len);
+    try std.testing.expectEqualStrings("snow", Plugins.console_commands[2].name);
+
+    var plugins = Plugins{ .instances = .{ .{}, .{} }, .enabled = .{ true, true } };
+    var app: App = undefined;
+    var discard: std.Io.Writer.Discarding = .init(&.{});
+    var call = console_commands_zig.Call{ .line = "god on", .args = &.{"on"}, .out = &discard.writer, .arena = std.testing.allocator };
+    const commands = plugins.consoleCommands();
+    try std.testing.expect(commands.run(commands.context, 0, &app, &call));
+    try std.testing.expect(commands.run(commands.context, 2, &app, &call));
+    try std.testing.expectEqual(@as(u32, 1), plugins.instances[0].gods);
+    try std.testing.expectEqual(@as(usize, 1), plugins.instances[1].last);
+    plugins.enabled[1] = false;
+    try std.testing.expectError(error.PluginDisabled, plugins.consoleCommand(1, &app, &call));
 }

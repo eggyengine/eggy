@@ -95,6 +95,9 @@ pub const State = struct {
             .finger_up, .finger_canceled => _ = self.touches.remove(touchKey(local).?),
             else => {},
         }
+        // The dev console, while it shows over the game, takes every input, once the pointer and
+        // buttons are tracked above, so the editor still sees the mouse leave and let go.
+        if (eggy.dev_console.overlay.event(&app.dev_console, app, local, true)) return;
         const relative_pointer = self.relative_mouse and at != null and !eggy.game_ui.isTouchInput(local);
         const consumed = if (!relative_pointer) if (app.ui_layer) |layer| layer.handle(local, true) else false else false;
         if (!relative_pointer and (consumed or game.uiEvent(app, local) or (running and try pressBillboard(app, local, view, viewport)))) {
@@ -150,6 +153,7 @@ test "custom UI consumption withholds both gameplay polling and event hooks" {
     var app: eggy.App = undefined;
     app.input = .{};
     app.ui_layer = null;
+    app.dev_console = .{};
     var game = Game{};
     var state = State{ .focused = true };
     const event = eggy.Event{ .key_down = .{ .common = undefined, .id = null, .scancode = .w, .key = .w, .mod = .{}, .raw = 0, .down = true, .repeat = false } };
@@ -187,6 +191,7 @@ test "Scene touch ownership follows exact contacts outside the viewport and clea
     app.world = .init(gpa);
     defer app.world.deinit();
     app.ui_layer = null;
+    app.dev_console = .{};
     app.input = .{};
     var game = Game{};
     var state = State{};
@@ -216,6 +221,7 @@ test "relative capture keeps tracking outside the viewport without hovering or c
     var app: eggy.App = undefined;
     app.input = .{};
     app.ui_layer = null;
+    app.dev_console = .{};
     var game = Game{};
     var state = State{ .focused = true, .mouse_captured = true, .relative_mouse = true };
     const motion = eggy.Event{ .mouse_motion = .{

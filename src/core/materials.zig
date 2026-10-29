@@ -6,7 +6,6 @@ const refs = @import("refs.zig");
 const api = @import("support.zig");
 pub const Material = @import("material.zig").Material;
 pub const support: api.Support = .available;
-pub const effects_support: api.Support = .not_implemented;
 
 /// Borrowed access to this world's material components; obtain it from `app.materials()`.
 pub const Materials = struct {
@@ -18,11 +17,6 @@ pub const Materials = struct {
         try material.validate();
         try self.world.addComponent(entity, material);
         self.world.markChanged(entity, Material);
-    }
-
-    /// Postprocessing is separate from materials and is not implemented.
-    pub fn applyEffect(_: Materials, effect: enum { bloom, tone_mapping }, strength: f32) api.Error!void {
-        return api.notImplemented(.{ effect, strength });
     }
 };
 
@@ -36,6 +30,7 @@ pub fn parse(gpa: std.mem.Allocator, source: [:0]const u8) !Material {
         emissive_color: [3]f32 = @splat(0),
         unlit: bool = false,
         alpha_cutoff: f32 = 0.01,
+        shader: []const u8 = "",
     };
     var arena: std.heap.ArenaAllocator = .init(gpa);
     defer arena.deinit();
@@ -48,6 +43,7 @@ pub fn parse(gpa: std.mem.Allocator, source: [:0]const u8) !Material {
         .emissive_color = file.emissive_color,
         .unlit = file.unlit,
         .alpha_cutoff = file.alpha_cutoff,
+        .shader = try refs.AssetRef(.shader).parse(file.shader),
     };
     try material.validate();
     return material;
@@ -56,8 +52,9 @@ pub fn parse(gpa: std.mem.Allocator, source: [:0]const u8) !Material {
 test "material files validate parameters and own texture references" {
     const material = try parse(std.testing.allocator,
         \\.{ .color = .{ 1, 0.5, 0.2, 1 }, .metallic = 0.7,
-        \\ .roughness = 0.3, .texture = "resources/metal.png" }
+        \\ .roughness = 0.3, .texture = "resources/metal.png", .shader = "resources/shine.slang" }
     );
+    try std.testing.expectEqual(refs.AssetRef(.shader).init("resources/shine.slang").id(), material.shader.id());
     try std.testing.expectEqual(@as(f32, 0.7), material.metallic);
     try std.testing.expectEqual(refs.AssetRef(.image).init("resources/metal.png").id(), material.texture.id());
     try std.testing.expectError(error.InvalidMaterial, parse(std.testing.allocator, ".{ .roughness = -1 }"));

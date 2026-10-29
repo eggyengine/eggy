@@ -19,6 +19,7 @@ pub const package = @import("package.zig");
 pub const clip = @import("clip.zig");
 pub const imported_clip = @import("imported_clip.zig");
 pub const ui_scene = @import("ui_scene.zig");
+pub const tilemap = @import("tilemap.zig");
 pub const zon = @import("zon.zig");
 
 test {
@@ -36,4 +37,5 @@ test {
     _ = package;
     _ = @import("clip.zig");
     _ = ui_scene;
+    _ = tilemap;
 }

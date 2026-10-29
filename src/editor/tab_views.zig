@@ -1,11 +1,11 @@
 //! Each workspace tab's own view through the panels it has a copy of (`panels.Live`): the Scene's
-//! camera and toolbar, the 2D Scene's centre, zoom, grid and snap, and the UI scene the UI
+//! camera and toolbar, the 2D Scene's centre, zoom and toolbar, and the UI scene the UI
 //! Designer has open. The editor has one of each; when another copy goes live, the one in use is
 //! put aside for its copy and the new copy's is put in its place.
 const std = @import("std");
 const panels = @import("panels.zig");
 const scene_view = @import("scene_view/scene_view.zig");
-const Scene2d = @import("scene_2d.zig").Scene2d;
+const Scene2d = @import("scene_2d/scene_2d.zig").Scene2d;
 const ui_designer = @import("ui_designer/ui_designer.zig");
 const log = std.log.scoped(.tabs);
 
@@ -13,7 +13,7 @@ const log = std.log.scoped(.tabs);
 const SceneLook = struct { camera: scene_view.SceneCamera, tools: scene_view.toolbar.State };
 
 /// What a 2D Scene copy keeps while another is live.
-const FlatLook = struct { centre: [2]f32, height_m: f32, grid: bool, snap: bool };
+const FlatLook = struct { centre: [2]f32, height_m: f32, tools: scene_view.toolbar.State };
 
 pub const TabViews = struct {
     /// The copies whose views are in use now.
@@ -42,9 +42,9 @@ pub const TabViews = struct {
             self.applied.scene = live.scene;
         }
         if (live.scene_2d != self.applied.scene_2d) {
-            self.flats[self.applied.scene_2d] = .{ .centre = flat.centre, .height_m = flat.height_m, .grid = flat.grid, .snap = flat.snap };
-            const next = self.flats[live.scene_2d] orelse FlatLook{ .centre = .{ 0, 0 }, .height_m = 12, .grid = true, .snap = false };
-            flat.* = .{ .centre = next.centre, .height_m = next.height_m, .grid = next.grid, .snap = next.snap };
+            self.flats[self.applied.scene_2d] = .{ .centre = flat.centre, .height_m = flat.height_m, .tools = flat.tools };
+            const next = self.flats[live.scene_2d] orelse FlatLook{ .centre = .{ 0, 0 }, .height_m = 12, .tools = (Scene2d{}).tools };
+            flat.* = .{ .centre = next.centre, .height_m = next.height_m, .tools = next.tools };
             self.applied.scene_2d = live.scene_2d;
         }
         if (live.ui != self.applied.ui) if (env) |designer_env| {

@@ -27,6 +27,8 @@ pub const HotGame = struct {
     /// The game's panels, copied out of the library, as the editor shows them across swaps.
     panels: []eggy.plugins.EditorPanel,
     commands: []const eggy.plugins.EditorCommand = &.{},
+    /// The plugins' dev console commands, copied into `manifest_arena`.
+    console_commands: []const eggy.dev_console.Command = &.{},
     file_types: []const eggy.plugins.EditorFileType = &.{},
     /// The plugins' widgets for UI scenes, copied into `manifest_arena`.
     ui_widgets: []const eggy.plugins.UiWidget = &.{},
@@ -314,6 +316,24 @@ pub const HotGame = struct {
         self.game.editor_command(state, command, editor);
     }
 
+    /// The game's and plugins' dev console commands, run in the library: what the editor hands
+    /// `app.dev_console`. While the game isn't running they say so rather than run. Valid while
+    /// `self` doesn't move; the list changes with each load.
+    pub fn consoleCommands(self: *HotGame) eggy.dev_console.Commands {
+        const Through = struct {
+            fn run(context: *anyopaque, command: usize, app: *eggy.App, call: *eggy.dev_console.Call) bool {
+                const hot: *HotGame = @ptrCast(@alignCast(context));
+                const state = hot.state orelse {
+                    call.print("the game isn't running (see the log)", .{});
+                    return false;
+                };
+                if (command >= hot.console_commands.len) return false;
+                return hot.game.console_command(state, command, app, call);
+            }
+        };
+        return .{ .context = self, .list = self.console_commands, .run = Through.run };
+    }
+
     /// Press a plugin's menu row or status bar entry, by its place in `menus` / `status_items`
     /// (`item` for `.menu_item` and `.status_item`). Editor host only: does nothing while the
     /// game isn't running, for a turned-off plugin's entry or an index past the metadata; hook
@@ -441,12 +461,19 @@ pub const HotGame = struct {
             .title = try self.manifest_arena.allocator().dupeSentinel(u8, std.mem.span(source.title), 0),
         };
         const arena = self.manifest_arena.allocator();
+        const console_commands = try arena.alloc(eggy.dev_console.Command, game.console_command_count);
+        for (console_commands, game.console_commands[0..game.console_command_count]) |*command, source| command.* = .{
+            .name = try arena.dupeSentinel(u8, std.mem.span(source.name), 0),
+            .help = try arena.dupeSentinel(u8, std.mem.span(source.help), 0),
+            .usage = try arena.dupeSentinel(u8, std.mem.span(source.usage), 0),
+        };
         const file_types = try arena.alloc(eggy.plugins.EditorFileType, game.file_type_count);
         for (file_types, game.file_types[0..game.file_type_count]) |*file_type, source| file_type.* = .{
             .key = try arena.dupeSentinel(u8, std.mem.span(source.key), 0),
             .title = try arena.dupeSentinel(u8, std.mem.span(source.title), 0),
             .extension = try arena.dupeSentinel(u8, std.mem.span(source.extension), 0),
             .contents = try arena.dupe(u8, source.contents[0..source.contents_len]),
+            .category = try arena.dupeSentinel(u8, std.mem.span(source.category), 0),
         };
         const ui_widgets = try arena.alloc(eggy.plugins.UiWidget, game.ui_widget_count);
         for (ui_widgets, game.ui_widgets[0..game.ui_widget_count]) |*widget, source| widget.* = .{
@@ -463,7 +490,7 @@ pub const HotGame = struct {
             .note = try arena.dupeSentinel(u8, std.mem.span(source.note), 0),
             .icon_png = try arena.dupe(u8, source.icon_png[0..source.icon_png_len]),
         };
-        self.* = .{ .gpa = gpa, .path = self.path, .copy_path = copy_path, .library = library, .game = game, .state = null, .panels = panels, .commands = commands, .file_types = file_types, .ui_widgets = ui_widgets, .menus = menus, .status_items = status_items, .export_platforms = export_platforms, .loads = self.loads, .preference_manifests = manifests, .component_types = component_types, .plugin_keys = plugin_keys, .manifest_arena = self.manifest_arena };
+        self.* = .{ .gpa = gpa, .path = self.path, .copy_path = copy_path, .library = library, .game = game, .state = null, .panels = panels, .commands = commands, .console_commands = console_commands, .file_types = file_types, .ui_widgets = ui_widgets, .menus = menus, .status_items = status_items, .export_platforms = export_platforms, .loads = self.loads, .preference_manifests = manifests, .component_types = component_types, .plugin_keys = plugin_keys, .manifest_arena = self.manifest_arena };
     }
 
     /// Copy the game's menus, with their rows, out of the library's memory.
@@ -526,6 +553,7 @@ pub const HotGame = struct {
         self.gpa.free(self.panels);
         self.panels = &.{};
         self.commands = &.{};
+        self.console_commands = &.{};
         self.file_types = &.{};
         self.ui_widgets = &.{};
         self.menus = &.{};
@@ -920,7 +948,7 @@ fn copyComponentTypes(arena: std.mem.Allocator, types: []const api.ComponentType
                 .parts = try copyParts(arena, field_source.parts[0..field_source.part_count]),
             };
         }
-        info.* = .{ .name = try arena.dupeSentinel(u8, std.mem.span(source.name), 0), .owner = try arena.dupeSentinel(u8, std.mem.span(source.owner), 0), .fields = fields, .addable = source.addable, .dependencies = try arena.dupe(usize, source.dependencies[0..source.dependency_count]), .icon = try arena.dupeSentinel(u8, std.mem.span(source.icon), 0) };
+        info.* = .{ .name = try arena.dupeSentinel(u8, std.mem.span(source.name), 0), .owner = try arena.dupeSentinel(u8, std.mem.span(source.owner), 0), .fields = fields, .addable = source.addable, .dependencies = try arena.dupe(usize, source.dependencies[0..source.dependency_count]), .icon = try arena.dupeSentinel(u8, std.mem.span(source.icon), 0), .category = try arena.dupeSentinel(u8, std.mem.span(source.category), 0) };
     }
     return infos;
 }

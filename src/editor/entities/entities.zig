@@ -12,6 +12,7 @@ const HotGame = @import("../hot_reload/hot_reload.zig").HotGame;
 const tree = @import("tree.zig");
 const hierarchy_zig = @import("hierarchy.zig");
 const inspector_zig = @import("inspector.zig");
+const field_editor = @import("field_editor.zig");
 const RootOrder = @import("root_order.zig").RootOrder;
 const Clipboard = @import("clipboard.zig").Clipboard;
 const ViewState = @import("view_state.zig").ViewState;
@@ -544,7 +545,14 @@ fn collectDetails(arena: std.mem.Allocator, app: *eggy.App, game: *const HotGame
     for (game.component_types, 0..) |info, index| {
         const disabled = isOff(off, info.owner);
         if (!game.hasComponent(app, entity, index)) {
-            if (info.addable and !disabled) try addable.append(arena, .{ .index = index, .label = try std.fmt.allocPrint(arena, "{s} ({s})", .{ info.name, info.owner }), .icon = info.icon });
+            if (info.addable and !disabled) try addable.append(arena, .{
+                .index = index,
+                .label = try std.fmt.allocPrint(arena, "{s} ({s})", .{ info.name, info.owner }),
+                .name = info.name,
+                .icon = info.icon,
+                // Uncategorised types go under their plugin's name ("Game" for the game's).
+                .category = if (info.category.len > 0) info.category else field_editor.displayName(arena, info.owner),
+            });
             continue;
         }
         const values = try arena.alloc(?[]const u8, info.fields.len);

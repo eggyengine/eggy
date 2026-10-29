@@ -1,4 +1,5 @@
-//! Own the complete export process tree so cancellation also stops SDK installers.
+//! Own a build's or export's whole process tree, so cancelling stops the compilers and SDK
+//! installers it started too, not only its root.
 const std = @import("std");
 const windows = @import("builtin").os.tag == .windows;
 const win = std.os.windows;
@@ -6,36 +7,37 @@ const win = std.os.windows;
 pub const Process = struct {
     child: std.process.Child,
     job: ?win.HANDLE = null,
-    grouped: bool,
 
-    /// Spawn with a private POSIX process group or Windows job when `grouped` is true.
-    /// Windows attaches the suspended process before any installer can spawn descendants.
-    pub fn spawn(io: std.Io, options: std.process.SpawnOptions, grouped: bool) !Process {
+    /// Spawn in a private POSIX process group or Windows job, which its descendants join.
+    /// Windows attaches the suspended process before it can spawn any.
+    pub fn spawn(io: std.Io, options: std.process.SpawnOptions) !Process {
         var configured = options;
-        if (grouped) {
-            if (windows) configured.start_suspended = true else configured.pgid = 0;
-        }
+        if (windows) configured.start_suspended = true else configured.pgid = 0;
         var child = try std.process.spawn(io, configured);
         errdefer child.kill(io);
-        if (windows and grouped) {
+        if (windows) {
             const job = kernel.CreateJobObjectW(null, null) orelse return error.ExportProcessGroupFailed;
             errdefer _ = kernel.CloseHandle(job);
             if (kernel.AssignProcessToJobObject(job, child.id.?) == .FALSE) return error.ExportProcessGroupFailed;
             if (kernel.ResumeThread(child.thread_handle) == std.math.maxInt(u32)) return error.ExportProcessGroupFailed;
-            return .{ .child = child, .job = job, .grouped = true };
+            return .{ .child = child, .job = job };
         }
-        return .{ .child = child, .grouped = grouped };
+        return .{ .child = child };
+    }
+
+    /// Kill the whole tree now without reaping the root, so pipes its processes hold close and
+    /// whoever reads them sees the end. Safe from another thread while the root isn't yet reaped.
+    pub fn terminate(self: *const Process) void {
+        if (windows) {
+            _ = kernel.TerminateJobObject(self.job.?, 1);
+        } else if (self.child.id) |id| {
+            _ = std.c.kill(-id, .KILL);
+        }
     }
 
     /// Kill remaining descendants if the root has not exited, then reap the root and close ownership.
     pub fn stop(self: *Process, io: std.Io) void {
-        if (self.child.id) |id| if (self.grouped) {
-            if (windows) {
-                _ = kernel.TerminateJobObject(self.job.?, 1);
-            } else {
-                _ = std.c.kill(-id, .KILL);
-            }
-        };
+        if (self.child.id != null) self.terminate();
         self.child.kill(io);
         if (windows) if (self.job) |job| {
             _ = kernel.CloseHandle(job);
@@ -52,13 +54,13 @@ const kernel = struct {
     extern "kernel32" fn CloseHandle(win.HANDLE) callconv(.winapi) win.BOOL;
 };
 
-test "an export owns a separate process group and cancellation reaps its root" {
+test "a build owns a separate process group and cancellation reaps its root" {
     if (windows) return error.SkipZigTest;
     var process = try Process.spawn(std.testing.io, .{
         .argv = &.{ "/bin/sh", "-c", "printf ready; sleep 30" },
         .stdout = .pipe,
         .stderr = .ignore,
-    }, true);
+    });
     defer process.stop(std.testing.io);
     var buffer: [32]u8 = undefined;
     var reader = process.child.stdout.?.readerStreaming(std.testing.io, &buffer);

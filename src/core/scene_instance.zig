@@ -13,6 +13,7 @@ const Transform = @import("transform.zig").Transform;
 pub const SceneInstance = struct {
     /// Marks it in the editor (nf-md-package_variant_closed).
     pub const icon = "\u{f03d7}";
+    pub const category = "Scene";
     /// Its entities go where its `Transform` puts them.
     pub const dependencies = .{Transform};
 
