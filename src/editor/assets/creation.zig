@@ -80,7 +80,7 @@ const builtins = [_]Entry{
 
 /// A pass over the image, which a `PostProcess` lists in its `passes`.
 const post_shader_template =
-    \\#include "eggy"
+    \\#include "eggy.slang"
     \\
     \\// Runs for every pixel of the scene's light, before bloom and tone mapping.
     \\// `input.values` are the four values the pass is given in its PostProcess.
@@ -95,7 +95,7 @@ const post_shader_template =
 
 /// How a material's surface looks before it is lit, which a material names as its `shader`.
 const surface_shader_template =
-    \\#include "eggy"
+    \\#include "eggy.slang"
     \\
     \\// Runs for every point drawn with a material using this shader. Start from the surface
     \\// the material describes, change what you need, and Eggy lights the result.

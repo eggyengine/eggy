@@ -52,7 +52,7 @@ sees the scene's real light values.
 2. Open it in your code editor:
 
    ```slang
-   #include "eggy"
+   #include "eggy.slang"
 
    float4 post(PostInput input) {
        float3 color = sceneColor(input.uv);
@@ -65,7 +65,15 @@ sees the scene's real light values.
    onto one of **passes**' **shader** slots, and set its **values**. Here the first value is
    how grey the image gets.
 
-`#include "eggy"` gives your shader everything below. The function must be called `post`
+:::tip Code editors
+When the editor opens your project it writes Eggy's shader library to `.eggy/shaders/eggy.slang`.
+With VS Code, VSCodium or Cursor as your code editor (Edit > Preferences), it also adds that
+folder to `.vscode/settings.json`, so the Slang extension finds `#include "eggy.slang"` and
+completes `PostInput` and the rest. In another editor, add `.eggy/shaders` (as an absolute
+path) to its Slang language server's include paths.
+:::
+
+`#include "eggy.slang"` gives your shader everything below. The function must be called `post`
 and take a `PostInput`:
 
 | In `PostInput` | Meaning |
@@ -89,7 +97,7 @@ pulsing glows, colour by height. Eggy still lights and shadows the result.
 2. Edit it:
 
    ```slang
-   #include "eggy"
+   #include "eggy.slang"
 
    Surface surface(SurfaceInput input) {
        Surface shown = defaultSurface(input);

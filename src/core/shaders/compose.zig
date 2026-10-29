@@ -1,12 +1,15 @@
-//! A project's shader made whole: its `#include "eggy"` replaced by Eggy's shader library, and
+//! A project's shader made whole: its `#include "eggy.slang"` replaced by Eggy's shader library, and
 //! its function put into Eggy's own shader for its role, ready to compile as one Slang source.
 const std = @import("std");
 
-const library = @embedFile("eggy.slang");
+/// Eggy's shader library, which a project shader's `#include "eggy.slang"` stands for.
+pub const library = @embedFile("eggy.slang");
 const post_wrapper = @embedFile("post_pass.slang");
 const surface_wrapper = @embedFile("mesh.slang");
 const library_include = "#include \"eggy.slang\"";
-const project_include = "#include \"eggy\"";
+/// What a project shader includes the library as; the bare name is what shaders wrote before
+/// code editors were given the file (`.eggy/shaders/eggy.slang`), and still builds.
+const project_includes = [_][]const u8{ "#include \"eggy.slang\"", "#include \"eggy\"" };
 
 /// What a project's shader does, told by the input its function takes.
 pub const Role = enum(u32) {
@@ -34,7 +37,7 @@ pub const Role = enum(u32) {
 };
 
 pub const Error = error{
-    /// The shader doesn't `#include "eggy"`.
+    /// The shader doesn't `#include "eggy.slang"`.
     MissingEggyInclude,
     /// It takes neither a `PostInput` nor a `SurfaceInput`.
     UnknownShaderRole,
@@ -57,7 +60,9 @@ pub fn roleOf(source: []const u8) Error!Role {
 /// include line left blank, so line numbers match the file). The caller owns the result.
 pub fn compose(gpa: std.mem.Allocator, source: []const u8, name: []const u8) (Error || error{OutOfMemory})![:0]u8 {
     const role = try roleOf(source);
-    const include = std.mem.indexOf(u8, source, project_include) orelse return error.MissingEggyInclude;
+    const include, const include_len = for (project_includes) |spelling| {
+        if (std.mem.indexOf(u8, source, spelling)) |at| break .{ at, spelling.len };
+    } else return error.MissingEggyInclude;
     const wrapper = role.wrapper();
     const included = std.mem.indexOf(u8, wrapper, library_include).?;
     const marked = std.mem.indexOf(u8, wrapper, role.marker()).? + role.marker().len;
@@ -74,7 +79,7 @@ pub fn compose(gpa: std.mem.Allocator, source: []const u8, name: []const u8) (Er
     if (role == .surface) writer.writeAll("#define EGGY_SURFACE 1\n") catch return error.OutOfMemory;
     writer.print("#line 1 \"{s}\"\n", .{name}) catch return error.OutOfMemory;
     writer.writeAll(source[0..include]) catch return error.OutOfMemory;
-    writer.writeAll(source[include + project_include.len ..]) catch return error.OutOfMemory;
+    writer.writeAll(source[include + include_len ..]) catch return error.OutOfMemory;
     // The rest of the wrapper.
     writer.print("\n#line {d} \"eggy {t}\"\n", .{ std.mem.count(u8, wrapper[0..marked], "\n") + 1, role }) catch return error.OutOfMemory;
     writer.writeAll(wrapper[marked..]) catch return error.OutOfMemory;
@@ -83,7 +88,7 @@ pub fn compose(gpa: std.mem.Allocator, source: []const u8, name: []const u8) (Er
 
 test "a post shader is put into the post wrapper with the library inlined" {
     const source =
-        \\#include "eggy"
+        \\#include "eggy.slang"
         \\float4 post(PostInput input) { return float4(1.0 - sceneColor(input.uv), 1.0); }
     ;
     try std.testing.expectEqual(Role.post, try roleOf(source));
@@ -104,6 +109,7 @@ test "a surface shader replaces the mesh shader's default surface" {
     ;
     const whole = try compose(std.testing.allocator, source, "plain.slang");
     defer std.testing.allocator.free(whole);
+    try std.testing.expect(std.mem.indexOf(u8, whole, "#include") == null);
     try std.testing.expect(std.mem.indexOf(u8, whole, "#define EGGY_SURFACE 1").? < std.mem.indexOf(u8, whole, "#ifndef EGGY_SURFACE").?);
     try std.testing.expect(std.mem.indexOf(u8, whole, "vertexMain") != null);
 }

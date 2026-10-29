@@ -35,7 +35,7 @@ pub const assets = @import("eggy_assets");
 pub const model_cache = @import("model_cache.zig");
 pub const texture_cache = @import("texture_cache.zig");
 pub const shader_cache = @import("shader_cache.zig");
-/// A project shader's `#include "eggy"` and role, made whole for compiling.
+/// A project shader's `#include "eggy.slang"` and role, made whole for compiling.
 pub const shader_compose = @import("shaders/compose.zig");
 pub const Mesh = mesh.Mesh;
 pub const sprite = @import("sprite.zig");

@@ -52,6 +52,7 @@ const save_prompt_zig = @import("save_prompt.zig");
 const crash_recovery = @import("crash_recovery.zig");
 const recovery_prompt_zig = @import("recovery_prompt.zig");
 const eggy_update = @import("projects/eggy_update.zig");
+const slang_search_path = @import("slang_search_path.zig");
 const eggy_update_prompt = @import("eggy_update_prompt.zig");
 const page_style = @import("page_style.zig");
 const file_ops = @import("assets/file_ops.zig");
@@ -478,6 +479,11 @@ pub fn Editor(comptime project: type) type {
                 } else |_| {}
             }
             self.offerRecovery();
+            // So the code editor's Slang language server finds a shader's `#include "eggy.slang"`.
+            if (opened_project) |opened| {
+                const choice = preferences.editor(&self.app.preference_values).code_editor;
+                slang_search_path.provide(gpa, self.app.process_init.io, opened.dir, choice == .vscode or choice == .vscodium or choice == .cursor);
+            }
             self.built_sources = self.sourcesNow();
             // ponytail: the commit at start stands for the one built from, so an editor opened long after its build misses commits made between; bake the commit in at build time if that bites.
             self.built_eggy_head = self.linkedEggyHead();
@@ -3896,6 +3902,7 @@ test {
     _ = @import("crash_recovery.zig");
     _ = @import("recovery_prompt.zig");
     _ = @import("eggy_update_prompt.zig");
+    _ = @import("slang_search_path.zig");
     _ = @import("projects/eggy_update.zig");
     _ = @import("assets/assets.zig");
     _ = @import("assets/listing.zig");

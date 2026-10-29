@@ -632,13 +632,13 @@ test "composed post and surface shaders compile with Slang" {
     const slangc = eggy.slangc;
     const gpa = std.testing.allocator;
     const sources = [_][]const u8{
-        \\#include "eggy"
+        \\#include "eggy.slang"
         \\float4 post(PostInput input) {
         \\    float3 color = sceneColor(input.uv);
         \\    return float4(lerp(color, luminance(color).xxx, input.values.x), 1.0);
         \\}
         ,
-        \\#include "eggy"
+        \\#include "eggy.slang"
         \\Surface surface(SurfaceInput input) {
         \\    Surface shown = defaultSurface(input);
         \\    shown.emissive += shown.base_color * (0.5 + 0.5 * sin(input.time_s));
