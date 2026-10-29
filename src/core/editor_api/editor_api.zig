@@ -81,6 +81,14 @@ pub const EditorStatus = struct {
     /// What Undo and Redo would take back or do again; null when nothing.
     undo: ?[]const u8 = null,
     redo: ?[]const u8 = null,
+    /// Milliseconds since someone last used the editor's windows, and since none of them has
+    /// focus (null while one has).
+    idle_ms: u64 = 0,
+    unfocused_ms: ?u64 = null,
+    /// How many times this editor saved the scene, started playing and started a build.
+    saves: u32 = 0,
+    plays: u32 = 0,
+    builds: u32 = 0,
 };
 
 pub const Host = extern struct {

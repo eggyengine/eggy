@@ -164,7 +164,9 @@ pub fn editorUpdate(self: *Plugin, editor: *eggy.editor.Context) !void {
 
 - `status(arena)` says which scene is open and whether it is saved, whether the game
   is playing or paused, how the last `requestBuild` went (with the end of its output),
-  and what Undo and Redo would do.
+  what Undo and Redo would do, how long since someone used the editor (`idle_ms`) and
+  since its windows lost focus (`unfocused_ms`), and how many times this editor saved
+  the scene, started playing and started a build.
 - `sceneText(arena)` returns the world as scene-file ZON. `replaceScene(zon)` replaces
   every entity with that ZON, and `addToScene(zon, parent)` adds its entities, under the
   entity at place `parent` in `sceneText`'s `.entities` when one is given. Each is one

@@ -50,6 +50,7 @@ const plugin_bars = @import("plugin_bars.zig");
 const Dragged = @import("dragged.zig").Dragged;
 const save_prompt_zig = @import("save_prompt.zig");
 const crash_recovery = @import("crash_recovery.zig");
+const Activity = @import("activity.zig").Activity;
 const recovery_prompt_zig = @import("recovery_prompt.zig");
 const eggy_update = @import("projects/eggy_update.zig");
 const slang_search_path = @import("slang_search_path.zig");
@@ -134,6 +135,8 @@ pub fn Editor(comptime project: type) type {
         leftover: ?crash_recovery.Leftover = null,
         recovery_prompt: ?*recovery_prompt_zig.RecoveryPrompt = null,
         crashed: bool = false,
+        /// How the editor is being used, for plugins (`EditorStatus`).
+        activity: Activity = .{},
         leaving: Leaving = .quit,
         leave_approved: bool = false,
         /// The Play mode warning's text (see `playWarning`).
@@ -1285,6 +1288,7 @@ pub fn Editor(comptime project: type) type {
             self.entity_editor.resetWorldView();
             self.workspace.playing = true;
             self.game_input = .{ .focused = true };
+            self.activity.plays += 1;
         }
 
         /// Stop: the game starts over on the scene kept by Play. Entities are made anew; the
@@ -1988,6 +1992,7 @@ pub fn Editor(comptime project: type) type {
             var message: [96]u8 = undefined;
             self.workspace.toast(std.fmt.bufPrint(&message, "Saved {s}", .{scene.name() orelse "the scene"}) catch "Saved");
             self.workspace.scene_unsaved = false;
+            self.activity.saves += 1;
         }
 
         /// Checked save entry point used by synchronous editor-extension requests.
@@ -2313,6 +2318,7 @@ pub fn Editor(comptime project: type) type {
 
         fn handleEvent(self: *Self, curr_event: sdl3.events.Event) !sdl3.AppResult {
             self.followInstances();
+            self.activity.follow(curr_event, sdl3.timer.getMillisecondsSinceInit());
             try self.app.deviceEvent(curr_event);
             if (self.about_window) |window| {
                 if (window.closeRequested(curr_event)) {
@@ -2827,6 +2833,7 @@ pub fn Editor(comptime project: type) type {
             self.built_sources = sources;
             if (self.build_window == null) self.build_window = try BuildWindow.open(self.gpa, &self.app.graphics, self.ui.font, self.mono, self.app.window.window, opened.title);
             self.rebuild = job;
+            self.activity.builds += 1;
         }
 
         /// What agreeing to an Eggy update goes on to do: the refocus's rebuild, or Reload.
@@ -3900,6 +3907,7 @@ test {
     _ = @import("scene_view/scene_view.zig");
     _ = @import("save_prompt.zig");
     _ = @import("crash_recovery.zig");
+    _ = @import("activity.zig");
     _ = @import("recovery_prompt.zig");
     _ = @import("eggy_update_prompt.zig");
     _ = @import("slang_search_path.zig");

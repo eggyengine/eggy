@@ -193,6 +193,8 @@ fn apply(host: anytype, request: api.Request, response: *api.Response) !void {
         },
         .status => {
             const state = &host.extension_state;
+            const activity = &host.activity;
+            const now_ms = sdl.timer.getMillisecondsSinceInit();
             var written: std.Io.Writer.Allocating = .init(host.gpa);
             defer written.deinit();
             try std.zon.stringify.serialize(api.EditorStatus{
@@ -203,6 +205,11 @@ fn apply(host: anytype, request: api.Request, response: *api.Response) !void {
                 .build_log = state.build_log orelse "",
                 .undo = if (host.history.peek(.undo)) |step| step.describe() else null,
                 .redo = if (host.history.peek(.redo)) |step| step.describe() else null,
+                .idle_ms = now_ms -| activity.last_input_ms,
+                .unfocused_ms = if (activity.focus_lost_ms) |lost_ms| now_ms -| lost_ms else null,
+                .saves = activity.saves,
+                .plays = activity.plays,
+                .builds = activity.builds,
             }, .{}, &written.writer);
             return respondText(request, response, written.written());
         },
