@@ -58,7 +58,8 @@ pub const UiBillboard = struct {
     pub const category = "UI";
     pub const dependencies = .{Transform};
     scene: AssetRef(.ui) = .{},
-    /// How wide its face is, in metres; its height follows the scene's design size.
+    /// How wide its face is, in metres, whatever the entity's scale; its height follows what the
+    /// scene lays out within its design size (all of it, for a root that fills it).
     width_m: f32 = 1,
     /// Turn to face the camera; otherwise its face is the entity's XY plane, facing +Z.
     face_camera: bool = true,
@@ -106,6 +107,7 @@ pub fn gather(world: *ecs.World, screens: []Screen, billboards_out: []Billboard)
 pub fn gatherInto(world: *ecs.World, state: *State, widgets: WidgetPainter) void {
     state.forgetClicks();
     state.billboard_buttons.clearRetainingCapacity();
+    state.billboard_bounds.clearRetainingCapacity();
     state.screen_count, state.billboard_count = gather(world, &state.screens, &state.billboards);
     state.widgets = widgets;
 }

@@ -74,7 +74,9 @@ Select an entity and add a component:
 - **UiScreen** shows the scene over the game's view. **Layer** orders several screens, and
   **Interactive** off lets presses through to the game.
 - **UiBillboard** shows the scene in the world, at the entity's Transform. **Width m** is
-  its width in metres; its height follows the scene's design size. **Face camera** turns it
+  its width in metres, even under a scaled parent. The billboard is as big as what the scene lays out: all of the design
+  size when the root fills it, or just a 400 by 200 root inside a 1280 by 720 design, scaled
+  to that width. **Face camera** turns it
   toward the camera; otherwise it faces the entity's +Z. **Resolution** trades sharpness for
   memory. Billboards are hidden by what is in front of them. Their buttons take mouse clicks,
   and clicking one in the Scene panel selects its entity.

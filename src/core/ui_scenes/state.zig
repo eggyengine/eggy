@@ -64,6 +64,13 @@ pub const BillboardButton = struct {
     rect: ui.Rect,
 };
 
+/// The part of a billboard's scene it showed last frame, in design pixels: what the scene lays
+/// out within its design size, so a 400 by 200 panel in a 1280 by 720 design is a 400 by 200 face.
+pub const BillboardBounds = struct {
+    entity: ecs.EntityId,
+    rect: ui.Rect,
+};
+
 /// How many screens and billboards are shown in one frame at most.
 pub const max_screens = 64;
 pub const max_billboards = 256;
@@ -87,6 +94,8 @@ pub const State = struct {
     billboard_count: usize = 0,
     /// The buttons billboards painted since `gatherInto` (`billboards.Renderer.prepare`).
     billboard_buttons: std.ArrayList(BillboardButton) = .empty,
+    /// What each billboard painted since `gatherInto` showed of its scene, for presses on it.
+    billboard_bounds: std.ArrayList(BillboardBounds) = .empty,
     /// Draws plugins' widgets; set by the plugin set each frame, cleared with the world.
     widgets: paint.WidgetPainter = .none,
     /// The asset key of the font the game UI draws with, when a screen's theme chose one.
@@ -98,6 +107,7 @@ pub const State = struct {
         self.overrides.deinit(self.gpa);
         self.clicks.deinit(self.gpa);
         self.billboard_buttons.deinit(self.gpa);
+        self.billboard_bounds.deinit(self.gpa);
         if (self.clicks_arena) |*arena| arena.deinit();
         if (self.scenes) |*scenes| scenes.deinit();
         if (self.screen_images) |*images| images.deinit();
@@ -115,6 +125,7 @@ pub const State = struct {
         self.screen_count = 0;
         self.billboard_count = 0;
         self.billboard_buttons.clearRetainingCapacity();
+        self.billboard_bounds.clearRetainingCapacity();
     }
 
     pub fn shownScreens(self: *const State) []const Screen {
@@ -164,6 +175,12 @@ pub const State = struct {
         if (self.scenes) |*scenes| scenes.forgetAll();
         if (self.screen_images) |*images| images.forgetAll();
         self.files_revision +%= 1;
+    }
+
+    /// The part of `entity`'s billboard scene painted last, if it was.
+    pub fn billboardBounds(self: *const State, entity: ecs.EntityId) ?ui.Rect {
+        for (self.billboard_bounds.items) |bounds| if (bounds.entity.eql(entity)) return bounds.rect;
+        return null;
     }
 
     /// What code changed about `entity`'s nodes named `name`, if anything.

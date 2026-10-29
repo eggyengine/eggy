@@ -14,6 +14,7 @@ const State = state_zig.State;
 const Billboard = state_zig.Billboard;
 const cache = @import("cache.zig");
 const scene_ui = @import("scene_ui.zig");
+const layout = @import("layout.zig");
 
 /// What the host gives graphics for one frame's billboards, borrowed until it is drawn.
 pub const Frame = struct {
@@ -104,12 +105,19 @@ pub const Renderer = struct {
             const scene = frame.state.sceneCache().get(frame.resources, billboard.key()) orelse continue;
             const design = scene.design_size;
             if (!(design[0] > 0 and design[1] > 0)) continue;
+            // The face is what the scene lays out, not its whole design size.
+            var sources = state_zig.Sources{ .state = frame.state, .resources = frame.resources, .images = &self.images, .font = self.context.font, .entity = billboard.entity() };
+            const measured = try layout.place(self.context.builder().allocator, scene, sources.layoutSources(), .{ .x = 0, .y = 0, .w = design[0], .h = design[1] }, 1);
+            const bounds = contentBounds(measured, design) orelse continue;
             // ponytail: a billboard larger than the texture is drawn coarser; split the texture if big signs look soft.
-            const resolution = @min(billboard.resolution, (atlas_size - gap) / @max(design[0], design[1]));
-            const tile = shelf.place(@ceil(design[0] * resolution), @ceil(design[1] * resolution)) orelse continue;
-            const built = try scene_ui.build(&self.context, frame.state, frame.resources, &self.images, scene, billboard.entity(), .{ .viewport = tile, .scale = resolution, .interactive = false }, frame.time_ms);
-            try self.panels.append(self.gpa, panelFor(billboard, tile, design[1] / design[0], view, self.group));
+            const resolution = @min(billboard.resolution, (atlas_size - gap) / @max(bounds.w, bounds.h));
+            const tile = shelf.place(@ceil(bounds.w * resolution), @ceil(bounds.h * resolution)) orelse continue;
+            // The whole design, moved so the bounds land on the tile, and cut off around it.
+            const viewport = ui.Rect{ .x = tile.x - bounds.x * resolution, .y = tile.y - bounds.y * resolution, .w = design[0] * resolution, .h = design[1] * resolution };
+            const built = try scene_ui.build(&self.context, frame.state, frame.resources, &self.images, scene, billboard.entity(), .{ .viewport = viewport, .scale = resolution, .interactive = false, .clip = tile }, frame.time_ms);
+            try self.panels.append(self.gpa, panelFor(billboard, tile, bounds.h / bounds.w, view, self.group));
             try noteButtons(frame.state, billboard.entity(), built.placed, tile);
+            if (frame.state.billboardBounds(billboard.entity()) == null) try frame.state.billboard_bounds.append(frame.state.gpa, .{ .entity = billboard.entity(), .rect = bounds });
         }
         const vertices = try self.context.render();
         if (self.panels.items.len == 0) return self.panels.items;
@@ -145,6 +153,20 @@ const Shelf = struct {
         return tile;
     }
 };
+
+/// The box around every node `placed` laid out, within the `design`-sized area; null when
+/// nothing shows there.
+fn contentBounds(placed: []const layout.Placed, design: [2]f32) ?ui.Rect {
+    var low = [2]f32{ design[0], design[1] };
+    var high = [2]f32{ 0, 0 };
+    for (placed) |item| {
+        if (item.rect.w <= 0 or item.rect.h <= 0) continue;
+        low = .{ @min(low[0], @max(0, item.rect.x)), @min(low[1], @max(0, item.rect.y)) };
+        high = .{ @max(high[0], @min(design[0], item.rect.x + item.rect.w)), @max(high[1], @min(design[1], item.rect.y + item.rect.h)) };
+    }
+    if (high[0] <= low[0] or high[1] <= low[1]) return null;
+    return .{ .x = low[0], .y = low[1], .w = high[0] - low[0], .h = high[1] - low[1] };
+}
 
 /// Keep where `entity`'s buttons were painted in `tile`, for presses, unless another viewport
 /// painted them this frame already.
@@ -193,7 +215,9 @@ pub fn hit(state: *State, resources: Resources, view: camera.View, ray: camera.R
         const scene = state.sceneCache().get(resources, billboard.key()) orelse continue;
         const design = scene.design_size;
         if (!(design[0] > 0 and design[1] > 0)) continue;
-        var found = hitFace(faceOf(billboard, design[1] / design[0], view), ray) orelse continue;
+        // As painted last; the design size before it was.
+        const shown = state.billboardBounds(billboard.entity()) orelse ui.Rect{ .x = 0, .y = 0, .w = design[0], .h = design[1] };
+        var found = hitFace(faceOf(billboard, shown.h / shown.w, view), ray) orelse continue;
         if (nearest != null and found.distance >= nearest.?.distance) continue;
         found.entity = billboard.entity();
         nearest = found;
@@ -237,27 +261,22 @@ fn panelFor(billboard: Billboard, tile: ui.Rect, aspect: f32, view: camera.View,
 }
 
 /// Where `billboard`'s face is: centred on its entity, `width_m` wide and `aspect` (height over
-/// width) of that tall, facing the camera or along its own X and Y.
+/// width) of that tall, facing the camera or along its own X and Y, whatever its scale.
 fn faceOf(billboard: Billboard, aspect: f32, view: camera.View) Face {
     const model = billboard.model;
     const width_m = billboard.width_m;
     const height_m = width_m * aspect;
     var across: [3]f32 = undefined;
     var upward: [3]f32 = undefined;
-    if (billboard.face_camera) {
-        // The camera's axes, scaled as the entity's X and Y are, so turning to face the camera
-        // keeps the size the panel has facing along the entity.
+    // `width_m` is metres in the world whichever way it faces: the entity's scale (or its
+    // parent's) turns it but doesn't shrink or stretch it.
+    const right, const up = if (billboard.face_camera) blk: {
         const right = camera.normalize(camera.cross(view.forward, view.up));
-        const up = camera.normalize(camera.cross(right, view.forward));
-        const scale_x = length(model[0][0..3].*);
-        const scale_y = length(model[1][0..3].*);
-        for (&across, &upward, right, up) |*a, *u, r, v| {
-            a.* = r * width_m * scale_x;
-            u.* = v * height_m * scale_y;
-        }
-    } else for (&across, &upward, 0..) |*a, *u, i| {
-        a.* = model[0][i] * width_m;
-        u.* = model[1][i] * height_m;
+        break :blk .{ right, camera.normalize(camera.cross(right, view.forward)) };
+    } else .{ camera.normalize(model[0][0..3].*), camera.normalize(model[1][0..3].*) };
+    for (&across, &upward, right, up) |*a, *u, r, v| {
+        a.* = r * width_m;
+        u.* = v * height_m;
     }
     var origin: [3]f32 = undefined;
     for (&origin, across, upward, 0..) |*o, a, u, i| o.* = model[3][i] - (a + u) / 2;
@@ -332,7 +351,7 @@ test "a press over a painted button records its click" {
     try std.testing.expect(state.clicks.items[0].entity.eql(sign));
 }
 
-test "a panel is the same size facing the camera as facing along its scaled entity" {
+test "a panel is width_m wide facing either way, however its entity is scaled" {
     var billboard = std.mem.zeroes(Billboard);
     billboard.width_m = 2;
     billboard.model = .{ .{ 0.5, 0, 0, 0 }, .{ 0, 0.5, 0, 0 }, .{ 0, 0, 0.5, 0 }, .{ 0, 0, 0, 1 } };
@@ -342,6 +361,26 @@ test "a panel is the same size facing the camera as facing along its scaled enti
     const fixed = panelFor(billboard, tile, 0.5, view, undefined);
     billboard.face_camera = true;
     const facing = panelFor(billboard, tile, 0.5, view, undefined);
-    try std.testing.expectApproxEqAbs(length(fixed.across), length(facing.across), 1e-5);
-    try std.testing.expectApproxEqAbs(length(fixed.upward), length(facing.upward), 1e-5);
+    for ([_]world_draw.Panel{ fixed, facing }) |panel| {
+        try std.testing.expectApproxEqAbs(@as(f32, 2), length(panel.across), 1e-5);
+        try std.testing.expectApproxEqAbs(@as(f32, 1), length(panel.upward), 1e-5);
+    }
+}
+
+test "a billboard's face is what its scene lays out within its design" {
+    const scene = @import("eggy_assets").ui_scene;
+    var children = [_]scene.Node{.{ .name = "panel", .layout = .{ .width = .{ .px = 400 }, .height = .{ .px = 200 }, .anchor = .{ .offset = .{ 100, 50 } } } }};
+    const sized = scene.UiScene{ .root = .{ .layout = .{}, .children = &children } };
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var context = try ui.Context.init(std.testing.allocator);
+    defer context.deinit();
+    const placed = try layout.place(arena.allocator(), &sized, .plain(context.font), .{ .x = 0, .y = 0, .w = 1280, .h = 720 }, 1);
+    const bounds = contentBounds(placed, .{ 1280, 720 }).?;
+    try std.testing.expectEqual(ui.Rect{ .x = 100, .y = 50, .w = 400, .h = 200 }, bounds);
+
+    // A root that fills the design shows all of it.
+    const filled = scene.UiScene{ .root = .{ .layout = .{ .width = .fill, .height = .fill } } };
+    const whole = try layout.place(arena.allocator(), &filled, .plain(context.font), .{ .x = 0, .y = 0, .w = 1280, .h = 720 }, 1);
+    try std.testing.expectEqual(ui.Rect{ .x = 0, .y = 0, .w = 1280, .h = 720 }, contentBounds(whole, .{ 1280, 720 }).?);
 }
