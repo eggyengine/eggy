@@ -4,8 +4,8 @@
 <meta charset="UTF-8">
 <meta name="generator" content="Docusaurus v3.10.2">
 <title data-rh="true">Your first scene-based game | Eggy</title><meta data-rh="true" name="viewport" content="width=device-width,initial-scale=1"><meta data-rh="true" name="twitter:card" content="summary_large_image"><meta data-rh="true" property="og:url" content="https://eggyengine.github.io/eggy/guides/first-game"><meta data-rh="true" property="og:locale" content="en"><meta data-rh="true" name="docusaurus_locale" content="en"><meta data-rh="true" name="docsearch:language" content="en"><meta data-rh="true" name="docusaurus_version" content="current"><meta data-rh="true" name="docusaurus_tag" content="docs-default-current"><meta data-rh="true" name="docsearch:version" content="current"><meta data-rh="true" name="docsearch:docusaurus_tag" content="docs-default-current"><meta data-rh="true" property="og:title" content="Your first scene-based game | Eggy"><meta data-rh="true" name="description" content="Build Cube Runner: an orange cube on a green floor that you drive with W, A, S and D"><meta data-rh="true" property="og:description" content="Build Cube Runner: an orange cube on a green floor that you drive with W, A, S and D"><link data-rh="true" rel="icon" href="/eggy/img/icon.svg"><link data-rh="true" rel="canonical" href="https://eggyengine.github.io/eggy/guides/first-game"><link data-rh="true" rel="alternate" href="https://eggyengine.github.io/eggy/guides/first-game" hreflang="en"><link data-rh="true" rel="alternate" href="https://eggyengine.github.io/eggy/guides/first-game" hreflang="x-default"><script data-rh="true" type="application/ld+json">{"@context":"https://schema.org","@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"Tutorials","item":"https://eggyengine.github.io/eggy/tutorials"},{"@type":"ListItem","position":2,"name":"Your first scene-based game","item":"https://eggyengine.github.io/eggy/guides/first-game"}]}</script><link rel="stylesheet" href="/eggy/assets/css/styles.888f8311.css">
-<script src="/eggy/assets/js/runtime~main.2e0438a7.js" defer="defer"></script>
-<script src="/eggy/assets/js/main.35e44b3b.js" defer="defer"></script>
+<script src="/eggy/assets/js/runtime~main.9dc810c8.js" defer="defer"></script>
+<script src="/eggy/assets/js/main.7b06e965.js" defer="defer"></script>
 </head>
 <body>
 <svg style="display: none;"><defs>
@@ -53,8 +53,8 @@ the top of the Inspector. Then press Add component:</p>
 <p><img decoding="async" loading="lazy" alt="The Add component list for the Player entity" src="/eggy/assets/images/add-component-84151065c1cfb4d28fd2a70923104e1a.png" width="1280" height="800" class="img_ev3q"></p>
 <p>Add these two:</p>
 <ul>
-<li class="">Transform sets where the entity is, how it is turned and how big it is. Set its position&#x27;s Y to <code>0.5</code>, so the cube sits on the floor.</li>
-<li class="">Mesh sets what it looks like. Pick the Cube shape and an orange colour (R <code>1</code>, G <code>0.55</code>, B <code>0.1</code>).</li>
+<li class="">Transform (under Scene) sets where the entity is, how it is turned and how big it is. Set its position&#x27;s Y to <code>0.5</code>, so the cube sits on the floor.</li>
+<li class="">Mesh (under Rendering) sets what it looks like. Pick the Cube shape and an orange colour (R <code>1</code>, G <code>0.55</code>, B <code>0.1</code>).</li>
 </ul>
 <p><img decoding="async" loading="lazy" alt="The Player entity: an orange cube with a Transform and a Mesh" src="/eggy/assets/images/player-821fcea9ebdb415b270450490b1fb9c4.png" width="1280" height="800" class="img_ev3q"></p>
 <h2 class="anchor anchorTargetStickyNavbar_Vzrq" id="add-the-floor-and-the-camera">5. Add the floor and the camera<a href="#add-the-floor-and-the-camera" class="hash-link" aria-label="Direct link to 5. Add the floor and the camera" title="Direct link to 5. Add the floor and the camera" translate="no">​</a></h2>
@@ -86,7 +86,7 @@ held. <code>eggy.findNamed</code> finds Camera so its transform can follow the p
 <p>Save the file and go back to the editor. It rebuilds your game in the Build progress window,
 then swaps it in without closing the editor. If the build fails, the Console says why.</p>
 <h2 class="anchor anchorTargetStickyNavbar_Vzrq" id="make-the-cube-a-player">7. Add the player component and try the game<a href="#make-the-cube-a-player" class="hash-link" aria-label="Direct link to 7. Add the player component and try the game" title="Direct link to 7. Add the player component and try the game" translate="no">​</a></h2>
-<p>Select Player in the Hierarchy, press Add component, and add Player. Its fields
+<p>Select Player in the Hierarchy, press Add component, and add Player (under Game, or type its name). Its fields
 come from the struct, with their defaults. You can change them here:</p>
 <p><img decoding="async" loading="lazy" alt="The Player entity with the Player component added" src="/eggy/assets/images/player-component-c6f23902d20e231d0db3deff997b9e6d.png" width="1280" height="800" class="img_ev3q"></p>
 <p>Save the scene, and press Play. Hold W to drive forward and use A, S and D for the
