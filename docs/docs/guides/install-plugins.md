@@ -3,8 +3,9 @@ title: Install plugins from the editor
 ---
 
 Plugins add features to your game or to the editor. **Edit > Plugins...** finds them,
-shows their read-me, and installs them into your project. Nothing is installed until you
-choose to.
+shows their read-me, and installs them into your project. A new project starts with only
+**Player Controller** (see [First- and third-person players](first-and-third-person.md));
+nothing else is installed until you choose to.
 
 ## Find a plugin
 

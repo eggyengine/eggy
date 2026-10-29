@@ -3,4 +3,9 @@
     .name = "eggy_template_name",
     .title = "eggy_template_title",
     .version = "0.0.1",
+    // The plugins installed from the editor's Plugins window. New projects start with Player
+    // Controller, which writes first- and third-person players into the project as code.
+    .plugins = .{
+        .{ .module = "eggy_player", .version = "0.1.0", .dev = true, .repository = "https://github.com/eggyengine/eggy", .fingerprint = 0x634131700cbdf8dd },
+    },
 }
