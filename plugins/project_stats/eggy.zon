@@ -1,0 +1,13 @@
+.{
+    .plugin = .{
+        .title = "Project Stats",
+        .module = "eggy_project_stats",
+        .version = "0.1.0",
+        .description = "A session stopwatch in the status bar, and how long the project has been worked on, by whom and on which days.",
+        .dev = true,
+        .repository = "https://github.com/eggyengine/eggy",
+        // Eggy's own build.zig.zon fingerprint: this plugin ships inside Eggy.
+        .fingerprint = 0x634131700cbdf8dd,
+        .package = "eggy",
+    },
+}
