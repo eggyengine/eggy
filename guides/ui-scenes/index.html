@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="generator" content="Docusaurus v3.10.2">
 <title data-rh="true">Build HUDs and billboards with UI scenes | Eggy</title><meta data-rh="true" name="viewport" content="width=device-width,initial-scale=1"><meta data-rh="true" name="twitter:card" content="summary_large_image"><meta data-rh="true" property="og:url" content="https://eggyengine.github.io/eggy/guides/ui-scenes"><meta data-rh="true" property="og:locale" content="en"><meta data-rh="true" name="docusaurus_locale" content="en"><meta data-rh="true" name="docsearch:language" content="en"><meta data-rh="true" name="docusaurus_version" content="current"><meta data-rh="true" name="docusaurus_tag" content="docs-default-current"><meta data-rh="true" name="docsearch:version" content="current"><meta data-rh="true" name="docsearch:docusaurus_tag" content="docs-default-current"><meta data-rh="true" property="og:title" content="Build HUDs and billboards with UI scenes | Eggy"><meta data-rh="true" name="description" content="A UI scene is a .ui.zon file holding a tree of UI nodes: panels, text, images (GIFs"><meta data-rh="true" property="og:description" content="A UI scene is a .ui.zon file holding a tree of UI nodes: panels, text, images (GIFs"><link data-rh="true" rel="icon" href="/eggy/img/icon.svg"><link data-rh="true" rel="canonical" href="https://eggyengine.github.io/eggy/guides/ui-scenes"><link data-rh="true" rel="alternate" href="https://eggyengine.github.io/eggy/guides/ui-scenes" hreflang="en"><link data-rh="true" rel="alternate" href="https://eggyengine.github.io/eggy/guides/ui-scenes" hreflang="x-default"><script data-rh="true" type="application/ld+json">{"@context":"https://schema.org","@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"Build HUDs and billboards with UI scenes","item":"https://eggyengine.github.io/eggy/guides/ui-scenes"}]}</script><link rel="stylesheet" href="/eggy/assets/css/styles.888f8311.css">
-<script src="/eggy/assets/js/runtime~main.9dc810c8.js" defer="defer"></script>
+<script src="/eggy/assets/js/runtime~main.0e865de6.js" defer="defer"></script>
 <script src="/eggy/assets/js/main.7b06e965.js" defer="defer"></script>
 </head>
 <body>
@@ -74,7 +74,9 @@ opacity and clipping of the node&#x27;s children.</p>
 <li class=""><strong>UiScreen</strong> shows the scene over the game&#x27;s view. <strong>Layer</strong> orders several screens, and
 <strong>Interactive</strong> off lets presses through to the game.</li>
 <li class=""><strong>UiBillboard</strong> shows the scene in the world, at the entity&#x27;s Transform. <strong>Width m</strong> is
-its width in metres; its height follows the scene&#x27;s design size. <strong>Face camera</strong> turns it
+its width in metres, even under a scaled parent. The billboard is as big as what the scene lays out: all of the design
+size when the root fills it, or just a 400 by 200 root inside a 1280 by 720 design, scaled
+to that width. <strong>Face camera</strong> turns it
 toward the camera; otherwise it faces the entity&#x27;s +Z. <strong>Resolution</strong> trades sharpness for
 memory. Billboards are hidden by what is in front of them. Their buttons take mouse clicks,
 and clicking one in the Scene panel selects its entity.</li>
