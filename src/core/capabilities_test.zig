@@ -4,9 +4,6 @@ const expect = std.testing.expectError;
 
 test "every missing backend operation returns NotImplemented" {
     const entity = @import("clutch").EntityId.init(0, 0);
-    const particles = @import("particles.zig").Particles{};
-    try expect(error.NotImplemented, particles.emit(.{ .position_m = @splat(0) }));
-    try expect(error.NotImplemented, particles.stop(@fromBackingInt(@intCast(0))));
 
     const network = @import("network.zig").Network{};
     const address = @import("network.zig").Address{ .host = "localhost", .port = 3000 };
@@ -24,9 +21,6 @@ test "every missing backend operation returns NotImplemented" {
     try expect(error.StorageNotInitialized, storage.read(std.testing.allocator, "slot"));
     try expect(error.StorageNotInitialized, storage.write("slot", "bytes"));
     try expect(error.StorageNotInitialized, storage.remove("slot"));
-    const localization = @import("localization.zig").Localization{};
-    try expect(error.NotImplemented, localization.setLocale("en"));
-    try expect(error.NotImplemented, localization.text(std.testing.allocator, "hello"));
 
     const resources = @import("resources/resources.zig").Resources{};
     try expect(error.NoAsyncResourceProvider, resources.readAsync(std.testing.allocator, @import("refs.zig").AssetRef(.text).init("notes.txt")));
@@ -36,7 +30,7 @@ test "every missing backend operation returns NotImplemented" {
     var instances = @import("scene_instances.zig").SceneInstances.init(std.testing.allocator);
     defer instances.deinit();
     const scenes = @import("scenes/scenes.zig").Scenes{ .world = &world, .instances = &instances, .resources = .{}, .access = null };
-    try expect(error.NotImplemented, scenes.stream(.init("level.scene.zon"), .{}));
+    try expect(error.NoSceneRegistry, scenes.stream(.init("level.scene.zon"), .{}));
     try expect(error.NoSceneRegistry, scenes.replace(.init("level.scene.zon")));
 }
 

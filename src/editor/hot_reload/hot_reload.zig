@@ -32,6 +32,11 @@ pub const HotGame = struct {
     file_types: []const eggy.plugins.EditorFileType = &.{},
     /// The plugins' widgets for UI scenes, copied into `manifest_arena`.
     ui_widgets: []const eggy.plugins.UiWidget = &.{},
+    /// The components plugins draw their own Inspector for (indices into `component_types`),
+    /// the plugins' importers and their Scene tools, copied into `manifest_arena` too.
+    component_inspectors: []const usize = &.{},
+    asset_importers: []const eggy.plugins.AssetImporter = &.{},
+    scene_tools: []const eggy.plugins.SceneTool = &.{},
     /// The plugins' top-bar menus and status bar entries, rebuilt from the library on every
     /// load and copied into `manifest_arena` (rows included): the editor keeps no callbacks.
     menus: []const eggy.plugins.EditorMenu = &.{},
@@ -303,6 +308,40 @@ pub const HotGame = struct {
         if (panel < self.panels.len) self.game.editor_panel_ui(state, panel, editor, context);
     }
 
+    /// The plugin Inspector drawn for `component_types[component]`, if a plugin draws its own.
+    pub fn inspectorOf(self: *const HotGame, component: usize) ?usize {
+        return std.mem.indexOfScalar(usize, self.component_inspectors, component);
+    }
+
+    /// Draw `component_inspectors[inspector]` for `entity` through the running game into this UI
+    /// frame. Editor host only: stopped/out-of-range calls do nothing and hook failures log.
+    pub fn componentInspectorUi(self: *HotGame, inspector: usize, entity: eggy.ecs.EntityId, editor: *eggy.editor.Context, context: *eggy.ui.Context) void {
+        const state = self.state orelse return;
+        if (inspector < self.component_inspectors.len) self.game.component_inspector_ui(state, inspector, entityOf(entity), editor, context);
+    }
+
+    /// The importer for a file at `path`: the first whose extension ends it.
+    pub fn importerFor(self: *const HotGame, path: []const u8) ?usize {
+        for (self.asset_importers, 0..) |importer, at| if (std.ascii.endsWithIgnoreCase(path, importer.extension)) return at;
+        return null;
+    }
+
+    /// Import `source` with `asset_importers[importer]` through the running game, writing what it
+    /// makes to `out`. Fails with `GameStopped` while the game is stopped and `ImportFailed` when
+    /// the hook did (logged).
+    pub fn importAsset(self: *HotGame, importer: usize, source: []const u8, out: *std.Io.Writer, editor: *eggy.editor.Context) !void {
+        const state = self.state orelse return error.GameStopped;
+        if (importer >= self.asset_importers.len) return error.NoAssetImporter;
+        if (!self.game.import_asset(state, importer, source.ptr, source.len, out, editor)) return error.ImportFailed;
+    }
+
+    /// Hand `input` to `scene_tools[tool]` through the running game. Editor host only:
+    /// stopped/out-of-range calls do nothing and hook failures log.
+    pub fn sceneTool(self: *HotGame, tool: usize, input: eggy.plugins.SceneToolInput, editor: *eggy.editor.Context) void {
+        const state = self.state orelse return;
+        if (tool < self.scene_tools.len) self.game.scene_tool(state, tool, &input, editor);
+    }
+
     /// Execute zero-based `commands[command]` synchronously through the running game.
     /// Editor host only: stopped/out-of-range calls do nothing and hook failures log.
     /// The hook-local editor context may queue lifecycle work; process it only after return.
@@ -480,6 +519,19 @@ pub const HotGame = struct {
             .key = try arena.dupeSentinel(u8, std.mem.span(source.key), 0),
             .title = try arena.dupeSentinel(u8, std.mem.span(source.title), 0),
         };
+        const component_inspectors = try arena.dupe(usize, game.component_inspectors[0..game.component_inspector_count]);
+        const asset_importers = try arena.alloc(eggy.plugins.AssetImporter, game.asset_importer_count);
+        for (asset_importers, game.asset_importers[0..game.asset_importer_count]) |*importer, source| importer.* = .{
+            .key = try arena.dupeSentinel(u8, std.mem.span(source.key), 0),
+            .title = try arena.dupeSentinel(u8, std.mem.span(source.title), 0),
+            .extension = try arena.dupeSentinel(u8, std.mem.span(source.extension), 0),
+            .output_extension = try arena.dupeSentinel(u8, std.mem.span(source.output_extension), 0),
+        };
+        const scene_tools = try arena.alloc(eggy.plugins.SceneTool, game.scene_tool_count);
+        for (scene_tools, game.scene_tools[0..game.scene_tool_count]) |*tool, source| tool.* = .{
+            .key = try arena.dupeSentinel(u8, std.mem.span(source.key), 0),
+            .title = try arena.dupeSentinel(u8, std.mem.span(source.title), 0),
+        };
         const menus = try copyMenus(arena, game);
         const status_items = try copyStatusItems(arena, game);
         const export_platforms = try arena.alloc(eggy.plugins.ExportPlatform, game.export_platform_count);
@@ -490,7 +542,7 @@ pub const HotGame = struct {
             .note = try arena.dupeSentinel(u8, std.mem.span(source.note), 0),
             .icon_png = try arena.dupe(u8, source.icon_png[0..source.icon_png_len]),
         };
-        self.* = .{ .gpa = gpa, .path = self.path, .copy_path = copy_path, .library = library, .game = game, .state = null, .panels = panels, .commands = commands, .console_commands = console_commands, .file_types = file_types, .ui_widgets = ui_widgets, .menus = menus, .status_items = status_items, .export_platforms = export_platforms, .loads = self.loads, .preference_manifests = manifests, .component_types = component_types, .plugin_keys = plugin_keys, .manifest_arena = self.manifest_arena };
+        self.* = .{ .gpa = gpa, .path = self.path, .copy_path = copy_path, .library = library, .game = game, .state = null, .panels = panels, .commands = commands, .console_commands = console_commands, .file_types = file_types, .ui_widgets = ui_widgets, .component_inspectors = component_inspectors, .asset_importers = asset_importers, .scene_tools = scene_tools, .menus = menus, .status_items = status_items, .export_platforms = export_platforms, .loads = self.loads, .preference_manifests = manifests, .component_types = component_types, .plugin_keys = plugin_keys, .manifest_arena = self.manifest_arena };
     }
 
     /// Copy the game's menus, with their rows, out of the library's memory.
@@ -556,6 +608,9 @@ pub const HotGame = struct {
         self.console_commands = &.{};
         self.file_types = &.{};
         self.ui_widgets = &.{};
+        self.component_inspectors = &.{};
+        self.asset_importers = &.{};
+        self.scene_tools = &.{};
         self.menus = &.{};
         self.status_items = &.{};
         self.export_platforms = &.{};

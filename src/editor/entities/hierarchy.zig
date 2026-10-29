@@ -8,7 +8,8 @@
 //! the target lights up and a chip with the entity's name follows the pointer; anywhere else (or onto its own
 //! children) letting go does nothing, and Escape cancels. A right-click opens a menu (rename, add
 //! a child, duplicate, move to the top level, delete); a double-click on a name renames (both
-//! clicks on its text, in the same spot), as does Ctrl+R, and Delete deletes.
+//! clicks on its text, in the same spot), as does Ctrl+R, a double-click anywhere else on a row
+//! frames the entity in the Scene, and Delete deletes.
 //!
 //! The page doesn't change the world itself: `build`, `pointer` and `key` return the `Action` the
 //! user took, for the editor to carry out. The UI Designer's tree is the same page listing a UI
@@ -35,6 +36,8 @@ pub const Action = union(enum) {
     extract: ecs.EntityId,
     toggle_collapse: ecs.EntityId,
     toggle_hidden: ecs.EntityId,
+    /// Select `entity` and bring it into view in the Scene panels (a double-click on its row).
+    frame: ecs.EntityId,
 };
 
 const NameEdit = ui.TextEdit(eggy.Name.max_len);
@@ -92,12 +95,17 @@ pub const Subject = enum {
 
 pub const Hierarchy = struct {
     subject: Subject = .entities,
+    /// Every entity selected with the one `build` is given, highlighted with it; the host sets
+    /// it before `build`.
+    also_selected: []const ecs.EntityId = &.{},
     can_paste: bool = false,
     filter: FilterEdit = FilterEdit.init("") catch unreachable,
     /// The row being renamed, and its text.
     renaming: ?struct { entity: ecs.EntityId, edit: NameEdit, started: bool = false } = null,
     /// The right-click menu: where, and for which row (none: the empty space below the rows).
     menu: ?struct { at: ui.Vec2, entity: ?ecs.EntityId, has_parent: bool, has_children: bool = false, collapsed: bool = false, self_hidden: bool = false } = null,
+    /// The menu's scroll, when the page is too short to show it whole.
+    menu_scroll: L.ScrollState = .{},
     /// A press on a row, which becomes a drag once it moves, and where it would drop.
     drag: ?struct { entity: ecs.EntityId, from: ui.Vec2, moving: bool = false, target: Target = .none } = null,
     /// The rows last built, to match presses to.
@@ -216,6 +224,7 @@ pub const Hierarchy = struct {
                     .right => {
                         // What a scene instance's file made has no menu: its file says what it is.
                         if (row) |r| if (r.from_instance) return .{ .used = true, .action = .{ .select = r.entity } };
+                        self.menu_scroll = .{};
                         self.menu = .{
                             .at = down.position,
                             .entity = if (row) |r| r.entity else null,
@@ -239,7 +248,10 @@ pub const Hierarchy = struct {
                                 return .{ .used = true, .action = .{ .toggle_collapse = pressed.entity } };
                         };
                         // What a scene instance's file made isn't renamed or moved, only tuned.
-                        if (pressed.from_instance) return .{ .used = false };
+                        if (pressed.from_instance) {
+                            if (down.clicks >= 2) return .{ .used = true, .action = .{ .frame = pressed.entity } };
+                            return .{ .used = false };
+                        }
                         // A rename takes both clicks on the name's text, in the same spot.
                         const on_name = self.onName(context, pressed.entity, down.position);
                         const first = self.name_press;
@@ -249,6 +261,8 @@ pub const Hierarchy = struct {
                             self.startRename(pressed.entity, pressed.name);
                             return .{ .used = true };
                         };
+                        // Any other double-click on the row frames it.
+                        if (down.clicks >= 2) return .{ .used = true, .action = .{ .frame = pressed.entity } };
                         self.drag = .{ .entity = pressed.entity, .from = down.position };
                     },
                     .middle => {},
@@ -379,7 +393,9 @@ pub const Hierarchy = struct {
             .step = step,
             .last = row.last,
             .lines = row.lines,
-            .selected = if (selected) |entity| entity.eql(row.entity) else false,
+            .selected = if (selected) |entity| entity.eql(row.entity) else false or for (self.also_selected) |entity| {
+                if (entity.eql(row.entity)) break true;
+            } else false,
             .drop = if (self.drag) |drag| if (drag.moving) dropOn(drag.target, row.entity) else .none else .none,
             .dragged = if (self.drag) |drag| drag.moving and drag.entity.eql(row.entity) else false,
             .has_children = row.has_children,
@@ -437,15 +453,21 @@ pub const Hierarchy = struct {
             if (self.can_paste) choices.append(arena, .{ .id = menuId(.paste), .label = "Paste tree" }) catch return null;
         }
 
-        // Kept inside the page: it opens left of or above the pointer near an edge.
+        // Kept inside the page: it opens left of or above the pointer near an edge. Its rows are
+        // 32 tall with a gap of 1 between them, inside 4 of padding top and bottom.
         const width: f32 = @min(200, context.viewport.w);
-        const height = 8 + 32 * @as(f32, @floatFromInt(choices.items.len));
+        const height = 7 + 33 * @as(f32, @floatFromInt(choices.items.len));
         const at = ui.Vec2{
             .x = @max(context.viewport.x, @min(menu.at.x, context.viewport.x + context.viewport.w - width)),
             .y = @max(context.viewport.y, @min(menu.at.y, context.viewport.y + context.viewport.h - height)),
         };
         const popup = (ui.widgets.contextMenu(context.builder(), at, choices.items, 0) catch return null) orelse return null;
         popup.style.width = width;
+        // A page shorter than the menu scrolls it, rather than cutting off its last rows.
+        popup.style.height = @min(height, context.viewport.h);
+        popup.style.overflow = .scroll;
+        popup.scroll = &self.menu_scroll;
+        self.menu_scroll.overlay_bar = true;
         context.element(popup);
 
         for (choices.items) |choice| if (context.activated(choice.id)) {
@@ -834,7 +856,7 @@ test "a row's top and bottom quarters drop beside it, the middle into it" {
     try std.testing.expect(hierarchy.targetAt(&context, rows[0].entity, at(sun, 0.5)) == .none);
 }
 
-test "a double-click renames only with both clicks on the name, in the same spot" {
+test "a double-click renames only with both clicks on the name, in the same spot, and frames elsewhere" {
     var context = try ui.Context.init(std.testing.allocator);
     defer context.deinit();
     var hierarchy = Hierarchy.init(std.testing.allocator);
@@ -851,9 +873,10 @@ test "a double-click renames only with both clicks on the name, in the same spot
         }
     }.f;
 
-    // Beside the name, on the row: no rename.
+    // Beside the name, on the row: no rename, but the entity is framed.
     click(&hierarchy, &context, beside_name, 1);
-    click(&hierarchy, &context, beside_name, 2);
+    const framed = hierarchy.pointer(&context, .{ .pointer_down = .{ .position = beside_name, .button = .left, .clicks = 2 } });
+    try std.testing.expectEqual(Action{ .frame = rows[0].entity }, framed.action.?);
     try std.testing.expect(hierarchy.renaming == null);
     // On the name, but the second click elsewhere on it: no rename.
     click(&hierarchy, &context, on_name, 1);

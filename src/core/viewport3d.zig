@@ -202,7 +202,7 @@ pub const Preview = struct {
         self.geometry.deinit();
     }
 
-    /// Draw the backdrop and `drawables` (sorted in place), seen from `view` with `selected`'s
+    /// Draw the backdrop and `drawables` (sorted in place), seen from `view` with each of `selected`'s
     /// outlined, into `scene` of `target`, a window `window` big at `extent` pixels, cut to
     /// `clip`, with model files and textures from `sources`, and the editor's ground grid when
     /// `grid` says, post-processed as `sources.lights.post` says. Call outside a render pass.
@@ -214,9 +214,9 @@ pub const Preview = struct {
     /// propagate; empty/invalid clipped rectangles record nothing.
     ///
     /// ```zig
-    /// try preview.draw(scene_cmd, target_view, scene_rect, clip_rect, window_rect, target_extent_pixels, target_is_srgb, drawables, asset_sources, camera_view, selected_entity, true);
+    /// try preview.draw(scene_cmd, target_view, scene_rect, clip_rect, window_rect, target_extent_pixels, target_is_srgb, drawables, asset_sources, camera_view, selected_entities, true);
     /// ```
-    pub fn draw(self: *Preview, cmd: vit.CommandBuffer, target: vit.TextureView, scene: ui.Rect, clip: ui.Rect, window: ui.Rect, extent: vit.Extent2D, srgb: bool, drawables: []mesh.Drawable, sources: mesh_renderer.Sources, view: camera.View, selected: ?ecs.EntityId, grid: bool) !void {
+    pub fn draw(self: *Preview, cmd: vit.CommandBuffer, target: vit.TextureView, scene: ui.Rect, clip: ui.Rect, window: ui.Rect, extent: vit.Extent2D, srgb: bool, drawables: []mesh.Drawable, sources: mesh_renderer.Sources, view: camera.View, selected: []const ecs.EntityId, grid: bool) !void {
         const scissor = previewScissor(scene, clip, window, extent) orelse return;
         try self.post.begin(cmd);
         try self.drawPass(cmd, scene, clip, window, renderExtent(extent, self.settings.render_scale), drawables, sources, view, selected, grid);
@@ -230,7 +230,7 @@ pub const Preview = struct {
     }
 
     // The scene in linear HDR light, into the post target.
-    fn drawPass(self: *Preview, cmd: vit.CommandBuffer, scene: ui.Rect, clip: ui.Rect, window: ui.Rect, extent: vit.Extent2D, drawables: []mesh.Drawable, sources: mesh_renderer.Sources, view: camera.View, selected: ?ecs.EntityId, grid: bool) !void {
+    fn drawPass(self: *Preview, cmd: vit.CommandBuffer, scene: ui.Rect, clip: ui.Rect, window: ui.Rect, extent: vit.Extent2D, drawables: []mesh.Drawable, sources: mesh_renderer.Sources, view: camera.View, selected: []const ecs.EntityId, grid: bool) !void {
         const srgb = true;
         const scissor = previewScissor(scene, clip, window, extent) orelse return;
         try self.meshes.prepare(cmd, drawables, sources);
@@ -372,5 +372,5 @@ test "preview scissor respects UI clipping, window and fractional pixel scale" {
 test "preview skips an empty viewport without recording commands" {
     var preview: Preview = undefined;
     const empty = ui.Rect{ .x = 0, .y = 0, .w = 0, .h = 0 };
-    try preview.draw(undefined, undefined, empty, empty, empty, .{ .width = 200, .height = 120 }, false, &.{}, undefined, .default, null, false);
+    try preview.draw(undefined, undefined, empty, empty, empty, .{ .width = 200, .height = 120 }, false, &.{}, undefined, .default, &.{}, false);
 }

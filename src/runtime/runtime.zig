@@ -68,7 +68,8 @@ pub fn Runtime(comptime project: type) type {
                 try eggy.render_settings.parse(gpa, project.graphics_zon)
             else
                 eggy.render_settings.Settings{};
-            var app = try eggy.App.initForProject(process_init, project.name, project.name, .runtime, graphics_defaults);
+            var app: eggy.App = undefined;
+            try app.initForProject(process_init, project.name, project.name, .runtime, graphics_defaults);
             errdefer app.deinit();
             app.storage = try eggy.storage.Storage.init(gpa, process_init.io, project.name);
             if (@hasDecl(project, "dev_console")) app.dev_console.setEnabled(project.dev_console);
@@ -223,11 +224,13 @@ pub fn Runtime(comptime project: type) type {
                     .frame_slot = self.app.graphics.surface.slot,
                 };
                 try self.plugins.draw(&self.app, draw);
-                if (has_ui or self.app.graphics_settings_ui.isOpen() or self.app.dev_console.isOpen()) {
+                const loading = self.app.scene_stream.loading();
+                if (has_ui or self.app.graphics_settings_ui.isOpen() or self.app.dev_console.isOpen() or eggy.scenes.loading_screen.shows(loading)) {
                     const layer = try self.app.gameUi();
                     layer.begin(draw, ui_time_ms);
                     if (has_ui) try self.plugins.gameUi(&self.app, &layer.context);
                     self.app.graphics_settings_ui.draw(&self.app, &layer.context);
+                    eggy.scenes.loading_screen.draw(loading, &layer.context);
                     eggy.dev_console.overlay.draw(&self.app.dev_console, &self.app, self.plugins.consoleCommands(), &layer.context);
                     if (try layer.render(draw)) self.app.input.cancel();
                     try layer.syncClipboard();

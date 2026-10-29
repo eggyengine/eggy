@@ -3,8 +3,10 @@
 //! path to climb back up. A filter searches every folder by name. A scene (`.scene.zon`) opens
 //! with a double-click, a code or text file opens in the code editor chosen in Preferences, and
 //! any other file (or a model's part) shows in the Asset Preview, in a window of its own. A right-click opens a menu (open, open in
-//! the IDE, rename, duplicate, delete, copy path, show in the file manager, and new folders and
-//! scenes); F2 renames and Delete deletes the selected entry. The toolbar's Open in IDE opens the
+//! the IDE, rename, duplicate, delete, copy path, show in the file manager, import files picked
+//! on the computer, and new folders and scenes); F2 renames and Delete deletes the selected
+//! entry. A rename (and anything just made, which starts as one) selects the name before its
+//! extensions, as Ctrl+A does there. The toolbar's Open in IDE opens the
 //! selected file, or the folder shown, in the code editor chosen in Preferences.
 //!
 //! A model file opens, in the list or (double-clicked) in the grid, into what it holds: its
@@ -53,6 +55,8 @@ pub const Action = union(enum) {
     copy_path: []const u8,
     /// Show this file or folder in the system's file manager.
     reveal: []const u8,
+    /// Pick files on the computer to bring into this folder ("" for the project).
+    import_file: []const u8,
     /// Open this file or folder ("" for the project) in the code editor people chose.
     open_code: []const u8,
     /// Show the selected entry (`path`) in the Asset Preview, popped out into a window.
@@ -66,7 +70,7 @@ pub const Action = union(enum) {
 /// What an event routed to the panel did: whether the panel used it, and the action it led to.
 pub const Handled = struct { used: bool, action: ?Action = null };
 
-const MenuItem = enum(u32) { open, open_in_ide, rename, duplicate, delete, copy_path, reveal, extract, new_files };
+const MenuItem = enum(u32) { open, open_in_ide, rename, duplicate, delete, copy_path, reveal, import_file, extract, new_files };
 const menu_id_base: u32 = item_id_base - 32;
 const creation_id_base: u32 = 0x6E00_0000;
 const menu_root_id: u32 = menu_id_base - 8;
@@ -369,11 +373,29 @@ pub const AssetsPanel = struct {
         return @max(1, level);
     }
 
+    /// Rename `path`, just made (New file or folder), as its row appears: typing names it.
+    pub fn renameNew(self: *AssetsPanel, path: []const u8) void {
+        self.startRename(path);
+    }
+
+    /// Rename `path` in its row, with its name before the extensions selected, so typing
+    /// replaces just that.
     fn startRename(self: *AssetsPanel, path: []const u8) void {
         self.cancelRename();
         const owned = self.gpa.dupe(u8, path) catch return;
         self.renaming = .{ .path = owned, .edit = NameEdit.init(std.fs.path.basename(path)) catch NameEdit.init("") catch unreachable };
+        selectStem(&self.renaming.?.edit);
         self.menu = null;
+    }
+
+    /// Select `edit`'s name up to its extensions: `ui_scene` of `ui_scene.ui.zon`, all of a name
+    /// with none (or one that starts with its dot, like `.gitignore`).
+    // ponytail: a folder with a dot in its name selects up to the dot too; pass the entry's kind if that bites.
+    fn selectStem(edit: *NameEdit) void {
+        const name = edit.text();
+        const stem_len = if (name.len > 1) (std.mem.indexOfScalarPos(u8, name, 1, '.') orelse name.len) else name.len;
+        edit.anchor = 0;
+        edit.cursor = stem_len;
     }
 
     fn cancelRename(self: *AssetsPanel) void {
@@ -648,6 +670,14 @@ pub const AssetsPanel = struct {
         const renaming = &(self.renaming orelse return);
         context.begin(.row);
         context.element(context.builder().node(0, .{ .width = 16, .height = 16 }, icon, &.{}) catch return);
+        // Ctrl+A selects the name, not its extensions: taken here before the field selects all.
+        if (renaming.field_id != 0 and context.focus == renaming.field_id) for (context.pending.items) |*item| switch (item.*) {
+            .key => |*pressed| if (pressed.key == .a and (pressed.modifiers.control or pressed.modifiers.super)) {
+                pressed.modifiers = .{};
+                selectStem(&renaming.edit);
+            },
+            else => {},
+        };
         _ = context.textInput("##rename asset", &renaming.edit, "Name");
         const field = context.last_added;
         // Only as wide as the name, so a press beside it lands on the panel, not the field.
@@ -692,9 +722,11 @@ pub const AssetsPanel = struct {
             add(&choices, context, .delete, "Delete");
             add(&choices, context, .copy_path, "Copy path");
             add(&choices, context, .reveal, "Show in file manager");
+            add(&choices, context, .import_file, "Import file...");
         } else {
             add(&choices, context, .open_in_ide, "Open in IDE");
             add(&choices, context, .reveal, "Show in file manager");
+            add(&choices, context, .import_file, "Import file...");
         }
         // New files go in a folder, which a model's part isn't.
         const in_model = if (menu.entry) |entry| entry.virtual else false;
@@ -746,6 +778,8 @@ pub const AssetsPanel = struct {
                 .delete => .{ .delete = menu.entry.?.path },
                 .copy_path => .{ .copy_path = menu.entry.?.path },
                 .reveal => .{ .reveal = if (menu.entry) |entry| entry.path else self.folder.items },
+                // Into the folder pressed on, or the one the entry is in.
+                .import_file => .{ .import_file = if (menu.entry) |entry| (if (entry.kind == .folder) entry.path else listing.parentOf(entry.path)) else self.newFilesFolder() },
                 // Beside the model it came from.
                 .extract => .{ .extract = .{ .path = menu.entry.?.path, .folder = listing.parentOf(listing.parentOf(menu.entry.?.path)) } },
                 .new_files => unreachable,
@@ -1378,4 +1412,22 @@ test "input maps open their own editor and New menus work inside empty narrow fo
         try std.testing.expectEqualStrings(creation.at(creation_index, panel.file_types).?.file.contents, action.create_file.file_type.contents);
         _ = try context.render();
     };
+}
+
+test "a rename selects the name before its extensions" {
+    var panel = AssetsPanel.init(std.testing.allocator);
+    defer panel.deinit();
+    panel.startRename("ui/ui_scene.ui.zon");
+    defer panel.cancelRename();
+    const edit = &panel.renaming.?.edit;
+    try std.testing.expectEqualStrings("ui_scene", edit.text()[edit.selection().?.start..edit.selection().?.end]);
+
+    // Typing replaces only the name.
+    try edit.insert("menu");
+    try std.testing.expectEqualStrings("menu.ui.zon", edit.text());
+
+    // A name with no extension, or one starting with its dot, is selected whole.
+    try edit.set(".gitignore");
+    AssetsPanel.selectStem(edit);
+    try std.testing.expectEqual(@as(usize, 10), edit.selection().?.end);
 }

@@ -180,6 +180,18 @@ pub fn import(gpa: std.mem.Allocator, io: std.Io, project: std.Io.Dir, outside: 
     return made.toOwnedSlice(gpa);
 }
 
+/// Save `bytes`, what a plugin's importer made of the file at `outside`, into `folder` of the
+/// project as the file's name with `extension` in place of its own (numbered if taken). Returns
+/// the path it made, caller-owned. Editor-only: creates the folder; I/O failures propagate.
+pub fn saveImported(gpa: std.mem.Allocator, io: std.Io, project: std.Io.Dir, outside: []const u8, folder: []const u8, extension: []const u8, bytes: []const u8) ![]u8 {
+    const name = std.fs.path.basename(outside);
+    const target = try freeName(gpa, io, project, folder, name[0..extensionStart(name)], extension);
+    errdefer gpa.free(target);
+    try project.createDirPath(io, folder);
+    try project.writeFile(io, .{ .sub_path = target, .data = bytes });
+    return target;
+}
+
 /// Copy the files the glTF model at `outside` refers to beside its copy at `target`, appending
 /// what was made to `made`. One that is missing is logged and left out: the model still imports.
 fn importReferences(gpa: std.mem.Allocator, io: std.Io, project: std.Io.Dir, outside: []const u8, target: []const u8, made: *std.ArrayList([]u8)) !void {

@@ -453,38 +453,6 @@ pub const Context = struct {
         return project.parse(arena, buffer);
     }
 
-    // ponytail: custom inspectors/importers/scene tools have no host registration, add one before exposing callbacks.
-    /// Reserved importer registration; always returns `NotImplemented`, retaining no name
-    /// or callbacks. Declaring a name does not enable custom asset importing.
-    ///
-    /// ```zig
-    /// try std.testing.expectError(error.NotImplemented, editor.registerImporter("sprites"));
-    /// ```
-    pub fn registerImporter(_: *Context, name: []const u8) error{NotImplemented}!void {
-        _ = name;
-        return error.NotImplemented;
-    }
-    /// Reserved inspector registration; always returns `NotImplemented` and retains nothing.
-    /// Existing component field editors are not replaced by this call.
-    ///
-    /// ```zig
-    /// try std.testing.expectError(error.NotImplemented, editor.registerInspector("health"));
-    /// ```
-    pub fn registerInspector(_: *Context, name: []const u8) error{NotImplemented}!void {
-        _ = name;
-        return error.NotImplemented;
-    }
-    /// Reserved scene-tool registration; always returns `NotImplemented` and retains nothing.
-    /// No tool is added to the Scene toolbar.
-    ///
-    /// ```zig
-    /// try std.testing.expectError(error.NotImplemented, editor.registerSceneTool("paint"));
-    /// ```
-    pub fn registerSceneTool(_: *Context, name: []const u8) error{NotImplemented}!void {
-        _ = name;
-        return error.NotImplemented;
-    }
-
     /// A host text read: asked once for its size, then into a buffer that big.
     /// Text that grows between the two (the Console's) is asked for again.
     fn readText(self: *Context, arena: std.mem.Allocator, request: Request) ![:0]u8 {
@@ -592,7 +560,4 @@ test "typed editor edits commit once, reject stale values, and restore failed co
     try std.testing.expectError(error.EditorOperationFailed, editor.changeComponent(entity, action.Action(Health){ .before = .{ .value = 20 }, .after = .{ .value = 30 } }));
     try std.testing.expectEqual(@as(u32, 20), app.world.get(entity, Health).?.value);
     try std.testing.expectEqual(@as(usize, 1), host.cancels);
-    try std.testing.expectError(error.NotImplemented, editor.registerImporter("example"));
-    try std.testing.expectError(error.NotImplemented, editor.registerInspector("example"));
-    try std.testing.expectError(error.NotImplemented, editor.registerSceneTool("example"));
 }

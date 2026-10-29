@@ -75,6 +75,13 @@ The editor and game library must use the same Eggy revision because engine point
 cross their C-callable boundary. An engine change rebuilds the whole editor instead
 of swapping an incompatible game library. The Reload button opens the rebuilt editor.
 
+When the project is linked to an Eggy checkout and that checkout gained changes that
+can break your code (commits marked `!` or `BREAKING CHANGE:`, or a new major version,
+or a new minor version before 1.0), the editor asks before rebuilding onto them. A very
+large update (a new major version, or five or more breaking changes) shows the whole
+changelog. **Skip this session** keeps the current editor until you close it: it stops
+rebuilding on refocus, and Reload asks again.
+
 Use [Extend the editor](../how-to/extend-editor.md) for queued build/reload requests and
 undoable scene changes. The [hook reference](../reference/plugin-hooks.md) defines when
 initialization, cleanup, and editor hooks run.

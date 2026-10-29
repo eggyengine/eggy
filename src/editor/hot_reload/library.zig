@@ -80,6 +80,16 @@ const file_types = blk: {
     };
     break :blk list;
 };
+const asset_importers = blk: {
+    var list: [Plugins.asset_importers.len]api.AssetImporter = undefined;
+    for (&list, Plugins.asset_importers) |*importer, source| importer.* = .{ .key = source.key.ptr, .title = source.title.ptr, .extension = source.extension.ptr, .output_extension = source.output_extension.ptr };
+    break :blk list;
+};
+const scene_tools = blk: {
+    var list: [Plugins.scene_tools.len]api.SceneTool = undefined;
+    for (&list, Plugins.scene_tools) |*tool, source| tool.* = .{ .key = source.key.ptr, .title = source.title.ptr };
+    break :blk list;
+};
 const ui_widgets = blk: {
     var list: [Plugins.ui_widgets.len]api.UiWidget = undefined;
     for (&list, Plugins.ui_widgets) |*widget, source| widget.* = .{ .key = source.key.ptr, .title = source.title.ptr };
@@ -196,6 +206,15 @@ const game = api.Game{
     .gather_ui_scenes = gatherUiScenes,
     .ui_widgets = &ui_widgets,
     .ui_widget_count = ui_widgets.len,
+    .component_inspectors = Plugins.component_inspectors.ptr,
+    .component_inspector_count = Plugins.component_inspectors.len,
+    .component_inspector_ui = componentInspectorUi,
+    .asset_importers = &asset_importers,
+    .asset_importer_count = asset_importers.len,
+    .import_asset = importAsset,
+    .scene_tools = &scene_tools,
+    .scene_tool_count = scene_tools.len,
+    .scene_tool = sceneTool,
     .world_matrix = worldMatrix,
     .find_camera = findCamera,
     .animation_preview_begin = animationPreviewBegin,
@@ -245,7 +264,7 @@ fn start(editor: *const api.Host, gpa_ptr: *const anyopaque, app_ptr: *anyopaque
 
 /// What can fail each frame, and the error each last failed with: one failing every frame is
 /// logged once, and again only when it fails differently or after it recovers.
-const Hook = enum { update, game_ui, draw, ui_event, editor_update, editor_ui, editor_panel_ui, editor_command, bar_action, bar_state, export_ui, export_args, event, world_start, world_update, scene_lights };
+const Hook = enum { update, game_ui, draw, ui_event, editor_update, editor_ui, editor_panel_ui, component_inspector_ui, import_asset, scene_tool, editor_command, bar_action, bar_state, export_ui, export_args, event, world_start, world_update, scene_lights };
 var failures: [@typeInfo(Hook).@"enum".field_names.len]?anyerror = @splat(null);
 
 fn report(hook: Hook, err: anyerror) void {
@@ -260,6 +279,9 @@ fn report(hook: Hook, err: anyerror) void {
         .editor_update => "an editorUpdate hook",
         .editor_ui => "an editorUi hook",
         .editor_panel_ui => "an editorPanelUi hook",
+        .component_inspector_ui => "a componentInspectorUi hook",
+        .import_asset => "an importAsset hook",
+        .scene_tool => "a sceneTool hook",
         .export_ui => "an exportUi hook",
         .export_args => "an exportArgs hook",
         .editor_command => "an editorCommand hook",
@@ -360,6 +382,26 @@ fn event(state_ptr: *anyopaque, app_ptr: *anyopaque, event_ptr: *const anyopaque
 fn editorUi(state_ptr: *anyopaque, editor_ptr: *anyopaque, context: *anyopaque) callconv(.c) void {
     stateOf(state_ptr).plugins.editorUi(@ptrCast(@alignCast(editor_ptr)), @ptrCast(@alignCast(context))) catch |err| return report(.editor_ui, err);
     recovered(.editor_ui);
+}
+
+fn componentInspectorUi(state_ptr: *anyopaque, inspector: usize, entity: api.Entity, editor_ptr: *anyopaque, context: *anyopaque) callconv(.c) void {
+    stateOf(state_ptr).plugins.componentInspectorUi(inspector, eggy.ecs.EntityId.init(entity.id, entity.generation), @ptrCast(@alignCast(editor_ptr)), @ptrCast(@alignCast(context))) catch |err| return report(.component_inspector_ui, err);
+    recovered(.component_inspector_ui);
+}
+
+fn importAsset(state_ptr: *anyopaque, importer: usize, source: [*]const u8, source_len: usize, out: *anyopaque, editor_ptr: *anyopaque) callconv(.c) bool {
+    stateOf(state_ptr).plugins.importAsset(importer, source[0..source_len], @ptrCast(@alignCast(out)), @ptrCast(@alignCast(editor_ptr))) catch |err| {
+        report(.import_asset, err);
+        return false;
+    };
+    recovered(.import_asset);
+    return true;
+}
+
+fn sceneTool(state_ptr: *anyopaque, tool: usize, input: *const anyopaque, editor_ptr: *anyopaque) callconv(.c) void {
+    const typed: *const eggy.plugins.SceneToolInput = @ptrCast(@alignCast(input));
+    stateOf(state_ptr).plugins.sceneTool(tool, typed.*, @ptrCast(@alignCast(editor_ptr))) catch |err| return report(.scene_tool, err);
+    recovered(.scene_tool);
 }
 
 fn editorPanelUi(state_ptr: *anyopaque, panel: usize, editor_ptr: *anyopaque, context: *anyopaque) callconv(.c) void {

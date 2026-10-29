@@ -6,7 +6,8 @@
 //! editing, its controls then move that camera; with none to look through it says so. A camera
 //! selected shows what it sees in a corner. Lights and cameras are drawn as stand-ins
 //! (`stand_ins.zig`). W, E, R and T pick Move, Rotate, Scale and Universal while the pointer is over
-//! the panel; Ctrl turns snapping round while dragging.
+//! the panel; Ctrl turns snapping round while dragging. Ctrl- or Shift-clicking an entity adds it
+//! to the selection or takes it out, and the gizmo then moves every selected entity together.
 const std = @import("std");
 const zon_file = @import("eggy").assets.zon;
 const eggy = @import("eggy");
@@ -21,6 +22,7 @@ pub const game_camera = @import("game_camera.zig");
 const light_direction = @import("light_direction.zig");
 pub const stand_ins = @import("stand_ins.zig");
 pub const toolbar = @import("toolbar.zig");
+const selection_zig = @import("../entities/selection.zig");
 pub const SceneCamera = @import("scene_camera.zig").SceneCamera;
 /// A gamepad stick with its resting wobble removed, shared by both Scene panels.
 pub const deadZone = @import("scene_camera.zig").deadZone;
@@ -46,6 +48,11 @@ pub const Overlay = struct {
     preview: ?ui.Rect = null,
     /// The game owns the panel: no editor controls, just a frame saying it is playing.
     playing: bool = false,
+    /// The fly speed, in metres per second, while it has just changed.
+    fly_speed: ?f32 = null,
+    /// The plugins' Scene tools, as `tools.plugin_tool_count` counts them; borrowed from the
+    /// game's library until it reloads.
+    plugin_tools: []const eggy.plugins.SceneTool = &.{},
 
     pub const none: Overlay = .{};
 };
@@ -93,6 +100,7 @@ pub fn overlayElements(b: L.Builder, overlay: Overlay, scene: ui.Rect) ![]*L.Ele
         try parts.append(b.allocator, handles);
     }
     if (overlay.no_camera) try parts.append(b.allocator, try noCameraNotice(b, scene));
+    if (overlay.fly_speed) |speed| try parts.append(b.allocator, try flySpeedNotice(b, scene, speed));
     // The selected camera's view, framed and named.
     if (overlay.preview) |inset| {
         const frame = try b.node(0, .{ .width = inset.w, .height = inset.h, .z_index = 12 }, .{ .custom = .{ .context = undefined, .draw = drawPreviewFrame } }, &.{});
@@ -100,7 +108,9 @@ pub fn overlayElements(b: L.Builder, overlay: Overlay, scene: ui.Rect) ![]*L.Ele
         frame.accessibility = .{ .role = .ignored };
         try parts.append(b.allocator, frame);
     }
-    try parts.append(b.allocator, try toolbar.element(b, overlay.tools, scene));
+    const titles = try b.allocator.alloc([]const u8, overlay.plugin_tools.len);
+    for (titles, overlay.plugin_tools) |*title, tool| title.* = tool.title;
+    try parts.append(b.allocator, try toolbar.element(b, overlay.tools, scene, titles));
     return parts.items;
 }
 
@@ -110,6 +120,18 @@ fn noCameraNotice(b: L.Builder, scene: ui.Rect) !*L.Element {
         try b.node(0, .{ .width = scene.w }, .{ .text = .{ .value = "No camera available", .size = 16, .tone = .muted, .alignment = .center } }, &.{}),
     });
     notice.overlay = .{ .point = .init(scene.x, scene.y) };
+    return notice;
+}
+
+/// The fly speed just set, in a small card at the top middle of the panel at `scene`.
+fn flySpeedNotice(b: L.Builder, scene: ui.Rect, speed_m_per_s: f32) !*L.Element {
+    const width: f32 = 150;
+    const label = try std.fmt.allocPrint(b.allocator, "Fly speed {d:.1} m/s", .{speed_m_per_s});
+    const notice = try b.node(0, .{ .width = width, .padding = .{ .left = 6, .right = 6, .top = 6, .bottom = 6 }, .z_index = 12, .align_items = .center }, .{ .surface = .card }, &.{
+        try b.node(0, .{ .width = width - 12 }, .{ .text = .{ .value = label, .size = 13, .alignment = .center } }, &.{}),
+    });
+    notice.overlay = .{ .point = .init(scene.x + (scene.w - width) / 2, scene.y + 12) };
+    notice.accessibility.role = .ignored;
     return notice;
 }
 
@@ -130,7 +152,22 @@ pub const Target = struct {
     app: *eggy.App,
     selected: *?eggy.ecs.EntityId,
     selection_hidden: bool = false,
+    /// Every entity selected with `selected`, which modified clicks change and the gizmo moves
+    /// with it; null to select only one.
+    selection: ?struct { gpa: std.mem.Allocator, set: *selection_zig.Selection } = null,
+    /// Hands the pointer to the plugin Scene tool in use (`toolbar.State.plugin_tool`).
+    scene_tool: ?SceneToolHook = null,
 };
+
+/// The host's way to a plugin's `sceneTool` hook, which needs the editor's context.
+pub const SceneToolHook = struct {
+    context: *anyopaque,
+    use: *const fn (context: *anyopaque, tool: usize, input: eggy.plugins.SceneToolInput) void,
+};
+
+/// The most other selected entities the gizmo carries along with the one it shows.
+// ponytail: a fixed list; grow it, or keep it on the heap, if bigger selections are moved.
+const max_carried = 64;
 
 pub const SceneView = struct {
     camera: SceneCamera = .{},
@@ -139,6 +176,12 @@ pub const SceneView = struct {
     hot: ?gizmo.Handle = null,
     drag: ?gizmo.Drag = null,
     hot_end: ?orientation.End = null,
+    /// The other selected entities a gizmo drag carries along, as their `Transform`s were when it
+    /// began.
+    carried: [max_carried]Carried = undefined,
+    carried_count: usize = 0,
+    /// Whether the left button went down on the panel with a plugin tool in use, so moves drag it.
+    plugin_tool_held: bool = false,
     /// The toolbar's drag by its grip: where the pointer and the toolbar were when it began.
     toolbar_drag: ?struct { from: ui.Vec2, offset: ui.Vec2 } = null,
     /// The pointer's last place over the editor's windows.
@@ -179,7 +222,7 @@ pub const SceneView = struct {
     pub fn overlay(self: *SceneView) Overlay {
         const feedback = if (self.drag) |drag| drag.feedback(self.pointer, self.snapping(), &self.feedback_buffer) else "";
         const inset = if (self.preview != null) if (self.scene) |area| previewRect(area) else null else null;
-        return .{ .tools = self.tools, .view = self.view, .gizmo = self.gizmo, .hot = self.hot, .drag = self.drag, .hot_end = self.hot_end, .light_arrow = self.light_arrow, .suns = self.suns[0..self.sun_count], .pointer = self.pointer, .feedback = feedback, .no_camera = self.no_camera, .preview = inset, .playing = self.playing };
+        return .{ .tools = self.tools, .view = self.view, .gizmo = self.gizmo, .hot = self.hot, .drag = self.drag, .hot_end = self.hot_end, .light_arrow = self.light_arrow, .suns = self.suns[0..self.sun_count], .pointer = self.pointer, .feedback = feedback, .no_camera = self.no_camera, .preview = inset, .playing = self.playing, .fly_speed = self.camera.flySpeedNote() };
     }
 
     /// Before each frame: what the panel at `scene` is seen from, as `look` says, the selected
@@ -225,6 +268,8 @@ pub const SceneView = struct {
         };
         const area = scene orelse return;
         self.tools.offset = toolbar.keepInside(self.tools, self.tools.offset, area);
+        // A plugin's tool in use takes the gizmo's place.
+        if (self.tools.plugin_tool != null) return;
         const entity = working.selected.* orelse return;
         const component = transformIndex(working.game) orelse return;
         if (!working.game.hasComponent(working.app, entity, component)) return;
@@ -311,10 +356,15 @@ pub const SceneView = struct {
     pub fn press(self: *SceneView, button: toolbar.Button) void {
         switch (button) {
             .grip => self.toolbar_drag = .{ .from = self.pointer, .offset = self.tools.offset },
-            .move => self.tools.tool = .move,
-            .rotate => self.tools.tool = .rotate,
-            .scale => self.tools.tool = .scale,
-            .universal => self.tools.tool = .universal,
+            .move, .rotate, .scale, .universal => {
+                self.tools.plugin_tool = null;
+                self.tools.tool = switch (button) {
+                    .move => .move,
+                    .rotate => .rotate,
+                    .scale => .scale,
+                    else => .universal,
+                };
+            },
             .space => self.tools.space = if (self.tools.space == .world) .local else .world,
             .snap => self.tools.snapping = !self.tools.snapping,
             .game_camera => self.tools.through_game_camera = !self.tools.through_game_camera,
@@ -322,6 +372,13 @@ pub const SceneView = struct {
             // The 2D Scene's own; the Scene's toolbar doesn't show them.
             .grid, .frame_origin => {},
         }
+    }
+
+    /// Plugin Scene tool `tool` on the toolbar was pressed: it takes the pointer from the gizmo,
+    /// or, already in use, hands it back.
+    pub fn pressPluginTool(self: *SceneView, tool: u8) void {
+        self.plugin_tool_held = false;
+        self.tools.plugin_tool = if (self.tools.plugin_tool == tool) null else tool;
     }
 
     /// Before the workspace sees `event`: the camera's drags, scroll and pinch over the panel at
@@ -342,6 +399,7 @@ pub const SceneView = struct {
         if (!self.camera.hovered or self.camera.drag != null or key_down.repeat) return false;
         if (key_down.mod.controlDown() or key_down.mod.altDown()) return false;
         const key = key_down.key orelse return false;
+        if (key == .w or key == .e or key == .r or key == .t) self.tools.plugin_tool = null;
         self.tools.tool = switch (key) {
             .w => .move,
             .e => .rotate,
@@ -365,6 +423,9 @@ pub const SceneView = struct {
     /// // Unconsumed raw SDL event, optional UI rect and live host Target.
     /// ```
     pub fn handlePointer(self: *SceneView, event: sdl3.events.Event, scene: ?ui.Rect, target: Target) bool {
+        if (self.tools.plugin_tool) |tool| if (self.toolbar_drag == null) if (target.scene_tool) |hook| {
+            if (self.usePluginTool(event, scene, target, hook, tool)) return true;
+        };
         switch (event) {
             .mouse_button_down => |down| {
                 if (down.button != .left) return false;
@@ -379,13 +440,14 @@ pub const SceneView = struct {
                 }
                 if (self.gizmo) |layout| if (gizmo.hit(layout, at)) |handle| {
                     self.drag = startDrag(target, layout, handle, at);
+                    self.carryOthers(target);
                     return true;
                 };
                 if (stand_ins.sunAt(self.suns[0..self.sun_count], at)) |light| {
-                    target.selected.* = instanceRoot(target, light);
+                    choose(target, instanceRoot(target, light));
                     return true;
                 }
-                target.selected.* = instanceRoot(target, picking.pick(self.drawn, &target.app.graphics.models, &target.app.ui_scenes, target.app.resources(), self.view, area, at));
+                choose(target, instanceRoot(target, picking.pick(self.drawn, &target.app.graphics.models, &target.app.ui_scenes, target.app.resources(), self.view, area, at)));
                 return true;
             },
             .mouse_motion => |motion| {
@@ -407,15 +469,94 @@ pub const SceneView = struct {
                 var text: [160]u8 = undefined;
                 const zon = std.fmt.bufPrintSentinel(&text, ".{{ {d}, {d}, {d} }}", .{ change.value[0], change.value[1], change.value[2] }, 0) catch return true;
                 _ = target.game.writeField(target.app, entity, component, @backingInt(change.field), zon);
+                // The others move, turn or grow by as much.
+                const start = drag.start;
+                const from = switch (change.field) {
+                    .position => start.position,
+                    .rotation_deg => start.rotation_deg,
+                    .scale => start.scale,
+                };
+                for (self.carried[0..self.carried_count]) |other| {
+                    const was = other.fields[@backingInt(change.field)];
+                    var now: [3]f32 = undefined;
+                    for (&now, was, from, change.value) |*axis, other_was, primary_was, primary_now| axis.* = if (change.field == .scale)
+                        (if (primary_was != 0) other_was * primary_now / primary_was else other_was)
+                    else
+                        other_was + primary_now - primary_was;
+                    const other_zon = std.fmt.bufPrintSentinel(&text, ".{{ {d}, {d}, {d} }}", .{ now[0], now[1], now[2] }, 0) catch continue;
+                    _ = target.game.writeField(target.app, other.entity, component, @backingInt(change.field), other_zon);
+                }
                 return true;
             },
             .mouse_button_up => |up| {
                 if (up.button != .left or (self.drag == null and self.toolbar_drag == null)) return false;
                 self.drag = null;
+                self.carried_count = 0;
                 self.toolbar_drag = null;
                 return true;
             },
             else => return false,
+        }
+    }
+
+    /// Hand a left press, move or release on the panel at `scene` to plugin tool `tool`, with the
+    /// ray through the pointer, where it meets the ground and what is under it. Returns whether
+    /// it was used; a press on an orientation bubble is left to it.
+    fn usePluginTool(self: *SceneView, event: sdl3.events.Event, scene: ?ui.Rect, target: Target, hook: SceneToolHook, tool: u8) bool {
+        const area = scene orelse return false;
+        const at, const kind: eggy.plugins.SceneToolInput.Kind = switch (event) {
+            .mouse_button_down => |down| blk: {
+                const at = ui.Vec2{ .x = down.x, .y = down.y };
+                if (down.button != .left or !area.contains(at.x, at.y) or orientation.hit(self.view, area, at) != null) return false;
+                self.plugin_tool_held = true;
+                break :blk .{ at, .press };
+            },
+            .mouse_motion => |motion| blk: {
+                const at = ui.Vec2{ .x = motion.x, .y = motion.y };
+                self.pointer = at;
+                if (!self.plugin_tool_held and !area.contains(at.x, at.y)) return false;
+                break :blk .{ at, if (self.plugin_tool_held) .drag else .hover };
+            },
+            .mouse_button_up => |up| blk: {
+                if (up.button != .left or !self.plugin_tool_held) return false;
+                self.plugin_tool_held = false;
+                break :blk .{ ui.Vec2{ .x = up.x, .y = up.y }, .release };
+            },
+            else => return false,
+        };
+        const ray = picking.rayThrough(self.view, area, at);
+        const to_ground = if (@abs(ray.direction[1]) > 1e-6) -ray.origin[1] / ray.direction[1] else -1;
+        const held = sdl3.keyboard.getModState();
+        hook.use(hook.context, tool, .{
+            .kind = kind,
+            .ray_origin_m = ray.origin,
+            .ray_direction = ray.direction,
+            .ground_m = if (to_ground > 0) .{ ray.origin[0] + ray.direction[0] * to_ground, 0, ray.origin[2] + ray.direction[2] * to_ground } else null,
+            .entity = self.entityAt(target.app, area, at),
+            .shift = held.shiftDown(),
+            .control = held.controlDown(),
+        });
+        // Hovering leaves the move to the rest of the editor too.
+        return kind != .hover;
+    }
+
+    /// Note the other selected entities with a `Transform` as they are now, for a gizmo drag that
+    /// has just begun to carry along; none when it didn't begin. Children of selected entities
+    /// are left out: their parents carry them.
+    fn carryOthers(self: *SceneView, target: Target) void {
+        self.carried_count = 0;
+        if (self.drag == null) return;
+        const chosen = target.selection orelse return;
+        const component = transformIndex(target.game) orelse return;
+        const all = chosen.set.all.items;
+        for (all) |entity| {
+            if (target.selected.*) |primary| if (primary.eql(entity)) continue;
+            if (self.carried_count == max_carried) break;
+            if (underAnyOf(&target.app.world, entity, all)) continue;
+            if (!target.game.hasComponent(target.app, entity, component)) continue;
+            const fields = readTransform(target, entity, component) orelse continue;
+            self.carried[self.carried_count] = .{ .entity = entity, .fields = fields };
+            self.carried_count += 1;
         }
     }
 
@@ -473,9 +614,22 @@ pub fn previewRect(scene: ui.Rect) ui.Rect {
 }
 
 /// A drag of `handle`, from the selected entity's `Transform` as it is now.
-fn startDrag(target: Target, layout: gizmo.Layout, handle: gizmo.Handle, at: ui.Vec2) ?gizmo.Drag {
-    const entity = target.selected.* orelse return null;
-    const component = transformIndex(target.game) orelse return null;
+/// Another selected entity a gizmo drag moves, and its `Transform` when the drag began.
+const Carried = struct { entity: eggy.ecs.EntityId, fields: [3][3]f32 };
+
+/// Click `entity` (null: nothing) in the panel: with Ctrl or Shift held it joins the selection
+/// or leaves it, otherwise it is selected alone.
+fn choose(target: Target, entity: ?eggy.ecs.EntityId) void {
+    const chosen = target.selection orelse {
+        target.selected.* = entity;
+        return;
+    };
+    const how: selection_zig.How = if (selection_zig.howNow() == .only) .only else .toggle;
+    chosen.set.choose(chosen.gpa, target.selected, entity, how, &.{});
+}
+
+/// The `Transform` fields (position, rotation, scale) of `entity`; null, logged, when unreadable.
+fn readTransform(target: Target, entity: eggy.ecs.EntityId, component: usize) ?[3][3]f32 {
     var fields: [3][3]f32 = undefined;
     for (&fields, 0..) |*field, index| {
         var buffer: [160]u8 = undefined;
@@ -485,6 +639,13 @@ fn startDrag(target: Target, layout: gizmo.Layout, handle: gizmo.Handle, at: ui.
             return null;
         };
     }
+    return fields;
+}
+
+fn startDrag(target: Target, layout: gizmo.Layout, handle: gizmo.Handle, at: ui.Vec2) ?gizmo.Drag {
+    const entity = target.selected.* orelse return null;
+    const component = transformIndex(target.game) orelse return null;
+    const fields = readTransform(target, entity, component) orelse return null;
     // Moves and turns about world axes are made in the parent's space: the world's at the top.
     var to_local = [4][4]f32{ .{ 1, 0, 0, 0 }, .{ 0, 1, 0, 0 }, .{ 0, 0, 1, 0 }, .{ 0, 0, 0, 1 } };
     if (target.app.world.getParent(entity)) |parent| if (target.game.worldMatrix(target.app, parent)) |placed| {
@@ -551,4 +712,13 @@ test "a Transform field's ZON, as the game's library writes it, reads back for a
     try std.zon.stringify.serialize([3]f32{ 0, 0.75, -2 }, .{ .whitespace = false }, &written.writer);
     try std.testing.expectEqualSlices(f32, &.{ 0, 0.75, -2 }, &parseVector(written.written()).?);
     try std.testing.expect(parseVector("sideways") == null);
+}
+
+/// Whether one of `entity`'s ancestors is among `entities`.
+fn underAnyOf(world: *eggy.ecs.World, entity: eggy.ecs.EntityId, entities: []const eggy.ecs.EntityId) bool {
+    var at = world.getParent(entity);
+    while (at) |parent| : (at = world.getParent(parent)) {
+        for (entities) |chosen| if (chosen.eql(parent)) return true;
+    }
+    return false;
 }

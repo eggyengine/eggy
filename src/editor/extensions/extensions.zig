@@ -316,7 +316,7 @@ fn apply(host: anytype, request: api.Request, response: *api.Response) !void {
                 if (request.operation == .copy_file) {
                     host.history.record(.{ .create = .{ .path = try file_ops.copyInto(host.gpa, io, files, text, extra) } });
                 } else {
-                    host.history.record(try history.Step.created(host.gpa, try file_ops.import(host.gpa, io, files, text, extra)));
+                    host.history.record(try history.Step.created(host.gpa, try host.importFile(io, files, text, extra)));
                 }
             }
             host.filesChanged();
@@ -388,6 +388,22 @@ test "deferred workflow requests are taken once without retaining callbacks" {
     try std.testing.expectEqual(workspace.Outcome.build_project, state.takeRequest().?);
 }
 
+/// Open one undo step for a plugin Scene tool's stroke, from press to release: what it changes
+/// in the world in between is undone together. A failure is logged and the stroke goes unrecorded.
+pub fn beginStroke(host: anytype) void {
+    beginEdit(host) catch |err| std.log.err("cannot record the Scene tool's stroke: {t}", .{err});
+}
+
+/// Close the stroke `beginStroke` opened, recording it when the world changed.
+pub fn endStroke(host: anytype) void {
+    if (host.extension_state.before == null) return;
+    const recorded = commitEdit(host) catch |err| blk: {
+        std.log.err("cannot record the Scene tool's stroke: {t}", .{err});
+        break :blk false;
+    };
+    if (!recorded) host.extension_state.cancelEdit(host.gpa);
+}
+
 /// Start a scene edit: keep the world as it is now for the undo step `commitEdit` records.
 fn beginEdit(host: anytype) !void {
     if (host.project == null) return error.NoProject;
@@ -415,6 +431,12 @@ fn commitEdit(host: anytype) !bool {
     host.history.record(.{ .scene = .{ .before = before, .after = after } });
     host.history.setBaseline(baseline);
     return true;
+}
+
+/// Put the scene `zon`'s entities in place of the world's, as one step to undo: a recovered
+/// copy of a scene never saved. Returns how many components and fields were left out.
+pub fn restoreScene(host: anytype, zon: []const u8) !usize {
+    return changeScene(host, true, zon, -1);
 }
 
 /// Put the scene `zon`'s entities into the world, after its own (or in place of them, when

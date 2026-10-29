@@ -64,6 +64,9 @@ pub const Plugin = struct {
 | `exportUi` | Builds extra settings in File > Export for the platform shown, whichever it is. See [Export platforms](#export-platforms). |
 | `exportArgs` | Adds `zig build export` arguments when an export starts, for whichever platform. |
 | `uiWidget` | Draws one of the type's `ui_widgets` in a UI scene node. See [UI widgets](#ui-widgets). |
+| `componentInspectorUi` | Draws the Inspector for one of the type's `component_inspectors`, in place of its fields. See [Inspectors, importers and Scene tools](#inspectors-importers-and-scene-tools). |
+| `importAsset` | Converts a file brought into the project with one of the type's `asset_importers`. |
+| `sceneTool` | Gets the Scene panel's pointer while one of the type's `scene_tools` is in use. |
 
 Keep the parameter order and return types above, including error unions on hooks that
 currently cannot fail. `init` has no `self`; it constructs the instance. Use `_` for
@@ -98,6 +101,9 @@ keeps running. See [Diagnose and handle errors](../how-to/handle-errors.md).
 | `pub const editor_file_types = [_]eggy.plugins.EditorFileType{...};` | Templates in both Assets New menus |
 | `pub const export_platforms = [_]eggy.plugins.ExportPlatform{...};` | Platforms in File > Export, paired with `exportUi` and `exportArgs` |
 | `pub const ui_widgets = [_]eggy.plugins.UiWidget{...};` | Widgets in the UI Designer's palette, paired with `uiWidget` |
+| `pub const component_inspectors = .{Health};` | Components whose Inspector the type draws, paired with `componentInspectorUi` |
+| `pub const asset_importers = [_]eggy.plugins.AssetImporter{...};` | File types converted on import, paired with `importAsset` |
+| `pub const scene_tools = [_]eggy.plugins.SceneTool{...};` | Tools on the Scene panel's toolbar, paired with `sceneTool` |
 
 Disabling a plugin skips its instance and hooks. Its component types and preferences
 remain known so scene and setting values are retained. The game is always enabled.
@@ -297,6 +303,56 @@ Inspector; the Window menu restores closed panels.
 layout identity, scoped to the published plugin name. Omit it to use the title.
 Duplicate keys fail compilation; dock-ID hash collisions are reported. Keep a key
 unchanged when renaming a panel or reordering declarations.
+
+## Inspectors, importers and Scene tools
+
+```zig
+pub const Plugin = struct {
+    pub const components = .{Health};
+    pub const component_inspectors = .{Health};
+    pub const asset_importers = [_]eggy.plugins.AssetImporter{.{
+        .key = "heightmap",
+        .title = "Heightmap",
+        .extension = ".raw",
+        .output_extension = ".terrain.zon",
+    }};
+    pub const scene_tools = [_]eggy.plugins.SceneTool{.{ .key = "plant", .title = "Plant trees" }};
+
+    pub fn componentInspectorUi(self: *Plugin, inspector: usize, entity: eggy.ecs.EntityId, editor: *eggy.editor.Context, ui: *eggy.ui.Context) !void { ... }
+    pub fn importAsset(self: *Plugin, importer: usize, source: []const u8, out: *std.Io.Writer, editor: *eggy.editor.Context) !void { ... }
+    pub fn sceneTool(self: *Plugin, tool: usize, input: eggy.plugins.SceneToolInput, editor: *eggy.editor.Context) !void { ... }
+};
+```
+
+A component in `component_inspectors` must also be in some plugin's `components`, and only
+one plugin may draw its Inspector. Its card keeps its header and Remove button;
+`componentInspectorUi` draws the body in place of the fields. Change the entity's values
+through `editor`, so the change can be undone. A disabled plugin's components show their
+fields read-only instead.
+
+A file whose name ends in an importer's `extension`, dropped on the Assets panel or brought
+in through `editor`, is read whole and passed to `importAsset` as `source`. What the hook
+writes to `out` is saved in the chosen folder as the file's name with `output_extension`.
+The original isn't copied. When the hook fails, nothing is saved and the import reports the
+error. Undo removes the saved file. Extensions are matched without regard to case, and the
+first importer in plugin order wins.
+
+Each Scene tool adds a button to the Scene panel's toolbar, after the built-in ones, showing
+the first letter of its `title`. Pressing it again, or picking Move, Rotate, Scale or
+Universal (or W, E, R, T), hands the pointer back to the gizmo. While it is in use, the gizmo
+is hidden, and `sceneTool` receives left presses, drags, releases and hovers over the panel
+as `eggy.plugins.SceneToolInput`:
+
+| Field | Meaning |
+| --- | --- |
+| `kind` | `.press`, `.drag` (moving while held), `.release` or `.hover` |
+| `ray_origin_m`, `ray_direction` | The world ray through the pointer; the direction is unit length |
+| `ground_m` | Where that ray meets y = 0, or null when it points away |
+| `entity` | The entity drawn under the pointer, if any |
+| `shift`, `control` | The modifier keys held |
+
+Outside Play, what a tool changes from press to release is one Undo step. Inspector,
+importer and tool keys are scoped to the published plugin name, like command keys.
 
 ## Export platforms
 

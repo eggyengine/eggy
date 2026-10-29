@@ -34,6 +34,14 @@ pub const Details = struct {
     dragging: ?Dragged = null,
     /// Names the assets nested reference fields hold, by their identities.
     assets: ?*ProjectAssets = null,
+    /// Draws a plugin's own Inspector for components that have one (`Component.custom`).
+    custom_ui: ?CustomUi = null,
+
+    /// A plugin's Inspector for a component, drawn by the host in place of its fields.
+    pub const CustomUi = struct {
+        context: *anyopaque,
+        draw: *const fn (context: *anyopaque, inspector: usize, entity: ecs.EntityId, ui_context: *ui.Context) void,
+    };
 
     pub const Component = struct {
         /// Its index among the game's component types.
@@ -46,6 +54,8 @@ pub const Details = struct {
         shown: []const ?[]const u8 = &.{},
         /// Whether its plugin is turned off: its values show, but can't be changed.
         disabled: bool = false,
+        /// The plugin Inspector drawn in place of its fields, if a plugin draws its own.
+        custom: ?usize = null,
         /// The components it depends on, and those of the entity's that depend on it (which keep
         /// it from being removed), by name, joined with commas; empty for none.
         needs: []const u8 = "",
@@ -209,7 +219,7 @@ pub const EntityInspector = struct {
             page_style.smallText(context, 13);
         }
         const field_control = std.math.clamp(width * control_share, min_control_width, max_control_width);
-        for (details.components) |component| if (self.componentCard(context, component, field_control, details.dragging, details.assets)) |card_action| {
+        for (details.components) |component| if (self.componentCard(context, details, component, field_control)) |card_action| {
             action = card_action;
         };
         self.focused = focused;
@@ -217,7 +227,7 @@ pub const EntityInspector = struct {
     }
 
     /// A card for one component: a header (fold, name, owner, Remove), then its fields.
-    fn componentCard(self: *EntityInspector, context: *ui.Context, component: Details.Component, field_control: f32, dragging: ?Dragged, assets: ?*ProjectAssets) ?Action {
+    fn componentCard(self: *EntityInspector, context: *ui.Context, details: Details, component: Details.Component, field_control: f32) ?Action {
         const arena = context.builder().allocator;
         const b = context.builder();
         var action: ?Action = null;
@@ -248,6 +258,14 @@ pub const EntityInspector = struct {
         context.end();
         restyle(context, .{ .direction = .row, .gap = 8, .align_items = .center });
 
+        // A plugin that draws its own Inspector for the component draws it instead of its fields.
+        const custom = if (component.disabled) null else component.custom;
+        if (!folded) if (custom) |inspector| if (details.custom_ui) |custom_ui| {
+            custom_ui.draw(custom_ui.context, inspector, details.entity, context);
+            context.end();
+            restyle(context, .{ .gap = 8, .padding = .{ .left = 12, .right = 12, .top = 10, .bottom = 10 } });
+            return action;
+        };
         if (!folded) for (component.info.fields, component.values, 0..) |field, value, index| {
             const shown = if (index < component.shown.len) component.shown[index] else null;
             if (component.disabled or !field.editable or field.parts.len == 0 or value == null) {
@@ -260,8 +278,8 @@ pub const EntityInspector = struct {
                 .text = value.?,
                 .shown = shown,
                 .control_width = field_control,
-                .dragging = dragging,
-                .assets = assets,
+                .dragging = details.dragging,
+                .assets = details.assets,
             })) |text| action = .{ .set_field = .{ .component = component.index, .field = index, .text = text } };
         };
 
@@ -341,7 +359,7 @@ pub const EntityInspector = struct {
             // The icon, then the name, fitted to the room the icon leaves.
             const label = page_style.fitText(arena, context.font, choice.label, 13, width - 64);
             const iconed = std.fmt.allocPrint(arena, "{s}  {s}", .{ choice.icon, label }) catch return null;
-            const row = b.node(id, .{ .height = 24 }, .{ .menu_item = .{ .label = iconed } }, &.{}) catch return null;
+            const row = b.node(id, .{ .height = 24, .width = width }, .{ .menu_item = .{ .label = iconed } }, &.{}) catch return null;
             row.cursor = .pointer;
             row.accessibility = .{ .role = .menu_item, .label = choice.label };
             context.element(row);
@@ -367,17 +385,19 @@ pub const EntityInspector = struct {
             } else categories.append(arena, choice.category) catch return null;
         }
 
-        // While the pointer is on the popout, the category under it (where the popout flips
-        // back over the rows) doesn't take over.
-        const on_popout = if (context.last_bounds.get(category_popout_id)) |popout| popout.rect.contains(context.pointer.x, context.pointer.y) else false;
+        // A click opens a category in place under its row, or closes it: a popout beside the
+        // rows had no room in the Inspector and flipped back over them. One is open at a time,
+        // settled before any is drawn, as the open one's list has a single id.
+        for (0..categories.items.len) |c| {
+            const id = category_id_base + @as(u32, @intCast(c));
+            if (context.activated(id)) search.open_category = if (search.open_category == id) 0 else id;
+        }
         var picked: ?usize = null;
         for (categories.items, 0..) |category, c| {
             const id = category_id_base + @as(u32, @intCast(c));
-            const pointed = if (context.last_bounds.get(id)) |row| row.rect.contains(context.pointer.x, context.pointer.y) else false;
-            if ((pointed and !on_popout) or context.activated(id)) search.open_category = id;
             const open = search.open_category == id;
             const label = page_style.fitText(arena, context.font, category, 13, width - 48);
-            const row = b.node(id, .{ .height = 24 }, .{ .menu_item = .{ .label = label, .submenu = true, .hot = open } }, &.{}) catch return null;
+            const row = b.node(id, .{ .height = 24, .width = width }, .{ .menu_item = .{ .label = label, .submenu = true, .hot = open } }, &.{}) catch return null;
             row.cursor = .pointer;
             row.accessibility = .{ .role = .menu_item, .label = category, .expanded = open };
             if (!open) {
@@ -385,20 +405,20 @@ pub const EntityInspector = struct {
                 continue;
             }
 
-            // Its types, each with its icon, beside the row.
-            const popout_width = @min(240, width);
+            // Its types, each with its icon, indented under the row.
             var items: std.ArrayList(ui.widgets.MenuItem) = .empty;
             for (addable, 0..) |choice, i| if (std.mem.eql(u8, choice.category, category)) {
                 const pick = pick_id_base + @as(u32, @intCast(i));
                 if (context.activated(pick)) picked = choice.index;
-                const name = page_style.fitText(arena, context.font, if (choice.name.len > 0) choice.name else choice.label, 14, popout_width - 64);
+                const name = page_style.fitText(arena, context.font, if (choice.name.len > 0) choice.name else choice.label, 14, width - 80);
                 const iconed = std.fmt.allocPrint(arena, "{s}  {s}", .{ choice.icon, name }) catch return null;
                 items.append(arena, .{ .id = pick, .label = iconed }) catch return null;
             };
-            const popout = ui.widgets.menuItems(b, items.items, 0, 0) catch return null;
-            popout.id = category_popout_id;
-            popout.style.width = popout_width;
-            context.element(b.node(0, .{}, .none, &.{ row, ui.widgets.anchorTo(popout, row, .right, 150) }) catch return null);
+            const list = ui.widgets.menuItems(b, items.items, 0, 0) catch return null;
+            list.id = category_popout_id;
+            list.style.width = width - 16;
+            const indented = b.node(0, .{ .padding = .{ .left = 16 } }, .none, &.{list}) catch return null;
+            context.element(b.node(0, .{}, .none, &.{ row, indented }) catch return null);
         }
         return picked;
     }
@@ -576,8 +596,8 @@ test "before anything is typed, components pop out of their categories" {
     try std.testing.expectEqualStrings("Rendering", labels.items[0]);
     try std.testing.expectEqualStrings("Game", labels.items[1]);
 
-    // Pointing at Rendering pops out its two types, by name, inside the narrow Inspector.
-    context.handle(.{ .pointer_move = context.last_bounds.get(category_id_base).?.rect.center() });
+    // Clicking Rendering lists its two types under it, by name, inside the narrow Inspector.
+    clickAt(&context, context.last_bounds.get(category_id_base).?.rect.center());
     context.newFrame(viewport);
     _ = inspector.build(&context, details);
     _ = try context.render();
@@ -595,6 +615,48 @@ test "before anything is typed, components pop out of their categories" {
     context.newFrame(viewport);
     try std.testing.expectEqual(@as(usize, 2), inspector.build(&context, details).?.add_component);
     try std.testing.expect(inspector.search == null);
+}
+
+test "opening another category closes the one open" {
+    var context = try ui.Context.init(std.testing.allocator);
+    defer context.deinit();
+    var inspector = EntityInspector.init(std.testing.allocator);
+    defer inspector.deinit();
+    const details = Details{ .entity = .init(1, 0), .name = "", .components = &.{}, .addable = &.{
+        .{ .index = 1, .label = "Light (eggy)", .name = "Light", .category = "Rendering" },
+        .{ .index = 2, .label = "Spin (game)", .name = "Spin", .category = "Game" },
+    } };
+    inspector.shown = details.entity;
+    inspector.search = .{ .edit = try SearchEdit.init(""), .focused = true };
+    const viewport = ui.Rect{ .x = 0, .y = 0, .w = 600, .h = 400 };
+    context.newFrame(viewport);
+    _ = inspector.build(&context, details);
+    _ = try context.render();
+
+    // Rendering open, then Game clicked: one list, Game's, and no shared id.
+    clickAt(&context, context.last_bounds.get(category_id_base).?.rect.center());
+    context.newFrame(viewport);
+    _ = inspector.build(&context, details);
+    _ = try context.render();
+    clickAt(&context, context.last_bounds.get(category_id_base + 1).?.rect.center());
+    context.newFrame(viewport);
+    _ = inspector.build(&context, details);
+    _ = try context.render();
+    try std.testing.expectEqual(@as(usize, 1), countId(context.last_root.?, category_popout_id));
+    try std.testing.expectEqual(category_id_base + 1, inspector.search.?.open_category);
+    _ = try ui.accessibility.collect(context.arena.allocator(), context.last_root.?, 0);
+}
+
+fn clickAt(context: *ui.Context, point: anytype) void {
+    context.handle(.{ .pointer_move = point });
+    context.handle(.{ .pointer_down = .{ .position = point, .button = .left, .clicks = 1 } });
+    context.handle(.{ .pointer_up = .{ .position = point, .button = .left } });
+}
+
+fn countId(element: *const ui.Layout.Element, id: u32) usize {
+    var found: usize = if (element.id == id) 1 else 0;
+    for (element.children) |child| found += countId(child, id);
+    return found;
 }
 
 fn collectMenuItems(element: *const ui.Layout.Element, labels: *std.ArrayList([]const u8)) !void {

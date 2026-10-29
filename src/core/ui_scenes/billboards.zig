@@ -245,11 +245,15 @@ fn faceOf(billboard: Billboard, aspect: f32, view: camera.View) Face {
     var across: [3]f32 = undefined;
     var upward: [3]f32 = undefined;
     if (billboard.face_camera) {
+        // The camera's axes, scaled as the entity's X and Y are, so turning to face the camera
+        // keeps the size the panel has facing along the entity.
         const right = camera.normalize(camera.cross(view.forward, view.up));
         const up = camera.normalize(camera.cross(right, view.forward));
+        const scale_x = length(model[0][0..3].*);
+        const scale_y = length(model[1][0..3].*);
         for (&across, &upward, right, up) |*a, *u, r, v| {
-            a.* = r * width_m;
-            u.* = v * height_m;
+            a.* = r * width_m * scale_x;
+            u.* = v * height_m * scale_y;
         }
     } else for (&across, &upward, 0..) |*a, *u, i| {
         a.* = model[0][i] * width_m;
@@ -258,6 +262,10 @@ fn faceOf(billboard: Billboard, aspect: f32, view: camera.View) Face {
     var origin: [3]f32 = undefined;
     for (&origin, across, upward, 0..) |*o, a, u, i| o.* = model[3][i] - (a + u) / 2;
     return .{ .origin = origin, .across = across, .upward = upward };
+}
+
+fn length(v: [3]f32) f32 {
+    return @sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]);
 }
 
 test "tiles fill rows and stop when the texture is full" {
@@ -322,4 +330,18 @@ test "a press over a painted button records its click" {
     try std.testing.expect(try press(&state, .{}, view, .{ 800, 600 }, .{ x, y }));
     try std.testing.expectEqualStrings("go", state.clicks.items[0].node);
     try std.testing.expect(state.clicks.items[0].entity.eql(sign));
+}
+
+test "a panel is the same size facing the camera as facing along its scaled entity" {
+    var billboard = std.mem.zeroes(Billboard);
+    billboard.width_m = 2;
+    billboard.model = .{ .{ 0.5, 0, 0, 0 }, .{ 0, 0.5, 0, 0 }, .{ 0, 0, 0.5, 0 }, .{ 0, 0, 0, 1 } };
+    const view = camera.View{ .eye = .{ 3, 0, 3 }, .forward = camera.normalize(.{ -1, 0, -1 }), .up = .{ 0, 1, 0 } };
+    const tile = ui.Rect{ .x = 0, .y = 0, .w = 100, .h = 50 };
+    billboard.face_camera = false;
+    const fixed = panelFor(billboard, tile, 0.5, view, undefined);
+    billboard.face_camera = true;
+    const facing = panelFor(billboard, tile, 0.5, view, undefined);
+    try std.testing.expectApproxEqAbs(length(fixed.across), length(facing.across), 1e-5);
+    try std.testing.expectApproxEqAbs(length(fixed.upward), length(facing.upward), 1e-5);
 }

@@ -62,6 +62,8 @@ pub const Outcome = union(enum) {
     pause: bool,
     /// A button floating over the Scene panel.
     scene_button: scene_view.toolbar.Button,
+    /// A plugin's Scene tool on that toolbar.
+    scene_plugin_tool: u8,
     /// File > New Project.
     new_project,
     /// File > Open Project.
@@ -568,6 +570,7 @@ pub const Workspace = struct {
     /// does, for its tooltip; null for others.
     fn tooltipText(self: *const Workspace, id: u32) ?[]const u8 {
         if (scene_view.toolbar.buttonOf(id)) |button| return scene_view.toolbar.describe(button, self.scene_overlay.tools);
+        if (scene_view.toolbar.pluginToolOf(id)) |tool| if (tool < self.scene_overlay.plugin_tools.len) return self.scene_overlay.plugin_tools[tool].title;
         if (id == play_button.id) return if (self.playing) self.stop_tooltip else "Play";
         if (id == pause_button.id and self.playing) return if (self.paused) "Resume" else "Pause";
         if (id == simulate_button.id and !self.playing) return "Simulate: run the game, seen through the Scene panel's camera";
@@ -857,6 +860,7 @@ pub const Workspace = struct {
                     if (self.menubar.press(id, self.plugin_bars)) |action| return self.run(action);
                 }
                 if (scene_view.toolbar.buttonOf(id)) |button| return .{ .scene_button = button };
+                if (scene_view.toolbar.pluginToolOf(id)) |tool| return .{ .scene_plugin_tool = tool };
                 if (no_tabs.kindOf(id)) |kind| {
                     self.openTab(kind);
                     return .handled;

@@ -134,7 +134,8 @@ pub const Renderer = struct {
             },
             .sprite => {
                 const sprite = source.sprites.items[item.index].value;
-                const paint = textures.get(sprite.image.key()) orelse return error.SpriteTextureUnavailable;
+                // No image is plain white, tinted.
+                const paint = if (sprite.image.len == 0) textures.white else textures.get(sprite.image.key()) orelse return error.SpriteTextureUnavailable;
                 const angle = sprite.rotation_deg * std.math.rad_per_deg;
                 const x_axis: [3]f32 = if (sprite.billboard) right else .{ 1, 0, 0 };
                 const y_axis: [3]f32 = if (sprite.billboard) up else .{ 0, 1, 0 };

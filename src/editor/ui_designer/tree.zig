@@ -37,6 +37,8 @@ pub const Tree = struct {
     folded: std.AutoHashMapUnmanaged(u32, void) = .empty,
     /// The node kinds menu, open after Add: the node the new one goes under, and where it opened.
     adding: ?struct { parent: u32, at: ui.Vec2 } = null,
+    /// The add menu's scroll, when the page is too short to show it whole.
+    adding_scroll: ui.Layout.ScrollState = .{},
     /// The node Copy took, with its children, in `copied_arena`.
     copied: ?Node = null,
     copied_arena: std.heap.ArenaAllocator,
@@ -95,8 +97,11 @@ pub const Tree = struct {
         var path_buffer: [ui_scene.max_depth]u16 = undefined;
         const root = &document.scene().root;
         switch (action) {
-            .select => |node| if (layout.pathOf(root, node.id, &path_buffer)) |path| document.select(path),
-            .spawn => |parent| self.adding = .{ .parent = if (parent) |node| node.id else layout.indexOf(root, document.selection()) orelse 0, .at = at },
+            .select, .frame => |node| if (layout.pathOf(root, node.id, &path_buffer)) |path| document.select(path),
+            .spawn => |parent| {
+                self.adding_scroll = .{};
+                self.adding = .{ .parent = if (parent) |node| node.id else layout.indexOf(root, document.selection()) orelse 0, .at = at };
+            },
             .toggle_collapse => |node| if (self.folded.contains(node.id)) {
                 _ = self.folded.remove(node.id);
             } else self.folded.put(self.gpa, node.id, {}) catch {},
@@ -165,7 +170,7 @@ pub const Tree = struct {
                     .top_level => try document.moveSelected(&.{}, root.children.len),
                 }
             },
-            .select, .spawn, .toggle_collapse, .copy, .extract => return false,
+            .select, .frame, .spawn, .toggle_collapse, .copy, .extract => return false,
         }
         return true;
     }
@@ -179,15 +184,20 @@ pub const Tree = struct {
         for (palette, 0..) |entry, i| choices.append(arena, .{ .id = kind_id_base + @as(u32, @intCast(i)), .label = iconLabel(arena, entry.icon, entry.label) }) catch return false;
         for (widgets, palette.len..) |widget, i| choices.append(arena, .{ .id = kind_id_base + @as(u32, @intCast(i)), .label = iconLabel(arena, eggy.components.default_icon, widget.title) }) catch break;
 
-        // Kept inside the page, as the Hierarchy's menu is.
+        // Kept inside the page, as the Hierarchy's menu is: rows of 32, a gap of 1, padding of 4.
         const width: f32 = @min(200, context.viewport.w);
-        const height = 8 + 32 * @as(f32, @floatFromInt(choices.items.len));
+        const height = 7 + 33 * @as(f32, @floatFromInt(choices.items.len));
         const at = ui.Vec2{
             .x = @max(context.viewport.x, @min(adding.at.x, context.viewport.x + context.viewport.w - width)),
             .y = @max(context.viewport.y, @min(adding.at.y, context.viewport.y + context.viewport.h - height)),
         };
         const popup = (ui.widgets.contextMenu(context.builder(), at, choices.items, 0) catch return false) orelse return false;
         popup.style.width = width;
+        // A page shorter than the menu scrolls it, rather than cutting off its last rows.
+        popup.style.height = @min(height, context.viewport.h);
+        popup.style.overflow = .scroll;
+        popup.scroll = &self.adding_scroll;
+        self.adding_scroll.overlay_bar = true;
         context.element(popup);
 
         for (choices.items, 0..) |choice, i| if (context.activated(choice.id)) {

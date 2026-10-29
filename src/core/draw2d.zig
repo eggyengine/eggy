@@ -6,6 +6,7 @@ pub const support: @import("support.zig").Support = .available;
 /// An unlit XY-plane quad, centred at position, measured in world metres.
 /// Atlas UVs are {left, top, right, bottom}; higher layers draw later.
 pub const Sprite = struct {
+    /// None draws a plain square of `tint`.
     image: AssetRef(.image),
     position: [2]f32 = .{ 0, 0 },
     depth_m: f32 = 0,
@@ -28,7 +29,6 @@ pub const Draw2d = struct {
     labels: std.ArrayList(Text) = .empty,
 
     pub fn sprite(self: *Draw2d, request: Sprite) !void {
-        if (request.image.len == 0) return error.UnsetAsset;
         for (request.position) |value| if (!std.math.isFinite(value)) return error.InvalidSprite;
         for (request.size) |value| if (!std.math.isFinite(value) or value <= 0) return error.InvalidSprite;
         for (request.tint) |value| if (!std.math.isFinite(value) or value < 0 or value > 1) return error.InvalidSprite;

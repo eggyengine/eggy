@@ -1,6 +1,6 @@
 //! The Asset Preview panel's sound player: the sound selected in Assets drawn as its waveform,
-//! the part played lit, to click or drag on to play from there, with the time, Play and Pause,
-//! Stop and Loop under it.
+//! the part played lit, to click or drag on to play from there (or, once clicked, Left and Right
+//! to seek and Home and End to jump), with the time, Play and Pause, Stop and Loop under it.
 const std = @import("std");
 const eggy = @import("eggy");
 const ui = eggy.ui;
@@ -9,6 +9,8 @@ const page_style = @import("page_style.zig");
 /// How many stretches of the sound its waveform is read in; drawn bars take the loudest of theirs.
 const peak_count = 256;
 const waveform_height: f32 = 72;
+/// How far Left and Right seek, in seconds.
+const seek_step_s: f32 = 5;
 
 /// What `build` reads from, borrowed for the call.
 pub const Request = struct {
@@ -60,17 +62,34 @@ pub const SoundPreview = struct {
         if (self.voice) |voice| if (!audio.isPlaying(voice)) self.stop(request.app);
         const at_s = if (self.voice) |voice| audio.position(voice) orelse self.cursor_s else self.cursor_s;
 
-        // The waveform: pressing on it grabs it, and letting go plays from where it was let go.
+        // The waveform: pressing on it grabs it (and the keyboard), and letting go plays from
+        // where it was let go.
         const id = context.idFor("##sound waveform");
         const bounds = context.last_bounds.get(id);
         const pointer_over = if (bounds) |target| target.rect.contains(context.pointer.x, context.pointer.y) else false;
-        if (context.pressed_down and pointer_over) context.active = id;
+        context.focusables.append(context.arena.allocator(), id) catch {};
+        if (context.pressed_down and pointer_over) {
+            context.active = id;
+            context.focus = id;
+        }
+        // With the keyboard, Left and Right seek and Home and End jump to either end.
+        if (context.focus == id) for (context.pending.items) |item| switch (item) {
+            .key => |key| switch (key.key) {
+                .left => self.seek(request, at_s - seek_step_s, info.duration_s),
+                .right => self.seek(request, at_s + seek_step_s, info.duration_s),
+                .home => self.seek(request, 0, info.duration_s),
+                .end => self.seek(request, info.duration_s, info.duration_s),
+                else => {},
+            },
+            .text => {},
+        };
         const dragged_s: ?f32 = if ((context.active == id or context.released == id) and bounds != null) blk: {
             const rect = bounds.?.rect;
             break :blk std.math.clamp((context.pointer.x - rect.x) / @max(1, rect.w), 0, 1) * info.duration_s;
         } else null;
         if (context.released == id) self.playFrom(request, dragged_s.?);
-        const shown_s = dragged_s orelse at_s;
+        const now_s = if (self.voice) |voice| audio.position(voice) orelse self.cursor_s else self.cursor_s;
+        const shown_s = dragged_s orelse now_s;
         const progress = if (info.duration_s > 0) std.math.clamp(shown_s / info.duration_s, 0, 1) else 0;
         self.waveform(context, id, progress, self.voice != null or shown_s > 0);
 
@@ -108,6 +127,15 @@ pub const SoundPreview = struct {
         self.voice = null;
         self.paused = false;
         self.cursor_s = 0;
+    }
+
+    /// Move to `to_s`, kept within the sound's `duration_s`: what plays carries on from there,
+    /// and otherwise play will start there.
+    fn seek(self: *SoundPreview, request: Request, to_s: f32, duration_s: f32) void {
+        const target_s = std.math.clamp(to_s, 0, duration_s);
+        if (self.voice != null and !self.paused) return self.playFrom(request, target_s);
+        self.stop(request.app);
+        self.cursor_s = target_s;
     }
 
     /// Play the sound from `start_s`, unplaced through the master bus, ending what played.

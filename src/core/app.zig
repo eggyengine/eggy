@@ -53,6 +53,8 @@ pub const App = struct {
     scene_access: ?scene.Access = null,
     instances: ?SceneInstances = null,
     scene_transition: @import("scenes/scenes.zig").Transition = .{},
+    /// The scene streaming in over the frames (see `Scenes.stream`), and how the last one ended.
+    scene_stream: @import("scenes/scenes.zig").SceneStream = .{},
     ui_layer: ?*Overlay = null,
     /// The player's graphics menu: F10 opens it, or `graphics_settings_ui.open()` (see `GraphicsSettingsUi`).
     graphics_settings_ui: GraphicsSettingsUi = .{},
@@ -74,28 +76,31 @@ pub const App = struct {
     /// The motion sensors and vibrator `mobile()` has opened.
     mobile_state: mobile_zig.State = .{},
 
-    /// Host entry point: open SDL video/gamepads, a 900x675 logical-point window, GPU and world.
-    /// `process_init` must outlive the returned owner; `title` is null-terminated UTF-8.
+    /// Host entry point: open SDL video/gamepads, a 900x675 logical-point window, GPU and world,
+    /// into `self`. `process_init` must outlive it; `title` is null-terminated UTF-8.
     /// Call on the main thread and pair with `deinit`. SDL, GPU and allocation errors unwind
-    /// partially created resources. Games normally receive an App rather than constructing one.
+    /// partially created resources and leave `self` undefined. Games normally receive an App
+    /// rather than constructing one. It fills `self` rather than returning the App, because a
+    /// Debug build gives each error path of a `!App` its own copy of the App on the stack.
     ///
     /// ```zig
     /// // In an executable host with its process context:
-    /// var app = try eggy.App.init(process, "Preview");
+    /// var app: eggy.App = undefined;
+    /// try app.init(process, "Preview");
     /// defer app.deinit();
     /// ```
-    pub fn init(process_init: *const std.process.Init, title: [:0]const u8) !App {
-        return initConfigured(process_init, title, null);
+    pub fn init(self: *App, process_init: *const std.process.Init, title: [:0]const u8) !void {
+        return self.initConfigured(process_init, title, null);
     }
 
-    /// Load persistent graphics choices before creating this project's window and device.
-    pub fn initForProject(process_init: *const std.process.Init, title: [:0]const u8, project_name: []const u8, scope: render.Scope, defaults: render.Settings) !App {
-        return initConfigured(process_init, title, .{ .project_name = project_name, .scope = scope, .defaults = defaults });
+    /// `init`, loading persistent graphics choices before creating this project's window and device.
+    pub fn initForProject(self: *App, process_init: *const std.process.Init, title: [:0]const u8, project_name: []const u8, scope: render.Scope, defaults: render.Settings) !void {
+        return self.initConfigured(process_init, title, .{ .project_name = project_name, .scope = scope, .defaults = defaults });
     }
 
     const GraphicsConfig = struct { project_name: []const u8, scope: render.Scope, defaults: render.Settings };
 
-    fn initConfigured(process_init: *const std.process.Init, title: [:0]const u8, config: ?GraphicsConfig) !App {
+    fn initConfigured(self: *App, process_init: *const std.process.Init, title: [:0]const u8, config: ?GraphicsConfig) !void {
         const gpa = process_init.gpa;
         // Phones and tablets also get their motion sensors and vibrator (see `mobile`).
         const init_flags = sdl3.InitFlags{ .video = true, .gamepad = true, .sensor = mobile_zig.is_mobile, .haptic = mobile_zig.is_mobile };
@@ -146,7 +151,7 @@ pub const App = struct {
         errdefer audio_host.destroy();
         if (builtin.os.tag == .windows) try window.window.show();
 
-        return .{ .window = window, .process_init = process_init, .init_flags = all_flags, .audio_host = audio_host, .graphics = graphics, .graphics_options = options, .world = .init(gpa), .preference_values = .init(gpa), .input_backend = input_backend, .input = .{ .backend = input_backend.state.interface() }, .resource_jobs = resource_jobs, .draw2d = .{ .gpa = gpa } };
+        self.* = .{ .window = window, .process_init = process_init, .init_flags = all_flags, .audio_host = audio_host, .graphics = graphics, .graphics_options = options, .world = .init(gpa), .preference_values = .init(gpa), .input_backend = input_backend, .input = .{ .backend = input_backend.state.interface() }, .resource_jobs = resource_jobs, .draw2d = .{ .gpa = gpa } };
     }
 
     /// Queue validated live choices; restart-only selections remain pending until next launch.
@@ -174,7 +179,8 @@ pub const App = struct {
     /// world shutdown failures are logged. Invalidates borrowed services and shuts SDL down.
     ///
     /// ```zig
-    /// var app = try eggy.App.init(process, "Preview");
+    /// var app: eggy.App = undefined;
+    /// try app.init(process, "Preview");
     /// defer app.deinit(); // Runs before unloading the plugins' code.
     /// ```
     pub fn deinit(self: *App) void {
@@ -188,9 +194,12 @@ pub const App = struct {
         self.graphics.ui_billboards = null;
         self.ui_scenes.deinit();
         self.scene_transition.deinit();
+        self.scene_stream.deinit(self.world.allocator);
+        self.particles.deinit();
         if (self.instances) |*instances| instances.deinit();
         self.world.deinit();
         self.storage.deinit();
+        self.localization.deinit();
         if (self.input_backend) |backend| backend.deinit();
         self.preference_values.deinit();
         self.graphics.deinit();
@@ -292,7 +301,7 @@ pub const App = struct {
     /// _ = root; // An entity owned by app.world, not caller-allocated scene data.
     /// ```
     pub fn scenes(self: *App) Scenes {
-        return .{ .world = &self.world, .instances = self.sceneInstances(), .resources = self.resources(), .access = self.sceneAccess(), .transition = &self.scene_transition };
+        return .{ .world = &self.world, .instances = self.sceneInstances(), .resources = self.resources(), .access = self.sceneAccess(), .transition = &self.scene_transition, .streaming = &self.scene_stream };
     }
 
     /// The instance registry shared by author calls and the executable's scene-sync point.
@@ -389,6 +398,8 @@ pub const App = struct {
         self.profiling = .{};
         self.graphics.lights = .{};
         self.scene_transition.deinit();
+        self.scene_stream.deinit(self.world.allocator);
+        self.particles.deinit();
         if (self.instances) |*instances| instances.deinit();
         self.instances = null;
         self.scene_access = null;
@@ -439,11 +450,18 @@ pub const App = struct {
         // Clips play after the game's systems, by the game's (scaled, pause-held) time.
         @import("animation.zig").step(&self.world, &self.graphics.clips, self.time.delta_s);
         @import("sprite_animator.zig").step(&self.world, self.time.delta_s);
+        // Particles move on game time too, and are drawn where they end up.
+        self.particles.step(self.time.delta_s);
+        try self.particles.draw(&self.draw2d);
         // Sound sources and the listener follow where their entities ended up.
         audio_zig.step(&self.world, self.audio());
         self.world.tick();
         if (self.scene_transition.pending != null) if (self.sceneAccess()) |access| {
             if (try self.scene_transition.apply(&self.world, access, self.sceneInstances())) self.input.cancel();
+        };
+        // A streaming scene comes in a step a frame, after the game's systems as a replacement does.
+        if (self.scene_stream.current != null) if (self.sceneAccess()) |access| {
+            self.scene_stream.step(self.world.allocator, &self.world, access, self.sceneInstances(), &self.scene_transition, self.resources(), &self.graphics.models, &self.graphics.textures);
         };
         try self.profiling.end(sample);
     }

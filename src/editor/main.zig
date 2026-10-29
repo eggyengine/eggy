@@ -29,7 +29,7 @@ const State = struct {
     pub fn init(process: *const std.process.Init, args: []const [*:0]const u8) !State {
         const gui = try process.gpa.create(Editor);
         errdefer process.gpa.destroy(gui);
-        gui.* = try Editor.init(process, args);
+        try gui.init(process, args);
         return .{ .gui = gui };
     }
 

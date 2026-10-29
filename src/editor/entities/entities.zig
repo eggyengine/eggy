@@ -1,5 +1,6 @@
 //! Entities in the editor: the Hierarchy panel's tree of the world's entities and the
-//! Inspector's view of the one selected there, and carrying out what they ask (selecting,
+//! Inspector's view of the one selected there (others can be selected with it, `selection.zig`),
+//! and carrying out what they ask (selecting,
 //! adding, deleting, renaming, reparenting, duplicating, and changing components) on the app's
 //! world through the game's library. A model or scene file dropped into the world becomes an
 //! entity of its own, and each scene instance's entities are kept made (`eggy.SceneInstances`).
@@ -17,6 +18,8 @@ const RootOrder = @import("root_order.zig").RootOrder;
 const Clipboard = @import("clipboard.zig").Clipboard;
 const ViewState = @import("view_state.zig").ViewState;
 const view_file = @import("view_file.zig");
+pub const selection_zig = @import("selection.zig");
+pub const CustomInspector = inspector_zig.Details.CustomUi;
 const Dragged = @import("../dragged.zig").Dragged;
 const project_assets = @import("../assets/project_assets.zig");
 const ProjectAssets = project_assets.ProjectAssets;
@@ -28,8 +31,10 @@ pub const EntityEditor = struct {
     gpa: std.mem.Allocator,
     hierarchy: hierarchy_zig.Hierarchy,
     inspector: inspector_zig.EntityInspector,
-    /// The entity the Inspector shows.
+    /// The entity the Inspector shows: the primary one of `selection`.
     selected: ?ecs.EntityId = null,
+    /// Every entity selected, `selected` among them, which deleting and duplicating act on.
+    selection: selection_zig.Selection = .{},
     /// The top-level entities' order.
     root_order: RootOrder,
     clipboard: Clipboard,
@@ -37,6 +42,8 @@ pub const EntityEditor = struct {
     pending_paste: ?struct { beside: ?ecs.EntityId } = null,
     pending_extract: ?ecs.EntityId = null,
     pending_visibility: ?ecs.EntityId = null,
+    /// The selection waits to be brought into view in the Scene panels.
+    pending_frame: bool = false,
     view_state: ViewState,
     /// The scene whose folds `view_state` keeps (a project path; "" for one not saved yet), once
     /// read from the project's file.
@@ -68,6 +75,7 @@ pub const EntityEditor = struct {
         self.root_order.deinit();
         self.clipboard.deinit();
         self.view_state.deinit();
+        self.selection.deinit(self.gpa);
         if (self.view_scene) |*scene| scene.deinit(self.gpa);
     }
 
@@ -117,6 +125,7 @@ pub const EntityEditor = struct {
         const all = tree.collect(arena, &app.world, self.roots(&app.world), access, self.hierarchy.filterText()) catch &.{};
         const rows = self.view_state.rows(arena, &app.world, all, self.hierarchy.filterText().len != 0) catch &.{};
         self.hierarchy.can_paste = self.clipboard.scene != null;
+        self.hierarchy.also_selected = self.selection.all.items;
         if (self.hierarchy.build(context, rows, self.selected)) |action| self.apply(app, game, action);
     }
 
@@ -177,9 +186,9 @@ pub const EntityEditor = struct {
     ///
     /// ```zig
     /// // Given entities, building context and App/optional HotGame pointers:
-    /// const shown = entities.buildInspector(context, app, game, null, &.{});
+    /// const shown = entities.buildInspector(context, app, game, null, &.{}, null);
     /// ```
-    pub fn buildInspector(self: *EntityEditor, context: *ui.Context, app: *eggy.App, game: ?*const HotGame, dragging: ?Dragged, off: []const []const u8) bool {
+    pub fn buildInspector(self: *EntityEditor, context: *ui.Context, app: *eggy.App, game: ?*const HotGame, dragging: ?Dragged, off: []const []const u8, custom_ui: ?inspector_zig.Details.CustomUi) bool {
         self.forgetDead(app);
         const entity = self.selected orelse return false;
         const arena = context.builder().allocator;
@@ -191,6 +200,7 @@ pub const EntityEditor = struct {
         var details = collectDetails(arena, app, loaded, entity, off, self.assets) catch return true;
         details.dragging = dragging;
         details.assets = self.assets;
+        details.custom_ui = custom_ui;
         if (self.inspector.build(context, details)) |action| switch (action) {
             .rename => |name| loaded.writeName(app, entity, name),
             .set_field => |change| {
@@ -263,7 +273,7 @@ pub const EntityEditor = struct {
         return result.used;
     }
 
-    /// Delete the selected entity and its children, as the Hierarchy's Delete does.
+    /// Delete the selected entities and their children, as the Hierarchy's Delete does.
     /// Editor-only: clears selection; the library is not required for recursive despawning.
     /// No selection is a no-op; the surrounding editor owns any undo snapshot.
     ///
@@ -278,7 +288,13 @@ pub const EntityEditor = struct {
     fn apply(self: *EntityEditor, app: *eggy.App, game: ?*const HotGame, action: hierarchy_zig.Action) void {
         const world = &app.world;
         switch (action) {
-            .select => |entity| self.selected = entity,
+            .select => |entity| {
+                // The rows in the order shown, for a Shift-click's range.
+                const order = self.gpa.alloc(ecs.EntityId, self.hierarchy.rows.items.len) catch return;
+                defer self.gpa.free(order);
+                for (order, self.hierarchy.rows.items) |*at, row| at.* = row.entity;
+                self.selection.choose(self.gpa, &self.selected, entity, selection_zig.howNow(), order);
+            },
             .spawn => |parent| {
                 const entity = world.spawn(.{}) catch |err| return log.err("cannot add an entity: {t}", .{err});
                 if (parent) |under| if (world.isAlive(under)) world.setParent(entity, under) catch {};
@@ -286,8 +302,12 @@ pub const EntityEditor = struct {
                 self.hierarchy.startRename(entity, "");
             },
             .delete => |entity| {
-                world.despawnRecursive(entity);
+                // A selected row takes the rest of the selection with it.
+                if (self.selection.contains(entity)) {
+                    for (self.selection.all.items) |selected| if (world.isAlive(selected)) world.despawnRecursive(selected);
+                } else world.despawnRecursive(entity);
                 self.selected = null;
+                self.selection.all.clearRetainingCapacity();
             },
             .rename => |change| if (game) |loaded| loaded.writeName(app, change.entity, change.name),
             .move => |change| self.moveEntity(world, change.entity, change.place) catch |err| switch (err) {
@@ -296,14 +316,19 @@ pub const EntityEditor = struct {
             },
             .duplicate => |entity| {
                 const loaded = game orelse return;
-                var copy = eggy.scene.Scene.capture(self.gpa, world, loaded.sceneAccess(), &.{entity}) catch |err| return log.err("cannot duplicate: {t}", .{err});
-                defer copy.deinit();
-                const made = copy.instantiate(self.gpa, world, loaded.sceneAccess(), world.getParent(entity)) catch |err| return log.err("cannot duplicate: {t}", .{err});
-                defer self.gpa.free(made.entities);
-                if (made.entities.len == 0) return;
-                // The copy goes right after the original.
-                self.moveEntity(world, made.entities[0], .{ .after = entity }) catch {};
-                self.selected = made.entities[0];
+                // A selected row duplicates the whole selection, each copy beside its original.
+                if (self.selection.contains(entity) and self.selection.all.items.len > 1) {
+                    const originals = self.gpa.dupe(ecs.EntityId, self.selection.all.items) catch return;
+                    defer self.gpa.free(originals);
+                    self.selection.all.clearRetainingCapacity();
+                    for (originals) |original| if (!hasSelectedAncestor(world, original, originals)) {
+                        const made = self.duplicateOne(world, loaded, original) orelse continue;
+                        self.selection.all.append(self.gpa, made) catch {};
+                        self.selected = made;
+                    };
+                    return;
+                }
+                if (self.duplicateOne(world, loaded, entity)) |made| self.selected = made;
             },
             .copy => |entity| {
                 const loaded = game orelse return;
@@ -314,7 +339,28 @@ pub const EntityEditor = struct {
             .extract => |entity| self.pending_extract = entity,
             .toggle_collapse => |entity| self.view_state.toggleCollapse(entity) catch |err| log.err("cannot fold tree: {t}", .{err}),
             .toggle_hidden => |entity| self.pending_visibility = entity,
+            .frame => |entity| {
+                self.selected = entity;
+                self.pending_frame = true;
+            },
         }
+    }
+
+    /// A copy of `entity` and its children, right after it; null (logged) when it can't be made.
+    fn duplicateOne(self: *EntityEditor, world: *ecs.World, game: *const HotGame, entity: ecs.EntityId) ?ecs.EntityId {
+        var copy = eggy.scene.Scene.capture(self.gpa, world, game.sceneAccess(), &.{entity}) catch |err| {
+            log.err("cannot duplicate: {t}", .{err});
+            return null;
+        };
+        defer copy.deinit();
+        const made = copy.instantiate(self.gpa, world, game.sceneAccess(), world.getParent(entity)) catch |err| {
+            log.err("cannot duplicate: {t}", .{err});
+            return null;
+        };
+        defer self.gpa.free(made.entities);
+        if (made.entities.len == 0) return null;
+        self.moveEntity(world, made.entities[0], .{ .after = entity }) catch {};
+        return made.entities[0];
     }
 
     /// Paste beside the target, or at the top level, and select the new root.
@@ -503,7 +549,7 @@ pub const EntityEditor = struct {
         if (at < scene.sources.len) self.selected = scene.sources[at];
     }
 
-    /// Drop the selection once its entity is gone.
+    /// Drop selected entities once they are gone, and catch the others up with `selected`.
     /// Editor-only: checks the App's world including entity generation; does not alter the world.
     ///
     /// ```zig
@@ -514,6 +560,7 @@ pub const EntityEditor = struct {
         if (self.selected) |entity| if (!app.world.isAlive(entity)) {
             self.selected = null;
         };
+        self.selection.follow(self.gpa, self.selected, &app.world);
     }
 
     /// Clear world-specific UI state without discarding the independent entity clipboard.
@@ -522,6 +569,7 @@ pub const EntityEditor = struct {
         self.clipboard.worldChanged();
         self.root_order.entities.clearRetainingCapacity();
         self.selected = null;
+        self.selection.all.clearRetainingCapacity();
         self.hierarchy.rows.clearRetainingCapacity();
         self.hierarchy.menu = null;
         self.hierarchy.drag = null;
@@ -532,6 +580,7 @@ pub const EntityEditor = struct {
         self.pending_paste = null;
         self.pending_extract = null;
         self.pending_visibility = null;
+        self.pending_frame = false;
     }
 };
 
@@ -570,6 +619,7 @@ fn collectDetails(arena: std.mem.Allocator, app: *eggy.App, game: *const HotGame
             .values = values,
             .shown = shown,
             .disabled = disabled,
+            .custom = game.inspectorOf(index),
             .needs = try std.mem.join(arena, ", ", needs.items),
             .needed_by = neededBy(arena, app, game, entity, index),
         });
@@ -628,6 +678,7 @@ test {
     _ = @import("root_order.zig");
     _ = @import("tree.zig");
     _ = @import("hierarchy.zig");
+    _ = @import("selection.zig");
     _ = @import("inspector.zig");
     _ = @import("field_editor.zig");
     _ = @import("field_value.zig");
@@ -712,4 +763,13 @@ test "preparing extraction history excludes the original and restores its siblin
     try std.testing.expectEqual(replacement, children.next().?);
     try std.testing.expectEqual(original, children.next().?);
     try std.testing.expectEqual(sibling, children.next().?);
+}
+
+/// Whether one of `entity`'s ancestors is among `selected`, whose copy already holds it.
+fn hasSelectedAncestor(world: *ecs.World, entity: ecs.EntityId, selected: []const ecs.EntityId) bool {
+    var at = world.getParent(entity);
+    while (at) |parent| : (at = world.getParent(parent)) {
+        for (selected) |chosen| if (chosen.eql(parent)) return true;
+    }
+    return false;
 }

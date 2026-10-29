@@ -143,6 +143,36 @@ by that call.
 Service views and component pointers do not survive a world reset or reload. Use fresh
 App access and typed `EntityRef` resolution instead of retaining borrowed storage.
 
+## Stream a scene behind a loading screen
+
+`stream` loads a scene over the frames that follow instead of all at once. It reads the
+scene file in the background, puts the models and images the scene uses on the GPU one per
+frame, and then places the scene. Pass `.replace = true` to swap out the whole world, as a
+level change does, or leave it out to add the scene beside the world, under `.parent` if
+you give one.
+
+```zig
+const level = eggy.AssetRef(.scene).init("resources/scene/level.scene.zon");
+self.loading = try app.scenes().stream(level, .{ .replace = true });
+
+// In a later update:
+if (self.loading) |ticket| if (try app.scenes().streamed(ticket)) |placed| {
+    self.loading = null;
+    _ = placed.root; // null after a replace, the instance's root otherwise
+};
+```
+
+Until the scene is placed, Eggy covers the game with a loading screen. It shows the scene's
+name, a progress bar, and which model or image is loading. To draw your own screen, pass
+`.loading_screen = false` and read `app.scenes().loading()` in `gameUi`. It gives the scene,
+the stage (`reading`, `models_and_images` or `placing`), how many of the scene's models and
+images are done out of how many, the item loading now, and `fraction()`, from 0 to 1.
+
+Only one scene streams at a time. A second `stream` call before the first is placed fails
+with `SceneStreamBusy`. The game keeps updating while a scene streams. Each model or image
+still loads on the main thread, so a very large one can hold a single frame. If a scene
+fails to load, `streamed` returns the error and the world is left as it was.
+
 ## Check the loaded result
 
 After `instantiate` succeeds, inspect the returned root and its immediate entities.

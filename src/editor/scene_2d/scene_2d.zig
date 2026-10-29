@@ -169,7 +169,7 @@ pub const Scene2d = struct {
     /// The toolbar, its tooltip, and the pointer's place in the bottom left corner.
     fn overlay(self: *const Scene2d, b: ui.Layout.Builder) ![]const *ui.Layout.Element {
         var parts: std.ArrayList(*ui.Layout.Element) = .empty;
-        try parts.append(b.allocator, try toolbar.element(b, self.tools, self.area));
+        try parts.append(b.allocator, try toolbar.element(b, self.tools, self.area, &.{}));
         const corner = self.toolbarCorner();
         if (self.toolbar_drag == null and self.hovered) if (toolbar.buttonAt(self.tools, corner, self.pointer)) |button| {
             const tip = try ui.widgets.tooltip(b, toolbar.describe(button, self.tools));

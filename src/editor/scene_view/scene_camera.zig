@@ -3,13 +3,14 @@
 //! them apart by each scroll event:
 //!
 //! - right-drag looks around, and while it is held W, A, S, D fly, Q and E go down and up
-//!   (Shift faster); the host captures relative movement inside the rendered Scene for drags;
+//!   (Shift faster) and the wheel changes how fast; the host captures relative movement inside
+//!   the rendered Scene for drags;
 //! - Alt+left-drag orbits the focus point; middle-drag pans;
 //! - the wheel zooms towards the focus point; F frames what is selected;
 //! - on a touchpad, two-finger scroll orbits, Shift+scroll pans, Ctrl+scroll or pinch zooms;
 //! - on a gamepad, the left stick flies, the right stick looks around (orbits with the right
-//!   shoulder held), the right and left triggers go up and down, and holding the left shoulder
-//!   flies faster.
+//!   shoulder held), the right and left triggers go up and down, holding the left shoulder
+//!   flies faster, and holding the D-pad up or down changes how fast.
 const std = @import("std");
 const eggy = @import("eggy");
 const sdl3 = eggy.sdl_adapter.sdl;
@@ -17,9 +18,18 @@ const View = eggy.camera.View;
 
 /// Degrees turned for each point the pointer moves.
 const turn_per_point: f32 = 0.25;
-/// Metres flown per second, and how much faster with Shift.
-const fly_speed: f32 = 8;
+/// Metres flown per second to begin with, how far the wheel or D-pad can take it, and how much
+/// faster with Shift.
+const default_fly_speed_m_per_s: f32 = 8;
+const min_fly_speed_m_per_s: f32 = 0.1;
+const max_fly_speed_m_per_s: f32 = 1000;
 const fast: f32 = 3;
+/// How much each wheel notch changes the fly speed, and how many times faster or slower it gets
+/// each second the D-pad is held.
+const fly_speed_step: f32 = 1.2;
+const fly_speed_per_dpad_s: f32 = 2;
+/// How long the fly speed stays shown over the panel after it changes.
+const fly_speed_note_s: f32 = 1.5;
 /// Degrees turned per second with a stick pushed all the way.
 const stick_turn_deg_per_s: f32 = 120;
 /// Stick deflection ignored, so a resting stick doesn't drift the camera.
@@ -41,6 +51,10 @@ fn fromTouchpad(wheel: sdl3.events.MouseWheel) bool {
 pub const SceneCamera = struct {
     /// What it circles and zooms towards.
     focus: [3]f32 = .{ 0, 1, 0 },
+    /// How fast W, A, S, D and the left stick fly, before Shift or the left shoulder.
+    fly_speed_m_per_s: f32 = default_fly_speed_m_per_s,
+    /// Seconds left showing the fly speed over the panel, since it last changed.
+    fly_speed_note_s: f32 = 0,
     /// Turned about y (0 looks down -z) and up or down, in degrees.
     yaw_deg: f32 = 0,
     pitch_deg: f32 = -21,
@@ -168,6 +182,12 @@ pub const SceneCamera = struct {
     }
 
     fn scroll(self: *SceneCamera, wheel: sdl3.events.MouseWheel, height: f32, modifiers: sdl3.keycode.KeyModifier) void {
+        // While looking around, scrolling changes how fast the keys fly instead of moving.
+        if (self.drag == .look) {
+            const direction: f32 = if (wheel.direction == .flipped) -1 else 1;
+            self.scaleFlySpeed(std.math.pow(f32, fly_speed_step, wheel.scroll_y * direction));
+            return;
+        }
         if (!fromTouchpad(wheel)) {
             self.distance = @max(min_distance, self.distance * std.math.pow(f32, 1 - zoom_step, wheel.scroll_y));
             return;
@@ -186,6 +206,17 @@ pub const SceneCamera = struct {
         }
     }
 
+    /// The fly speed shown over the panel, while it has just changed.
+    pub fn flySpeedNote(self: *const SceneCamera) ?f32 {
+        return if (self.fly_speed_note_s > 0) self.fly_speed_m_per_s else null;
+    }
+
+    fn scaleFlySpeed(self: *SceneCamera, factor: f32) void {
+        if (!std.math.isFinite(factor) or factor <= 0) return;
+        self.fly_speed_m_per_s = std.math.clamp(self.fly_speed_m_per_s * factor, min_fly_speed_m_per_s, max_fly_speed_m_per_s);
+        self.fly_speed_note_s = fly_speed_note_s;
+    }
+
     fn zoom(self: *SceneCamera, factor: f32) void {
         // Pinch begin/end may have no scale; only finite, positive updates move the camera.
         if (!std.math.isFinite(factor) or factor <= 0) return;
@@ -201,13 +232,15 @@ pub const SceneCamera = struct {
 
     /// Fly by the keys held, over `seconds`, while looking around (right-drag).
     /// Desktop editor only: pass a finite nonnegative frame duration in seconds. Reads SDL
-    /// keyboard state and translates focus at 8 metres/second (three times faster with Shift);
-    /// no-op without a look drag. Call once per frame, not once per key event.
+    /// keyboard state and translates focus at `fly_speed_m_per_s` (three times faster with
+    /// Shift); only counts down the speed note without a look drag. Call once per frame, not
+    /// once per key event.
     ///
     /// ```zig
     /// camera.fly(1.0 / 60.0); // Existing SceneCamera, one 60 Hz navigation frame.
     /// ```
     pub fn fly(self: *SceneCamera, seconds: f32) void {
+        self.fly_speed_note_s = @max(0, self.fly_speed_note_s - seconds);
         if (self.drag != .look) return;
         const keys = sdl3.keyboard.getState();
         const held = struct {
@@ -220,7 +253,7 @@ pub const SceneCamera = struct {
         const across = held(keys, .d) - held(keys, .a);
         const rise = held(keys, .e) - held(keys, .q);
         if (ahead == 0 and across == 0 and rise == 0) return;
-        const speed = fly_speed * seconds * (if (held(keys, .left_shift) + held(keys, .right_shift) > 0) fast else 1);
+        const speed = self.fly_speed_m_per_s * seconds * (if (held(keys, .left_shift) + held(keys, .right_shift) > 0) fast else 1);
         const step = add(add(scale(self.forward(), ahead * speed), scale(self.right(), across * speed)), .{ 0, rise * speed, 0 });
         self.focus = add(self.focus, step);
     }
@@ -229,12 +262,15 @@ pub const SceneCamera = struct {
     /// Desktop editor only: pass a finite nonnegative frame duration and the pad's raw state
     /// (sticks -1..1, right/down positive; triggers 0..1). Looking turns about the eye, as
     /// right-drag does, or about the focus point with the right shoulder held, as Alt+left-drag
-    /// does; flying matches `fly`'s speeds. Call once per frame.
+    /// does; flying matches `fly`'s speeds, which the D-pad's up and down change. Call once per
+    /// frame.
     ///
     /// ```zig
     /// camera.steer(pad, 1.0 / 60.0); // Existing SceneCamera, one connected gamepad's state.
     /// ```
     pub fn steer(self: *SceneCamera, pad: eggy.input.ControllerState, seconds: f32) void {
+        const faster = @as(f32, @floatFromInt(@intFromBool(pad.buttons.contains(.up)))) - @as(f32, @floatFromInt(@intFromBool(pad.buttons.contains(.down))));
+        if (faster != 0) self.scaleFlySpeed(std.math.pow(f32, fly_speed_per_dpad_s, faster * seconds));
         const look = deadZone(pad.right_stick);
         const travel = deadZone(pad.left_stick);
         const rise = pad.triggers[1] - pad.triggers[0];
@@ -245,7 +281,7 @@ pub const SceneCamera = struct {
         const points_per_s = stick_turn_deg_per_s / turn_per_point;
         self.turn(look[0] * points_per_s * seconds, look[1] * points_per_s * seconds);
         if (!pad.buttons.contains(.right_shoulder)) self.focus = add(eye_before, scale(self.forward(), self.distance));
-        const speed = fly_speed * seconds * (if (pad.buttons.contains(.left_shoulder)) fast else 1);
+        const speed = self.fly_speed_m_per_s * seconds * (if (pad.buttons.contains(.left_shoulder)) fast else 1);
         const step = add(add(scale(self.forward(), -travel[1] * speed), scale(self.right(), travel[0] * speed)), .{ 0, rise * speed, 0 });
         self.focus = add(self.focus, step);
     }
@@ -454,6 +490,25 @@ test "a gamepad's left stick flies, its right stick looks about the eye, and res
     orbiting.buttons.insert(.right_shoulder);
     camera.steer(orbiting, 0.5);
     try std.testing.expectEqualSlices(f32, &focus_before, &camera.focus);
+}
+
+test "scrolling while looking around changes the fly speed, not the view, and shows it briefly" {
+    var camera = SceneCamera{ .drag = .look };
+    const before = camera.pose();
+    camera.scroll(scrollWheel(0, 2), 600, .{});
+    try std.testing.expectApproxEqAbs(@as(f32, 8 * 1.44), camera.fly_speed_m_per_s, 0.001);
+    try std.testing.expectEqualSlices(f32, &before, &camera.pose());
+    try std.testing.expect(camera.flySpeedNote() != null);
+    camera.fly(2);
+    try std.testing.expect(camera.flySpeedNote() == null);
+
+    // Holding the D-pad down for a second halves it, and it never stops altogether.
+    var pad = eggy.input.ControllerState{};
+    pad.buttons.insert(.down);
+    camera.steer(pad, 1);
+    try std.testing.expectApproxEqAbs(@as(f32, 8.0 * 1.44 / 2.0), camera.fly_speed_m_per_s, 0.001);
+    camera.steer(pad, 100);
+    try std.testing.expectEqual(min_fly_speed_m_per_s, camera.fly_speed_m_per_s);
 }
 
 fn scrollWheel(x: f32, y: f32) sdl3.events.MouseWheel {

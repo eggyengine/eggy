@@ -18,12 +18,10 @@ no output devices, threads, sessions, files, fake handles, or successful empty r
 
 | App service | Requests |
 | --- | --- |
-| `particles` | emission and stopping |
 | `network` | connection, listening, messages, polling, disconnection |
 | `navigation` | paths and destinations; no physics or collision access |
-| `localization` | locale selection and translated-text lookup |
 
-`eggy.particles.support` and the others report support without an App. These contracts do
+`eggy.network.support` and `eggy.navigation.support` report support without an App. These contracts do
 not add components to the Inspector.
 
 Working low-level graphics (`eggy.vit`), UI (`eggy.ui`), math (`eggy.math`), ECS
@@ -32,7 +30,8 @@ touch gameplay input, [named input maps](../how-to/map-input.md), value timers, 
 time scaling are implemented. Resource reads, model imports and image decoding have
 owned asynchronous requests with polling, progress and cooperative cancellation.
 Native requests use bounded worker threads; browser builds defer decoding of already-preloaded
-data until polling. `Scenes.stream` is not implemented. `Scenes.replace`
+data until polling. `Scenes.stream` loads a scene over several frames behind a loading screen
+([Stream a scene](../how-to/load-assets.md#stream-a-scene-behind-a-loading-screen)). `Scenes.replace`
 stages synchronous scene replacement for the end of the gameplay update.
 
 | Surface | Desktop | Web |
@@ -42,12 +41,13 @@ stages synchronous scene replacement for the end of the gameplay update.
 | Named input maps, priorities, modifiers, hold/tap/chord triggers | Implemented; project editor included | Shared runtime API |
 | Controllers, rumble, and touch contacts | SDL3; hardware-dependent | SDL3/browser-dependent |
 | Synchronous project/packaged resource and scene providers | Implemented | Packaged assets preloaded at startup |
+| [Translated text](../how-to/translate-text.md): `app.localization` | A `.zon` table per locale, with regional locales falling back to their language | Same API |
 | [Game-save slots](../how-to/save-games.md) | Atomic versioned saves in project-specific user data | Persistent browser localStorage; quota/availability errors are explicit |
 | Weeoui game UI and custom draw hooks | Implemented | Shared runtime API; no editor import |
 | [UI scenes](../guides/ui-scenes.md): `UiScreen` HUDs and `UiBillboard` world panels | Implemented; UI Designer panel, animated GIFs, plugin widgets | Same runtime API |
 | Materials and directional/point scene lights | Implemented; Inspector components and reusable material assets | Shared renderer, up to sixteen lights |
 | [Debug drawing and CPU profiling](../how-to/debug-and-profile.md) | World-space overlays, named samples/counters; DevTools Game tab | Same frame-owned collectors and drawing |
-| [World sprites and text](../how-to/world-drawing.md) | Depth-tested atlas sprites and camera-facing glyphs | Same scene renderer |
+| [World sprites, text and particles](../how-to/world-drawing.md) | Depth-tested atlas sprites, camera-facing glyphs, and particles that fly and fade on game time | Same scene renderer |
 | [Sound and 3D audio](../guides/play-sound.md): `AudioSource`, `AudioListener`, `app.audio()` | WAV, FLAC, MP3 and Ogg Vorbis through miniaudio; buses; Asset Preview playback | Same API |
 | [Animation](audio-and-animation.md#animation): `Animator`, `app.animation()` | Authored `.clip.zon` clips and imported model clips (bones, blend shapes, baked frames), with blending; Animation panel | Same API; packaged models keep their rigs |
 | [Post-processing and shaders](../guides/post-processing-and-shaders.md): `PostProcess`, Slang `.slang` files | HDR rendering, tone mapping, bloom and grading; project post passes and material surface shaders, compiled while the editor runs | Same; shaders compiled when the game is built |

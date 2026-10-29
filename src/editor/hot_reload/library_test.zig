@@ -54,6 +54,8 @@ test "the game's library loads, runs, swaps for a fresh copy, and unloads cleanl
     app.ui_layer = null;
     app.scene_access = null;
     app.scene_transition = .{};
+    app.scene_stream = .{};
+    app.particles = .{ .gpa = gpa };
     app.audio_host = null;
     app.storage = .{};
     app.debug_draw = .{};
@@ -181,6 +183,8 @@ test "typed actions and game UI cross the real ABI and undo after library replac
     app.ui_layer = null;
     app.scene_access = null;
     app.scene_transition = .{};
+    app.scene_stream = .{};
+    app.particles = .{ .gpa = gpa };
     app.audio_host = null;
     app.storage = .{};
     app.debug_draw = .{};

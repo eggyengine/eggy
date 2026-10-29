@@ -224,7 +224,7 @@ pub const MeshRenderer = struct {
     /// Draw up to `max_drawables` visible meshes, partitioning and sorting in place without
     /// losing other entities; visible overflow is an error. Draw inside the render pass in
     /// progress, whose viewport is `viewport_px`, through `view_projection` (a `camera.View`'s),
-    /// outlining `selected`'s, with model files and textures from `sources` (`prepare`d for
+    /// outlining each of `selected`'s, with model files and textures from `sources` (`prepare`d for
     /// them). `srgb`: whether the target encodes sRGB itself.
     /// Host-only: `viewport_px` is `{ width, height }` in physical pixels, not a rectangle.
     /// The pass needs the configured color format and `.d32_float` depth; caller owns
@@ -232,9 +232,9 @@ pub const MeshRenderer = struct {
     ///
     /// ```zig
     /// // Inside the compatible render pass, after prepare:
-    /// try renderer.draw(scene_cmd, drawables, asset_sources, clip_from_world, .{ 1280, 720 }, selected_entity, target_is_srgb);
+    /// try renderer.draw(scene_cmd, drawables, asset_sources, clip_from_world, .{ 1280, 720 }, selected_entities, target_is_srgb);
     /// ```
-    pub fn draw(self: *MeshRenderer, cmd: vit.CommandBuffer, drawables: []mesh.Drawable, sources: Sources, view_projection: [4][4]f32, viewport_px: [2]f32, eye: [3]f32, selected: ?ecs.EntityId, srgb: bool) !void {
+    pub fn draw(self: *MeshRenderer, cmd: vit.CommandBuffer, drawables: []mesh.Drawable, sources: Sources, view_projection: [4][4]f32, viewport_px: [2]f32, eye: [3]f32, selected: []const ecs.EntityId, srgb: bool) !void {
         const sorted = visibleFirst(drawables, sources, view_projection);
         sources.stats.culled += drawables.len - sorted.len;
         if (sorted.len > max_drawables) return error.TooManyVisibleMeshes;
@@ -270,8 +270,8 @@ pub const MeshRenderer = struct {
             start = end;
         }
 
-        // The selected entity's mask, then its outline wherever the mask isn't.
-        if (selected) |entity| for (sorted, 0..) |drawable, i| if (drawable.entity().eql(entity)) {
+        // Each selected entity's mask, then its outline wherever the mask isn't.
+        for (selected) |entity| for (sorted, 0..) |drawable, i| if (drawable.entity().eql(entity)) {
             for ([_]vit.GraphicsPipeline{ self.mask_pipeline, self.outline_pipeline }) |pass| {
                 cmd.setGraphicsPipeline(pass);
                 self.drawRun(cmd, sources, drawable, @intCast(i), 1);

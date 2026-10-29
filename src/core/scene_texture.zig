@@ -97,7 +97,7 @@ pub const SceneTexture = struct {
         self.preview.deinit();
     }
 
-    /// Render the scene, with `drawables` (sorted in place) seen from `view` and `selected`'s
+    /// Render the scene, with `drawables` (sorted in place) seen from `view` and each of `selected`'s
     /// outlined, and the editor's ground grid when `grid` says, into the texture at `extent_px`.
     /// Call outside a render pass. A new size recreates the texture, which first waits for the GPU
     /// to finish earlier frames.
@@ -106,9 +106,9 @@ pub const SceneTexture = struct {
     /// target sampled for `draw`. GPU/upload errors propagate.
     ///
     /// ```zig
-    /// try scene_texture.render(&graphics, scene_cmd, .{ .width = 800, .height = 600 }, drawables, camera_view, selected_entity, true);
+    /// try scene_texture.render(&graphics, scene_cmd, .{ .width = 800, .height = 600 }, drawables, camera_view, selected_entities, true);
     /// ```
-    pub fn render(self: *SceneTexture, graphics: *Graphics, cmd: vit.CommandBuffer, extent_px: vit.Extent2D, drawables: []mesh.Drawable, view: camera.View, selected: ?ecs.EntityId, grid: bool) !void {
+    pub fn render(self: *SceneTexture, graphics: *Graphics, cmd: vit.CommandBuffer, extent_px: vit.Extent2D, drawables: []mesh.Drawable, view: camera.View, selected: []const ecs.EntityId, grid: bool) !void {
         if (extent_px.width == 0 or extent_px.height == 0) return;
         if (self.settings_revision != graphics.settings_revision) {
             try graphics.queue.waitIdle();

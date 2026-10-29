@@ -86,6 +86,26 @@
 //!     pub fn exportUi(self: *Self, platform: eggy.plugins.ExportTarget, editor: *eggy.editor.Context, ui: *eggy.ui.Context) !void
 //!     pub fn exportArgs(self: *Self, platform: eggy.plugins.ExportTarget, args: *eggy.plugins.ExportArgs) !void
 //!
+//! Its own Inspector for a component it lists: the component's card shows what the hook draws in
+//! place of a control per field. Edit through `editor.changeComponent`, so Undo takes it back:
+//!
+//!     pub const component_inspectors = .{Health};
+//!     pub fn componentInspectorUi(self: *Self, inspector: usize, entity: eggy.ecs.EntityId, editor: *eggy.editor.Context, ui: *eggy.ui.Context) !void
+//!
+//! Importers for files Eggy doesn't know: a file ending in `extension` brought into Assets is
+//! handed to the hook, and what it writes is saved in its place, ending in `output_extension`:
+//!
+//!     pub const asset_importers = [_]eggy.plugins.AssetImporter{.{
+//!         .key = "csv", .title = "CSV table", .extension = ".csv", .output_extension = ".zon",
+//!     }};
+//!     pub fn importAsset(self: *Self, importer: usize, source: []const u8, out: *std.Io.Writer, editor: *eggy.editor.Context) !void
+//!
+//! Tools for the Scene panel's toolbar: while one is picked, the pointer over the Scene is the
+//! tool's, told where it points in the world:
+//!
+//!     pub const scene_tools = [_]eggy.plugins.SceneTool{.{ .key = "plant", .title = "Plant trees" }};
+//!     pub fn sceneTool(self: *Self, tool: usize, input: eggy.plugins.SceneToolInput, editor: *eggy.editor.Context) !void
+//!
 //! Widgets of its own for UI scenes (`.ui.zon`): the UI Designer offers each in its palette, and
 //! a node showing one asks the plugin to draw it in its box, with the node's `value` text to
 //! read as it likes. Widgets are named `<plugin>/<key>` in files:
@@ -118,6 +138,7 @@ const ui = @import("weeoui");
 const preferences = @import("preferences.zig");
 const components = @import("components.zig");
 const EditorContext = @import("editor_api/editor_api.zig").Context;
+const ecs = @import("clutch");
 const DrawContext = @import("game_ui/game_ui.zig").DrawContext;
 const ui_scenes = @import("ui_scenes/ui_scenes.zig");
 const console_commands_zig = @import("dev_console/commands.zig");
@@ -311,6 +332,40 @@ pub const EditorFileType = struct {
     /// The submenu of New it is in, shared with Eggy's own (`Rendering`, `2D`...) or a new one;
     /// empty for one named after the plugin.
     category: [:0]const u8 = "",
+};
+
+/// A file type a plugin imports (see `asset_importers` above): a file ending in `extension`
+/// brought into Assets becomes what `importAsset` writes, saved ending in `output_extension`.
+/// In the Set's metadata the key is `<plugin>/<key>`.
+pub const AssetImporter = struct {
+    key: [:0]const u8,
+    title: [:0]const u8,
+    extension: [:0]const u8,
+    output_extension: [:0]const u8,
+};
+
+/// A tool a plugin adds to the Scene panel's toolbar (see `scene_tools` above), shown by its
+/// title's first letter. In the Set's metadata the key is `<plugin>/<key>`.
+pub const SceneTool = struct {
+    key: [:0]const u8,
+    title: [:0]const u8,
+};
+
+/// What the pointer did over the Scene panel while a plugin's tool is picked, and where.
+pub const SceneToolInput = struct {
+    kind: Kind,
+    /// The ray from the eye through the pointer, in world metres; `ray_direction` is unit length.
+    ray_origin_m: [3]f32,
+    ray_direction: [3]f32,
+    /// Where the ray meets the ground (y = 0); null when it points away from it.
+    ground_m: ?[3]f32,
+    /// The entity drawn under the pointer, if any.
+    entity: ?ecs.EntityId,
+    shift: bool = false,
+    control: bool = false,
+
+    /// A left press on the panel, a move while it is held, its release, or a move without it.
+    pub const Kind = enum { press, drag, release, hover };
 };
 
 /// A widget a plugin adds to UI scenes. In the Set's metadata the key is `<plugin>/<key>`.
@@ -525,7 +580,9 @@ pub fn Set(comptime types: anytype, comptime keys: []const [:0]const u8) type {
 
         /// Eggy's built-in components, then every component the plugins list (their
         /// `components`), in plugin order, each once, and what the editor does with them.
-        pub const Components = blk: {
+        pub const Components = components.Registry(component_list.types, component_list.owners);
+
+        const component_list = blk: {
             var listed: []const type = &.{};
             var owners: []const [:0]const u8 = &.{};
             for (0..builtin_components.len) |i| {
@@ -538,7 +595,54 @@ pub fn Set(comptime types: anytype, comptime keys: []const [:0]const u8) type {
                     owners = owners ++ .{key};
                 }
             };
-            break :blk components.Registry(listed, owners);
+            break :blk .{ .types = listed, .owners = owners };
+        };
+
+        /// The components plugins draw their own Inspector for (`component_inspectors`), as
+        /// indices into `Components`, in plugin order; each component at most once.
+        pub const component_inspectors: []const usize = blk: {
+            var all: []const usize = &.{};
+            for (list) |T| if (@hasDecl(T, "component_inspectors")) {
+                for (T.component_inspectors) |C| {
+                    const index = std.mem.indexOfScalar(type, component_list.types, C) orelse @compileError("a component inspector's type must be listed in a plugin's components");
+                    if (std.mem.indexOfScalar(usize, all, index) != null) @compileError("two plugins draw an Inspector for the same component");
+                    all = all ++ .{index};
+                }
+            };
+            break :blk all;
+        };
+
+        /// Every plugin's `asset_importers`, in plugin order, with published-plugin/key identities.
+        pub const asset_importers: []const AssetImporter = blk: {
+            var all: []const AssetImporter = &.{};
+            for (list, keys) |T, key| if (@hasDecl(T, "asset_importers")) {
+                for (T.asset_importers) |importer| {
+                    if (importer.key.len == 0 or importer.title.len == 0 or
+                        importer.extension.len < 2 or importer.extension[0] != '.' or
+                        importer.output_extension.len < 2 or importer.output_extension[0] != '.' or
+                        std.mem.indexOfAny(u8, importer.extension, "/\\") != null or
+                        std.mem.indexOfAny(u8, importer.output_extension, "/\\") != null)
+                        @compileError("asset importers need a key, title and path-free .extension and .output_extension");
+                    const identity = std.fmt.comptimePrint("{s}/{s}", .{ key, importer.key });
+                    for (all) |previous| if (std.mem.eql(u8, previous.key, identity)) @compileError("duplicate asset importer key");
+                    all = all ++ .{AssetImporter{ .key = identity, .title = importer.title, .extension = importer.extension, .output_extension = importer.output_extension }};
+                }
+            };
+            break :blk all;
+        };
+
+        /// Every plugin's `scene_tools`, in plugin order, with published-plugin/key identities.
+        pub const scene_tools: []const SceneTool = blk: {
+            var all: []const SceneTool = &.{};
+            for (list, keys) |T, key| if (@hasDecl(T, "scene_tools")) {
+                for (T.scene_tools) |tool| {
+                    if (tool.key.len == 0 or tool.title.len == 0) @compileError("scene tools need a key and title");
+                    const identity = std.fmt.comptimePrint("{s}/{s}", .{ key, tool.key });
+                    for (all) |previous| if (std.mem.eql(u8, previous.key, identity)) @compileError("duplicate scene tool key");
+                    all = all ++ .{SceneTool{ .key = identity, .title = tool.title }};
+                }
+            };
+            break :blk all;
         };
 
         /// Which plugins are on when those keyed in `off` aren't. The game (listed first) is
@@ -746,6 +850,56 @@ pub fn Set(comptime types: anytype, comptime keys: []const [:0]const u8) type {
                 }
                 first += count;
             };
+        }
+
+        /// Draw `component_inspectors[inspector]` for `entity` through the plugin that declared it.
+        /// Host-only: the index is this Set's. Returns PluginDisabled or NoComponentInspector as
+        /// needed, or the hook's failure; the contexts must not escape the call.
+        pub fn componentInspectorUi(self: *Self, inspector: usize, entity: ecs.EntityId, editor: *EditorContext, context: *ui.Context) !void {
+            comptime var first: usize = 0;
+            inline for (list, 0..) |T, i| if (@hasDecl(T, "component_inspectors")) {
+                const count = T.component_inspectors.len;
+                if (inspector >= first and inspector < first + count) {
+                    if (!self.enabled[i]) return error.PluginDisabled;
+                    if (@hasDecl(T, "componentInspectorUi")) return self.instances[i].componentInspectorUi(inspector - first, entity, editor, context);
+                    return error.NoComponentInspector;
+                }
+                first += count;
+            };
+            return error.NoComponentInspector;
+        }
+
+        /// Import `source` (a file's bytes) with `asset_importers[importer]`, writing the result to
+        /// `out`. Host-only: returns PluginDisabled or NoAssetImporter as needed, or the hook's
+        /// failure.
+        pub fn importAsset(self: *Self, importer: usize, source: []const u8, out: *std.Io.Writer, editor: *EditorContext) !void {
+            comptime var first: usize = 0;
+            inline for (list, 0..) |T, i| if (@hasDecl(T, "asset_importers")) {
+                const count = T.asset_importers.len;
+                if (importer >= first and importer < first + count) {
+                    if (!self.enabled[i]) return error.PluginDisabled;
+                    if (@hasDecl(T, "importAsset")) return self.instances[i].importAsset(importer - first, source, out, editor);
+                    return error.NoAssetImporter;
+                }
+                first += count;
+            };
+            return error.NoAssetImporter;
+        }
+
+        /// Hand `input` to `scene_tools[tool]`. Host-only: returns PluginDisabled or NoSceneTool as
+        /// needed, or the hook's failure.
+        pub fn sceneTool(self: *Self, tool: usize, input: SceneToolInput, editor: *EditorContext) !void {
+            comptime var first: usize = 0;
+            inline for (list, 0..) |T, i| if (@hasDecl(T, "scene_tools")) {
+                const count = T.scene_tools.len;
+                if (tool >= first and tool < first + count) {
+                    if (!self.enabled[i]) return error.PluginDisabled;
+                    if (@hasDecl(T, "sceneTool")) return self.instances[i].sceneTool(tool - first, input, editor);
+                    return error.NoSceneTool;
+                }
+                first += count;
+            };
+            return error.NoSceneTool;
         }
 
         /// Dispatch a current-generation command to its declaring plugin's local index.
@@ -1417,4 +1571,44 @@ test "console commands are listed in plugin order and run on the plugin that dec
     try std.testing.expectEqual(@as(usize, 1), plugins.instances[1].last);
     plugins.enabled[1] = false;
     try std.testing.expectError(error.PluginDisabled, plugins.consoleCommand(1, &app, &call));
+}
+
+test "inspectors, importers and Scene tools are listed in plugin order and reach the plugin that declared them" {
+    const Health = struct { points: u32 = 3 };
+    const Terrain = struct {
+        pub const components = .{Health};
+        pub const component_inspectors = .{Health};
+        pub const asset_importers = [_]AssetImporter{.{ .key = "heightmap", .title = "Heightmap", .extension = ".raw", .output_extension = ".terrain.zon" }};
+        pub const scene_tools = [_]SceneTool{ .{ .key = "raise", .title = "Raise" }, .{ .key = "plant", .title = "Plant trees" } };
+        drawn: ?ecs.EntityId = null,
+        tool: ?usize = null,
+        pub fn componentInspectorUi(self: *@This(), inspector: usize, entity: ecs.EntityId, _: *EditorContext, _: *ui.Context) !void {
+            try std.testing.expectEqual(@as(usize, 0), inspector);
+            self.drawn = entity;
+        }
+        pub fn importAsset(_: *@This(), _: usize, source: []const u8, out: *std.Io.Writer, _: *EditorContext) !void {
+            try out.print(".{{ .size = {d} }}", .{source.len});
+        }
+        pub fn sceneTool(self: *@This(), tool: usize, input: SceneToolInput, _: *EditorContext) !void {
+            try std.testing.expectEqual(SceneToolInput.Kind.press, input.kind);
+            self.tool = tool;
+        }
+    };
+    const Plugins = Set(.{ struct {}, Terrain }, &.{ "game", "terrain" });
+    try std.testing.expectEqual(Plugins.Components.infos.len - 1, Plugins.component_inspectors[0]);
+    try std.testing.expectEqualStrings("terrain/heightmap", Plugins.asset_importers[0].key);
+    try std.testing.expectEqualStrings("terrain/plant", Plugins.scene_tools[1].key);
+
+    var plugins = Plugins{ .instances = .{ .{}, .{} }, .enabled = .{ true, true } };
+    try plugins.componentInspectorUi(0, .init(4, 0), undefined, undefined);
+    try std.testing.expect(plugins.instances[1].drawn.?.eql(.init(4, 0)));
+    var out: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer out.deinit();
+    try plugins.importAsset(0, "abcd", &out.writer, undefined);
+    try std.testing.expectEqualStrings(".{ .size = 4 }", out.written());
+    try plugins.sceneTool(1, .{ .kind = .press, .ray_origin_m = @splat(0), .ray_direction = .{ 0, -1, 0 }, .ground_m = null, .entity = null }, undefined);
+    try std.testing.expectEqual(@as(?usize, 1), plugins.instances[1].tool);
+    plugins.enabled[1] = false;
+    try std.testing.expectError(error.PluginDisabled, plugins.sceneTool(0, .{ .kind = .press, .ray_origin_m = @splat(0), .ray_direction = .{ 0, -1, 0 }, .ground_m = null, .entity = null }, undefined));
+    try std.testing.expectError(error.NoSceneTool, plugins.sceneTool(5, .{ .kind = .press, .ray_origin_m = @splat(0), .ray_direction = .{ 0, -1, 0 }, .ground_m = null, .entity = null }, undefined));
 }

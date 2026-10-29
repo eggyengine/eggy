@@ -7,7 +7,7 @@ const std = @import("std");
 const eggy = @import("eggy");
 
 /// Bumped whenever these types change, so an editor refuses a library built for another.
-pub const version: u32 = 42;
+pub const version: u32 = 43;
 
 /// The library's one exported function: `fn () callconv(.c) *const Game`.
 pub const entry_symbol = "eggy_game";
@@ -55,6 +55,10 @@ pub const StatusItem = extern struct {
 };
 
 pub const UiWidget = extern struct { key: [*:0]const u8, title: [*:0]const u8 };
+/// A file type a plugin imports (`eggy.plugins.AssetImporter`).
+pub const AssetImporter = extern struct { key: [*:0]const u8, title: [*:0]const u8, extension: [*:0]const u8, output_extension: [*:0]const u8 };
+/// A tool a plugin adds to the Scene toolbar (`eggy.plugins.SceneTool`).
+pub const SceneTool = extern struct { key: [*:0]const u8, title: [*:0]const u8 };
 
 /// Which kind of entry `Game.bar_action` and `Game.bar_state` mean (`eggy.plugins.EditorBarTarget`).
 pub const BarKind = enum(u8) { menu_item, status, status_item };
@@ -236,6 +240,21 @@ pub const Game = extern struct {
     /// The plugins' widgets for UI scenes (`eggy.plugins.UiWidget`), keys `<plugin>/<key>`.
     ui_widgets: [*]const UiWidget,
     ui_widget_count: usize,
+    /// The components plugins draw their own Inspector for (indices into `components`), and
+    /// drawing `inspector` of them for `entity` with an `*eggy.editor.Context` into an
+    /// `*eggy.ui.Context`; a failure is logged.
+    component_inspectors: [*]const usize,
+    component_inspector_count: usize,
+    component_inspector_ui: *const fn (state: *anyopaque, inspector: usize, entity: Entity, editor: *anyopaque, context: *anyopaque) callconv(.c) void,
+    /// The plugins' importers, and importing `source` with `importer` into `out` (an
+    /// `*std.Io.Writer`); false when it failed (logged).
+    asset_importers: [*]const AssetImporter,
+    asset_importer_count: usize,
+    import_asset: *const fn (state: *anyopaque, importer: usize, source: [*]const u8, source_len: usize, out: *anyopaque, editor: *anyopaque) callconv(.c) bool,
+    /// The plugins' Scene tools, and handing `tool` an `*const eggy.plugins.SceneToolInput`.
+    scene_tools: [*]const SceneTool,
+    scene_tool_count: usize,
+    scene_tool: *const fn (state: *anyopaque, tool: usize, input: *const anyopaque, editor: *anyopaque) callconv(.c) void,
     /// The entity's transform within the world (`eggy.transform.worldMatrix`), as columns, into
     /// `out`; false if it isn't alive.
     world_matrix: *const fn (world: *anyopaque, entity: Entity, out: *[4][4]f32) callconv(.c) bool,

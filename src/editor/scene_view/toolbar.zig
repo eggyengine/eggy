@@ -1,8 +1,9 @@
 //! The Scene and 2D Scene panels' floating toolbar: icon buttons for the tool (Move, Rotate,
 //! Scale, Universal) and snapping, then in the Scene whether the gizmo works in the world's axes or
 //! the entity's own and looking through the game's camera, and in the 2D Scene the grid and going
-//! back to the origin. Drag its grip to move it inside the panel; its last button folds it down
-//! to the grip.
+//! back to the origin, then the Scene tools plugins add (`eggy.plugins.SceneTool`), each its
+//! title's first letter. Drag its grip to move it inside the panel; its last button folds it
+//! down to the grip.
 const std = @import("std");
 const ui = @import("eggy").ui;
 const L = ui.Layout;
@@ -26,10 +27,16 @@ pub const State = struct {
     folded: bool = false,
     /// Where its top left corner is, from the Scene panel's.
     offset: ui.Vec2 = .{ .x = 8, .y = 8 },
+    /// How many Scene tools plugins add (the Scene's toolbar only), and the one in use, in place
+    /// of the gizmo's tool.
+    plugin_tool_count: u8 = 0,
+    plugin_tool: ?u8 = null,
 };
 
-/// Button `b`'s element id: `first_id` plus the button, below the dock's ids.
+/// Button `b`'s element id: `first_id` plus the button, below the dock's ids; plugin tool `i`'s
+/// is `first_plugin_id` plus `i`.
 const first_id: u32 = 0x5100_0000;
+const first_plugin_id: u32 = first_id + 64;
 const button_pt: f32 = 26;
 const gap_pt: f32 = 2;
 const padding_pt: f32 = 3;
@@ -44,6 +51,12 @@ const padding_pt: f32 = 3;
 pub fn buttonOf(id: u32) ?Button {
     if (id < first_id) return null;
     return std.enums.fromInt(Button, id - first_id);
+}
+
+/// The plugin Scene tool element `id` is, if it is one.
+pub fn pluginToolOf(id: u32) ?u8 {
+    if (id < first_plugin_id or id - first_plugin_id > std.math.maxInt(u8)) return null;
+    return @intCast(id - first_plugin_id);
 }
 
 /// What a button does, for its tooltip.
@@ -95,7 +108,7 @@ pub fn buttonAt(state: State, corner: ui.Vec2, at: ui.Vec2) ?Button {
 /// const extent = size(.{ .folded = true });
 /// ```
 pub fn size(state: State) ui.Vec2 {
-    const count: f32 = @floatFromInt(shown(state).len);
+    const count: f32 = @floatFromInt(shown(state).len + pluginTools(state));
     return .{ .x = count * button_pt + (count - 1) * gap_pt + 2 * padding_pt, .y = button_pt + 2 * padding_pt };
 }
 
@@ -123,9 +136,19 @@ pub fn keepInside(state: State, offset: ui.Vec2, scene: ui.Rect) ui.Vec2 {
 /// // Given a building UI context, toolbar State and Scene UI rect:
 /// context.element(try element(context.builder(), state, scene));
 /// ```
-pub fn element(b: L.Builder, state: State, scene: ui.Rect) !*L.Element {
+pub fn element(b: L.Builder, state: State, scene: ui.Rect, plugin_titles: []const []const u8) !*L.Element {
     var buttons: std.ArrayList(*L.Element) = .empty;
     for (shown(state)) |button| {
+        // Plugins' tools go last, before the button that folds the toolbar.
+        if (button == .fold) for (0..pluginTools(state)) |i| {
+            const title = if (i < plugin_titles.len) plugin_titles[i] else "?";
+            const look = try b.allocator.create(PluginLook);
+            look.* = .{ .letter = title[0..@min(title.len, 1)], .pressed = if (state.plugin_tool) |tool| tool == i else false, .id = first_plugin_id + @as(u32, @intCast(i)) };
+            const node = try b.node(look.id, .{ .width = button_pt, .height = button_pt }, .{ .custom = .{ .context = look, .draw = PluginLook.draw } }, &.{});
+            node.cursor = .pointer;
+            node.accessibility = .{ .role = .button, .label = title };
+            try buttons.append(b.allocator, node);
+        };
         const look = try b.allocator.create(Look);
         look.* = .{ .button = button, .pressed = pressed(button, state), .folded = state.folded, .id = first_id + @backingInt(button) };
         const node = try b.node(look.id, .{ .width = button_pt, .height = button_pt }, .{ .custom = .{ .context = look, .draw = Look.draw } }, &.{});
@@ -140,12 +163,18 @@ pub fn element(b: L.Builder, state: State, scene: ui.Rect) !*L.Element {
     return row;
 }
 
+/// How many plugin tools the toolbar shows: none folded, or over the 2D Scene.
+fn pluginTools(state: State) usize {
+    return if (state.folded or state.panel != .scene) 0 else state.plugin_tool_count;
+}
+
 fn pressed(button: Button, state: State) bool {
+    const gizmo_tool = state.plugin_tool == null;
     return switch (button) {
-        .move => state.tool == .move,
-        .rotate => state.tool == .rotate,
-        .scale => state.tool == .scale,
-        .universal => state.tool == .universal,
+        .move => gizmo_tool and state.tool == .move,
+        .rotate => gizmo_tool and state.tool == .rotate,
+        .scale => gizmo_tool and state.tool == .scale,
+        .universal => gizmo_tool and state.tool == .universal,
         .space => state.space == .local,
         .snap => state.snapping,
         .game_camera => state.through_game_camera,
@@ -233,6 +262,22 @@ const Look = struct {
     }
 };
 
+/// A plugin's tool: its box, lit as the others are, and its title's first letter.
+const PluginLook = struct {
+    letter: []const u8,
+    pressed: bool,
+    id: u32,
+
+    fn draw(context: *const anyopaque, c: *ui.Canvas, r: ui.Rect) anyerror!void {
+        const self: *const PluginLook = @ptrCast(@alignCast(context));
+        const t = c.theme;
+        if (self.pressed) {
+            try c.roundRect(r, t.accent, t.radiusSm());
+        } else if (c.hot_id == self.id) try c.roundRectAlpha(r, t.accent, t.radiusSm(), 0.5);
+        try c.textIn(r, self.letter, 13, if (self.pressed) t.accent_foreground else t.foreground, .center);
+    }
+};
+
 fn line(c: *ui.Canvas, from: ui.Vec2, to: ui.Vec2, width: f32, color: [4]f32) !void {
     const dx = to.x - from.x;
     const dy = to.y - from.y;
@@ -305,6 +350,14 @@ test "the 2D Scene's toolbar has the grid and the origin where the Scene's has i
     try std.testing.expectEqual(Button.grip, buttonAt(flat, corner, .{ .x = 15, .y = 20 }).?);
     try std.testing.expect(buttonAt(flat, corner, .{ .x = 15, .y = 50 }) == null);
     try std.testing.expectEqual(Button.fold, buttonAt(.{ .panel = .scene_2d, .folded = true }, corner, .{ .x = 10 + padding_pt + button_pt + gap_pt + 2, .y = 20 }).?);
+}
+
+test "plugin tools widen the Scene's toolbar and have ids of their own" {
+    try std.testing.expectEqual(size(State{}).x + 2 * (button_pt + gap_pt), size(.{ .plugin_tool_count = 2 }).x);
+    try std.testing.expectEqual(size(State{ .panel = .scene_2d }).x, size(.{ .panel = .scene_2d, .plugin_tool_count = 2 }).x);
+    try std.testing.expectEqual(@as(u8, 1), pluginToolOf(first_plugin_id + 1).?);
+    try std.testing.expect(pluginToolOf(first_id + 3) == null);
+    try std.testing.expect(buttonOf(first_plugin_id) == null);
 }
 
 test "the toolbar stays inside the panel, folded or not" {

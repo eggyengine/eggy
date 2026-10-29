@@ -67,7 +67,7 @@ test "GPU renders every supported AA mode through live texture and scene changes
         try std.testing.expectEqualDeep(settings, graphics.render_settings);
         for (0..3) |frame_index| {
             const frame = try graphics.beginFrame();
-            try scene.render(&graphics, frame.cmd, .{ .width = 63 + @as(u32, @intCast(frame_index)), .height = 35 }, &drawables, camera.View.default, null, true);
+            try scene.render(&graphics, frame.cmd, .{ .width = 63 + @as(u32, @intCast(frame_index)), .height = 35 }, &drawables, camera.View.default, &.{}, true);
             try graphics.drawScene(frame, &drawables, camera.View.default);
             try graphics.endFrame(frame);
         }
@@ -225,7 +225,7 @@ test "GPU directional shadows darken receivers and world sprites and text reach 
     try std.testing.expect(!std.mem.eql(u8, empty_scene, late_model));
     for (many) |*drawable| drawable.* = drawables[0];
     const overflow_frame = try graphics.beginFrame();
-    try std.testing.expectError(error.TooManyVisibleMeshes, scene.render(&graphics, overflow_frame.cmd, .{ .width = 128, .height = 128 }, many, view, null, false));
+    try std.testing.expectError(error.TooManyVisibleMeshes, scene.render(&graphics, overflow_frame.cmd, .{ .width = 128, .height = 128 }, many, view, &.{}, false));
     try graphics.endFrame(overflow_frame);
 }
 
@@ -369,7 +369,7 @@ fn scenePixels(gpa: std.mem.Allocator, graphics: *Graphics, scene: *SceneTexture
     const destination = try vit.Buffer.init(graphics.device, .{ .size = length, .usage = .{ .transfer_dst = true }, .memory = .readback });
     defer destination.deinit();
     const frame = try graphics.beginFrame();
-    try scene.render(graphics, frame.cmd, .{ .width = size, .height = size }, drawables, view, null, false);
+    try scene.render(graphics, frame.cmd, .{ .width = size, .height = size }, drawables, view, &.{}, false);
     const target = scene.target.?.texture;
     try frame.cmd.barrier(&.{.{ .texture = .{ .texture = target, .before = .sampled, .after = .copy_source } }});
     try frame.cmd.copyTextureToBuffer(.{ .buffer = destination, .bytes_per_row = size * 4, .texture = .{ .texture = target }, .extent = .{ .width = size, .height = size } });
