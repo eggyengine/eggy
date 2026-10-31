@@ -57,7 +57,7 @@ pub fn update(self: *Game, app: *eggy.App) !void {
 
     // From a place in the world, fading out by 30 metres.
     if (self.exploded) _ = try app.audio().play(boom, .{
-        .position_m = .{ 4, 0, -2 },
+        .position_m = .init(4, 0, -2),
         .falloff = .{ .min_distance_m = 2, .max_distance_m = 30 },
     });
 }

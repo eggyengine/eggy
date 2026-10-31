@@ -24,11 +24,11 @@ const SavedCamera = struct {
     fly_speed_m_per_s: f32,
 
     fn of(look: scene_view.SceneCamera) SavedCamera {
-        return .{ .focus = look.focus, .yaw_deg = look.yaw_deg, .pitch_deg = look.pitch_deg, .distance = look.distance, .fly_speed_m_per_s = look.fly_speed_m_per_s };
+        return .{ .focus = look.focus.toArray(), .yaw_deg = look.yaw_deg, .pitch_deg = look.pitch_deg, .distance = look.distance, .fly_speed_m_per_s = look.fly_speed_m_per_s };
     }
 
     fn sceneCamera(self: SavedCamera) scene_view.SceneCamera {
-        return .{ .focus = self.focus, .yaw_deg = self.yaw_deg, .pitch_deg = self.pitch_deg, .distance = self.distance, .fly_speed_m_per_s = self.fly_speed_m_per_s };
+        return .{ .focus = .fromArray(self.focus), .yaw_deg = self.yaw_deg, .pitch_deg = self.pitch_deg, .distance = self.distance, .fly_speed_m_per_s = self.fly_speed_m_per_s };
     }
 };
 
@@ -71,9 +71,9 @@ pub const TabViews = struct {
             self.applied.scene = live.scene;
         }
         if (live.scene_2d != self.applied.scene_2d) {
-            self.flats[self.applied.scene_2d] = .{ .centre = flat.centre, .height_m = flat.height_m, .tools = flat.tools };
+            self.flats[self.applied.scene_2d] = .{ .centre = flat.centre.toArray(), .height_m = flat.height_m, .tools = flat.tools };
             const next = self.flats[live.scene_2d] orelse FlatLook{ .centre = .{ 0, 0 }, .height_m = 12, .tools = (Scene2d{}).tools };
-            flat.* = .{ .centre = next.centre, .height_m = next.height_m, .tools = next.tools };
+            flat.* = .{ .centre = .fromArray(next.centre), .height_m = next.height_m, .tools = next.tools };
             self.applied.scene_2d = live.scene_2d;
         }
         if (live.ui != self.applied.ui) if (env) |designer_env| {
@@ -99,7 +99,7 @@ pub const TabViews = struct {
             kept.* = .{ .camera = .of(shown.camera), .tools = shown.tools };
         };
         saved.scenes[self.applied.scene] = .{ .camera = .of(scene.camera), .tools = scene.tools };
-        saved.flats[self.applied.scene_2d] = .{ .centre = flat.centre, .height_m = flat.height_m, .tools = flat.tools };
+        saved.flats[self.applied.scene_2d] = .{ .centre = flat.centre.toArray(), .height_m = flat.height_m, .tools = flat.tools };
 
         var text: std.Io.Writer.Allocating = .init(gpa);
         defer text.deinit();
@@ -125,7 +125,7 @@ pub const TabViews = struct {
             scene.camera = look.camera;
             scene.tools = look.tools;
         }
-        if (self.flats[self.applied.scene_2d]) |look| flat.* = .{ .centre = look.centre, .height_m = look.height_m, .tools = look.tools };
+        if (self.flats[self.applied.scene_2d]) |look| flat.* = .{ .centre = .fromArray(look.centre), .height_m = look.height_m, .tools = look.tools };
     }
 };
 

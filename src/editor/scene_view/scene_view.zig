@@ -467,7 +467,7 @@ pub const SceneView = struct {
                 const component = transformIndex(target.game) orelse return true;
                 const change = drag.changeAt(at, self.snapping());
                 var text: [160]u8 = undefined;
-                const zon = std.fmt.bufPrintSentinel(&text, ".{{ {d}, {d}, {d} }}", .{ change.value[0], change.value[1], change.value[2] }, 0) catch return true;
+                const zon = std.fmt.bufPrintSentinel(&text, ".{{ {d}, {d}, {d} }}", .{ change.value.x, change.value.y, change.value.z }, 0) catch return true;
                 _ = target.game.writeField(target.app, entity, component, @backingInt(change.field), zon);
                 // The others move, turn or grow by as much.
                 const start = drag.start;
@@ -479,7 +479,7 @@ pub const SceneView = struct {
                 for (self.carried[0..self.carried_count]) |other| {
                     const was = other.fields[@backingInt(change.field)];
                     var now: [3]f32 = undefined;
-                    for (&now, was, from, change.value) |*axis, other_was, primary_was, primary_now| axis.* = if (change.field == .scale)
+                    for (&now, was.toArray(), from.toArray(), change.value.toArray()) |*axis, other_was, primary_was, primary_now| axis.* = if (change.field == .scale)
                         (if (primary_was != 0) other_was * primary_now / primary_was else other_was)
                     else
                         other_was + primary_now - primary_was;
@@ -525,13 +525,13 @@ pub const SceneView = struct {
             else => return false,
         };
         const ray = picking.rayThrough(self.view, area, at);
-        const to_ground = if (@abs(ray.direction[1]) > 1e-6) -ray.origin[1] / ray.direction[1] else -1;
+        const to_ground = if (@abs(ray.direction.y) > 1e-6) -ray.origin.y / ray.direction.y else -1;
         const held = sdl3.keyboard.getModState();
         hook.use(hook.context, tool, .{
             .kind = kind,
             .ray_origin_m = ray.origin,
             .ray_direction = ray.direction,
-            .ground_m = if (to_ground > 0) .{ ray.origin[0] + ray.direction[0] * to_ground, 0, ray.origin[2] + ray.direction[2] * to_ground } else null,
+            .ground_m = if (to_ground > 0) ray.origin.add(ray.direction.scale(to_ground)).mul(.init(1, 0, 1)) else null,
             .entity = self.entityAt(target.app, area, at),
             .shift = held.shiftDown(),
             .control = held.controlDown(),
@@ -583,13 +583,11 @@ pub const SceneView = struct {
     /// ```zig
     /// const world_position = scene_view.dropPoint(scene, pointer); // Updated view and UI rect/point.
     /// ```
-    pub fn dropPoint(self: *const SceneView, scene: ui.Rect, at: ui.Vec2) [3]f32 {
+    pub fn dropPoint(self: *const SceneView, scene: ui.Rect, at: ui.Vec2) eggy.math.Vec3 {
         const ray = picking.rayThrough(self.view, scene, at);
-        const along = ray.direction;
-        const eye = ray.origin;
-        const to_ground = if (along[1] < -1e-3) -eye[1] / along[1] else std.math.inf(f32);
+        const to_ground = if (ray.direction.y < -1e-3) -ray.origin.y / ray.direction.y else std.math.inf(f32);
         const distance: f32 = if (to_ground > 0 and to_ground < 100) to_ground else 5;
-        return .{ eye[0] + along[0] * distance, eye[1] + along[1] * distance, eye[2] + along[2] * distance };
+        return ray.origin.add(ray.direction.scale(distance));
     }
 
     /// Whether a drag snaps now: the toolbar's setting, turned round while Ctrl is held.
@@ -615,7 +613,7 @@ pub fn previewRect(scene: ui.Rect) ui.Rect {
 
 /// A drag of `handle`, from the selected entity's `Transform` as it is now.
 /// Another selected entity a gizmo drag moves, and its `Transform` when the drag began.
-const Carried = struct { entity: eggy.ecs.EntityId, fields: [3][3]f32 };
+const Carried = struct { entity: eggy.ecs.EntityId, fields: [3]eggy.math.Vec3 };
 
 /// Click `entity` (null: nothing) in the panel: with Ctrl or Shift held it joins the selection
 /// or leaves it, otherwise it is selected alone.
@@ -629,8 +627,8 @@ fn choose(target: Target, entity: ?eggy.ecs.EntityId) void {
 }
 
 /// The `Transform` fields (position, rotation, scale) of `entity`; null, logged, when unreadable.
-fn readTransform(target: Target, entity: eggy.ecs.EntityId, component: usize) ?[3][3]f32 {
-    var fields: [3][3]f32 = undefined;
+fn readTransform(target: Target, entity: eggy.ecs.EntityId, component: usize) ?[3]eggy.math.Vec3 {
+    var fields: [3]eggy.math.Vec3 = undefined;
     for (&fields, 0..) |*field, index| {
         var buffer: [160]u8 = undefined;
         const text = target.game.readField(target.app, entity, component, index, &buffer) orelse return null;
@@ -647,21 +645,21 @@ fn startDrag(target: Target, layout: gizmo.Layout, handle: gizmo.Handle, at: ui.
     const component = transformIndex(target.game) orelse return null;
     const fields = readTransform(target, entity, component) orelse return null;
     // Moves and turns about world axes are made in the parent's space: the world's at the top.
-    var to_local = [4][4]f32{ .{ 1, 0, 0, 0 }, .{ 0, 1, 0, 0 }, .{ 0, 0, 1, 0 }, .{ 0, 0, 0, 1 } };
+    var to_local = eggy.math.identity(f32, 4);
     if (target.app.world.getParent(entity)) |parent| if (target.game.worldMatrix(target.app, parent)) |placed| {
-        to_local = eggy.transform.invert(placed) orelse return null;
+        to_local = eggy.math.inverse4x4(f32, placed) orelse return null;
     };
     return gizmo.Drag.init(handle, at, layout, .{ .position = fields[0], .rotation_deg = fields[1], .scale = fields[2] }, to_local);
 }
 
 /// Three numbers, `.{ x, y, z }` in ZON; null when `text` isn't that.
-pub fn parseVector(text: []const u8) ?[3]f32 {
+pub fn parseVector(text: []const u8) ?eggy.math.Vec3 {
     var source: [160]u8 = undefined;
     const terminated = std.fmt.bufPrintSentinel(&source, "{s}", .{text}, 0) catch return null;
     // ZON's parser needs room for its syntax tree, as the Inspector's does.
     var scratch: [16 * 1024]u8 = undefined;
     var fba = std.heap.FixedBufferAllocator.init(&scratch);
-    return zon_file.parse([3]f32, fba.allocator(), terminated, .{}) catch null;
+    return .fromArray(zon_file.parse([3]f32, fba.allocator(), terminated, .{}) catch return null);
 }
 
 /// Eggy's `Transform` among the game's component types.
@@ -710,7 +708,7 @@ test "a Transform field's ZON, as the game's library writes it, reads back for a
     var written: std.Io.Writer.Allocating = .init(std.testing.allocator);
     defer written.deinit();
     try std.zon.stringify.serialize([3]f32{ 0, 0.75, -2 }, .{ .whitespace = false }, &written.writer);
-    try std.testing.expectEqualSlices(f32, &.{ 0, 0.75, -2 }, &parseVector(written.written()).?);
+    try std.testing.expectEqual(eggy.math.Vec3.init(0, 0.75, -2), parseVector(written.written()).?);
     try std.testing.expect(parseVector("sideways") == null);
 }
 

@@ -13,6 +13,7 @@ const std = @import("std");
 const sdl3 = @import("vitellus_sdl3").sdl;
 const support = @import("../support.zig");
 const types = @import("types.zig");
+const math = @import("eggenvector");
 const protocol = @import("bridge.zig");
 const marker = @import("../type_marker.zig");
 
@@ -51,7 +52,7 @@ const KeySet = types.KeySet;
 pub const Input = struct {
     /// Host-owned services; copied snapshots never own device handles or binding allocations.
     backend: ?protocol.Bridge = null,
-    viewport_points: [2]f32 = .{ 1, 1 },
+    viewport_points: math.Vec2 = .one,
     keys_held: KeySet = .empty,
     keys_pressed: KeySet = .empty,
     keys_released: KeySet = .empty,
@@ -59,9 +60,9 @@ pub const Input = struct {
     buttons_pressed: std.EnumSet(MouseButton) = .empty,
     buttons_released: std.EnumSet(MouseButton) = .empty,
     /// Where the pointer is in the window, in points from its top left corner.
-    mouse_position: [2]f32 = .{ 0, 0 },
+    mouse_position: math.Vec2 = .zero,
     /// How far it moved this frame, in points (right and down are positive).
-    mouse_delta: [2]f32 = .{ 0, 0 },
+    mouse_delta: math.Vec2 = .zero,
     /// How far the wheel turned this frame, in notches (away from you is positive).
     wheel: f32 = 0,
 
@@ -111,8 +112,8 @@ pub const Input = struct {
     /// ```zig
     /// const movement = app.input.direction(.{}); // Default WASD, in a game hook.
     /// ```
-    pub fn direction(self: *const Input, keys: DirectionKeys) [2]f32 {
-        return .{ self.axis(keys.left, keys.right), self.axis(keys.down, keys.up) };
+    pub fn direction(self: *const Input, keys: DirectionKeys) math.Vec2 {
+        return .init(self.axis(keys.left, keys.right), self.axis(keys.down, keys.up));
     }
 
     /// Number of connected SDL gamepads. No connected devices is ordinary absence.
@@ -465,9 +466,8 @@ pub const Input = struct {
                 self.buttons_held.remove(which);
             },
             .mouse_motion => |motion| {
-                self.mouse_position = .{ motion.x, motion.y };
-                self.mouse_delta[0] += motion.x_rel;
-                self.mouse_delta[1] += motion.y_rel;
+                self.mouse_position = .init(motion.x, motion.y);
+                self.mouse_delta = self.mouse_delta.add(.init(motion.x_rel, motion.y_rel));
             },
             .mouse_wheel => |wheel| self.wheel += wheel.scroll_y,
             // Keys and buttons held while the window loses focus never come up in it.
@@ -494,7 +494,7 @@ pub const Input = struct {
         self.keys_released = .empty;
         self.buttons_pressed = .empty;
         self.buttons_released = .empty;
-        self.mouse_delta = .{ 0, 0 };
+        self.mouse_delta = .zero;
         self.wheel = 0;
         self.notify(.end_frame);
     }
@@ -537,7 +537,7 @@ pub const Input = struct {
                 self.buttons_pressed.remove(button);
                 self.buttons_released.remove(button);
             },
-            .mouse_motion => self.mouse_delta = .{ 0, 0 },
+            .mouse_motion => self.mouse_delta = .zero,
             .mouse_wheel => self.wheel = 0,
             else => {},
         }
@@ -635,9 +635,9 @@ pub fn MapView(comptime Mapping: type) type {
         /// // Player declares move with kind .vector:
         /// const movement = try app.input.map(Player).vector(.move);
         /// ```
-        pub fn vector(self: Self, control: Mapping.Control) !@import("eggenvector").Vec2 {
+        pub fn vector(self: Self, control: Mapping.Control) !math.Vec2 {
             const result = try self.value(control);
-            return if (result == .vector) .{ .x = result.vector[0], .y = result.vector[1] } else error.WrongControlKind;
+            return if (result == .vector) result.vector else error.WrongControlKind;
         }
         /// Context activation is session state; it never rewrites developer project defaults.
         /// Resets trigger evaluation without inventing presses from already-held sources.
@@ -755,7 +755,7 @@ test "a key held for frames is pressed once, and an axis reads two keys" {
     try input.handle(.{ .key_down = .{ .common = undefined, .id = null, .scancode = .w, .key = null, .mod = .{}, .raw = 0, .down = true, .repeat = false } });
     try std.testing.expect(input.pressed(.w) and input.held(.w));
     try std.testing.expectEqual(@as(f32, 1), input.axis(.s, .w));
-    try std.testing.expectEqual([2]f32{ 0, 1 }, input.direction(.{}));
+    try std.testing.expect(input.direction(.{}).eql(.init(0, 1)));
     input.endFrame();
     try std.testing.expect(!input.pressed(.w) and input.held(.w));
     input.releaseAll();

@@ -2,6 +2,7 @@
 //! component. `mesh.gather` turns each into a quad drawable, so sprites are picked, outlined and
 //! hidden like meshes; this file says which part of the image shows and how big it is.
 const std = @import("std");
+const math = @import("eggenvector");
 const Transform = @import("transform.zig").Transform;
 const AssetRef = @import("refs.zig").AssetRef;
 
@@ -19,7 +20,7 @@ pub const Sprite = struct {
 
     image: AssetRef(.image) = .{},
     /// Width and height in metres, before the `Transform`'s scale.
-    size_m: [2]f32 = .{ 1, 1 },
+    size_m: math.Vec2 = .one,
     /// Red, green, blue and alpha, 0 to 1, multiplied with the image.
     color: [4]f32 = .{ 1, 1, 1, 1 },
     /// The part of the image shown, as fractions of it: left, top, right, bottom. A sprite
@@ -45,8 +46,8 @@ pub const Sprite = struct {
     pub fn placed(self: Sprite, world: [4][4]f32) [4][4]f32 {
         var model = world;
         for (0..3) |row| {
-            model[0][row] *= self.size_m[0];
-            model[1][row] *= self.size_m[1];
+            model[0][row] *= self.size_m.x;
+            model[1][row] *= self.size_m.y;
         }
         const lift = @as(f32, @floatFromInt(self.layer)) * layer_step_m;
         for (0..3) |row| model[3][row] += world[2][row] * lift;
@@ -55,7 +56,7 @@ pub const Sprite = struct {
 };
 
 test "flipping swaps the region's edges, and the size stretches the quad's axes" {
-    const sprite = Sprite{ .region = .{ 0.25, 0, 0.5, 1 }, .flip_x = true, .size_m = .{ 2, 3 }, .layer = 10 };
+    const sprite = Sprite{ .region = .{ 0.25, 0, 0.5, 1 }, .flip_x = true, .size_m = .init(2, 3), .layer = 10 };
     try std.testing.expectEqual([4]f32{ 0.5, 0, 0.25, 1 }, sprite.uvRect());
     const identity = [4][4]f32{ .{ 1, 0, 0, 0 }, .{ 0, 1, 0, 0 }, .{ 0, 0, 1, 0 }, .{ 4, 5, 0, 1 } };
     const model = sprite.placed(identity);

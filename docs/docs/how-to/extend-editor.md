@@ -41,7 +41,7 @@ pub fn editorPanelUi(
     const entity = try editor.selection() orelse return;
     const transform = editor.app.world.get(entity, eggy.Transform) orelse return;
     var after = transform.*;
-    after.position[1] += 1;
+    after.position.y += 1;
     try editor.changeComponent(entity, eggy.Action(eggy.Transform){
         .before = transform.*,
         .after = after,

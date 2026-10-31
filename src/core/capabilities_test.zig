@@ -14,8 +14,8 @@ test "every missing backend operation returns NotImplemented" {
     try expect(error.NotImplemented, network.poll(&buffer));
     try expect(error.NotImplemented, network.disconnect(@fromBackingInt(@intCast(0))));
     const navigation = @import("navigation.zig").Navigation{};
-    try expect(error.NotImplemented, navigation.findPath(std.testing.allocator, @splat(0), @splat(1)));
-    try expect(error.NotImplemented, navigation.setDestination(entity, @splat(1)));
+    try expect(error.NotImplemented, navigation.findPath(std.testing.allocator, .zero, .one));
+    try expect(error.NotImplemented, navigation.setDestination(entity, .one));
     try expect(error.NotImplemented, navigation.cancel(entity));
     const storage = @import("storage.zig").Storage{};
     try expect(error.StorageNotInitialized, storage.read(std.testing.allocator, "slot"));

@@ -63,7 +63,7 @@ if (app.input.mousePressed(.right)) try lockMouse(app);
 if (app.input.pressed(.escape)) try releaseMouse(app);
 
 if (sdl.mouse.getWindowRelativeMode(app.window.window)) {
-    transform.rotation_deg[1] -= app.input.mouse_delta[0] * sensitivity_deg_per_point;
+    transform.rotation_deg.y -= app.input.mouse_delta.x * sensitivity_deg_per_point;
 }
 ```
 

@@ -44,7 +44,7 @@ pub const FirstPersonPlayer = struct {
     /// Which way the body faces about the world's up. Set by looking.
     yaw_deg: f32 = 0,
     /// Ground velocity along world X and Z. Set by walking.
-    velocity_m_per_s: [2]f32 = .{ 0, 0 },
+    velocity_m_per_s: eggy.math.Vec2 = .zero,
 };
 
 pub const Controls = eggy.input.Map(enum { move, look, look_stick, sprint }, .{
@@ -99,23 +99,20 @@ pub fn update(app: *eggy.App) !void {
 
         // Walk along the ground the way the body faces, speeding up and slowing down smoothly.
         const yaw_rad = player.yaw_deg * std.math.rad_per_deg;
-        const forward = [2]f32{ -@sin(yaw_rad), -@cos(yaw_rad) };
-        const right = [2]f32{ @cos(yaw_rad), -@sin(yaw_rad) };
+        const forward = eggy.math.Vec2.init(-@sin(yaw_rad), -@cos(yaw_rad));
+        const right = eggy.math.Vec2.init(@cos(yaw_rad), -@sin(yaw_rad));
         const speed = if (sprinting) player.sprint_speed_m_per_s else player.walk_speed_m_per_s;
         const ahead = -move.y;
-        const wanted = [2]f32{
-            (forward[0] * ahead + right[0] * move.x) * speed,
-            (forward[1] * ahead + right[1] * move.x) * speed,
-        };
+        const wanted = forward.scale(ahead).add(right.scale(move.x)).scale(speed);
         const blend = smoothing(player.acceleration_per_s, delta_s);
-        for (&player.velocity_m_per_s, wanted) |*velocity, target| velocity.* += (target - velocity.*) * blend;
-        body.translate(.{ player.velocity_m_per_s[0] * delta_s, 0, player.velocity_m_per_s[1] * delta_s });
+        player.velocity_m_per_s = player.velocity_m_per_s.lerp(wanted, blend);
+        body.translate(.init(player.velocity_m_per_s.x * delta_s, 0, player.velocity_m_per_s.y * delta_s));
 
         // The body turns left and right; the camera, its child, tilts up and down.
-        body.rotation_deg = .{ 0, player.yaw_deg, 0 };
+        body.rotation_deg = .init(0, player.yaw_deg, 0);
         if (player.camera.get(world)) |camera| {
-            camera.position = .{ 0, player.eye_height_m, 0 };
-            camera.rotation_deg = .{ player.pitch_deg, 0, 0 };
+            camera.position = .init(0, player.eye_height_m, 0);
+            camera.rotation_deg = .init(player.pitch_deg, 0, 0);
         }
     }
 }
@@ -144,7 +141,7 @@ fn playerWithoutCamera(world: *ecs.World) ?ecs.EntityId {
 fn addCamera(world: *ecs.World, entity: ecs.EntityId) !void {
     const settings = world.get(entity, FirstPersonPlayer).?.*;
     const camera = try world.spawn(.{
-        eggy.Transform{ .position = .{ 0, settings.eye_height_m, 0 } },
+        eggy.Transform{ .position = .init(0, settings.eye_height_m, 0) },
         eggy.Camera{ .fov_deg = settings.fov_deg },
     });
     try world.setParent(camera, entity);
@@ -165,6 +162,6 @@ test "a player without a camera gets one at eye height, as its child" {
 
     const camera = world.get(body, FirstPersonPlayer).?.camera.entity.?;
     try std.testing.expect(world.getParent(camera).?.eql(body));
-    try std.testing.expectEqual(@as(f32, 1.7), world.get(camera, eggy.Transform).?.position[1]);
+    try std.testing.expectEqual(@as(f32, 1.7), world.get(camera, eggy.Transform).?.position.y);
     try std.testing.expect(playerWithoutCamera(&world) == null);
 }

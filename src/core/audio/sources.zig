@@ -5,6 +5,7 @@ const std = @import("std");
 const ecs = @import("clutch");
 const AssetRef = @import("../refs.zig").AssetRef;
 const transform = @import("../transform.zig");
+const math = @import("eggenvector");
 const camera = @import("../camera.zig");
 const audio = @import("voices.zig");
 
@@ -65,8 +66,7 @@ pub fn step(world: *ecs.World, sound: audio.Audio) void {
         };
         if (!source.playing or source.sound.len == 0) continue;
 
-        const placed = transform.worldMatrix(world, view.entity).data;
-        const position = [3]f32{ placed[3][0], placed[3][1], placed[3][2] };
+        const position = math.transformPoint4x4(f32, transform.worldMatrix(world, view.entity), .zero);
         if (host.started.get(view.entity)) |playing| {
             update(sound, playing.voice, source.*, position);
             continue;
@@ -89,17 +89,17 @@ pub fn step(world: *ecs.World, sound: audio.Audio) void {
 fn placeListener(world: *ecs.World, sound: audio.Audio) void {
     var listeners = world.query(.{*const AudioListener});
     const ears: camera.View = if (listeners.next()) |view| blk: {
-        const placed = transform.worldMatrix(world, view.entity).data;
+        const placed = transform.worldMatrix(world, view.entity);
         break :blk .{
-            .eye = .{ placed[3][0], placed[3][1], placed[3][2] },
-            .forward = camera.normalize(.{ -placed[2][0], -placed[2][1], -placed[2][2] }),
-            .up = camera.normalize(.{ placed[1][0], placed[1][1], placed[1][2] }),
+            .eye = math.transformPoint4x4(f32, placed, .zero),
+            .forward = math.transformDirection4x4(f32, placed, .forward).normalize(),
+            .up = math.transformDirection4x4(f32, placed, .up).normalize(),
         };
     } else camera.find(world) orelse return;
     sound.setListener(ears.eye, ears.forward, ears.up) catch |err| std.log.warn("cannot place the audio listener: {t}", .{err});
 }
 
-fn start(world: *ecs.World, entity: ecs.EntityId, sound: audio.Audio, source: *AudioSource, position_m: [3]f32) void {
+fn start(world: *ecs.World, entity: ecs.EntityId, sound: audio.Audio, source: *AudioSource, position_m: math.Vec3) void {
     const voice = sound.play(source.sound, .{
         .gain = source.gain,
         .pitch = source.pitch,
@@ -120,7 +120,7 @@ fn start(world: *ecs.World, entity: ecs.EntityId, sound: audio.Audio, source: *A
 }
 
 /// Carry the component's gain, pitch, repeat and place over to its voice.
-fn update(sound: audio.Audio, handle: audio.Voice, source: AudioSource, position_m: [3]f32) void {
+fn update(sound: audio.Audio, handle: audio.Voice, source: AudioSource, position_m: math.Vec3) void {
     const voice = sound.host.?.get(handle) orelse return;
     if (source.gain >= 0 and std.math.isFinite(source.gain)) voice.setGain(source.gain);
     if (source.pitch > 0 and std.math.isFinite(source.pitch)) voice.setPitch(source.pitch);
@@ -129,7 +129,7 @@ fn update(sound: audio.Audio, handle: audio.Voice, source: AudioSource, position
         voice.setSpatial(source.spatial, source.min_distance_m, source.max_distance_m, source.rolloff)
     else
         voice.setSpatialEnabled(source.spatial);
-    if (source.spatial) voice.setPosition(position_m);
+    if (source.spatial) voice.setPosition(position_m.toArray());
 }
 
 test "a once source plays at its entity, then turns itself off when it ends" {
@@ -153,7 +153,7 @@ test "a once source plays at its entity, then turns itself off when it ends" {
     const sound = audio.Audio{ .host = host, .resources = .from(&wav, Source.read, Source.model, Source.image) };
     var world = ecs.World.init(gpa);
     defer world.deinit();
-    const entity = try world.spawn(.{ transform.Transform{ .position = .{ 3, 0, 0 } }, AudioSource{ .sound = .init("beep.wav") } });
+    const entity = try world.spawn(.{ transform.Transform{ .position = .init(3, 0, 0) }, AudioSource{ .sound = .init("beep.wav") } });
 
     // The first step starts it.
     step(&world, sound);

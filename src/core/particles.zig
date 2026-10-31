@@ -3,6 +3,7 @@
 //! number at once; a rate keeps sending until stopped. No collision: they fly through things.
 const std = @import("std");
 const api = @import("support.zig");
+const math = @import("eggenvector");
 const AssetRef = @import("refs.zig").AssetRef;
 const Draw2d = @import("draw2d.zig").Draw2d;
 pub const support: api.Support = .available;
@@ -16,7 +17,7 @@ pub const max_particles = 10_000;
 
 pub const Options = struct {
     /// Where they start, in metres.
-    position_m: [3]f32,
+    position_m: math.Vec3,
     /// How many to send out at once, or with `rate_per_s` the most it sends before stopping
     /// itself (0: until `stop`).
     count: u32 = 1,
@@ -26,10 +27,10 @@ pub const Options = struct {
     lifetime_s: f32 = 1,
     /// How each starts moving, in metres per second, and how far off that it may start, at
     /// random, in any direction.
-    velocity_m_per_s: [3]f32 = @splat(0),
+    velocity_m_per_s: math.Vec3 = .zero,
     spread_m_per_s: f32 = 0,
     /// Pulled along this way as they fly, in metres per second per second (as gravity would).
-    acceleration_m_per_s2: [3]f32 = @splat(0),
+    acceleration_m_per_s2: math.Vec3 = .zero,
     /// How big each is, across, in metres.
     size_m: f32 = 0.1,
     /// Its colour (RGBA, 0 to 1), times the image's; it fades to clear as it ages when `fade`.
@@ -57,8 +58,8 @@ pub const Particles = struct {
 
     const Particle = struct {
         emitter: Emitter,
-        position_m: [3]f32,
-        velocity_m_per_s: [3]f32,
+        position_m: math.Vec3,
+        velocity_m_per_s: math.Vec3,
         age_s: f32 = 0,
     };
 
@@ -76,7 +77,7 @@ pub const Particles = struct {
     ///
     /// ```zig
     /// const sparks = try app.particles.emit(.{
-    ///     .position_m = .{ 0, 1, 0 }, .count = 20, .lifetime_s = 0.5, .spread_m_per_s = 2,
+    ///     .position_m = .init(0, 1, 0), .count = 20, .lifetime_s = 0.5, .spread_m_per_s = 2,
     /// });
     /// ```
     pub fn emit(self: *Particles, options: Options) !Emitter {
@@ -119,10 +120,8 @@ pub const Particles = struct {
             var moved = particle;
             moved.age_s += delta_s;
             if (moved.age_s >= source.options.lifetime_s) continue;
-            for (&moved.velocity_m_per_s, &moved.position_m, source.options.acceleration_m_per_s2) |*velocity, *position, pull| {
-                velocity.* += pull * delta_s;
-                position.* += velocity.* * delta_s;
-            }
+            moved.velocity_m_per_s = moved.velocity_m_per_s.add(source.options.acceleration_m_per_s2.scale(delta_s));
+            moved.position_m = moved.position_m.add(moved.velocity_m_per_s.scale(delta_s));
             self.alive.items[kept] = moved;
             kept += 1;
         }
@@ -168,9 +167,9 @@ pub const Particles = struct {
             if (options.fade and options.lifetime_s > 0) tint[3] *= 1 - particle.age_s / options.lifetime_s;
             world.sprite(.{
                 .image = options.image,
-                .position = .{ particle.position_m[0], particle.position_m[1] },
-                .depth_m = particle.position_m[2],
-                .size = @splat(options.size_m),
+                .position = particle.position_m.xy(),
+                .depth_m = particle.position_m.z,
+                .size = .splat(options.size_m),
                 .tint = tint,
                 .billboard = true,
             }) catch |err| switch (err) {
@@ -185,9 +184,8 @@ pub const Particles = struct {
         var velocity = source.options.velocity_m_per_s;
         if (source.options.spread_m_per_s > 0) {
             // A random direction, as far as the spread at most.
-            var direction: [3]f32 = undefined;
-            for (&direction) |*axis| axis.* = random.float(f32) * 2 - 1;
-            for (&velocity, direction) |*axis, off| axis.* += off * source.options.spread_m_per_s;
+            const direction = math.Vec3.init(random.float(f32) * 2 - 1, random.float(f32) * 2 - 1, random.float(f32) * 2 - 1);
+            velocity = velocity.add(direction.scale(source.options.spread_m_per_s));
         }
         return .{ .emitter = source.id, .position_m = source.options.position_m, .velocity_m_per_s = velocity };
     }
@@ -201,12 +199,12 @@ pub const Particles = struct {
 test "a burst sends its count at once, they fly and fall, and go when their time is up" {
     var particles = Particles{ .gpa = std.testing.allocator };
     defer particles.deinit();
-    _ = try particles.emit(.{ .position_m = .{ 0, 0, 0 }, .count = 5, .lifetime_s = 1, .velocity_m_per_s = .{ 1, 0, 0 }, .acceleration_m_per_s2 = .{ 0, -10, 0 } });
+    _ = try particles.emit(.{ .position_m = .zero, .count = 5, .lifetime_s = 1, .velocity_m_per_s = .unit_x, .acceleration_m_per_s2 = .init(0, -10, 0) });
     particles.step(0);
     try std.testing.expectEqual(@as(usize, 5), particles.count());
     particles.step(0.5);
-    try std.testing.expectApproxEqAbs(@as(f32, 0.5), particles.alive.items[0].position_m[0], 0.001);
-    try std.testing.expect(particles.alive.items[0].position_m[1] < 0);
+    try std.testing.expectApproxEqAbs(@as(f32, 0.5), particles.alive.items[0].position_m.x, 0.001);
+    try std.testing.expect(particles.alive.items[0].position_m.y < 0);
     particles.step(0.6);
     try std.testing.expectEqual(@as(usize, 0), particles.count());
     try std.testing.expectEqual(@as(usize, 0), particles.emitters.items.len);
@@ -215,12 +213,12 @@ test "a burst sends its count at once, they fly and fall, and go when their time
 test "a rate keeps sending until stopped, and bad options are refused" {
     var particles = Particles{ .gpa = std.testing.allocator };
     defer particles.deinit();
-    const stream = try particles.emit(.{ .position_m = .{ 0, 0, 0 }, .count = 0, .rate_per_s = 10, .lifetime_s = 5 });
+    const stream = try particles.emit(.{ .position_m = .zero, .count = 0, .rate_per_s = 10, .lifetime_s = 5 });
     particles.step(0.5);
     try std.testing.expectEqual(@as(usize, 5), particles.count());
     try particles.stop(stream);
     particles.step(0.5);
     try std.testing.expectEqual(@as(usize, 5), particles.count());
     try std.testing.expectError(error.UnknownEmitter, particles.stop(@fromBackingInt(@intCast(99))));
-    try std.testing.expectError(error.InvalidParticleOptions, particles.emit(.{ .position_m = .{ 0, 0, 0 }, .lifetime_s = -1 }));
+    try std.testing.expectError(error.InvalidParticleOptions, particles.emit(.{ .position_m = .zero, .lifetime_s = -1 }));
 }

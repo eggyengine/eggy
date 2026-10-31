@@ -780,11 +780,12 @@ pub const HotGame = struct {
     /// ```zig
     /// const matrix = game.worldMatrix(app, entity); // Existing host game/App/entity.
     /// ```
-    pub fn worldMatrix(self: *const HotGame, app: *eggy.App, entity: eggy.ecs.EntityId) ?[4][4]f32 {
+    pub fn worldMatrix(self: *const HotGame, app: *eggy.App, entity: eggy.ecs.EntityId) ?eggy.math.Mat4 {
         if (self.library == null) return null;
-        var matrix: [4][4]f32 = undefined;
-        if (!self.game.world_matrix(&app.world, entityOf(entity), &matrix)) return null;
-        return matrix;
+        // Plain columns across the C boundary.
+        var columns: [4][4]f32 = undefined;
+        if (!self.game.world_matrix(&app.world, entityOf(entity), &columns)) return null;
+        return eggy.math.fromArray(f32, 4, 4, columns);
     }
 
     /// The view through the game's camera (`eggy.camera.find`); null without one.

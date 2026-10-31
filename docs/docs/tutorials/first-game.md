@@ -124,29 +124,21 @@ pub const Game = struct {
 
             // Hold the right mouse button and move the mouse to turn.
             if (app.input.mouseHeld(.right)) {
-                transform.rotation_deg[1] -= app.input.mouse_delta[0] * player.turn_deg_per_point;
+                transform.rotation_deg.y -= app.input.mouse_delta.x * player.turn_deg_per_point;
             }
 
             // W and S go ahead and back, A and D to the sides, the way the cube faces.
-            const across, const ahead = app.input.direction(.{});
+            const movement = app.input.direction(.{});
             const forward = transform.forward();
             const right = transform.right();
             const step = player.speed_m_per_s * app.time.delta_s;
-            transform.translate(.{
-                (forward[0] * ahead + right[0] * across) * step,
-                0,
-                (forward[2] * ahead + right[2] * across) * step,
-            });
+            transform.translate(forward.scale(movement.y).add(right.scale(movement.x)).mul(.init(step, 0, step)));
 
             // The camera follows: six metres behind, three up, looking down a little.
             const camera = eggy.findNamed(&app.world, "Camera") orelse continue;
             const eye = app.world.get(camera, eggy.Transform) orelse continue;
-            eye.position = .{
-                transform.position[0] - forward[0] * 6,
-                transform.position[1] + 3,
-                transform.position[2] - forward[2] * 6,
-            };
-            eye.rotation_deg = .{ -20, transform.rotation_deg[1], 0 };
+            eye.position = transform.position.sub(forward.mul(.init(6, 0, 6))).add(.init(0, 3, 0));
+            eye.rotation_deg = .init(-20, transform.rotation_deg.y, 0);
             app.world.markChanged(camera, eggy.Transform);
         }
     }
@@ -158,7 +150,7 @@ lets the editor add it and edit its fields. Each frame during Play, `update` fin
 entities with both `Transform` and `Player` and moves them.
 
 The movement comes from `app.input.direction(.{})`, which reads A/D across and S/W
-ahead as `-1`, `0`, or `1`. You can choose other keys or read one axis with `axis`.
+ahead as `-1`, `0`, or `1` in its `x` and `y`. You can choose other keys or read one axis with `axis`.
 Multiplying the speed by `app.time.delta_s` keeps it in metres per second as the
 frame rate changes. The mouse movement turns the cube while the right button is
 held. `eggy.findNamed` finds Camera so its transform can follow the player.

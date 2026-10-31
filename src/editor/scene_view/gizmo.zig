@@ -19,6 +19,8 @@ const ui = eggy.ui;
 const rotation = @import("rotation.zig");
 const rayThrough = @import("picking.zig").rayThrough;
 const View = eggy.camera.View;
+const math = eggy.math;
+const Vec3 = math.Vec3;
 
 pub const Tool = enum { move, rotate, scale, universal };
 pub const Space = enum { world, local };
@@ -71,10 +73,10 @@ pub const Layout = struct {
     space: Space,
     view: View,
     scene: ui.Rect,
-    origin_world: [3]f32,
+    origin_world: Vec3,
     origin: ui.Vec2,
     /// Each axis in the world, pointing towards the camera, and whether it is shown.
-    axes: [3][3]f32,
+    axes: [3]Vec3,
     /// Whether each axis was turned round to face the camera.
     flipped: [3]bool,
     axis_shown: [3]bool,
@@ -98,7 +100,7 @@ pub const Layout = struct {
     }
 };
 
-/// The gizmo for `tool` on the entity placed by `placed` (its world matrix, as columns), seen
+/// The gizmo for `tool` on the entity placed by `placed` (its world matrix), seen
 /// through `view` in `scene` (the Scene panel's rect); null when it is behind the camera.
 /// Editor-only: requires positive scene dimensions and a valid camera/finite world transform.
 /// Returns copied geometry in UI points and world metres, hiding edge-on handles; Scale always
@@ -108,14 +110,14 @@ pub const Layout = struct {
 /// const handles = layout(.move, .world, world_matrix, view, scene);
 /// // Existing column-major entity matrix, camera view and Scene UI rect.
 /// ```
-pub fn layout(tool: Tool, space: Space, placed: [4][4]f32, view: View, scene: ui.Rect) ?Layout {
-    const origin_world = [3]f32{ placed[3][0], placed[3][1], placed[3][2] };
+pub fn layout(tool: Tool, space: Space, placed: math.Mat4, view: View, scene: ui.Rect) ?Layout {
+    const origin_world = math.transformPoint4x4(f32, placed, .zero);
     const view_projection = view.viewProjection(scene.w / scene.h);
     const centre = toScreen(view_projection, scene, origin_world) orelse return null;
     // Orthographic cameras see every point along the same direction, at a size fixed by the view's height.
     const orthographic = view.projection == .orthographic;
-    const to_camera = if (orthographic) scale(view.forward, -1) else eggy.camera.normalize(eggy.camera.sub(view.eye, origin_world));
-    const distance = length(eggy.camera.sub(origin_world, view.eye));
+    const to_camera = if (orthographic) view.forward.negate() else view.eye.sub(origin_world).normalize();
+    const distance = origin_world.distance(view.eye);
     const world_length = if (orthographic)
         view.orthographic_height_m * length_pt / @max(1, scene.h)
     else
@@ -142,37 +144,37 @@ pub fn layout(tool: Tool, space: Space, placed: [4][4]f32, view: View, scene: ui
     // The axes: the world's or the entity's own, each turned to face the camera.
     for (0..3) |axis| {
         const own = space == .local or tool == .scale;
-        var direction = if (own) eggy.camera.normalize(.{ placed[axis][0], placed[axis][1], placed[axis][2] }) else unit(axis);
-        result.flipped[axis] = dot(direction, to_camera) < 0;
-        if (result.flipped[axis]) direction = scale(direction, -1);
+        var direction = if (own) math.transformDirection4x4(f32, placed, unit(axis)).normalize() else unit(axis);
+        result.flipped[axis] = direction.dot(to_camera) < 0;
+        if (result.flipped[axis]) direction = direction.negate();
         result.axes[axis] = direction;
-        result.axis_shown[axis] = @abs(dot(direction, to_camera)) < axis_limit;
-        result.plane_shown[axis] = @abs(dot(direction, to_camera)) > plane_limit;
-        result.tips[axis] = toScreen(view_projection, scene, add(origin_world, scale(direction, world_length))) orelse centre;
+        result.axis_shown[axis] = @abs(direction.dot(to_camera)) < axis_limit;
+        result.plane_shown[axis] = @abs(direction.dot(to_camera)) > plane_limit;
+        result.tips[axis] = toScreen(view_projection, scene, origin_world.add(direction.scale(world_length))) orelse centre;
     }
     for (0..3) |axis| {
         const a = result.axes[(axis + 1) % 3];
         const b = result.axes[(axis + 2) % 3];
         for ([4][2]f32{ .{ plane_near, plane_near }, .{ plane_far, plane_near }, .{ plane_far, plane_far }, .{ plane_near, plane_far } }, 0..) |corner, i| {
-            const point = add(origin_world, add(scale(a, corner[0] * world_length), scale(b, corner[1] * world_length)));
+            const point = origin_world.add(a.scale(corner[0] * world_length)).add(b.scale(corner[1] * world_length));
             result.planes[axis][i] = toScreen(view_projection, scene, point) orelse centre;
         }
     }
 
     // The rings: a circle about each axis, and one about the view.
     const radius = world_length * (if (tool == .universal) universal_ring_radius else ring_radius);
-    const right = eggy.camera.normalize(eggy.camera.cross(view.forward, view.up));
+    const right = view.forward.cross(view.up).normalize();
     for (0..ring_points) |i| {
         const angle = std.math.tau * @as(f32, @floatFromInt(i)) / ring_points;
         for (0..3) |axis| {
             const a = result.axes[(axis + 1) % 3];
             const b = result.axes[(axis + 2) % 3];
-            const offset = add(scale(a, @cos(angle) * radius), scale(b, @sin(angle) * radius));
-            result.rings[axis][i] = toScreen(view_projection, scene, add(origin_world, offset)) orelse centre;
-            result.ring_front[axis][i] = dot(offset, to_camera) >= -0.02 * radius;
+            const offset = a.scale(@cos(angle) * radius).add(b.scale(@sin(angle) * radius));
+            result.rings[axis][i] = toScreen(view_projection, scene, origin_world.add(offset)) orelse centre;
+            result.ring_front[axis][i] = offset.dot(to_camera) >= -0.02 * radius;
         }
-        const around = add(scale(right, @cos(angle) * radius * screen_ring_scale), scale(view.up, @sin(angle) * radius * screen_ring_scale));
-        result.screen_ring[i] = toScreen(view_projection, scene, add(origin_world, around)) orelse centre;
+        const around = right.scale(@cos(angle) * radius * screen_ring_scale).add(view.up.scale(@sin(angle) * radius * screen_ring_scale));
+        result.screen_ring[i] = toScreen(view_projection, scene, origin_world.add(around)) orelse centre;
     }
     return result;
 }
@@ -220,11 +222,11 @@ pub fn hit(gizmo: Layout, pointer: ui.Vec2) ?Handle {
 /// Which `Transform` field a drag changes, and to what.
 pub const Change = struct {
     field: enum { position, rotation_deg, scale },
-    value: [3]f32,
+    value: Vec3,
 };
 
 /// The entity's local `Transform` fields when a drag began.
-pub const Start = struct { position: [3]f32, rotation_deg: [3]f32, scale: [3]f32 };
+pub const Start = struct { position: Vec3, rotation_deg: Vec3, scale: Vec3 };
 
 /// A drag of one handle, from where it was taken.
 pub const Drag = struct {
@@ -232,22 +234,21 @@ pub const Drag = struct {
     from: ui.Vec2,
     gizmo: Layout,
     start: Start,
-    /// Turns world-space moves and axes into the parent's space (columns; identity at the top
-    /// level).
-    to_local: [4][4]f32,
+    /// Turns world-space moves and axes into the parent's space (identity at the top level).
+    to_local: math.Mat4,
     /// Where the pointer's ray met the dragged plane when the drag began (plane and screen moves).
-    plane_from: ?[3]f32 = null,
+    plane_from: ?Vec3 = null,
 
     /// Snapshot an editor drag from a hit handle, UI-space press and matching gizmo Layout.
     /// `start` contains the entity's local position/metres, Euler degrees and scale; `to_local`
-    /// is its parent's inverse world matrix in columns (identity for roots). Returns owned
+    /// is its parent's inverse world matrix (identity for roots). Returns owned
     /// value state; an unresolvable drag-plane intersection later keeps the starting position.
     ///
     /// ```zig
     /// // Given a hit handle, UI pointer, Layout, local Start and inverse parent matrix:
     /// const drag = Drag.init(handle, pointer, layout_value, start, inverse_parent);
     /// ```
-    pub fn init(handle: Handle, from: ui.Vec2, gizmo: Layout, start: Start, to_local: [4][4]f32) Drag {
+    pub fn init(handle: Handle, from: ui.Vec2, gizmo: Layout, start: Start, to_local: math.Mat4) Drag {
         var drag = Drag{ .handle = handle, .from = from, .gizmo = gizmo, .start = start, .to_local = to_local };
         if (drag.planeNormal()) |normal| drag.plane_from = drag.onPlane(normal, from);
         return drag;
@@ -269,16 +270,14 @@ pub const Drag = struct {
                 const axis = @backingInt(which);
                 var metres = self.alongAxis(axis, moved) * self.gizmo.world_length;
                 if (snapping) metres = snapTo(metres, snap.move_m);
-                return self.moveBy(scale(self.gizmo.axes[axis], metres));
+                return self.moveBy(self.gizmo.axes[axis].scale(metres));
             },
             .plane, .screen_move => {
                 const normal = self.planeNormal().?;
                 const before = self.plane_from orelse return .{ .field = .position, .value = self.start.position };
                 const now = self.onPlane(normal, pointer) orelse return .{ .field = .position, .value = self.start.position };
-                var shift = eggy.camera.sub(now, before);
-                if (snapping) for (&shift) |*part| {
-                    part.* = snapTo(part.*, snap.move_m);
-                };
+                var shift = now.sub(before);
+                if (snapping) shift = .init(snapTo(shift.x, snap.move_m), snapTo(shift.y, snap.move_m), snapTo(shift.z, snap.move_m));
                 return self.moveBy(shift);
             },
             .ring, .screen_ring => {
@@ -288,18 +287,16 @@ pub const Drag = struct {
             },
             .scale_axis => |which| {
                 const axis = @backingInt(which);
-                var value = self.start.scale;
+                var value = self.start.scale.toArray();
                 value[axis] = @max(0.001, value[axis] * (1 + self.alongAxis(axis, moved)));
                 if (snapping) value[axis] = @max(snap.scale, snapTo(value[axis], snap.scale));
-                return .{ .field = .scale, .value = value };
+                return .{ .field = .scale, .value = .fromArray(value) };
             },
             .uniform => {
                 // Right and up grow it; left and down shrink it.
                 var factor = @max(0.01, 1 + (moved.x - moved.y) / 100);
                 if (snapping) factor = @max(snap.scale, snapTo(factor, snap.scale));
-                var value = self.start.scale;
-                for (&value) |*part| part.* *= factor;
-                return .{ .field = .scale, .value = value };
+                return .{ .field = .scale, .value = self.start.scale.scale(factor) };
             },
         }
     }
@@ -321,19 +318,19 @@ pub const Drag = struct {
                 if (snapping) degrees = snapTo(degrees, snap.rotate_deg);
                 break :blk std.fmt.bufPrint(buffer, "{d:.1}°", .{degrees}) catch "";
             },
-            .arrow, .plane, .screen_move => std.fmt.bufPrint(buffer, "{d:.2} m", .{length(eggy.camera.sub(change.value, self.start.position))}) catch "",
-            .scale_axis => |which| std.fmt.bufPrint(buffer, "×{d:.2}", .{change.value[@backingInt(which)] / @max(0.0001, self.start.scale[@backingInt(which)])}) catch "",
-            .uniform => std.fmt.bufPrint(buffer, "×{d:.2}", .{change.value[0] / @max(0.0001, self.start.scale[0])}) catch "",
+            .arrow, .plane, .screen_move => std.fmt.bufPrint(buffer, "{d:.2} m", .{change.value.distance(self.start.position)}) catch "",
+            .scale_axis => |which| std.fmt.bufPrint(buffer, "×{d:.2}", .{change.value.toArray()[@backingInt(which)] / @max(0.0001, self.start.scale.toArray()[@backingInt(which)])}) catch "",
+            .uniform => std.fmt.bufPrint(buffer, "×{d:.2}", .{change.value.x / @max(0.0001, self.start.scale.x)}) catch "",
         };
     }
 
     /// The position after a move of `world` (a world-space offset), in the parent's space.
-    fn moveBy(self: Drag, world: [3]f32) Change {
-        return .{ .field = .position, .value = add(self.start.position, eggy.transform.apply(self.to_local, world, 0)) };
+    fn moveBy(self: Drag, world: Vec3) Change {
+        return .{ .field = .position, .value = self.start.position.add(math.transformDirection4x4(f32, self.to_local, world)) };
     }
 
     /// The Euler angles after a turn of `degrees` about the dragged ring's axis.
-    fn turnBy(self: Drag, degrees: f32) [3]f32 {
+    fn turnBy(self: Drag, degrees: f32) Vec3 {
         const start = rotation.fromEuler(self.start.rotation_deg);
         const turned = switch (self.handle) {
             // About one of the entity's own axes: turned within its own space.
@@ -341,15 +338,15 @@ pub const Drag = struct {
                 rotation.mul(start, rotation.aboutAxis(unit(@backingInt(which)), degrees))
             else
                 rotation.mul(rotation.aboutAxis(self.parentAxis(unit(@backingInt(which))), degrees), start),
-            .screen_ring => rotation.mul(rotation.aboutAxis(self.parentAxis(scale(self.gizmo.view.forward, -1)), degrees), start),
+            .screen_ring => rotation.mul(rotation.aboutAxis(self.parentAxis(self.gizmo.view.forward.negate()), degrees), start),
             else => start,
         };
         return rotation.toEuler(turned);
     }
 
     /// A world direction in the parent's space, unit length.
-    fn parentAxis(self: Drag, world: [3]f32) [3]f32 {
-        return eggy.camera.normalize(eggy.transform.apply(self.to_local, world, 0));
+    fn parentAxis(self: Drag, world: Vec3) Vec3 {
+        return math.transformDirection4x4(f32, self.to_local, world).normalize();
     }
 
     /// How far round the centre the pointer went, in degrees, counter-clockwise looking down the
@@ -379,7 +376,7 @@ pub const Drag = struct {
     }
 
     /// The normal of the plane a plane or screen move slides on.
-    fn planeNormal(self: Drag) ?[3]f32 {
+    fn planeNormal(self: Drag) ?Vec3 {
         return switch (self.handle) {
             .plane => |which| self.gizmo.axes[@backingInt(which)],
             .screen_move => self.gizmo.view.forward,
@@ -388,13 +385,13 @@ pub const Drag = struct {
     }
 
     /// Where the pointer's ray at `pointer` meets the plane through the entity with `normal`.
-    fn onPlane(self: Drag, normal: [3]f32, pointer: ui.Vec2) ?[3]f32 {
+    fn onPlane(self: Drag, normal: Vec3, pointer: ui.Vec2) ?Vec3 {
         const ray = rayThrough(self.gizmo.view, self.gizmo.scene, pointer);
-        const facing = dot(ray.direction, normal);
+        const facing = ray.direction.dot(normal);
         if (@abs(facing) < 1e-5) return null;
-        const t = dot(eggy.camera.sub(self.gizmo.origin_world, ray.origin), normal) / facing;
+        const t = self.gizmo.origin_world.sub(ray.origin).dot(normal) / facing;
         if (t <= 0) return null;
-        return add(ray.origin, scale(ray.direction, t));
+        return ray.origin.add(ray.direction.scale(t));
     }
 };
 
@@ -538,7 +535,7 @@ fn dot2(c: *ui.Canvas, centre: ui.Vec2, radius: f32, color: [4]f32) !void {
 }
 
 /// Where world `point` lands in `scene`, in points; null behind the camera.
-fn toScreen(view_projection: [4][4]f32, scene: ui.Rect, world: [3]f32) ?ui.Vec2 {
+fn toScreen(view_projection: math.Mat4, scene: ui.Rect, world: Vec3) ?ui.Vec2 {
     const projected = eggy.camera.project(view_projection, world);
     if (!projected.in_front) return null;
     return .{ .x = scene.x + (projected.x + 1) / 2 * scene.w, .y = scene.y + (1 - projected.y) / 2 * scene.h };
@@ -586,32 +583,18 @@ fn sub2(a: ui.Vec2, b: ui.Vec2) ui.Vec2 {
     return .{ .x = a.x - b.x, .y = a.y - b.y };
 }
 
-fn unit(axis: usize) [3]f32 {
-    var direction = [3]f32{ 0, 0, 0 };
-    direction[axis] = 1;
-    return direction;
+fn unit(axis: usize) Vec3 {
+    return switch (axis) {
+        0 => .unit_x,
+        1 => .unit_y,
+        else => .unit_z,
+    };
 }
 
-fn add(a: [3]f32, b: [3]f32) [3]f32 {
-    return @as(@Vector(3, f32), a) + @as(@Vector(3, f32), b);
-}
-
-fn scale(v: [3]f32, by: f32) [3]f32 {
-    return @as(@Vector(3, f32), v) * @as(@Vector(3, f32), @splat(by));
-}
-
-fn dot(a: [3]f32, b: [3]f32) f32 {
-    return @reduce(.Add, @as(@Vector(3, f32), a) * @as(@Vector(3, f32), b));
-}
-
-fn length(v: [3]f32) f32 {
-    return @sqrt(dot(v, v));
-}
-
-const identity = [4][4]f32{ .{ 1, 0, 0, 0 }, .{ 0, 1, 0, 0 }, .{ 0, 0, 1, 0 }, .{ 0, 0, 0, 1 } };
+const identity = math.identity(f32, 4);
 const test_scene = ui.Rect{ .x = 0, .y = 0, .w = 800, .h = 600 };
-const at_origin = [4][4]f32{ .{ 1, 0, 0, 0 }, .{ 0, 1, 0, 0 }, .{ 0, 0, 1, 0 }, .{ 0, 1, 0, 1 } };
-const still = Start{ .position = .{ 0, 1, 0 }, .rotation_deg = .{ 0, 0, 0 }, .scale = .{ 1, 1, 1 } };
+const at_origin = math.translationVec4x4(f32, .init(0, 1, 0));
+const still = Start{ .position = .init(0, 1, 0), .rotation_deg = .zero, .scale = .one };
 
 test "dragging the x arrow along its own line moves the entity along x, in snapped steps too" {
     const gizmo = layout(.move, .world, at_origin, .default, test_scene).?;
@@ -619,20 +602,20 @@ test "dragging the x arrow along its own line moves the entity along x, in snapp
     try std.testing.expectEqual(Axis.x, handle.arrow);
     const drag = Drag.init(handle, gizmo.origin, gizmo, still, identity);
     const moved = drag.changeAt(gizmo.tips[0], false);
-    try std.testing.expectApproxEqAbs(gizmo.world_length, @abs(moved.value[0]), 0.001);
-    try std.testing.expectApproxEqAbs(@as(f32, 1), moved.value[1], 0.001);
+    try std.testing.expectApproxEqAbs(gizmo.world_length, @abs(moved.value.x), 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 1), moved.value.y, 0.001);
     const snapped = drag.changeAt(gizmo.tips[0], true);
-    try std.testing.expectApproxEqAbs(@as(f32, 0), @mod(snapped.value[0], snap.move_m), 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 0), @mod(snapped.value.x, snap.move_m), 0.001);
 }
 
 test "a move under a parent turned a quarter is made in the parent's space" {
     const gizmo = layout(.move, .world, at_origin, .default, test_scene).?;
     // The parent's inverse: turned back a quarter about y, world x is the parent's z.
-    const to_local = [4][4]f32{ .{ 0, 0, 1, 0 }, .{ 0, 1, 0, 0 }, .{ -1, 0, 0, 0 }, .{ 0, 0, 0, 1 } };
-    const drag = Drag.init(.{ .arrow = .x }, gizmo.origin, gizmo, .{ .position = .{ 0, 0, 0 }, .rotation_deg = .{ 0, 0, 0 }, .scale = .{ 1, 1, 1 } }, to_local);
+    const to_local = math.fromArray(f32, 4, 4, .{ .{ 0, 0, 1, 0 }, .{ 0, 1, 0, 0 }, .{ -1, 0, 0, 0 }, .{ 0, 0, 0, 1 } });
+    const drag = Drag.init(.{ .arrow = .x }, gizmo.origin, gizmo, .{ .position = .zero, .rotation_deg = .zero, .scale = .one }, to_local);
     const moved = drag.changeAt(gizmo.tips[0], false);
-    try std.testing.expectApproxEqAbs(gizmo.world_length, @abs(moved.value[2]), 0.001);
-    try std.testing.expectApproxEqAbs(@as(f32, 0), moved.value[0], 0.001);
+    try std.testing.expectApproxEqAbs(gizmo.world_length, @abs(moved.value.z), 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 0), moved.value.x, 0.001);
 }
 
 test "a plane move follows the pointer across the plane, keeping to it" {
@@ -643,17 +626,17 @@ test "a plane move follows the pointer across the plane, keeping to it" {
     try std.testing.expectEqual(Axis.y, hit(gizmo, middle).?.plane);
     const drag = Drag.init(.{ .plane = .y }, middle, gizmo, still, identity);
     const moved = drag.changeAt(.{ .x = middle.x + 40, .y = middle.y + 20 }, false);
-    try std.testing.expectApproxEqAbs(@as(f32, 1), moved.value[1], 0.001);
-    try std.testing.expect(moved.value[0] > 0 and moved.value[2] > 0);
+    try std.testing.expectApproxEqAbs(@as(f32, 1), moved.value.y, 0.001);
+    try std.testing.expect(moved.value.x > 0 and moved.value.z > 0);
 }
 
 test "the middle box resizes on every axis, and nothing is taken far from the gizmo" {
     const gizmo = layout(.scale, .world, at_origin, .default, test_scene).?;
     try std.testing.expectEqual(Handle.uniform, hit(gizmo, gizmo.origin).?);
     try std.testing.expect(hit(gizmo, .{ .x = 5, .y = 5 }) == null);
-    const drag = Drag.init(.uniform, gizmo.origin, gizmo, .{ .position = .{ 0, 1, 0 }, .rotation_deg = .{ 0, 0, 0 }, .scale = .{ 1, 2, 1 } }, identity);
+    const drag = Drag.init(.uniform, gizmo.origin, gizmo, .{ .position = .init(0, 1, 0), .rotation_deg = .zero, .scale = .init(1, 2, 1) }, identity);
     const grown = drag.changeAt(.{ .x = gizmo.origin.x + 100, .y = gizmo.origin.y }, false);
-    try std.testing.expectEqualSlices(f32, &.{ 2, 4, 2 }, &grown.value);
+    try std.testing.expectEqual(Vec3.init(2, 4, 2), grown.value);
 }
 
 test "turning the y ring a snapped step turns about y only" {
@@ -665,8 +648,8 @@ test "turning the y ring a snapped step turns about y only" {
     const drag = Drag.init(.{ .ring = .y }, ring[front], gizmo, still, identity);
     const turned = drag.changeAt(ring[(front + 6) % ring_points], true);
     try std.testing.expectEqual(@TypeOf(turned.field).rotation_deg, turned.field);
-    try std.testing.expectApproxEqAbs(@as(f32, 0), turned.value[0], 0.01);
-    try std.testing.expectApproxEqAbs(@as(f32, 0), turned.value[2], 0.01);
-    try std.testing.expectApproxEqAbs(@as(f32, 0), @mod(turned.value[1] + 360, snap.rotate_deg), 0.01);
-    try std.testing.expect(turned.value[1] != 0);
+    try std.testing.expectApproxEqAbs(@as(f32, 0), turned.value.x, 0.01);
+    try std.testing.expectApproxEqAbs(@as(f32, 0), turned.value.z, 0.01);
+    try std.testing.expectApproxEqAbs(@as(f32, 0), @mod(turned.value.y + 360, snap.rotate_deg), 0.01);
+    try std.testing.expect(turned.value.y != 0);
 }

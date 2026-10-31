@@ -116,8 +116,8 @@ test "extraction moves local placement to the instance without applying it twice
     const gpa = std.testing.allocator;
     var world = ecs.World.init(gpa);
     defer world.deinit();
-    const root = try world.spawn(.{eggy.Transform{ .position = .{ 3, 4, 5 }, .rotation_deg = .{ 10, 20, 30 }, .scale = .{ 2, 3, 4 } }});
-    const child = try world.spawn(.{eggy.Transform{ .position = .{ 1, 0, 0 } }});
+    const root = try world.spawn(.{eggy.Transform{ .position = .init(3, 4, 5), .rotation_deg = .init(10, 20, 30), .scale = .init(2, 3, 4) }});
+    const child = try world.spawn(.{eggy.Transform{ .position = .init(1, 0, 0) }});
     try world.setParent(child, root);
     var captured = try eggy.scene.Scene.capture(gpa, &world, access, &.{root});
     defer captured.deinit();
@@ -176,7 +176,7 @@ test "extraction saves a unique, catalogued scene before replacing anything" {
     const access = eggy.scene.registryAccess(Registry);
     var world = ecs.World.init(gpa);
     defer world.deinit();
-    const root = try world.spawn(.{eggy.Transform{ .position = .{ 7, 8, 9 } }});
+    const root = try world.spawn(.{eggy.Transform{ .position = .init(7, 8, 9) }});
     access.setName(&world, root, "Ship");
     var assets = try ProjectAssets.init(gpa, io, fixture_path);
     defer assets.deinit();

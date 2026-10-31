@@ -26,18 +26,19 @@ pub const End = struct { axis: u2, positive: bool, at: ui.Vec2, nearness: f32 };
 /// ```
 pub fn ends(view: View, scene: ui.Rect) [6]End {
     const centre = ui.Vec2{ .x = scene.x + scene.w - inset_pt, .y = scene.y + inset_pt };
-    const right = eggy.camera.normalize(eggy.camera.cross(view.forward, view.up));
+    const right = view.forward.cross(view.up).normalize();
     var result: [6]End = undefined;
     for (0..6) |i| {
         const axis: u2 = @intCast(i / 2);
         const positive = i % 2 == 0;
-        var direction = [3]f32{ 0, 0, 0 };
-        direction[axis] = if (positive) 1 else -1;
+        var axes = [3]f32{ 0, 0, 0 };
+        axes[axis] = if (positive) 1 else -1;
+        const direction = eggy.math.Vec3.fromArray(axes);
         result[i] = .{
             .axis = axis,
             .positive = positive,
-            .at = .{ .x = centre.x + dot(direction, right) * reach_pt, .y = centre.y - dot(direction, view.up) * reach_pt },
-            .nearness = -dot(direction, view.forward),
+            .at = .{ .x = centre.x + direction.dot(right) * reach_pt, .y = centre.y - direction.dot(view.up) * reach_pt },
+            .nearness = -direction.dot(view.forward),
         };
     }
     std.mem.sort(End, &result, {}, struct {
@@ -134,12 +135,8 @@ fn line(c: *ui.Canvas, from: ui.Vec2, to: ui.Vec2, width: f32, color: [4]f32) !v
     try c.triangle(.{ .{ from.x + nx, from.y + ny }, .{ to.x - nx, to.y - ny }, .{ from.x - nx, from.y - ny } }, .{ color, color, color });
 }
 
-fn dot(a: [3]f32, b: [3]f32) f32 {
-    return a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
-}
-
 test "looking down -z, +x is to the right and +y up, and clicking +x looks from the side" {
-    const view = View.lookingAt(.{ 0, 0, 10 }, .{ 0, 0, 0 }, .{});
+    const view = View.lookingAt(.init(0, 0, 10), .zero, .{});
     const scene = ui.Rect{ .x = 0, .y = 0, .w = 800, .h = 600 };
     var x_end: ?End = null;
     var y_end: ?End = null;

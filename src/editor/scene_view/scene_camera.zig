@@ -13,6 +13,7 @@
 //!   flies faster, and holding the D-pad up or down changes how fast.
 const std = @import("std");
 const eggy = @import("eggy");
+const math = eggy.math;
 const sdl3 = eggy.sdl_adapter.sdl;
 const View = eggy.camera.View;
 
@@ -50,7 +51,7 @@ fn fromTouchpad(wheel: sdl3.events.MouseWheel) bool {
 
 pub const SceneCamera = struct {
     /// What it circles and zooms towards.
-    focus: [3]f32 = .{ 0, 1, 0 },
+    focus: math.Vec3 = .init(0, 1, 0),
     /// How fast W, A, S, D and the left stick fly, before Shift or the left shoulder.
     fly_speed_m_per_s: f32 = default_fly_speed_m_per_s,
     /// Seconds left showing the fly speed over the panel, since it last changed.
@@ -119,7 +120,7 @@ pub const SceneCamera = struct {
                     .look => {
                         const eye_before = self.eye();
                         self.turn(motion.x_rel, motion.y_rel);
-                        self.focus = add(eye_before, scale(self.forward(), self.distance));
+                        self.focus = eye_before.add(self.forward().scale(self.distance));
                     },
                     .orbit => self.turn(motion.x_rel, motion.y_rel),
                     .pan => self.pan(motion.x_rel, motion.y_rel, if (scene) |area| area.h else 600),
@@ -227,7 +228,7 @@ pub const SceneCamera = struct {
         // Match the focus point's screen motion at any zoom level.
         const visible_height_m = if (self.projection == .orthographic) self.orthographic_height_m else 2 * self.distance * @tan(self.fov_deg * std.math.rad_per_deg / 2);
         const metres_per_point = visible_height_m / @max(1, height);
-        self.focus = add(self.focus, add(scale(self.right(), -dx * metres_per_point), scale(self.up(), dy * metres_per_point)));
+        self.focus = self.focus.add(self.right().scale(-dx * metres_per_point)).add(self.up().scale(dy * metres_per_point));
     }
 
     /// Fly by the keys held, over `seconds`, while looking around (right-drag).
@@ -254,8 +255,8 @@ pub const SceneCamera = struct {
         const rise = held(keys, .e) - held(keys, .q);
         if (ahead == 0 and across == 0 and rise == 0) return;
         const speed = self.fly_speed_m_per_s * seconds * (if (held(keys, .left_shift) + held(keys, .right_shift) > 0) fast else 1);
-        const step = add(add(scale(self.forward(), ahead * speed), scale(self.right(), across * speed)), .{ 0, rise * speed, 0 });
-        self.focus = add(self.focus, step);
+        const step = self.forward().scale(ahead * speed).add(self.right().scale(across * speed)).add(.init(0, rise * speed, 0));
+        self.focus = self.focus.add(step);
     }
 
     /// Fly and look by a gamepad's sticks and triggers, over `seconds`.
@@ -274,16 +275,16 @@ pub const SceneCamera = struct {
         const look = deadZone(pad.right_stick);
         const travel = deadZone(pad.left_stick);
         const rise = pad.triggers[1] - pad.triggers[0];
-        if (look[0] == 0 and look[1] == 0 and travel[0] == 0 and travel[1] == 0 and @abs(rise) < stick_dead_zone) return;
+        if (look.eql(.zero) and travel.eql(.zero) and @abs(rise) < stick_dead_zone) return;
 
         // Turn about the eye (or orbit the focus point), then fly from where it now looks.
         const eye_before = self.eye();
         const points_per_s = stick_turn_deg_per_s / turn_per_point;
-        self.turn(look[0] * points_per_s * seconds, look[1] * points_per_s * seconds);
-        if (!pad.buttons.contains(.right_shoulder)) self.focus = add(eye_before, scale(self.forward(), self.distance));
+        self.turn(look.x * points_per_s * seconds, look.y * points_per_s * seconds);
+        if (!pad.buttons.contains(.right_shoulder)) self.focus = eye_before.add(self.forward().scale(self.distance));
         const speed = self.fly_speed_m_per_s * seconds * (if (pad.buttons.contains(.left_shoulder)) fast else 1);
-        const step = add(add(scale(self.forward(), -travel[1] * speed), scale(self.right(), travel[0] * speed)), .{ 0, rise * speed, 0 });
-        self.focus = add(self.focus, step);
+        const step = self.forward().scale(-travel.y * speed).add(self.right().scale(travel.x * speed)).add(.init(0, rise * speed, 0));
+        self.focus = self.focus.add(step);
     }
 
     /// Where it is and which way it looks, to tell when it moved.
@@ -294,7 +295,7 @@ pub const SceneCamera = struct {
     /// const before = camera.pose(); // Existing SceneCamera, for change detection.
     /// ```
     pub fn pose(self: *const SceneCamera) [6]f32 {
-        return .{ self.focus[0], self.focus[1], self.focus[2], self.yaw_deg, self.pitch_deg, self.distance };
+        return .{ self.focus.x, self.focus.y, self.focus.z, self.yaw_deg, self.pitch_deg, self.distance };
     }
 
     /// Look from `from`'s eye the way it looks, keeping the distance to the focus point.
@@ -306,9 +307,9 @@ pub const SceneCamera = struct {
     /// ```
     pub fn place(self: *SceneCamera, from: View) void {
         const f = from.forward;
-        self.yaw_deg = @mod(std.math.atan2(-f[0], -f[2]) * std.math.deg_per_rad, 360);
-        self.pitch_deg = std.math.clamp(std.math.asin(std.math.clamp(f[1], -1, 1)) * std.math.deg_per_rad, -89, 89);
-        self.focus = add(from.eye, scale(self.forward(), self.distance));
+        self.yaw_deg = @mod(std.math.atan2(-f.x, -f.z) * std.math.deg_per_rad, 360);
+        self.pitch_deg = std.math.clamp(std.math.asin(std.math.clamp(f.y, -1, 1)) * std.math.deg_per_rad, -89, 89);
+        self.focus = from.eye.add(self.forward().scale(self.distance));
     }
 
     /// Look at `centre` from far enough away to see `radius` around it.
@@ -316,9 +317,9 @@ pub const SceneCamera = struct {
     /// Preserves yaw/pitch/FOV, setting distance from the vertical FOV with a 0.5 metre minimum.
     ///
     /// ```zig
-    /// camera.frame(.{ 0, 1, 0 }, 2); // Existing SceneCamera; frame a 2 m radius.
+    /// camera.frame(.init(0, 1, 0), 2); // Existing SceneCamera; frame a 2 m radius.
     /// ```
-    pub fn frame(self: *SceneCamera, centre: [3]f32, radius: f32) void {
+    pub fn frame(self: *SceneCamera, centre: math.Vec3, radius: f32) void {
         self.focus = centre;
         self.distance = @max(min_distance, radius / @sin(self.fov_deg * std.math.rad_per_deg / 2));
     }
@@ -328,39 +329,30 @@ pub const SceneCamera = struct {
         self.pitch_deg = std.math.clamp(self.pitch_deg - dy * turn_per_point, -89, 89);
     }
 
-    fn forward(self: *const SceneCamera) [3]f32 {
+    fn forward(self: *const SceneCamera) math.Vec3 {
         const yaw = self.yaw_deg * std.math.rad_per_deg;
         const pitch = self.pitch_deg * std.math.rad_per_deg;
-        return .{ -@sin(yaw) * @cos(pitch), @sin(pitch), -@cos(yaw) * @cos(pitch) };
+        return .init(-@sin(yaw) * @cos(pitch), @sin(pitch), -@cos(yaw) * @cos(pitch));
     }
 
-    fn right(self: *const SceneCamera) [3]f32 {
-        return eggy.camera.normalize(eggy.camera.cross(self.forward(), .{ 0, 1, 0 }));
+    fn right(self: *const SceneCamera) math.Vec3 {
+        return self.forward().cross(.up).normalize();
     }
 
-    fn up(self: *const SceneCamera) [3]f32 {
-        return eggy.camera.cross(self.right(), self.forward());
+    fn up(self: *const SceneCamera) math.Vec3 {
+        return self.right().cross(self.forward());
     }
 
-    fn eye(self: *const SceneCamera) [3]f32 {
-        return add(self.focus, scale(self.forward(), -self.distance));
+    fn eye(self: *const SceneCamera) math.Vec3 {
+        return self.focus.add(self.forward().scale(-self.distance));
     }
 };
 
 /// `stick` with its resting wobble removed, rescaled so just past the dead zone starts at 0.
-pub fn deadZone(stick: [2]f32) [2]f32 {
-    const length = @sqrt(stick[0] * stick[0] + stick[1] * stick[1]);
-    if (length <= stick_dead_zone) return .{ 0, 0 };
-    const kept = @min(1, (length - stick_dead_zone) / (1 - stick_dead_zone)) / length;
-    return .{ stick[0] * kept, stick[1] * kept };
-}
-
-fn add(a: [3]f32, b: [3]f32) [3]f32 {
-    return @as(@Vector(3, f32), a) + @as(@Vector(3, f32), b);
-}
-
-fn scale(v: [3]f32, by: f32) [3]f32 {
-    return @as(@Vector(3, f32), v) * @as(@Vector(3, f32), @splat(by));
+pub fn deadZone(stick: math.Vec2) math.Vec2 {
+    const length = stick.length();
+    if (length <= stick_dead_zone) return .zero;
+    return stick.scale(@min(1, (length - stick_dead_zone) / (1 - stick_dead_zone)) / length);
 }
 
 test "looking around turns about the eye, and orbiting about the focus point" {
@@ -369,13 +361,13 @@ test "looking around turns about the eye, and orbiting about the focus point" {
     const eye_before = camera.eye();
     try std.testing.expect(camera.handle(press(.right), area));
     _ = camera.handle(move(40, 10), area);
-    for (camera.eye(), eye_before) |now, before| try std.testing.expectApproxEqAbs(before, now, 0.001);
+    try std.testing.expect(camera.eye().approxEql(eye_before, 0.001));
     try std.testing.expect(camera.handle(.{ .mouse_button_up = .{ .common = .{ .timestamp = 0 }, .button = .right, .down = false, .clicks = 1, .x = 0, .y = 0 } }, area));
 
     const focus_before = camera.focus;
     camera.drag = .orbit;
     _ = camera.handle(move(40, 10), area);
-    try std.testing.expectEqualSlices(f32, &focus_before, &camera.focus);
+    try std.testing.expect(camera.focus.eql(focus_before));
 }
 
 test "a press outside the Scene panel doesn't steer it, and zoom stops short of the focus" {
@@ -398,14 +390,14 @@ test "fractional two-axis touchpad scrolling orbits without changing focus or zo
     camera.scroll(scrollWheel(0.25, 0.5), 600, .{});
     try std.testing.expectApproxEqAbs(@as(f32, 358.5), camera.yaw_deg, 0.001);
     try std.testing.expectApproxEqAbs(@as(f32, 3), camera.pitch_deg, 0.001);
-    try std.testing.expectEqualSlices(f32, &focus, &camera.focus);
+    try std.testing.expect(camera.focus.eql(focus));
     try std.testing.expectEqual(@as(f32, 10), camera.distance);
 }
 
 test "Shift touchpad scrolling pans in screen space at the viewport scale" {
-    var camera = SceneCamera{ .focus = .{ 0, 0, 0 }, .pitch_deg = 0, .distance = 10, .fov_deg = 90 };
+    var camera = SceneCamera{ .focus = .zero, .pitch_deg = 0, .distance = 10, .fov_deg = 90 };
     camera.scroll(scrollWheel(0.25, 0.5), 100, .{ .left_shift = true });
-    for (camera.focus, [3]f32{ -1.2, -2.4, 0 }) |got, want| try std.testing.expectApproxEqAbs(want, got, 0.001);
+    try std.testing.expect(camera.focus.approxEql(.init(-1.2, -2.4, 0), 0.001));
     try std.testing.expectEqual(@as(f32, 0), camera.yaw_deg);
     try std.testing.expectEqual(@as(f32, 0), camera.pitch_deg);
     try std.testing.expectEqual(@as(f32, 10), camera.distance);
@@ -418,7 +410,7 @@ test "Ctrl touchpad scrolling zooms like a whole mouse-wheel notch" {
     mouse.scroll(scrollWheel(0, 1), 600, .{ .left_shift = true });
     try std.testing.expectApproxEqAbs(@as(f32, 8.8), touchpad.distance, 0.001);
     try std.testing.expectApproxEqAbs(mouse.distance, touchpad.distance, 0.001);
-    try std.testing.expectEqualSlices(f32, &mouse.focus, &touchpad.focus);
+    try std.testing.expect(touchpad.focus.eql(mouse.focus));
     try std.testing.expectEqual(mouse.yaw_deg, touchpad.yaw_deg);
 }
 
@@ -471,25 +463,25 @@ test "pinch clamps zoom, ignores invalid scales and releases capture on focus lo
 }
 
 test "a gamepad's left stick flies, its right stick looks about the eye, and rest is ignored" {
-    var camera = SceneCamera{ .focus = .{ 0, 0, 0 }, .pitch_deg = 0, .distance = 10 };
-    camera.steer(.{ .left_stick = .{ 0.1, -0.1 }, .right_stick = .{ -0.1, 0 } }, 1);
+    var camera = SceneCamera{ .focus = .zero, .pitch_deg = 0, .distance = 10 };
+    camera.steer(.{ .left_stick = .init(0.1, -0.1), .right_stick = .init(-0.1, 0) }, 1);
     try std.testing.expectEqualSlices(f32, &[6]f32{ 0, 0, 0, 0, 0, 10 }, &camera.pose());
 
     // Full forward for half a second flies 4 m down -z.
-    camera.steer(.{ .left_stick = .{ 0, -1 } }, 0.5);
-    for (camera.focus, [3]f32{ 0, 0, -4 }) |got, want| try std.testing.expectApproxEqAbs(want, got, 0.001);
+    camera.steer(.{ .left_stick = .init(0, -1) }, 0.5);
+    try std.testing.expect(camera.focus.approxEql(.init(0, 0, -4), 0.001));
 
     const eye_before = camera.eye();
-    camera.steer(.{ .right_stick = .{ 1, 0 } }, 0.5);
+    camera.steer(.{ .right_stick = .init(1, 0) }, 0.5);
     try std.testing.expectApproxEqAbs(@as(f32, 300), camera.yaw_deg, 0.001);
-    for (camera.eye(), eye_before) |now, before| try std.testing.expectApproxEqAbs(before, now, 0.001);
+    try std.testing.expect(camera.eye().approxEql(eye_before, 0.001));
 
     // With the right shoulder held it orbits: the focus point stays put.
     const focus_before = camera.focus;
-    var orbiting = eggy.input.ControllerState{ .right_stick = .{ 1, 0 } };
+    var orbiting = eggy.input.ControllerState{ .right_stick = .init(1, 0) };
     orbiting.buttons.insert(.right_shoulder);
     camera.steer(orbiting, 0.5);
-    try std.testing.expectEqualSlices(f32, &focus_before, &camera.focus);
+    try std.testing.expect(camera.focus.eql(focus_before));
 }
 
 test "scrolling while looking around changes the fly speed, not the view, and shows it briefly" {

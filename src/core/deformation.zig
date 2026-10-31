@@ -254,9 +254,9 @@ fn multiply(a: [4]f32, b: [4]f32) [4]f32 {
 }
 
 test "a quaternion from degrees turns as a Transform does" {
-    const transform = @import("transform.zig").Transform{ .position = .{ 1, 2, 3 }, .rotation_deg = .{ 30, 45, 60 }, .scale = .{ 2, 3, 4 } };
+    const transform = @import("transform.zig").Transform{ .position = .init(1, 2, 3), .rotation_deg = .init(30, 45, 60), .scale = .init(2, 3, 4) };
     const expected = transform.matrix().data;
-    const made = assets.rig.fromTrs(transform.position, eulerQuaternion(transform.rotation_deg), transform.scale);
+    const made = assets.rig.fromTrs(transform.position.toArray(), eulerQuaternion(transform.rotation_deg.toArray()), transform.scale.toArray());
     for (expected, made) |column, mine| {
         const wanted: [4]f32 = column;
         for (wanted, mine) |a, b| try std.testing.expectApproxEqAbs(a, b, 1e-4);

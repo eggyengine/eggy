@@ -11,6 +11,8 @@
 //! pointer's place are drawn over it.
 const std = @import("std");
 const eggy = @import("eggy");
+const math = eggy.math;
+const Vec2 = math.Vec2;
 const ui = eggy.ui;
 const sdl3 = eggy.sdl_adapter.sdl;
 const scene_view = @import("../scene_view/scene_view.zig");
@@ -33,7 +35,7 @@ const min_gap_px = 18;
 
 pub const Scene2d = struct {
     /// The world point at the panel's centre, and how many metres its height shows.
-    centre: [2]f32 = .{ 0, 0 },
+    centre: Vec2 = .zero,
     height_m: f32 = 12,
     /// The floating toolbar: the tool, snapping and the grid. Scaling and turning both show at first.
     tools: toolbar.State = .{ .panel = .scene_2d, .tool = .universal },
@@ -65,17 +67,17 @@ pub const Scene2d = struct {
     /// moves in its parent's space.
     const Move = struct {
         entity: eggy.ecs.EntityId,
-        from_world: [2]f32,
-        from_position: [3]f32,
-        to_local: [4][4]f32,
+        from_world: Vec2,
+        from_position: math.Vec3,
+        to_local: math.Mat4,
     };
 
     /// The camera the panel sees through: from in front of the XY plane, looking along -Z.
     pub fn view(self: *const Scene2d) eggy.camera.View {
         return .{
-            .eye = .{ self.centre[0], self.centre[1], 1000 },
-            .forward = .{ 0, 0, -1 },
-            .up = .{ 0, 1, 0 },
+            .eye = .init(self.centre.x, self.centre.y, 1000),
+            .forward = .forward,
+            .up = .up,
             .near = 0.1,
             .far = 4000,
             .projection = .orthographic,
@@ -101,7 +103,7 @@ pub const Scene2d = struct {
             .snap => self.tools.snapping = !self.tools.snapping,
             .grid => self.tools.grid = !self.tools.grid,
             .frame_origin => {
-                self.centre = .{ 0, 0 };
+                self.centre = .zero;
                 self.height_m = 12;
             },
             .fold => self.tools.folded = !self.tools.folded,
@@ -141,11 +143,10 @@ pub const Scene2d = struct {
 
     /// Move the selection `steps` grid steps along x and y (onto the grid when snapping).
     /// Returns whether there was a selection with a Transform to move.
-    pub fn nudge(self: *const Scene2d, target: scene_view.Target, steps: [2]f32) bool {
+    pub fn nudge(self: *const Scene2d, target: scene_view.Target, steps: Vec2) bool {
         const entity = self.selected orelse return false;
-        const move = startMove(target, entity, .{ 0, 0 }) orelse return false;
-        const step = self.gridStep();
-        self.moveTo(target, move, .{ steps[0] * step, steps[1] * step });
+        const move = startMove(target, entity, .zero) orelse return false;
+        self.moveTo(target, move, steps.scale(self.gridStep()));
         return true;
     }
 
@@ -178,7 +179,7 @@ pub const Scene2d = struct {
             try parts.append(b.allocator, tip);
         };
         const at = self.worldAt(self.pointer);
-        const place = try std.fmt.allocPrint(b.allocator, "x {d:.2}   y {d:.2}   {d:.1} m tall", .{ at[0], at[1], self.height_m });
+        const place = try std.fmt.allocPrint(b.allocator, "x {d:.2}   y {d:.2}   {d:.1} m tall", .{ at.x, at.y, self.height_m });
         const label = try b.node(0, .{ .padding = .{ .left = 8, .right = 8, .top = 3, .bottom = 3 }, .z_index = 20 }, .{ .surface = .popover }, &.{
             try b.node(0, .{}, .{ .text = .{ .value = place, .size = 12, .tone = .muted } }, &.{}),
         });
@@ -274,14 +275,13 @@ pub const Scene2d = struct {
     pub fn steer(self: *Scene2d, pad: eggy.input.ControllerState, seconds: f32) void {
         const stick = scene_view.deadZone(pad.left_stick);
         const speed = self.height_m * seconds * (if (pad.buttons.contains(.left_shoulder)) @as(f32, 3) else 1);
-        self.centre[0] += stick[0] * speed;
-        self.centre[1] -= stick[1] * speed;
+        self.centre = self.centre.add(stick.mul(.init(1, -1)).scale(speed));
         const zoom_in = pad.triggers[1] - pad.triggers[0];
         if (@abs(zoom_in) > 0.15) self.height_m = std.math.clamp(self.height_m * @exp(-zoom_in * 1.5 * seconds), 0.25, 5000);
     }
 
     /// Centre on `centre`, zoomed to show `radius` around it.
-    pub fn frame(self: *Scene2d, centre: [2]f32, radius: f32) void {
+    pub fn frame(self: *Scene2d, centre: Vec2, radius: f32) void {
         self.centre = centre;
         self.height_m = std.math.clamp(radius * 4, 0.25, 5000);
     }
@@ -291,15 +291,13 @@ pub const Scene2d = struct {
         const before = self.worldAt(at);
         self.height_m = std.math.clamp(self.height_m * @exp(-notches * 0.12), 0.25, 5000);
         const after = self.worldAt(at);
-        self.centre[0] += before[0] - after[0];
-        self.centre[1] += before[1] - after[1];
+        self.centre = self.centre.add(before.sub(after));
     }
 
     /// Drag the world `dx`, `dy` points with the pointer.
     fn panBy(self: *Scene2d, dx: f32, dy: f32) void {
         const metres_per_px = self.height_m / @max(1, self.area.h);
-        self.centre[0] -= dx * metres_per_px;
-        self.centre[1] += dy * metres_per_px;
+        self.centre = self.centre.add(Vec2.init(-dx, dy).scale(metres_per_px));
     }
 
     fn metresPerPx(self: *const Scene2d) f32 {
@@ -307,23 +305,22 @@ pub const Scene2d = struct {
     }
 
     /// Where on the panel the world point `world` (on the XY plane) is.
-    fn screenAt(self: *const Scene2d, world: [2]f32) ui.Vec2 {
+    fn screenAt(self: *const Scene2d, world: Vec2) ui.Vec2 {
         const px_per_metre = 1 / self.metresPerPx();
         return .{
-            .x = self.area.x + self.area.w / 2 + (world[0] - self.centre[0]) * px_per_metre,
-            .y = self.area.y + self.area.h / 2 - (world[1] - self.centre[1]) * px_per_metre,
+            .x = self.area.x + self.area.w / 2 + (world.x - self.centre.x) * px_per_metre,
+            .y = self.area.y + self.area.h / 2 - (world.y - self.centre.y) * px_per_metre,
         };
     }
 
     /// The world point `world` in the brush's tilemap's own space (tiles, y up from its top
     /// edge); null without a tilemap drawn here.
-    fn mapPoint(self: *const Scene2d, world: [2]f32) ?[2]f32 {
+    fn mapPoint(self: *const Scene2d, world: Vec2) ?Vec2 {
         const entity = (self.brush.target orelse return null).entity;
         for (self.drawn) |drawable| {
             if (drawable.entity_id != entity.id or drawable.entity_generation != entity.generation) continue;
-            const to_local = eggy.transform.invert(drawable.model) orelse return null;
-            const local = eggy.transform.apply(to_local, .{ world[0], world[1], drawable.model[3][2] }, 1);
-            return .{ local[0], local[1] };
+            const to_local = math.inverse4x4(f32, math.fromArray(f32, 4, 4, drawable.model)) orelse return null;
+            return math.transformPoint4x4(f32, to_local, .init(world.x, world.y, drawable.model[3][2])).xy();
         }
         return null;
     }
@@ -349,13 +346,13 @@ pub const Scene2d = struct {
     }
 
     /// The world point (on the XY plane) under `at` on the panel.
-    fn worldAt(self: *const Scene2d, at: ui.Vec2) [2]f32 {
+    fn worldAt(self: *const Scene2d, at: ui.Vec2) Vec2 {
         if (self.area.h <= 0) return self.centre;
         const metres_per_px = self.height_m / self.area.h;
-        return .{
-            self.centre[0] + (at.x - (self.area.x + self.area.w / 2)) * metres_per_px,
-            self.centre[1] - (at.y - (self.area.y + self.area.h / 2)) * metres_per_px,
-        };
+        return .init(
+            self.centre.x + (at.x - (self.area.x + self.area.w / 2)) * metres_per_px,
+            self.centre.y - (at.y - (self.area.y + self.area.h / 2)) * metres_per_px,
+        );
     }
 
     /// The grid's spacing at this zoom, in metres.
@@ -367,38 +364,38 @@ pub const Scene2d = struct {
 
     /// Move the entity `move` holds by how far the pointer went (now at `world`), in its
     /// parent's space, onto the grid when snapping.
-    fn moveTo(self: *const Scene2d, target: scene_view.Target, move: Move, world: [2]f32) void {
+    fn moveTo(self: *const Scene2d, target: scene_view.Target, move: Move, world: Vec2) void {
         const component = target.game.builtinComponent("Transform") orelse return;
-        const along = eggy.transform.apply(move.to_local, .{ world[0] - move.from_world[0], world[1] - move.from_world[1], 0 }, 0);
-        var position = move.from_position;
-        for (&position, along) |*value, delta| value.* += delta;
+        const moved = world.sub(move.from_world);
+        var position = move.from_position.add(math.transformDirection4x4(f32, move.to_local, .init(moved.x, moved.y, 0)));
         if (self.snapping()) {
             const step = self.gridStep();
-            for (position[0..2]) |*value| value.* = @round(value.* / step) * step;
+            position.x = @round(position.x / step) * step;
+            position.y = @round(position.y / step) * step;
         }
         var text: [160]u8 = undefined;
-        const zon = std.fmt.bufPrintSentinel(&text, ".{{ {d}, {d}, {d} }}", .{ position[0], position[1], position[2] }, 0) catch return;
+        const zon = std.fmt.bufPrintSentinel(&text, ".{{ {d}, {d}, {d} }}", .{ position.x, position.y, position.z }, 0) catch return;
         _ = target.game.writeField(target.app, move.entity, component, 0, zon);
     }
 };
 
 /// Begin dragging `entity`, the pointer at `world`: read where it is, and how world moves map
 /// into its parent's space. Null when it has no Transform to move.
-fn startMove(target: scene_view.Target, entity: eggy.ecs.EntityId, world: [2]f32) ?Scene2d.Move {
+fn startMove(target: scene_view.Target, entity: eggy.ecs.EntityId, world: Vec2) ?Scene2d.Move {
     const component = target.game.builtinComponent("Transform") orelse return null;
     var buffer: [160]u8 = undefined;
     const text = target.game.readField(target.app, entity, component, 0, &buffer) orelse return null;
     const position = scene_view.parseVector(text) orelse return null;
-    var to_local = [4][4]f32{ .{ 1, 0, 0, 0 }, .{ 0, 1, 0, 0 }, .{ 0, 0, 1, 0 }, .{ 0, 0, 0, 1 } };
+    var to_local = math.identity(f32, 4);
     if (target.app.world.getParent(entity)) |parent| if (target.game.worldMatrix(target.app, parent)) |placed| {
-        to_local = eggy.transform.invert(placed) orelse return null;
+        to_local = math.inverse4x4(f32, placed) orelse return null;
     };
     return .{ .entity = entity, .from_world = world, .from_position = position, .to_local = to_local };
 }
 
 /// Take `handle` of `entity`'s `box` with the pointer at `world`: read its rotation and scale.
 /// Null when it has no Transform.
-fn startReshape(target: scene_view.Target, entity: eggy.ecs.EntityId, handle: handles.Handle, box: handles.Box, world: [2]f32) ?Scene2d.Reshape {
+fn startReshape(target: scene_view.Target, entity: eggy.ecs.EntityId, handle: handles.Handle, box: handles.Box, world: Vec2) ?Scene2d.Reshape {
     const component = target.game.builtinComponent("Transform") orelse return null;
     var buffer: [160]u8 = undefined;
     const rotation_deg = scene_view.parseVector(target.game.readField(target.app, entity, component, 1, &buffer) orelse return null) orelse return null;
@@ -407,14 +404,14 @@ fn startReshape(target: scene_view.Target, entity: eggy.ecs.EntityId, handle: ha
 }
 
 /// Write what dragging `reshape`'s handle to `world` makes of its entity's rotation or scale.
-fn reshapeTo(target: scene_view.Target, reshape: Scene2d.Reshape, world: [2]f32, uniform: bool, snap: bool) void {
+fn reshapeTo(target: scene_view.Target, reshape: Scene2d.Reshape, world: Vec2, uniform: bool, snap: bool) void {
     const component = target.game.builtinComponent("Transform") orelse return;
     const field: usize, const value = switch (reshape.drag.apply(world, uniform, snap)) {
         .rotation_deg => |v| .{ 1, v },
         .scale => |v| .{ 2, v },
     };
     var text: [160]u8 = undefined;
-    const zon = std.fmt.bufPrintSentinel(&text, ".{{ {d}, {d}, {d} }}", .{ value[0], value[1], value[2] }, 0) catch return;
+    const zon = std.fmt.bufPrintSentinel(&text, ".{{ {d}, {d}, {d} }}", .{ value.x, value.y, value.z }, 0) catch return;
     _ = target.game.writeField(target.app, reshape.entity, component, field, zon);
 }
 
@@ -428,7 +425,7 @@ fn drawHandles(self: *const Scene2d, c: *ui.Canvas) !void {
     for (&corners, box.corners()) |*at, world| at.* = self.screenAt(world);
     for (corners, 0..) |from, i| try line(c, from, corners[(i + 1) % 4], 1.5, accent);
     if (shown.knob) {
-        const top = self.screenAt(.{ (box.corners()[2][0] + box.corners()[3][0]) / 2, (box.corners()[2][1] + box.corners()[3][1]) / 2 });
+        const top = self.screenAt(box.corners()[2].lerp(box.corners()[3], 0.5));
         const knob = self.screenAt(box.knob(self.metresPerPx()));
         try line(c, top, knob, 1.5, accent);
         try c.roundRect(.{ .x = knob.x - 6, .y = knob.y - 6, .w = 12, .h = 12 }, accent, 6);
@@ -468,8 +465,8 @@ fn drawViewport(context: *const anyopaque, c: *ui.Canvas, r: ui.Rect) anyerror!v
     if (self.tools.grid) {
         const step = self.gridStep();
         const px_per_metre = r.h / self.height_m;
-        const left = self.centre[0] - r.w / 2 / px_per_metre;
-        const top = self.centre[1] + r.h / 2 / px_per_metre;
+        const left = self.centre.x - r.w / 2 / px_per_metre;
+        const top = self.centre.y + r.h / 2 / px_per_metre;
         var x = @ceil(left / step) * step;
         while ((x - left) * px_per_metre <= r.w) : (x += step) {
             const at = r.x + (x - left) * px_per_metre;
@@ -497,16 +494,16 @@ test "zooming keeps the point under the pointer still" {
     view.zoomAbout(pointer, 2);
     try std.testing.expect(view.height_m < 12);
     const after = view.worldAt(pointer);
-    try std.testing.expectApproxEqAbs(before[0], after[0], 1e-4);
-    try std.testing.expectApproxEqAbs(before[1], after[1], 1e-4);
+    try std.testing.expectApproxEqAbs(before.x, after.x, 1e-4);
+    try std.testing.expectApproxEqAbs(before.y, after.y, 1e-4);
 }
 
 test "panning drags the world with the pointer, and the grid thins out when zoomed out" {
     var view = Scene2d{ .area = .{ .x = 0, .y = 0, .w = 400, .h = 200 }, .shown = true };
     // 12 m over 200 px: 100 px right is 6 m, the world moving right under the pointer.
     view.panBy(100, 0);
-    try std.testing.expectApproxEqAbs(@as(f32, -6), view.centre[0], 1e-4);
-    try std.testing.expectApproxEqAbs(@as(f32, 0), view.worldAt(.{ .x = 300, .y = 100 })[0], 1e-4);
+    try std.testing.expectApproxEqAbs(@as(f32, -6), view.centre.x, 1e-4);
+    try std.testing.expectApproxEqAbs(@as(f32, 0), view.worldAt(.{ .x = 300, .y = 100 }).x, 1e-4);
     const near_step = view.gridStep();
     view.height_m = 400;
     try std.testing.expect(view.gridStep() > near_step);
@@ -514,14 +511,14 @@ test "panning drags the world with the pointer, and the grid thins out when zoom
 
 test "a gamepad's left stick pans a panel height a second, and the right trigger zooms in" {
     var view = Scene2d{};
-    view.steer(.{ .left_stick = .{ 1, 0 } }, 0.5);
-    view.steer(.{ .left_stick = .{ 0, -1 } }, 0.5);
-    try std.testing.expectApproxEqAbs(@as(f32, 6), view.centre[0], 1e-4);
-    try std.testing.expectApproxEqAbs(@as(f32, 6), view.centre[1], 1e-4);
+    view.steer(.{ .left_stick = .unit_x }, 0.5);
+    view.steer(.{ .left_stick = .init(0, -1) }, 0.5);
+    try std.testing.expectApproxEqAbs(@as(f32, 6), view.centre.x, 1e-4);
+    try std.testing.expectApproxEqAbs(@as(f32, 6), view.centre.y, 1e-4);
     view.steer(.{ .triggers = .{ 0, 1 } }, 1);
     try std.testing.expect(view.height_m < 12);
     const height = view.height_m;
-    view.steer(.{ .left_stick = .{ 0.1, 0 }, .triggers = .{ 0.1, 0 } }, 1);
+    view.steer(.{ .left_stick = .init(0.1, 0), .triggers = .{ 0.1, 0 } }, 1);
     try std.testing.expectEqual(height, view.height_m);
 }
 
@@ -533,7 +530,7 @@ test "a click picks the entity under the pointer through the flat view" {
     var models = eggy.model_cache.ModelCache.init(std.testing.allocator, undefined);
     var ui_scenes = eggy.ui_scenes.State{ .gpa = std.testing.allocator };
     const over = view.worldAt(.{ .x = 250, .y = 100 });
-    try std.testing.expectApproxEqAbs(@as(f32, 9), over[0], 1e-4);
+    try std.testing.expectApproxEqAbs(@as(f32, 9), over.x, 1e-4);
     try std.testing.expectEqual(@as(u32, 4), scene_view.picking.pick(&.{cube}, &models, &ui_scenes, .{}, view.view(), view.area, .{ .x = 250, .y = 100 }).?.id);
     try std.testing.expect(scene_view.picking.pick(&.{cube}, &models, &ui_scenes, .{}, view.view(), view.area, .{ .x = 100, .y = 100 }) == null);
 }

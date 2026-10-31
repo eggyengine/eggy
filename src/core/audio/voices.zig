@@ -1,5 +1,6 @@
 //! `app.audio()`: playing sound files on buses, placed in the world in 3D or unplaced.
 const std = @import("std");
+const math = @import("eggenvector");
 const AssetRef = @import("../refs.zig").AssetRef;
 const Resources = @import("../resources/resources.zig").Resources;
 const host_zig = @import("host.zig");
@@ -28,7 +29,7 @@ pub const PlayOptions = struct {
     pitch: f32 = 1,
     repeat: Repeat = .once,
     /// Where it sounds from in the world, in metres; null plays it unplaced (music, UI).
-    position_m: ?[3]f32 = null,
+    position_m: ?math.Vec3 = null,
     falloff: Falloff = .{},
     bus: Bus = .effects,
     /// How far into the sound it starts, in seconds.
@@ -52,7 +53,7 @@ pub const Audio = struct {
     /// ```zig
     /// _ = try app.audio().play(.init("resources/sounds/jump.ogg"), .{ .gain = 0.5 });
     /// // Placed in the world, so it pans and fades with the listener:
-    /// _ = try app.audio().play(.init("resources/sounds/boom.wav"), .{ .position_m = .{ 4, 0, -2 } });
+    /// _ = try app.audio().play(.init("resources/sounds/boom.wav"), .{ .position_m = .init(4, 0, -2) });
     /// ```
     pub fn play(self: Audio, sound: AssetRef(.audio), options: PlayOptions) !Voice {
         const host = self.host orelse return error.AudioUnavailable;
@@ -70,7 +71,7 @@ pub const Audio = struct {
         voice.setPitch(options.pitch);
         voice.setLooping(options.repeat == .loop);
         voice.setSpatial(options.position_m != null, falloff.min_distance_m, falloff.max_distance_m, falloff.rolloff);
-        if (options.position_m) |place| voice.setPosition(place);
+        if (options.position_m) |place| voice.setPosition(place.toArray());
         if (options.start_s > 0) voice.seekSeconds(options.start_s);
         voice.start();
         return handle;
@@ -156,12 +157,12 @@ pub const Audio = struct {
     /// ```zig
     /// try app.audio().setPosition(siren, car_position);
     /// ```
-    pub fn setPosition(self: Audio, voice: Voice, position_m: [3]f32) Error!void {
+    pub fn setPosition(self: Audio, voice: Voice, position_m: math.Vec3) Error!void {
         const host = self.host orelse return error.AudioUnavailable;
         try checkPosition(position_m);
         const playing = host.get(voice) orelse return;
         playing.setSpatialEnabled(true);
-        playing.setPosition(position_m);
+        playing.setPosition(position_m.toArray());
     }
 
     /// Set the linear gain of a whole bus, `.master` for everything.
@@ -180,12 +181,12 @@ pub const Audio = struct {
     /// so call it yourself only in scenes with neither.
     ///
     /// ```zig
-    /// try app.audio().setListener(.{ 0, 1.7, 0 }, .{ 0, 0, -1 }, .{ 0, 1, 0 });
+    /// try app.audio().setListener(.init(0, 1.7, 0), .forward, .up);
     /// ```
-    pub fn setListener(self: Audio, position_m: [3]f32, forward: [3]f32, up: [3]f32) Error!void {
+    pub fn setListener(self: Audio, position_m: math.Vec3, forward: math.Vec3, up: math.Vec3) Error!void {
         const host = self.host orelse return error.AudioUnavailable;
         inline for (.{ position_m, forward, up }) |vector| try checkPosition(vector);
-        host.mixer.setListener(&position_m, &forward, &up);
+        host.mixer.setListener(&position_m.toArray(), &forward.toArray(), &up.toArray());
     }
 
     /// Hold every sound where it is (true), as a pause menu or the editor's pause does, or let
@@ -204,8 +205,8 @@ fn checkPitch(pitch: f32) error{InvalidPitch}!void {
     if (!(pitch > 0) or !std.math.isFinite(pitch)) return error.InvalidPitch;
 }
 
-fn checkPosition(position: [3]f32) error{InvalidPosition}!void {
-    for (position) |value| if (!std.math.isFinite(value)) return error.InvalidPosition;
+fn checkPosition(position: math.Vec3) error{InvalidPosition}!void {
+    for (position.toArray()) |value| if (!std.math.isFinite(value)) return error.InvalidPosition;
 }
 
 test "sound controls fail plainly without a mixer, and reject bad values first" {
@@ -215,5 +216,5 @@ test "sound controls fail plainly without a mixer, and reject bad values first" 
     try std.testing.expect(!audio.isPlaying(@fromBackingInt(1 << 16)));
     try std.testing.expectError(error.InvalidGain, checkGain(-1));
     try std.testing.expectError(error.InvalidPitch, checkPitch(0));
-    try std.testing.expectError(error.InvalidPosition, checkPosition(.{ 0, std.math.nan(f32), 0 }));
+    try std.testing.expectError(error.InvalidPosition, checkPosition(.init(0, std.math.nan(f32), 0)));
 }

@@ -1,6 +1,7 @@
 //! Plain values shared by input snapshots and host input services.
 const std = @import("std");
 const sdl = @import("vitellus_sdl3").sdl;
+const math = @import("eggenvector");
 
 pub const Key = sdl.Scancode;
 pub const MouseButton = enum { left, middle, right, x1, x2 };
@@ -41,17 +42,17 @@ pub const ControllerState = struct {
     buttons_pressed: std.EnumSet(ControllerButton) = .empty,
     buttons_released: std.EnumSet(ControllerButton) = .empty,
     /// Sticks are normalized to -1..1, with right/down positive. No hidden dead zone.
-    left_stick: [2]f32 = .{ 0, 0 },
-    right_stick: [2]f32 = .{ 0, 0 },
+    left_stick: math.Vec2 = .zero,
+    right_stick: math.Vec2 = .zero,
     /// Left and right trigger pressures, 0..1.
     triggers: [2]f32 = .{ 0, 0 },
     rumble_supported: bool = false,
 };
 pub const Touch = struct {
     id: u64,
-    position_points: [2]f32,
+    position_points: math.Vec2,
     pressure: f32,
-    delta_points: [2]f32 = .{ 0, 0 },
+    delta_points: math.Vec2 = .zero,
     phase: enum { began, stationary, moved, ended, cancelled } = .began,
 };
 pub const TouchKey = struct { device: u64, finger: u64 };
@@ -78,7 +79,7 @@ pub const Binding = union(enum) {
     mouse_wheel: struct { scale: f32 = 1 },
 };
 pub const ControlState = struct { held: bool = false, pressed: bool = false, released: bool = false };
-pub const Value = union(Kind) { button: ControlState, axis: f32, vector: [2]f32 };
+pub const Value = union(Kind) { button: ControlState, axis: f32, vector: math.Vec2 };
 
 /// Defaults declared by a game/plugin. Project overrides use its published owner and tag name.
 /// `Controls` is the plugin's controls enum; each entry names one control, its value kind,
@@ -94,8 +95,8 @@ pub fn ControlBinding(comptime Controls: type) type {
     return struct { control: Controls, kind: Kind = .button, trigger: Trigger = .immediate, bindings: []const Binding };
 }
 
-pub const Buttons = struct { keys: KeySet, mouse: std.EnumSet(MouseButton), mouse_delta: [2]f32 = .{ 0, 0 }, wheel: f32 = 0 };
-pub const GameEvent = struct { event: sdl.events.Event, buttons: Buttons, viewport_points: [2]f32 };
+pub const Buttons = struct { keys: KeySet, mouse: std.EnumSet(MouseButton), mouse_delta: math.Vec2 = .zero, wheel: f32 = 0 };
+pub const GameEvent = struct { event: sdl.events.Event, buttons: Buttons, viewport_points: math.Vec2 };
 pub const ControlId = extern struct { type_marker: usize, tag: u64 };
 pub const ControlDefinition = struct { tag: u64, name: []const u8, kind: Kind = .button, trigger: Trigger = .immediate, bindings: []const Binding };
 pub const Registration = struct { type_marker: usize, owner: []const u8, priority: i32 = 0, enabled: bool = true, consume: bool = true, controls: []const ControlDefinition };

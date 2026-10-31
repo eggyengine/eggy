@@ -285,9 +285,9 @@ test "editor hiding removes descendant and directly hidden lights without mixing
     var state = ViewState{ .gpa = gpa };
     defer state.deinit();
     const parent = try world.spawn(.{});
-    const nested = try world.spawn(.{ eggy.Transform{ .position = .{ 2, 0, 0 } }, eggy.lighting.SceneLight{} });
-    const direct = try world.spawn(.{ eggy.Transform{ .position = .{ 4, 0, 0 } }, eggy.lighting.SceneLight{} });
-    const visible = try world.spawn(.{ eggy.Transform{ .position = .{ 9, 0, 0 } }, eggy.lighting.SceneLight{} });
+    const nested = try world.spawn(.{ eggy.Transform{ .position = .init(2, 0, 0) }, eggy.lighting.SceneLight{} });
+    const direct = try world.spawn(.{ eggy.Transform{ .position = .init(4, 0, 0) }, eggy.lighting.SceneLight{} });
+    const visible = try world.spawn(.{ eggy.Transform{ .position = .init(9, 0, 0) }, eggy.lighting.SceneLight{} });
     try world.setParent(nested, parent);
     try state.toggleCollapse(parent);
     var frame = try eggy.lighting.gather(&world);

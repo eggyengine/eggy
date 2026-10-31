@@ -6,6 +6,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 const sdl3 = @import("vitellus_sdl3").sdl;
 const ui = @import("weeoui");
+const math = @import("eggenvector");
 const api = @import("../support.zig");
 
 /// The platform the game was built for.
@@ -43,9 +44,9 @@ pub const Orientation = enum { unknown, landscape, landscape_flipped, portrait, 
 /// it, z out of it towards the player.
 pub const Motion = struct {
     /// Including gravity: about 9.8 down the y axis while held upright and still.
-    acceleration_m_s2: [3]f32,
+    acceleration_m_s2: math.Vec3,
     /// How fast it turns about each axis; zeros when the device has no gyroscope.
-    rotation_rad_s: [3]f32,
+    rotation_rad_s: math.Vec3,
 };
 
 pub const Battery = struct {
@@ -133,16 +134,17 @@ pub const Mobile = struct {
     /// and the web.
     ///
     /// ```zig
-    /// if (try app.mobile().motion()) |motion| steer = motion.acceleration_m_s2[0] / 9.8;
+    /// if (try app.mobile().motion()) |motion| steer = motion.acceleration_m_s2.x / 9.8;
     /// ```
     pub fn motion(self: Mobile) !?Motion {
         if (!is_mobile) return error.UnsupportedPlatform;
         if (!self.state.sensors_opened) openSensors(self.state);
         const accelerometer = self.state.accelerometer orelse return null;
-        var result = Motion{ .acceleration_m_s2 = undefined, .rotation_rad_s = .{ 0, 0, 0 } };
-        try accelerometer.getData(&result.acceleration_m_s2);
-        if (self.state.gyroscope) |gyroscope| try gyroscope.getData(&result.rotation_rad_s);
-        return result;
+        var acceleration: [3]f32 = undefined;
+        try accelerometer.getData(&acceleration);
+        var rotation: [3]f32 = .{ 0, 0, 0 };
+        if (self.state.gyroscope) |gyroscope| try gyroscope.getData(&rotation);
+        return .{ .acceleration_m_s2 = .fromArray(acceleration), .rotation_rad_s = .fromArray(rotation) };
     }
 
     /// The battery's charge and whether it's charging. Estimates: check now and then, not as

@@ -8,10 +8,10 @@ pub const Transform = struct {
     /// Marks it in the editor (nf-md-axis_arrow).
     pub const icon = "\u{f0d49}";
     pub const category = "Scene";
-    position: [3]f32 = .{ 0, 0, 0 },
+    position: math.Vec3 = .zero,
     /// Turns about x, then y, then z, in degrees.
-    rotation_deg: [3]f32 = .{ 0, 0, 0 },
-    scale: [3]f32 = .{ 1, 1, 1 },
+    rotation_deg: math.Vec3 = .zero,
+    scale: math.Vec3 = .one,
 
     /// The matrix taking points from the entity's space into its parent's: scaled, turned, then
     /// moved.
@@ -19,13 +19,13 @@ pub const Transform = struct {
     /// Returns the matrix by value without changing ECS storage.
     ///
     /// ```zig
-    /// const local = (Transform{ .position = .{ 0, 2, 0 } }).matrix();
+    /// const local = (Transform{ .position = .init(0, 2, 0) }).matrix();
     /// ```
     pub fn matrix(self: Transform) math.Mat4 {
-        const radians = @as(@Vector(3, f32), self.rotation_deg) * @as(@Vector(3, f32), @splat(std.math.rad_per_deg));
-        const turn = math.mul(f32, 4, 4, 4, math.mat.rotationZ4x4(f32, radians[2]), math.mul(f32, 4, 4, 4, math.mat.rotationY4x4(f32, radians[1]), math.mat.rotationX4x4(f32, radians[0])));
-        const scaled = math.mul(f32, 4, 4, 4, turn, math.mat.scaling4x4(f32, self.scale[0], self.scale[1], self.scale[2]));
-        return math.mul(f32, 4, 4, 4, math.mat.translation4x4(f32, self.position[0], self.position[1], self.position[2]), scaled);
+        const radians = self.rotation_deg.scale(std.math.rad_per_deg);
+        const turn = math.mul(f32, 4, 4, 4, math.mat.rotationZ4x4(f32, radians.z), math.mul(f32, 4, 4, 4, math.mat.rotationY4x4(f32, radians.y), math.mat.rotationX4x4(f32, radians.x)));
+        const scaled = math.mul(f32, 4, 4, 4, turn, math.mat.scaling4x4(f32, self.scale.x, self.scale.y, self.scale.z));
+        return math.mul(f32, 4, 4, 4, math.translationVec4x4(f32, self.position), scaled);
     }
 
     /// Which way it faces, in its parent's space: its -z turned by its rotation (one metre long).
@@ -33,10 +33,10 @@ pub const Transform = struct {
     /// Ignores scale and translation.
     ///
     /// ```zig
-    /// const ahead = (Transform{}).forward(); // { 0, 0, -1 }
+    /// const ahead = (Transform{}).forward(); // (0, 0, -1)
     /// ```
-    pub fn forward(self: Transform) [3]f32 {
-        return self.axis(.{ 0, 0, -1 });
+    pub fn forward(self: Transform) math.Vec3 {
+        return self.axis(.forward);
     }
 
     /// Its right, in its parent's space: its +x turned by its rotation.
@@ -45,8 +45,8 @@ pub const Transform = struct {
     /// ```zig
     /// const rightward = (Transform{}).right();
     /// ```
-    pub fn right(self: Transform) [3]f32 {
-        return self.axis(.{ 1, 0, 0 });
+    pub fn right(self: Transform) math.Vec3 {
+        return self.axis(.right);
     }
 
     /// Its up, in its parent's space: its +y turned by its rotation.
@@ -55,8 +55,8 @@ pub const Transform = struct {
     /// ```zig
     /// const upward = (Transform{}).up();
     /// ```
-    pub fn up(self: Transform) [3]f32 {
-        return self.axis(.{ 0, 1, 0 });
+    pub fn up(self: Transform) math.Vec3 {
+        return self.axis(.up);
     }
 
     /// Move it by `offset` (in its parent's space): `transform.translate(transform.forward())`
@@ -66,18 +66,16 @@ pub const Transform = struct {
     ///
     /// ```zig
     /// var transform = Transform{};
-    /// transform.translate(.{ 0, 1, 0 });
+    /// transform.translate(.init(0, 1, 0));
     /// ```
-    pub fn translate(self: *Transform, offset: [3]f32) void {
-        for (&self.position, offset) |*at, by| at.* += by;
+    pub fn translate(self: *Transform, offset: math.Vec3) void {
+        self.position = self.position.add(offset);
     }
 
     /// `direction` turned by the rotation alone.
-    fn axis(self: Transform, direction: [3]f32) [3]f32 {
+    fn axis(self: Transform, direction: math.Vec3) math.Vec3 {
         const turned = Transform{ .rotation_deg = self.rotation_deg };
-        var columns: [4][4]f32 = undefined;
-        for (&columns, turned.matrix().data) |*column, data| column.* = data;
-        return apply(columns, direction, 0);
+        return math.transformDirection4x4(f32, turned.matrix(), direction);
     }
 };
 
@@ -94,72 +92,38 @@ pub fn worldMatrix(world: *ecs.World, entity: ecs.EntityId) math.Mat4 {
     return math.mul(f32, 4, 4, 4, worldMatrix(world, parent), local);
 }
 
-/// The inverse of `m`, a transform's matrix (as columns: no projection), or null when it
-/// squashes space flat (a scale of 0).
-/// Treats determinants smaller than `1e-12` in magnitude as singular; returns by value.
+/// `m` as plain columns, for `extern` structs and GPU buffers, which can't hold `math.Mat4`'s
+/// SIMD columns. `math.fromArray(f32, 4, 4, columns)` turns them back.
 ///
 /// ```zig
-/// const world_from_local = [4][4]f32{
-///     .{ 1, 0, 0, 0 }, .{ 0, 1, 0, 0 }, .{ 0, 0, 1, 0 }, .{ 3, 0, 0, 1 },
-/// };
-/// const local_from_world = invert(world_from_local) orelse return error.SingularTransform;
+/// drawable.model = columns(worldMatrix(world, entity));
 /// ```
-pub fn invert(m: [4][4]f32) ?[4][4]f32 {
-    // The inverse of the turn-and-scale part, by cofactors.
-    const a = m[0];
-    const b = m[1];
-    const c = m[2];
-    const det = a[0] * (b[1] * c[2] - c[1] * b[2]) - b[0] * (a[1] * c[2] - c[1] * a[2]) + c[0] * (a[1] * b[2] - b[1] * a[2]);
-    if (@abs(det) < 1e-12) return null;
-    var inverse: [4][4]f32 = .{ .{ 0, 0, 0, 0 }, .{ 0, 0, 0, 0 }, .{ 0, 0, 0, 0 }, .{ 0, 0, 0, 1 } };
-    inverse[0][0] = (b[1] * c[2] - c[1] * b[2]) / det;
-    inverse[0][1] = -(a[1] * c[2] - c[1] * a[2]) / det;
-    inverse[0][2] = (a[1] * b[2] - b[1] * a[2]) / det;
-    inverse[1][0] = -(b[0] * c[2] - c[0] * b[2]) / det;
-    inverse[1][1] = (a[0] * c[2] - c[0] * a[2]) / det;
-    inverse[1][2] = -(a[0] * b[2] - b[0] * a[2]) / det;
-    inverse[2][0] = (b[0] * c[1] - c[0] * b[1]) / det;
-    inverse[2][1] = -(a[0] * c[1] - c[0] * a[1]) / det;
-    inverse[2][2] = (a[0] * b[1] - b[0] * a[1]) / det;
-    // Then undo the move, turned and scaled back.
-    for (0..3) |row| inverse[3][row] = -(inverse[0][row] * m[3][0] + inverse[1][row] * m[3][1] + inverse[2][row] * m[3][2]);
-    return inverse;
-}
-
-/// `point` taken through `m` (as columns), or as a direction (`w` 0) without its move.
-/// Use `w = 1` for positions; this affine helper does not perform perspective division.
-///
-/// ```zig
-/// const transformed = apply(world_from_local, .{ 1, 2, 3 }, 1);
-/// ```
-pub fn apply(m: [4][4]f32, point: [3]f32, w: f32) [3]f32 {
-    var out: [3]f32 = undefined;
-    for (&out, 0..) |*value, row| value.* = m[0][row] * point[0] + m[1][row] * point[1] + m[2][row] * point[2] + m[3][row] * w;
+pub fn columns(m: math.Mat4) [4][4]f32 {
+    var out: [4][4]f32 = undefined;
+    for (&out, m.data) |*column, data| column.* = data;
     return out;
 }
 
 test "a transform's inverse takes its points back" {
-    const transform = Transform{ .position = .{ 3, -1, 2 }, .rotation_deg = .{ 30, 45, 10 }, .scale = .{ 2, 0.5, 1 } };
-    var forward: [4][4]f32 = undefined;
-    for (&forward, transform.matrix().data) |*column, data| column.* = data;
-    const back = invert(forward).?;
-    const moved = apply(forward, .{ 1, 2, 3 }, 1);
-    for (apply(back, moved, 1), [_]f32{ 1, 2, 3 }) |got, want| try std.testing.expectApproxEqAbs(want, got, 0.001);
-    try std.testing.expect(invert(.{ .{ 0, 0, 0, 0 }, .{ 0, 1, 0, 0 }, .{ 0, 0, 1, 0 }, .{ 0, 0, 0, 1 } }) == null);
+    const transform = Transform{ .position = .init(3, -1, 2), .rotation_deg = .init(30, 45, 10), .scale = .init(2, 0.5, 1) };
+    const back = math.inverse4x4(f32, transform.matrix()).?;
+    const moved = math.transformPoint4x4(f32, transform.matrix(), .init(1, 2, 3));
+    try std.testing.expect(math.transformPoint4x4(f32, back, moved).approxEql(.init(1, 2, 3), 0.001));
+    try std.testing.expect(math.inverse4x4(f32, (Transform{ .scale = .init(0, 1, 1) }).matrix()) == null);
 }
 
 test "a transform scales, then turns, then moves" {
-    const transform = Transform{ .position = .{ 10, 0, 0 }, .rotation_deg = .{ 0, 0, 90 }, .scale = .{ 2, 2, 2 } };
-    const corner = math.mat.transformPoint4x4(f32, transform.matrix(), .{ .x = 1, .y = 0, .z = 0 });
+    const transform = Transform{ .position = .init(10, 0, 0), .rotation_deg = .init(0, 0, 90), .scale = .splat(2) };
+    const corner = math.transformPoint4x4(f32, transform.matrix(), .unit_x);
     try std.testing.expectApproxEqAbs(@as(f32, 10), corner.x, 0.001);
     try std.testing.expectApproxEqAbs(@as(f32, 2), corner.y, 0.001);
 }
 
 test "a transform faces down its -z, turned as it is" {
-    var transform = Transform{ .rotation_deg = .{ 0, 90, 0 } };
+    var transform = Transform{ .rotation_deg = .init(0, 90, 0) };
     // Turned a quarter left about y: it faces -x, and its right is -z.
-    for (transform.forward(), [3]f32{ -1, 0, 0 }) |got, want| try std.testing.expectApproxEqAbs(want, got, 0.001);
-    for (transform.right(), [3]f32{ 0, 0, -1 }) |got, want| try std.testing.expectApproxEqAbs(want, got, 0.001);
+    try std.testing.expect(transform.forward().approxEql(.left, 0.001));
+    try std.testing.expect(transform.right().approxEql(.forward, 0.001));
     transform.translate(transform.forward());
-    try std.testing.expectApproxEqAbs(@as(f32, -1), transform.position[0], 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, -1), transform.position.x, 0.001);
 }

@@ -1,7 +1,9 @@
 //! Directional shadow-map ownership and texel-stable camera fitting.
 const std = @import("std");
 const vit = @import("vitellus");
+const math = @import("eggenvector");
 const camera = @import("camera.zig");
+const transform = @import("transform.zig");
 const lighting = @import("lighting.zig");
 const render = @import("render_settings.zig");
 const Uniforms = @import("scene_uniforms.zig").Camera;
@@ -71,40 +73,36 @@ pub const Map = struct {
         const index = lights.options[2];
         if (settings.shadow_quality == .off or index < 0 or index >= @as(f32, @floatFromInt(lights.count))) return false;
         const light = lights.lights[@intFromFloat(index)];
-        const direction: [3]f32 = light.direction_range[0..3].*;
-        self.matrix = fitCamera(view, aspect, direction, settings.shadow_distance_m, self.resolution).viewProjection(1);
+        const direction = math.Vec3.fromArray(light.direction_range[0..3].*);
+        self.matrix = transform.columns(fitCamera(view, aspect, direction, settings.shadow_distance_m, self.resolution).viewProjection(1));
         self.params = .{ settings.shadow_bias, 1 / @as(f32, @floatFromInt(self.resolution)), index, 1 };
         return true;
     }
 };
 
-pub fn fitCamera(view: camera.View, aspect: f32, direction: [3]f32, distance_m: f32, resolution: u32) camera.View {
+pub fn fitCamera(view: camera.View, aspect: f32, direction: math.Vec3, distance_m: f32, resolution: u32) camera.View {
     const distance = @min(view.far, distance_m);
     const half_height = if (view.projection == .orthographic) view.orthographic_height_m / 2 else distance * @tan(view.fov_deg * std.math.rad_per_deg / 2);
     const radius = @max(1, @sqrt(distance * distance / 4 + half_height * half_height * (1 + aspect * aspect)));
-    var center: [3]f32 = undefined;
-    for (&center, view.eye, view.forward) |*value, eye, forward| value.* = eye + forward * distance / 2;
-    const up_hint: [3]f32 = if (@abs(direction[1]) > 0.95) .{ 0, 0, 1 } else .{ 0, 1, 0 };
-    const right = camera.normalize(camera.cross(direction, up_hint));
-    const up = camera.normalize(camera.cross(right, direction));
+    var center = view.eye.add(view.forward.scale(distance / 2));
+    const up_hint: math.Vec3 = if (@abs(direction.y) > 0.95) .unit_z else .up;
+    const right = direction.cross(up_hint).normalize();
+    const up = right.cross(direction).normalize();
     const texel_m = 2 * radius / @as(f32, @floatFromInt(resolution));
-    for ([_][3]f32{ right, up }) |axis| {
-        var coordinate: f32 = 0;
-        for (center, axis) |c, a| coordinate += c * a;
-        const shift = @round(coordinate / texel_m) * texel_m - coordinate;
-        for (&center, axis) |*c, a| c.* += a * shift;
+    for ([_]math.Vec3{ right, up }) |axis| {
+        const coordinate = center.dot(axis);
+        center = center.add(axis.scale(@round(coordinate / texel_m) * texel_m - coordinate));
     }
-    var eye: [3]f32 = undefined;
-    for (&eye, center, direction) |*value, c, d| value.* = c - d * radius * 2;
+    const eye = center.sub(direction.scale(radius * 2));
     return .{ .eye = eye, .forward = direction, .up = up, .near = 0.01, .far = radius * 4, .projection = .orthographic, .orthographic_height_m = radius * 2 };
 }
 
 test "shadow fitting remains finite for vertical lights and preserves texel stability" {
-    const first = fitCamera(camera.View.default, 16.0 / 9.0, .{ 0, -1, 0 }, 60, 2048);
-    const matrix = first.viewProjection(1);
+    const first = fitCamera(camera.View.default, 16.0 / 9.0, .down, 60, 2048);
+    const matrix = transform.columns(first.viewProjection(1));
     for (matrix) |column| for (column) |value| try std.testing.expect(std.math.isFinite(value));
     var moved = camera.View.default;
-    moved.eye[0] += 0.00001;
-    const second = fitCamera(moved, 16.0 / 9.0, .{ 0, -1, 0 }, 60, 2048);
-    try std.testing.expectApproxEqAbs(first.eye[0], second.eye[0], 0.000001);
+    moved.eye.x += 0.00001;
+    const second = fitCamera(moved, 16.0 / 9.0, .down, 60, 2048);
+    try std.testing.expectApproxEqAbs(first.eye.x, second.eye.x, 0.000001);
 }

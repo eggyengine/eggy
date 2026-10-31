@@ -8,9 +8,9 @@ Debug requests belong to one host frame. Submit them from `update` while playing
 `editorUpdate` while editing:
 
 ```zig
-try app.debug_draw.line(.{ 0, 0, 0 }, .{ 0, 2, 0 }, .{ 1, 0, 0, 1 });
-try app.debug_draw.box(.{ -1, 0, -1 }, .{ 1, 2, 1 }, .{ 0, 1, 0, 1 });
-try app.debug_draw.text(.{ 0, 2, 0 }, "Spawn point");
+try app.debug_draw.line(.zero, .init(0, 2, 0), .{ 1, 0, 0, 1 });
+try app.debug_draw.box(.init(-1, 0, -1), .init(1, 2, 1), .{ 0, 1, 0, 1 });
+try app.debug_draw.text(.init(0, 2, 0), "Spawn point");
 ```
 
 Positions are world-space metres. Lines and boxes take RGBA in 0–1. Labels copy their

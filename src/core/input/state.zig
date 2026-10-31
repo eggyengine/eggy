@@ -2,6 +2,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const types = @import("types.zig");
+const math = @import("eggenvector");
 const protocol = @import("bridge.zig");
 const config = @import("bindings.zig");
 const resolution = @import("resolution.zig");
@@ -38,7 +39,7 @@ pub const State = struct {
         trigger: types.Trigger,
         value: types.ControlState = .{},
         axis: f32 = 0,
-        vector: [2]f32 = .{ 0, 0 },
+        vector: math.Vec2 = .zero,
         physical: bool = false,
         has_press: bool = false,
         started_s: f64 = 0,
@@ -468,7 +469,7 @@ pub const State = struct {
             else => {},
         }
     }
-    fn gameEvent(self: *State, event: sdl.events.Event, viewport: [2]f32) !void {
+    fn gameEvent(self: *State, event: sdl.events.Event, viewport: math.Vec2) !void {
         switch (event) {
             .gamepad_button_down, .gamepad_button_up => |button| if (self.devices.getPtr(button.id.value)) |device| setButton(&device.game, button.button, button.down, true),
             .gamepad_axis_motion => |axis| if (self.devices.getPtr(axis.id.value)) |device| setAxis(&device.game, axis.axis, axis.value),
@@ -491,9 +492,9 @@ pub const State = struct {
             else => {},
         }
     }
-    fn touch(self: *State, event: sdl.events.Event, finger: sdl.events.TouchFinger, viewport: [2]f32) !void {
+    fn touch(self: *State, event: sdl.events.Event, finger: sdl.events.TouchFinger, viewport: math.Vec2) !void {
         const key = touchKey(finger);
-        const position = [2]f32{ finger.x * viewport[0], finger.y * viewport[1] };
+        const position = math.Vec2.init(finger.x, finger.y).mul(viewport);
         if (event == .finger_down and self.contactIndex(key) == null) {
             try self.contacts.append(self.gpa, .{ .key = key, .value = .{ .id = self.next_touch, .position_points = position, .pressure = finger.pressure } });
             self.next_touch +%= 1;
@@ -501,8 +502,7 @@ pub const State = struct {
         }
         const index = self.contactIndex(key) orelse return;
         const value = &self.contacts.items[index].value;
-        value.delta_points[0] += finger.dx * viewport[0];
-        value.delta_points[1] += finger.dy * viewport[1];
+        value.delta_points = value.delta_points.add(math.Vec2.init(finger.dx, finger.dy).mul(viewport));
         value.position_points = position;
         value.pressure = finger.pressure;
         value.phase = switch (event) {
@@ -532,7 +532,7 @@ pub const State = struct {
                 _ = self.contacts.orderedRemove(i);
             } else {
                 value.phase = .stationary;
-                value.delta_points = .{ 0, 0 };
+                value.delta_points = .zero;
                 i += 1;
             }
         }
@@ -574,15 +574,15 @@ pub fn setButton(state: *types.ControllerState, button: sdl.gamepad.Button, down
 ///
 /// ```zig
 /// var snapshot = types.ControllerState{};
-/// setAxis(&snapshot, .left_x, -32768); // left_stick[0] becomes -1.
+/// setAxis(&snapshot, .left_x, -32768); // left_stick.x becomes -1.
 /// ```
 pub fn setAxis(state: *types.ControllerState, axis: sdl.gamepad.Axis, raw: i16) void {
     const value = @as(f32, @floatFromInt(raw)) / (if (raw < 0) @as(f32, 32768) else 32767);
     switch (axis) {
-        .left_x => state.left_stick[0] = value,
-        .left_y => state.left_stick[1] = value,
-        .right_x => state.right_stick[0] = value,
-        .right_y => state.right_stick[1] = value,
+        .left_x => state.left_stick.x = value,
+        .left_y => state.left_stick.y = value,
+        .right_x => state.right_stick.x = value,
+        .right_y => state.right_stick.y = value,
         .left_trigger => state.triggers[0] = @max(0, value),
         .right_trigger => state.triggers[1] = @max(0, value),
     }

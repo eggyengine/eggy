@@ -139,6 +139,7 @@ const preferences = @import("preferences.zig");
 const components = @import("components.zig");
 const EditorContext = @import("editor_api/editor_api.zig").Context;
 const ecs = @import("clutch");
+const math = @import("eggenvector");
 const DrawContext = @import("game_ui/game_ui.zig").DrawContext;
 const ui_scenes = @import("ui_scenes/ui_scenes.zig");
 const console_commands_zig = @import("dev_console/commands.zig");
@@ -355,10 +356,10 @@ pub const SceneTool = struct {
 pub const SceneToolInput = struct {
     kind: Kind,
     /// The ray from the eye through the pointer, in world metres; `ray_direction` is unit length.
-    ray_origin_m: [3]f32,
-    ray_direction: [3]f32,
+    ray_origin_m: math.Vec3,
+    ray_direction: math.Vec3,
     /// Where the ray meets the ground (y = 0); null when it points away from it.
-    ground_m: ?[3]f32,
+    ground_m: ?math.Vec3,
     /// The entity drawn under the pointer, if any.
     entity: ?ecs.EntityId,
     shift: bool = false,
@@ -1606,9 +1607,9 @@ test "inspectors, importers and Scene tools are listed in plugin order and reach
     defer out.deinit();
     try plugins.importAsset(0, "abcd", &out.writer, undefined);
     try std.testing.expectEqualStrings(".{ .size = 4 }", out.written());
-    try plugins.sceneTool(1, .{ .kind = .press, .ray_origin_m = @splat(0), .ray_direction = .{ 0, -1, 0 }, .ground_m = null, .entity = null }, undefined);
+    try plugins.sceneTool(1, .{ .kind = .press, .ray_origin_m = .zero, .ray_direction = .down, .ground_m = null, .entity = null }, undefined);
     try std.testing.expectEqual(@as(?usize, 1), plugins.instances[1].tool);
     plugins.enabled[1] = false;
-    try std.testing.expectError(error.PluginDisabled, plugins.sceneTool(0, .{ .kind = .press, .ray_origin_m = @splat(0), .ray_direction = .{ 0, -1, 0 }, .ground_m = null, .entity = null }, undefined));
-    try std.testing.expectError(error.NoSceneTool, plugins.sceneTool(5, .{ .kind = .press, .ray_origin_m = @splat(0), .ray_direction = .{ 0, -1, 0 }, .ground_m = null, .entity = null }, undefined));
+    try std.testing.expectError(error.PluginDisabled, plugins.sceneTool(0, .{ .kind = .press, .ray_origin_m = .zero, .ray_direction = .down, .ground_m = null, .entity = null }, undefined));
+    try std.testing.expectError(error.NoSceneTool, plugins.sceneTool(5, .{ .kind = .press, .ray_origin_m = .zero, .ray_direction = .down, .ground_m = null, .entity = null }, undefined));
 }

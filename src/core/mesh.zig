@@ -476,8 +476,8 @@ test "allocated gathering includes every drawable and preserves borrowed asset i
 test "a child's mesh is drawn where its parent's transform puts it" {
     var world = ecs.World.init(std.testing.allocator);
     defer world.deinit();
-    const parent = try world.spawn(.{Transform{ .position = .{ 5, 0, 0 } }});
-    const child = try world.spawn(.{ Transform{ .position = .{ 0, 2, 0 } }, Mesh{ .shape = .sphere } });
+    const parent = try world.spawn(.{Transform{ .position = .init(5, 0, 0) }});
+    const child = try world.spawn(.{ Transform{ .position = .init(0, 2, 0) }, Mesh{ .shape = .sphere } });
     try world.setParent(child, parent);
 
     var drawn: [4]Drawable = undefined;

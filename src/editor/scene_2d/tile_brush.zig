@@ -136,14 +136,14 @@ pub const Brush = struct {
 
     /// Whether a press at the map-space point `local` (tiles, y up from the top edge) starts a
     /// stroke: painting is on and the point is on the map. Alt picks the tile there instead.
-    pub fn press(self: *Brush, env: Env, local: [2]f32, erase: bool, pick: bool) bool {
+    pub fn press(self: *Brush, env: Env, local: eggy.math.Vec2, erase: bool, pick: bool) bool {
         if (!self.painting) return false;
         const target = self.target orelse return false;
         const path = env.assets.label(env.gpa, target.mapKey());
         defer if (path.ptr != target.mapKey().ptr) env.gpa.free(path);
         const map = self.readMap(env, target.mapKey()) orelse return false;
         defer map.deinit(env.gpa);
-        const cell = map.cellAt(local[0], local[1]) orelse return false;
+        const cell = map.cellAt(local.x, local.y) orelse return false;
         if (pick) {
             const tile = map.at(cell[0], cell[1]).?.*;
             if (tile > 0) self.tile = tile - 1;
@@ -159,12 +159,12 @@ pub const Brush = struct {
     }
 
     /// Paint (or erase) the cell under `local` during a stroke, once per cell.
-    pub fn paint(self: *Brush, env: Env, local: [2]f32, erase: bool) void {
+    pub fn paint(self: *Brush, env: Env, local: eggy.math.Vec2, erase: bool) void {
         const stroke = &(self.stroke orelse return);
         const target = self.target orelse return;
         var map = self.readMap(env, target.mapKey()) orelse return;
         defer map.deinit(env.gpa);
-        const cell = map.cellAt(local[0], local[1]) orelse return;
+        const cell = map.cellAt(local.x, local.y) orelse return;
         if (stroke.last) |last| if (last[0] == cell[0] and last[1] == cell[1]) return;
         stroke.last = cell;
         const wanted: u16 = if (erase) 0 else self.tile + 1;

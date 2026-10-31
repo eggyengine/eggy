@@ -9,6 +9,8 @@ const std = @import("std");
 const builtin = @import("builtin");
 const vit = @import("vitellus");
 const ecs = @import("clutch");
+const math = @import("eggenvector");
+const transform = @import("transform.zig");
 const shaders = @import("scene_shaders");
 const mesh = @import("mesh.zig");
 const ModelCache = @import("model_cache.zig").ModelCache;
@@ -234,7 +236,7 @@ pub const MeshRenderer = struct {
     /// // Inside the compatible render pass, after prepare:
     /// try renderer.draw(scene_cmd, drawables, asset_sources, clip_from_world, .{ 1280, 720 }, selected_entities, target_is_srgb);
     /// ```
-    pub fn draw(self: *MeshRenderer, cmd: vit.CommandBuffer, drawables: []mesh.Drawable, sources: Sources, view_projection: [4][4]f32, viewport_px: [2]f32, eye: [3]f32, selected: []const ecs.EntityId, srgb: bool) !void {
+    pub fn draw(self: *MeshRenderer, cmd: vit.CommandBuffer, drawables: []mesh.Drawable, sources: Sources, view_projection: math.Mat4, viewport_px: math.Vec2, eye: math.Vec3, selected: []const ecs.EntityId, srgb: bool) !void {
         const sorted = visibleFirst(drawables, sources, view_projection);
         sources.stats.culled += drawables.len - sorted.len;
         if (sorted.len > max_drawables) return error.TooManyVisibleMeshes;
@@ -248,7 +250,7 @@ pub const MeshRenderer = struct {
         // draw; then upload them and the camera.
         std.mem.sort(mesh.Drawable, sorted, {}, drawnBefore);
         try upload(self.instances[self.slot], std.mem.sliceAsBytes(sorted));
-        const camera = CameraUniforms{ .view_projection = view_projection, .options = .{ if (srgb) 1 else 0, 0, 0, 0 }, .outline = outline_color, .outline_size = .{ viewport_px[0], viewport_px[1], outline_width_px, 0 }, .eye = .{ eye[0], eye[1], eye[2], 0 }, .light_info = .{ @floatFromInt(sources.lights.count), sources.time_s, 0, 0 }, .lights = sources.lights.lights, .ambient = sources.lights.ambient, .environment = environmentOf(sources.lights.*), .shadow_matrix = self.shadow.matrix, .shadow_params = self.shadow.params };
+        const camera = CameraUniforms{ .view_projection = transform.columns(view_projection), .options = .{ if (srgb) 1 else 0, 0, 0, 0 }, .outline = outline_color, .outline_size = .{ viewport_px.x, viewport_px.y, outline_width_px, 0 }, .eye = .{ eye.x, eye.y, eye.z, 0 }, .light_info = .{ @floatFromInt(sources.lights.count), sources.time_s, 0, 0 }, .lights = sources.lights.lights, .ambient = sources.lights.ambient, .environment = environmentOf(sources.lights.*), .shadow_matrix = self.shadow.matrix, .shadow_params = self.shadow.params };
         try upload(self.uniforms[self.slot], std.mem.asBytes(&camera));
 
         // Vitellus binds groups through the pipeline set, so the mesh pipeline goes first; surface
@@ -306,7 +308,7 @@ pub const MeshRenderer = struct {
     pub fn renderShadow(self: *MeshRenderer, cmd: vit.CommandBuffer, drawables: []mesh.Drawable, sources: Sources, view: @import("camera.zig").View, aspect: f32, settings: @import("render_settings.zig").Settings) !void {
         const enabled = self.shadow.fit(view, aspect, sources.lights, settings);
         if (!enabled and self.shadow.initialized) return;
-        const casters = if (enabled) castersFirst(visibleFirst(drawables, sources, self.shadow.matrix)) else drawables[0..0];
+        const casters = if (enabled) castersFirst(visibleFirst(drawables, sources, math.fromArray(f32, 4, 4, self.shadow.matrix))) else drawables[0..0];
         if (casters.len > max_drawables) return error.TooManyShadowMeshes;
         self.shadow.slot = (self.shadow.slot + 1) % frames_in_flight;
         const slot = self.shadow.slot;
@@ -378,7 +380,7 @@ fn castersFirst(drawables: []mesh.Drawable) []mesh.Drawable {
     return drawables[0..end];
 }
 
-fn visibleFirst(drawables: []mesh.Drawable, sources: Sources, matrix: [4][4]f32) []mesh.Drawable {
+fn visibleFirst(drawables: []mesh.Drawable, sources: Sources, matrix: math.Mat4) []mesh.Drawable {
     var end = drawables.len;
     var index: usize = 0;
     while (index < end) {
@@ -393,7 +395,7 @@ fn visibleFirst(drawables: []mesh.Drawable, sources: Sources, matrix: [4][4]f32)
             if (drawable.deformed != 0) break :block @import("bounds.zig").Bounds{ .min = drawable.bounds_min, .max = drawable.bounds_max };
             break :block @import("bounds.zig").Bounds{ .min = cached.bounds.min, .max = cached.bounds.max };
         } else @import("bounds.zig").Bounds.unit;
-        if (!drawable.material_failed and bounds.visible(@import("bounds.zig").compose(matrix, drawable.model))) {
+        if (!drawable.material_failed and bounds.visible(transform.columns(math.mul(f32, 4, 4, 4, matrix, math.fromArray(f32, 4, 4, drawable.model))))) {
             index += 1;
         } else {
             end -= 1;
@@ -412,10 +414,10 @@ test "visibility partition retains every entity for a second viewport" {
     };
     drawables[0].model[3][0] = 100;
     const sources = Sources{ .models = undefined, .textures = undefined, .materials = undefined, .shaders = undefined, .lights = undefined, .stats = undefined };
-    try std.testing.expectEqual(@as(usize, 2), visibleFirst(&drawables, sources, identity).len);
+    try std.testing.expectEqual(@as(usize, 2), visibleFirst(&drawables, sources, math.fromArray(f32, 4, 4, identity)).len);
     var other_view = identity;
     other_view[3][0] = -100;
-    const other = visibleFirst(&drawables, sources, other_view);
+    const other = visibleFirst(&drawables, sources, math.fromArray(f32, 4, 4, other_view));
     try std.testing.expectEqual(@as(usize, 1), other.len);
     try std.testing.expectEqual(@as(u32, 0), other[0].entity_id);
     var ids: u8 = 0;

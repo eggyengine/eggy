@@ -1,6 +1,7 @@
 //! Typed map declarations and binding modifier rules.
 const std = @import("std");
 const t = @import("types.zig");
+const math = @import("eggenvector");
 
 /// Reference a complete `.inmap.zon` resource while keeping typed control names in game code.
 /// Paths are project-relative resources; the stable key is independent of the file's name.
@@ -94,13 +95,12 @@ pub fn deadZone(value: f32, dead_zone: f32) f32 {
 /// Requires finite normalized components and `0 <= dead_zone < 1`; no allocation or validation.
 ///
 /// ```zig
-/// const filtered = stick(.{ 0.5, 0.0 }, 0.2);
+/// const filtered = stick(.init(0.5, 0.0), 0.2);
 /// ```
-pub fn stick(value: [2]f32, dead_zone: f32) [2]f32 {
-    const length = @sqrt(value[0] * value[0] + value[1] * value[1]);
-    if (length <= dead_zone) return .{ 0, 0 };
-    const scale = (@min(length, 1) - dead_zone) / ((1 - dead_zone) * length);
-    return .{ value[0] * scale, value[1] * scale };
+pub fn stick(value: math.Vec2, dead_zone: f32) math.Vec2 {
+    const length = value.length();
+    if (length <= dead_zone) return .zero;
+    return value.scale((@min(length, 1) - dead_zone) / ((1 - dead_zone) * length));
 }
 /// Host-only: whether a digital binding references this physical key, for source consumption.
 /// Does not test whether the key is currently held.

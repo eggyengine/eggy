@@ -52,7 +52,7 @@ pub const ThirdPersonPlayer = struct {
     /// Which way the camera faces about the world's up. Set by looking.
     yaw_deg: f32 = 0,
     /// Ground velocity along world X and Z. Set by walking.
-    velocity_m_per_s: [2]f32 = .{ 0, 0 },
+    velocity_m_per_s: eggy.math.Vec2 = .zero,
 };
 
 pub const Controls = eggy.input.Map(enum { move, look, look_stick, sprint }, .{
@@ -107,32 +107,29 @@ pub fn update(app: *eggy.App) !void {
 
         // Walk along the ground relative to the camera, speeding up and slowing down smoothly.
         const yaw_rad = player.yaw_deg * std.math.rad_per_deg;
-        const forward = [2]f32{ -@sin(yaw_rad), -@cos(yaw_rad) };
-        const right = [2]f32{ @cos(yaw_rad), -@sin(yaw_rad) };
+        const forward = eggy.math.Vec2.init(-@sin(yaw_rad), -@cos(yaw_rad));
+        const right = eggy.math.Vec2.init(@cos(yaw_rad), -@sin(yaw_rad));
         const speed = if (sprinting) player.sprint_speed_m_per_s else player.walk_speed_m_per_s;
         const ahead = -move.y;
-        const wanted = [2]f32{
-            (forward[0] * ahead + right[0] * move.x) * speed,
-            (forward[1] * ahead + right[1] * move.x) * speed,
-        };
+        const wanted = forward.scale(ahead).add(right.scale(move.x)).scale(speed);
         const blend = smoothing(player.acceleration_per_s, delta_s);
-        for (&player.velocity_m_per_s, wanted) |*velocity, target| velocity.* += (target - velocity.*) * blend;
-        body.translate(.{ player.velocity_m_per_s[0] * delta_s, 0, player.velocity_m_per_s[1] * delta_s });
+        player.velocity_m_per_s = player.velocity_m_per_s.lerp(wanted, blend);
+        body.translate(.init(player.velocity_m_per_s.x * delta_s, 0, player.velocity_m_per_s.y * delta_s));
 
         // The body turns, smoothly, toward where it walks.
-        var body_yaw_deg = body.rotation_deg[1];
+        var body_yaw_deg = body.rotation_deg.y;
         if (move.x != 0 or move.y != 0) {
-            const facing_deg = std.math.atan2(-wanted[0], -wanted[1]) * std.math.deg_per_rad;
+            const facing_deg = std.math.atan2(-wanted.x, -wanted.y) * std.math.deg_per_rad;
             body_yaw_deg = @mod(body_yaw_deg + angleBetween(body_yaw_deg, facing_deg) * smoothing(player.turn_rate_per_s, delta_s), 360);
         }
-        body.rotation_deg = .{ 0, body_yaw_deg, 0 };
+        body.rotation_deg = .init(0, body_yaw_deg, 0);
 
         // The pivot is the body's child, so it undoes the body's turn to face where you look.
         if (player.pivot.get(world)) |pivot| {
-            pivot.position = .{ 0, player.pivot_height_m, 0 };
-            pivot.rotation_deg = .{ player.pitch_deg, player.yaw_deg - body_yaw_deg, 0 };
+            pivot.position = .init(0, player.pivot_height_m, 0);
+            pivot.rotation_deg = .init(player.pitch_deg, player.yaw_deg - body_yaw_deg, 0);
         }
-        if (player.camera.get(world)) |camera| camera.position = .{ player.shoulder_offset_m, 0, player.distance_m };
+        if (player.camera.get(world)) |camera| camera.position = .init(player.shoulder_offset_m, 0, player.distance_m);
     }
 }
 
@@ -160,10 +157,10 @@ fn playerWithoutCamera(world: *ecs.World) ?ecs.EntityId {
 /// A pivot under `entity`, and the camera on the pivot.
 fn addCamera(world: *ecs.World, entity: ecs.EntityId) !void {
     const settings = world.get(entity, ThirdPersonPlayer).?.*;
-    const pivot = try world.spawn(.{eggy.Transform{ .position = .{ 0, settings.pivot_height_m, 0 } }});
+    const pivot = try world.spawn(.{eggy.Transform{ .position = .init(0, settings.pivot_height_m, 0) }});
     try world.setParent(pivot, entity);
     const camera = try world.spawn(.{
-        eggy.Transform{ .position = .{ settings.shoulder_offset_m, 0, settings.distance_m } },
+        eggy.Transform{ .position = .init(settings.shoulder_offset_m, 0, settings.distance_m) },
         eggy.Camera{ .fov_deg = settings.fov_deg },
     });
     try world.setParent(camera, pivot);
@@ -194,7 +191,7 @@ test "a player gets a pivot at its height and a camera behind it on the pivot" {
     const camera = player.camera.entity.?;
     try std.testing.expect(world.getParent(pivot).?.eql(body));
     try std.testing.expect(world.getParent(camera).?.eql(pivot));
-    try std.testing.expectEqual(@as(f32, 5), world.get(camera, eggy.Transform).?.position[2]);
+    try std.testing.expectEqual(@as(f32, 5), world.get(camera, eggy.Transform).?.position.z);
 }
 
 test "the body turns the short way round" {

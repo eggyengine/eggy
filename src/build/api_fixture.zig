@@ -31,9 +31,9 @@ const Hud = struct {
         try layer.setFont(@embedFile("api_fixture_font"));
         const player = try app.world.spawn(.{ eggy.Name.init("API Cube"), eggy.Transform{}, eggy.Mesh{} });
         try app.materials().assign(player, .{ .metallic = 0.45, .roughness = 0.25 });
-        const sun = try app.world.spawn(.{ eggy.Name.init("API Sun"), eggy.Transform{ .rotation_deg = .{ -35, 25, 0 } } });
+        const sun = try app.world.spawn(.{ eggy.Name.init("API Sun"), eggy.Transform{ .rotation_deg = .init(-35, 25, 0) } });
         try app.lighting().setLight(sun, .{ .directional = .{} });
-        _ = try app.world.spawn(.{ eggy.Camera{}, eggy.Transform{ .position = .{ 0, 2, 7 }, .rotation_deg = .{ -15, 0, 0 } } });
+        _ = try app.world.spawn(.{ eggy.Camera{}, eggy.Transform{ .position = .init(0, 2, 7), .rotation_deg = .init(-15, 0, 0) } });
         return .{ .player = .init(player) };
     }
 

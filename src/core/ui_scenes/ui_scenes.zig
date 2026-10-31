@@ -222,7 +222,7 @@ test "screens are gathered lowest layer first and billboards with their place" {
     const bottom = try world.spawn(.{UiScreen{ .scene = .init("back.ui.zon"), .layer = -1 }});
     _ = try world.spawn(.{UiScreen{ .scene = .init("hidden.ui.zon"), .visible = false }});
     _ = try world.spawn(.{UiScreen{}});
-    _ = try world.spawn(.{ UiBillboard{ .scene = .init("sign.ui.zon") }, Transform{ .position = .{ 1, 2, 3 } } });
+    _ = try world.spawn(.{ UiBillboard{ .scene = .init("sign.ui.zon") }, Transform{ .position = .init(1, 2, 3) } });
     var screens: [8]Screen = undefined;
     var signs: [8]Billboard = undefined;
     const counts = gather(&world, &screens, &signs);

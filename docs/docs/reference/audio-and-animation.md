@@ -72,7 +72,7 @@ pub fn bob(
     if (!app.world.isAlive(entity)) return error.InvalidEntity;
     const transform = app.world.get(entity, eggy.Transform) orelse return error.NoTransform;
     const phase: f32 = @floatCast(app.time.elapsed_s);
-    transform.position[1] = base_height_m + @sin(phase) * amplitude_m;
+    transform.position.y = base_height_m + @sin(phase) * amplitude_m;
     app.world.markChanged(entity, eggy.Transform);
 }
 ```

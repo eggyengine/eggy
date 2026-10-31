@@ -78,7 +78,7 @@ Use `app.time.delta_s` for movement that should follow the gameplay clock:
 
 ```zig
 const step_m = speed_m_per_s * app.time.delta_s;
-transform.translate(.{ step_m, 0, 0 });
+transform.translate(.init(step_m, 0, 0));
 ```
 
 Here `transform` is the object's transform and `speed_m_per_s` is its speed.

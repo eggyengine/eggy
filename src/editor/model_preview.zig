@@ -270,20 +270,16 @@ pub const ModelPreview = struct {
 
     /// Aim the camera at `bounds` and pose the model in the chosen clip, `time_ms` now.
     fn place(self: *ModelPreview, bounds: eggy.assets.Bounds, summary: Summary, duration_s: f32, time_ms: u64) void {
-        var centre: [3]f32 = undefined;
-        var half: [3]f32 = undefined;
-        for (&centre, &half, bounds.min, bounds.max) |*c, *h, low, high| {
-            c.* = (low + high) / 2;
-            h.* = (high - low) / 2;
-        }
-        const radius = @max(0.01, @sqrt(half[0] * half[0] + half[1] * half[1] + half[2] * half[2]));
+        const low = eggy.math.Vec3.fromArray(bounds.min);
+        const high = eggy.math.Vec3.fromArray(bounds.max);
+        const centre = low.add(high).scale(0.5);
+        const radius = @max(0.01, high.sub(low).scale(0.5).length());
         const fov_deg: f32 = 35;
         const distance = radius / @sin(fov_deg / 2 * std.math.rad_per_deg) * self.zoom;
         const yaw = self.yaw_deg * std.math.rad_per_deg;
         const pitch = self.pitch_deg * std.math.rad_per_deg;
-        const toward = [3]f32{ @sin(yaw) * @cos(pitch), -@sin(pitch), @cos(yaw) * @cos(pitch) };
-        var eye: [3]f32 = undefined;
-        for (&eye, centre, toward) |*e, c, t| e.* = c + t * distance;
+        const toward = eggy.math.Vec3.init(@sin(yaw) * @cos(pitch), -@sin(pitch), @cos(yaw) * @cos(pitch));
+        const eye = centre.add(toward.scale(distance));
         self.view = .lookingAt(eye, centre, .{ .fov_deg = fov_deg, .near = @max(0.001, (distance - radius) * 0.5), .far = distance + radius * 4 });
 
         // A model with animations always stands in the chosen one, held while paused.

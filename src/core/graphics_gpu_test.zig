@@ -10,6 +10,7 @@ const render = @import("render_settings.zig");
 const mesh = @import("mesh.zig");
 const camera = @import("camera.zig");
 const assets = @import("eggy_assets");
+const math = @import("eggenvector");
 const control = @import("graphics_control.zig");
 const identityHash = @import("storage.zig").identityHash;
 const vit = @import("vitellus");
@@ -146,13 +147,13 @@ test "GPU directional shadows darken receivers and world sprites and text reach 
         .{ .model = .{ .{ 12, 0, 0, 0 }, .{ 0, 1, 0, 0 }, .{ 0, 0, 12, 0 }, .{ 0, 0, 0, 1 } }, .color = .{ 0.8, 0.8, 0.8, 1 }, .shape = .plane, .entity_id = 1, .entity_generation = 0 },
     };
     graphics.lights.count = 1;
-    const direction = camera.normalize(.{ 0.6, -1, -0.5 });
+    const direction = math.Vec3.init(0.6, -1, -0.5).normalize();
     graphics.lights.lights[0] = .{
-        .direction_range = .{ direction[0], direction[1], direction[2], 0 },
+        .direction_range = math.Vec4.fromVec3(direction, 0).toArray(),
         .color_intensity = .{ 1, 1, 1, 7000 },
     };
     graphics.lights.options = .{ 1, 0, -1, 0 };
-    const view = camera.View.lookingAt(.{ 4, 4, 7 }, .{ 0, 0.5, 0 }, .{});
+    const view = camera.View.lookingAt(.init(4, 4, 7), .init(0, 0.5, 0), .{});
     const without = try scenePixels(gpa, &graphics, &scene, &drawables, view);
     defer gpa.free(without);
     graphics.lights.options[2] = 0;
@@ -166,20 +167,20 @@ test "GPU directional shadows darken receivers and world sprites and text reach 
 
     var world_draw = @import("draw2d.zig").Draw2d{ .gpa = gpa };
     defer world_draw.deinit();
-    try world_draw.sprite(.{ .image = .init("generated-checker.png"), .position = .{ 0, 2 }, .size = .{ 2, 1 }, .billboard = true, .tint = .{ 1, 0.1, 0.1, 1 } });
-    try world_draw.worldText("world", .{ -1, 2.5, 0 }, 0.35);
+    try world_draw.sprite(.{ .image = .init("generated-checker.png"), .position = .init(0, 2), .size = .init(2, 1), .billboard = true, .tint = .{ 1, 0.1, 0.1, 1 } });
+    try world_draw.worldText("world", .init(-1, 2.5, 0), 0.35);
     graphics.world_draw = &world_draw;
     const decorated = try scenePixels(gpa, &graphics, &scene, &drawables, view);
     defer gpa.free(decorated);
     try std.testing.expect(!std.mem.eql(u8, shadowed, decorated));
     world_draw.clear();
-    try world_draw.worldText("world", .{ -1, 2.5, 0 }, 0.35);
+    try world_draw.worldText("world", .init(-1, 2.5, 0), 0.35);
     const text_only = try scenePixels(gpa, &graphics, &scene, &drawables, view);
     defer gpa.free(text_only);
     try std.testing.expect(!std.mem.eql(u8, shadowed, text_only));
     try std.testing.expect(!std.mem.eql(u8, decorated, text_only));
     world_draw.clear();
-    try world_draw.sprite(.{ .image = .init("generated-checker.png"), .position = .{ 0, 0.5 }, .size = .{ 0.1, 0.1 }, .billboard = true });
+    try world_draw.sprite(.{ .image = .init("generated-checker.png"), .position = .init(0, 0.5), .size = .splat(0.1), .billboard = true });
     const occluded = try scenePixels(gpa, &graphics, &scene, &drawables, view);
     defer gpa.free(occluded);
     try std.testing.expectEqualSlices(u8, shadowed, occluded);
@@ -254,7 +255,7 @@ test "GPU sprite quads face the front and show only their texture region" {
     var context: u8 = 0;
     graphics.textures.loader = .{ .context = &context, .load = checker };
     // Seen flat from the front, as the 2D Scene panel sees it.
-    const view = camera.View{ .eye = .{ 0, 0, 10 }, .forward = .{ 0, 0, -1 }, .up = .{ 0, 1, 0 }, .near = 0.1, .far = 100, .projection = .orthographic, .orthographic_height_m = 2 };
+    const view = camera.View{ .eye = .init(0, 0, 10), .forward = .init(0, 0, -1), .up = .init(0, 1, 0), .near = 0.1, .far = 100, .projection = .orthographic, .orthographic_height_m = 2 };
     var quad = [_]mesh.Drawable{.{ .model = .{ .{ 1, 0, 0, 0 }, .{ 0, 1, 0, 0 }, .{ 0, 0, 1, 0 }, .{ 0, 0, 0, 1 } }, .color = @splat(1), .shape = .quad, .entity_id = 0, .entity_generation = 0, .texture_file = "checker.png", .texture_file_len = "checker.png".len, .material_params = .{ 0, 1, 1, 1 } }};
     // The checker's top-left 2x2 cell is white, the one right of it black.
     quad[0].uv_rect = .{ 0.2 / 63.0, 0.2 / 35.0, 1.8 / 63.0, 1.8 / 35.0 };
@@ -293,7 +294,7 @@ test "GPU imported skeletal morph and vertex clips pose each instance independen
         .{ .model = .{ .{ 0.5, 0, 0, 0 }, .{ 0, 0.5, 0, 0 }, .{ 0, 0, 0.5, 0 }, .{ -1.25, 0, 0, 1 } }, .color = .{ 1, 0.1, 0.1, 1 }, .shape = .cube, .entity_id = 0, .entity_generation = 0, .model_file = model_key, .model_file_len = model_key.len, .animator = &animators[0] },
         .{ .model = .{ .{ 0.5, 0, 0, 0 }, .{ 0, 0.5, 0, 0 }, .{ 0, 0, 0.5, 0 }, .{ 1.25, 0, 0, 1 } }, .color = .{ 1, 0.1, 0.1, 1 }, .shape = .cube, .entity_id = 1, .entity_generation = 0, .model_file = model_key, .model_file_len = model_key.len, .animator = &animators[1] },
     };
-    const view = camera.View.lookingAt(.{ 0, 0, 4 }, .{ 0, 0, 0 }, .{});
+    const view = camera.View.lookingAt(.init(0, 0, 4), .zero, .{});
     for ([_]u64{ 43, 44, 45 }) |clip_id| {
         animators[0].model_clip = .fromId(clip_id);
         animators[0].time_s = 0;

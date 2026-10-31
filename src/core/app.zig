@@ -219,7 +219,7 @@ pub const App = struct {
     /// ```zig
     /// const Settings = struct { mouse_sensitivity: f32 = 0.2 };
     /// const sensitivity = app.preferences(Settings).mouse_sensitivity;
-    /// transform.rotation_deg[1] += app.input.mouse_delta[0] * sensitivity;
+    /// transform.rotation_deg.y += app.input.mouse_delta.x * sensitivity;
     /// ```
     pub fn preferences(self: *const App, comptime T: type) T {
         return self.preference_values.get(T);

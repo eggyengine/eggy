@@ -9,11 +9,11 @@ game or Scene camera and are hidden by opaque geometry in front of them.
 ```zig
 try app.draw2d.sprite(.{
     .image = .init("resources/art/marker.png"),
-    .position = .{ 2, 1 },
+    .position = .init(2, 1),
     .depth_m = -3,
-    .size = .{ 1, 1 },
+    .size = .one,
 });
-try app.draw2d.worldText("Checkpoint", .{ 2, 2, -3 }, 0.3);
+try app.draw2d.worldText("Checkpoint", .init(2, 2, -3), 0.3);
 ```
 
 The sprite's position is its centre. Its default plane is world XY, with Z given by
@@ -61,22 +61,22 @@ game is paused), and pass through scene geometry because they don't collide with
 ```zig
 // A burst of sparks, all at once.
 _ = try app.particles.emit(.{
-    .position_m = .{ 0, 1, 0 },
+    .position_m = .init(0, 1, 0),
     .count = 30,
     .lifetime_s = 0.6,
-    .velocity_m_per_s = .{ 0, 3, 0 },
+    .velocity_m_per_s = .init(0, 3, 0),
     .spread_m_per_s = 2,
-    .acceleration_m_per_s2 = .{ 0, -9.8, 0 },
+    .acceleration_m_per_s2 = .init(0, -9.8, 0),
     .color = .{ 1, 0.7, 0.2, 1 },
 });
 
 // Smoke that keeps rising until stopped.
 const smoke = try app.particles.emit(.{
-    .position_m = .{ 4, 0, 0 },
+    .position_m = .init(4, 0, 0),
     .count = 0,
     .rate_per_s = 20,
     .lifetime_s = 2,
-    .velocity_m_per_s = .{ 0, 1, 0 },
+    .velocity_m_per_s = .init(0, 1, 0),
     .size_m = 0.4,
     .image = .init("resources/smoke.png"),
 });

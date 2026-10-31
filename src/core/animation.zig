@@ -7,6 +7,7 @@
 //! so playback is deterministic and a paused game holds its pose.
 const std = @import("std");
 const ecs = @import("clutch");
+const math = @import("eggenvector");
 const assets = @import("eggy_assets");
 const api = @import("support.zig");
 const refs = @import("refs.zig");
@@ -290,24 +291,26 @@ pub fn childNamed(world: *ecs.World, parent: ecs.EntityId, name: []const u8) ?ec
 
 fn read(world: *ecs.World, entity: ecs.EntityId, property: assets.clip.Property) ?[3]f32 {
     const transform = world.get(entity, Transform) orelse return null;
+    // Clips keep plain arrays (`eggy_assets` stays free of the engine's math).
     return switch (property) {
-        .position => transform.position,
-        .rotation_deg => transform.rotation_deg,
-        .scale => transform.scale,
+        .position => transform.position.toArray(),
+        .rotation_deg => transform.rotation_deg.toArray(),
+        .scale => transform.scale.toArray(),
         .morph_weight => null,
     };
 }
 
 fn write(world: *ecs.World, entity: ecs.EntityId, property: assets.clip.Property, value: [3]f32) void {
     const transform = world.get(entity, Transform) orelse return;
-    const field: *[3]f32 = switch (property) {
+    const field: *math.Vec3 = switch (property) {
         .position => &transform.position,
         .rotation_deg => &transform.rotation_deg,
         .scale => &transform.scale,
         .morph_weight => return,
     };
-    if (std.mem.eql(f32, field, &value)) return;
-    field.* = value;
+    const next = math.Vec3.fromArray(value);
+    if (field.eql(next)) return;
+    field.* = next;
     world.markChanged(entity, Transform);
 }
 
@@ -344,26 +347,26 @@ test "a clip moves the entity and a named child by the game's time, and holds wh
 
     // A half second and then another: a quarter of the way along each time, 1 and 2 metres.
     step(&scene.world, &cache, 0.5);
-    try std.testing.expectEqual(@as(f32, 1), scene.world.get(scene.root, Transform).?.position[0]);
-    try std.testing.expectEqual(@as(f32, 22.5), scene.world.get(scene.hand, Transform).?.rotation_deg[1]);
+    try std.testing.expectEqual(@as(f32, 1), scene.world.get(scene.root, Transform).?.position.x);
+    try std.testing.expectEqual(@as(f32, 22.5), scene.world.get(scene.hand, Transform).?.rotation_deg.y);
     step(&scene.world, &cache, 0.5);
-    try std.testing.expectEqual(@as(f32, 2), scene.world.get(scene.root, Transform).?.position[0]);
+    try std.testing.expectEqual(@as(f32, 2), scene.world.get(scene.root, Transform).?.position.x);
 
     // Paused, time (and so the pose) stands still however many frames pass.
     try animation.pause(scene.root);
     for (0..10) |_| step(&scene.world, &cache, 0.5);
-    try std.testing.expectEqual(@as(f32, 2), scene.world.get(scene.root, Transform).?.position[0]);
+    try std.testing.expectEqual(@as(f32, 2), scene.world.get(scene.root, Transform).?.position.x);
 
     // Seeking while paused shows that moment; unpausing and looping wraps past the end.
     try animation.seek(scene.root, 1.5);
     step(&scene.world, &cache, 0);
-    try std.testing.expectEqual(@as(f32, 3), scene.world.get(scene.root, Transform).?.position[0]);
+    try std.testing.expectEqual(@as(f32, 3), scene.world.get(scene.root, Transform).?.position.x);
     try animation.unpause(scene.root);
     step(&scene.world, &cache, 1);
-    try std.testing.expectEqual(@as(f32, 1), scene.world.get(scene.root, Transform).?.position[0]);
+    try std.testing.expectEqual(@as(f32, 1), scene.world.get(scene.root, Transform).?.position.x);
     try animation.stop(scene.root);
     step(&scene.world, &cache, 1);
-    try std.testing.expectEqual(@as(f32, 0), scene.world.get(scene.root, Transform).?.position[0]);
+    try std.testing.expectEqual(@as(f32, 0), scene.world.get(scene.root, Transform).?.position.x);
 }
 
 test "a once clip holds its last pose, and speed scales the clock" {
@@ -375,9 +378,9 @@ test "a once clip holds its last pose, and speed scales the clock" {
     const animation = Animation{ .world = &scene.world };
     try animation.play(scene.root, .{ .asset = .fromId(walk_id) }, .{ .speed = 2 });
     step(&scene.world, &cache, 0.5);
-    try std.testing.expectEqual(@as(f32, 2), scene.world.get(scene.root, Transform).?.position[0]);
+    try std.testing.expectEqual(@as(f32, 2), scene.world.get(scene.root, Transform).?.position.x);
     step(&scene.world, &cache, 5);
-    try std.testing.expectEqual(@as(f32, 4), scene.world.get(scene.root, Transform).?.position[0]);
+    try std.testing.expectEqual(@as(f32, 4), scene.world.get(scene.root, Transform).?.position.x);
 }
 
 test "blending fades from the previous clip, then ends the fade" {
@@ -391,15 +394,15 @@ test "blending fades from the previous clip, then ends the fade" {
     const animation = Animation{ .world = &scene.world };
     try animation.play(scene.root, .{ .asset = .fromId(walk_id) }, .{});
     step(&scene.world, &cache, 1);
-    try std.testing.expectEqual(@as(f32, 2), scene.world.get(scene.root, Transform).?.position[0]);
+    try std.testing.expectEqual(@as(f32, 2), scene.world.get(scene.root, Transform).?.position.x);
 
     // Halfway through a one second fade: walk is at 1.5 s (3 m), still is at 10 m, so 6.5 m.
     try animation.blendTo(scene.root, .{ .asset = .fromId(still_id) }, 1, .{});
     step(&scene.world, &cache, 0.5);
-    try std.testing.expectEqual(@as(f32, 6.5), scene.world.get(scene.root, Transform).?.position[0]);
+    try std.testing.expectEqual(@as(f32, 6.5), scene.world.get(scene.root, Transform).?.position.x);
     step(&scene.world, &cache, 0.5);
     try std.testing.expect(!scene.world.get(scene.root, Animator).?.isBlending());
-    try std.testing.expectEqual(@as(f32, 10), scene.world.get(scene.root, Transform).?.position[0]);
+    try std.testing.expectEqual(@as(f32, 10), scene.world.get(scene.root, Transform).?.position.x);
 }
 
 test "controls refuse what they can't do and change nothing" {

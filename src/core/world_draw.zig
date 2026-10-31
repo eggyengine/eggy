@@ -3,7 +3,9 @@ const std = @import("std");
 const vit = @import("vitellus");
 const ui = @import("weeoui");
 const shaders = @import("scene_shaders");
+const math = @import("eggenvector");
 const camera = @import("camera.zig");
+const transform = @import("transform.zig");
 const requests = @import("draw2d.zig");
 const texture = @import("texture_cache.zig");
 const slots = @import("weeoui_vitellus").frames_in_flight;
@@ -17,9 +19,9 @@ const Item = struct { index: usize, kind: enum { sprite, text, panel }, layer: i
 /// alpha, such as a billboard's UI scene. `origin` is its bottom-left corner; `uv_rect` is
 /// {left, top, right, bottom}. Panels sort with sprites and text, back to front.
 pub const Panel = struct {
-    origin: [3]f32,
-    across: [3]f32,
-    upward: [3]f32,
+    origin: math.Vec3,
+    across: math.Vec3,
+    upward: math.Vec3,
     uv_rect: [4]f32,
     group: vit.BindGroup,
 };
@@ -113,19 +115,18 @@ pub const Renderer = struct {
         const source = requests_for_frame orelse &empty;
         for (source.sprites.items, 0..) |request, i| {
             const sprite = request.value;
-            try self.items.append(self.gpa, .{ .index = i, .kind = .sprite, .layer = sprite.layer, .distance2 = distance2(view.eye, .{ sprite.position[0], sprite.position[1], sprite.depth_m }), .order = request.order });
+            try self.items.append(self.gpa, .{ .index = i, .kind = .sprite, .layer = sprite.layer, .distance2 = view.eye.distanceSquared(.init(sprite.position.x, sprite.position.y, sprite.depth_m)), .order = request.order });
         }
         for (source.labels.items, 0..) |label, i| {
-            try self.items.append(self.gpa, .{ .index = i, .kind = .text, .layer = 0, .distance2 = distance2(view.eye, label.position_m), .order = label.order });
+            try self.items.append(self.gpa, .{ .index = i, .kind = .text, .layer = 0, .distance2 = view.eye.distanceSquared(label.position_m), .order = label.order });
         }
         for (panels, 0..) |panel, i| {
-            var centre: [3]f32 = undefined;
-            for (&centre, panel.origin, panel.across, panel.upward) |*c, o, a, u| c.* = o + (a + u) / 2;
-            try self.items.append(self.gpa, .{ .index = i, .kind = .panel, .layer = 0, .distance2 = distance2(view.eye, centre), .order = source.sprites.items.len + source.labels.items.len + i });
+            const centre = panel.origin.add(panel.across.add(panel.upward).scale(0.5));
+            try self.items.append(self.gpa, .{ .index = i, .kind = .panel, .layer = 0, .distance2 = view.eye.distanceSquared(centre), .order = source.sprites.items.len + source.labels.items.len + i });
         }
         std.mem.sort(Item, self.items.items, {}, before);
-        const right = camera.normalize(camera.cross(view.forward, view.up));
-        const up = camera.normalize(camera.cross(right, view.forward));
+        const right = view.forward.cross(view.up).normalize();
+        const up = right.cross(view.forward).normalize();
         for (self.items.items) |item| switch (item.kind) {
             .text => try self.appendText(source.labels.items[item.index], right, up),
             .panel => {
@@ -137,16 +138,12 @@ pub const Renderer = struct {
                 // No image is plain white, tinted.
                 const paint = if (sprite.image.len == 0) textures.white else textures.get(sprite.image.key()) orelse return error.SpriteTextureUnavailable;
                 const angle = sprite.rotation_deg * std.math.rad_per_deg;
-                const x_axis: [3]f32 = if (sprite.billboard) right else .{ 1, 0, 0 };
-                const y_axis: [3]f32 = if (sprite.billboard) up else .{ 0, 1, 0 };
-                var across: [3]f32 = undefined;
-                var upward: [3]f32 = undefined;
-                for (&across, &upward, x_axis, y_axis) |*a, *u, x, y| {
-                    a.* = (x * @cos(angle) + y * @sin(angle)) * sprite.size[0];
-                    u.* = (y * @cos(angle) - x * @sin(angle)) * sprite.size[1];
-                }
-                var origin = [3]f32{ sprite.position[0], sprite.position[1], sprite.depth_m };
-                for (&origin, across, upward) |*o, a, u| o.* -= (a + u) / 2;
+                const x_axis: math.Vec3 = if (sprite.billboard) right else .right;
+                const y_axis: math.Vec3 = if (sprite.billboard) up else .up;
+                const across = x_axis.scale(@cos(angle)).add(y_axis.scale(@sin(angle))).scale(sprite.size.x);
+                const upward = y_axis.scale(@cos(angle)).sub(x_axis.scale(@sin(angle))).scale(sprite.size.y);
+                const centre = math.Vec3.init(sprite.position.x, sprite.position.y, sprite.depth_m);
+                const origin = centre.sub(across.add(upward).scale(0.5));
                 try self.quad(origin, across, upward, sprite.uv_rect, sprite.tint, paint.group, 0);
             },
         };
@@ -173,7 +170,7 @@ pub const Renderer = struct {
             self.capacities[self.slot] = bytes.len;
         }
         try upload(self.buffers[self.slot].?, bytes);
-        const uniforms = Uniforms{ .matrix = view.viewProjection(aspect), .options = .{ if (srgb) 1 else 0, 0, 0, 0 } };
+        const uniforms = Uniforms{ .matrix = transform.columns(view.viewProjection(aspect)), .options = .{ if (srgb) 1 else 0, 0, 0, 0 } };
         try upload(self.uniforms[self.slot], std.mem.asBytes(&uniforms));
     }
 
@@ -191,7 +188,7 @@ pub const Renderer = struct {
         return self.batches.items.len;
     }
 
-    fn appendText(self: *Renderer, text: requests.Text, right: [3]f32, up: [3]f32) !void {
+    fn appendText(self: *Renderer, text: requests.Text, right: math.Vec3, up: math.Vec3) !void {
         if (self.font == null) {
             const font = try self.gpa.create(ui.Font);
             errdefer self.gpa.destroy(font);
@@ -213,14 +210,11 @@ pub const Renderer = struct {
             }
             const glyph = font.next(strike, text.value, &index);
             if (glyph.w != 0 and glyph.h != 0) {
-                var origin = text.position_m;
-                var across: [3]f32 = undefined;
-                var upward: [3]f32 = undefined;
-                for (&origin, &across, &upward, right, up) |*o, *a, *u, r, v| {
-                    o.* += r * (x + @as(f32, @floatFromInt(glyph.left)) * scale) + v * (y + (@as(f32, @floatFromInt(glyph.top)) - @as(f32, @floatFromInt(glyph.h))) * scale);
-                    a.* = r * @as(f32, @floatFromInt(glyph.w)) * scale;
-                    u.* = v * @as(f32, @floatFromInt(glyph.h)) * scale;
-                }
+                const origin = text.position_m
+                    .add(right.scale(x + @as(f32, @floatFromInt(glyph.left)) * scale))
+                    .add(up.scale(y + (@as(f32, @floatFromInt(glyph.top)) - @as(f32, @floatFromInt(glyph.h))) * scale));
+                const across = right.scale(@as(f32, @floatFromInt(glyph.w)) * scale);
+                const upward = up.scale(@as(f32, @floatFromInt(glyph.h)) * scale);
                 try self.quad(origin, across, upward, .{
                     @as(f32, @floatFromInt(glyph.x)) / ui.atlas_width,
                     @as(f32, @floatFromInt(glyph.y)) / ui.atlas_height,
@@ -232,13 +226,12 @@ pub const Renderer = struct {
         }
     }
 
-    fn quad(self: *Renderer, origin: [3]f32, across: [3]f32, upward: [3]f32, uv: [4]f32, tint: [4]f32, group: ?vit.BindGroup, premultiplied: f32) !void {
+    fn quad(self: *Renderer, origin: math.Vec3, across: math.Vec3, upward: math.Vec3, uv: [4]f32, tint: [4]f32, group: ?vit.BindGroup, premultiplied: f32) !void {
         const first = std.math.cast(u32, self.vertices.items.len) orelse return error.TooManySpriteVertices;
         try self.batches.append(self.gpa, .{ .first = first, .group = group });
         for ([_][2]f32{ .{ 0, 0 }, .{ 1, 0 }, .{ 1, 1 }, .{ 1, 1 }, .{ 0, 1 }, .{ 0, 0 } }) |corner| {
-            var point: [3]f32 = undefined;
-            for (&point, origin, across, upward) |*p, o, a, u| p.* = o + a * corner[0] + u * corner[1];
-            try self.vertices.append(self.gpa, .{ .position = point, .uv = .{ uv[0] + (uv[2] - uv[0]) * corner[0], uv[3] + (uv[1] - uv[3]) * corner[1] }, .tint = tint, .premultiplied = premultiplied });
+            const point = origin.add(across.scale(corner[0])).add(upward.scale(corner[1]));
+            try self.vertices.append(self.gpa, .{ .position = point.toArray(), .uv = .{ uv[0] + (uv[2] - uv[0]) * corner[0], uv[3] + (uv[1] - uv[3]) * corner[1] }, .tint = tint, .premultiplied = premultiplied });
         }
     }
 };
@@ -247,12 +240,6 @@ fn upload(buffer: vit.Buffer, bytes: []const u8) !void {
     const mapped = try buffer.map(.write, .{ .size = bytes.len });
     @memcpy(mapped[0..bytes.len], bytes);
     buffer.unmap(.{ .size = bytes.len });
-}
-
-fn distance2(a: [3]f32, b: [3]f32) f32 {
-    var result: f32 = 0;
-    for (a, b) |x, y| result += (x - y) * (x - y);
-    return result;
 }
 
 fn before(_: void, a: Item, b: Item) bool {

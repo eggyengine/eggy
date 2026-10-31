@@ -54,9 +54,9 @@ fn lensOf(game: *const HotGame, app: *eggy.App, entity: eggy.ecs.EntityId, compo
     const placed = game.worldMatrix(app, entity) orelse return null;
     var lens = Lens{
         .view = .{
-            .eye = .{ placed[3][0], placed[3][1], placed[3][2] },
-            .forward = eggy.camera.normalize(.{ -placed[2][0], -placed[2][1], -placed[2][2] }),
-            .up = eggy.camera.normalize(.{ placed[1][0], placed[1][1], placed[1][2] }),
+            .eye = eggy.math.transformPoint4x4(f32, placed, .zero),
+            .forward = eggy.math.transformDirection4x4(f32, placed, .forward).normalize(),
+            .up = eggy.math.transformDirection4x4(f32, placed, .up).normalize(),
         },
         .active = true,
         .priority = 0,
@@ -126,7 +126,7 @@ pub fn steer(game: *const HotGame, app: *eggy.App, entity: eggy.ecs.EntityId, ca
     var buffer: [160]u8 = undefined;
     // A camera looks down its -z: turning it by the scene camera's pitch about x, then its yaw
     // about y, points it the same way.
-    const position = std.fmt.bufPrintSentinel(&buffer, ".{{ {d}, {d}, {d} }}", .{ view.eye[0], view.eye[1], view.eye[2] }, 0) catch return;
+    const position = std.fmt.bufPrintSentinel(&buffer, ".{{ {d}, {d}, {d} }}", .{ view.eye.x, view.eye.y, view.eye.z }, 0) catch return;
     _ = game.writeField(app, entity, component, 0, position);
     const rotation = std.fmt.bufPrintSentinel(&buffer, ".{{ {d}, {d}, 0 }}", .{ camera.pitch_deg, camera.yaw_deg }, 0) catch return;
     _ = game.writeField(app, entity, component, 1, rotation);
@@ -138,13 +138,11 @@ fn parseNumber(text: []const u8) ?f32 {
 
 test "a camera turned by the scene camera's pitch and yaw looks where it looks" {
     var camera = SceneCamera{ .yaw_deg = 30, .pitch_deg = -20 };
-    const transform = eggy.Transform{ .rotation_deg = .{ camera.pitch_deg, camera.yaw_deg, 0 } };
-    const placed = transform.matrix().data;
-    const forward = eggy.camera.normalize(.{ -placed[2][0], -placed[2][1], -placed[2][2] });
+    const transform = eggy.Transform{ .rotation_deg = .init(camera.pitch_deg, camera.yaw_deg, 0) };
     const expected = camera.view().forward;
-    for (forward, expected) |got, want| try std.testing.expectApproxEqAbs(want, got, 0.001);
-    camera.place(.{ .eye = .{ 1, 2, 3 }, .forward = expected, .up = .{ 0, 1, 0 } });
+    try std.testing.expect(transform.forward().approxEql(expected, 0.001));
+    camera.place(.{ .eye = .init(1, 2, 3), .forward = expected, .up = .up });
     try std.testing.expectApproxEqAbs(@as(f32, 30), camera.yaw_deg, 0.01);
     try std.testing.expectApproxEqAbs(@as(f32, -20), camera.pitch_deg, 0.01);
-    for (camera.view().eye, [3]f32{ 1, 2, 3 }) |got, want| try std.testing.expectApproxEqAbs(want, got, 0.001);
+    try std.testing.expect(camera.view().eye.approxEql(.init(1, 2, 3), 0.001));
 }

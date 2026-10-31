@@ -16,11 +16,11 @@ spawning it:
 ```zig
 const cube = try app.world.spawn(.{
     eggy.Name.init("Cube"),
-    eggy.Transform{ .position = .{ 0, 0.5, 0 } },
+    eggy.Transform{ .position = .init(0, 0.5, 0) },
     eggy.Mesh{ .shape = .cube, .color = .{ 1, 0.55, 0.1 } },
 });
 const camera = try app.world.spawn(.{
-    eggy.Transform{ .position = .{ 0, 2, 7 }, .rotation_deg = .{ -15, 0, 0 } },
+    eggy.Transform{ .position = .init(0, 2, 7), .rotation_deg = .init(-15, 0, 0) },
     eggy.Camera{ .fov_deg = 60, .near = 0.1, .far = 1000 },
 });
 ```
@@ -36,13 +36,14 @@ translates. Forward is -Z, right is +X, and up is +Y.
 
 ```zig
 transform.translate(transform.forward());
-transform.rotation_deg[1] += turn_deg_per_s * app.time.delta_s;
+transform.rotation_deg.y += turn_deg_per_s * app.time.delta_s;
 ```
 
 Use `forward`, `right`, and `up` for directions in the parent's space. They use the
 entity's rotation without traversing parents.
 `eggy.transform.worldMatrix(&app.world, entity)` composes the full parent chain.
-`eggy.math` exposes the existing vector/matrix operations directly.
+Positions, rotations, scales and directions are `eggy.math.Vec3`s, and matrices `eggy.math.Mat4`s,
+so `add`, `scale`, `dot`, `cross`, `normalize` and the rest work on them directly.
 
 An entity without a Transform contributes an identity local matrix. A zero scale makes
 the transform singular; inverse conversion can fail. Keep units in your own field names,
@@ -69,7 +70,7 @@ Resolve it each time it is needed:
 
 ```zig
 const target = follow.target.get(&app.world) orelse return;
-target.position[1] += app.time.delta_s;
+target.position.y += app.time.delta_s;
 app.world.markChanged(follow.target.entity.?, eggy.Transform);
 ```
 

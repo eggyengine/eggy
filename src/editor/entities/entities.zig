@@ -449,9 +449,9 @@ pub const EntityEditor = struct {
     ///
     /// ```zig
     /// // Given entities, App/optional HotGame pointers and a model's reference:
-    /// const made = entities.spawnFrom(app, game, Reference.of(id, .model, "ship.glb"), .{ 0, 0, 0 }, null);
+    /// const made = entities.spawnFrom(app, game, Reference.of(id, .model, "ship.glb"), .zero, null);
     /// ```
-    pub fn spawnFrom(self: *EntityEditor, app: *eggy.App, game: ?*const HotGame, asset: Reference, position: [3]f32, parent: ?ecs.EntityId) bool {
+    pub fn spawnFrom(self: *EntityEditor, app: *eggy.App, game: ?*const HotGame, asset: Reference, position: eggy.math.Vec3, parent: ?ecs.EntityId) bool {
         const loaded = game orelse return false;
         const component = loaded.builtinComponent(switch (asset.kind) {
             .model => "Mesh",
@@ -479,7 +479,7 @@ pub const EntityEditor = struct {
         } else 0;
         _ = loaded.addComponent(app, entity, component);
         _ = loaded.writeField(app, entity, component, field, field_text catch return false);
-        const position_text = std.fmt.bufPrintSentinel(&buffer, ".{{ {d}, {d}, {d} }}", .{ position[0], position[1], position[2] }, 0) catch unreachable;
+        const position_text = std.fmt.bufPrintSentinel(&buffer, ".{{ {d}, {d}, {d} }}", .{ position.x, position.y, position.z }, 0) catch unreachable;
         _ = loaded.writeField(app, entity, transform, 0, position_text);
         self.selected = entity;
         return true;

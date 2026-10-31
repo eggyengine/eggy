@@ -17,16 +17,11 @@ pub fn shinesAlongDirection(kind_zon: []const u8) bool {
     return std.mem.eql(u8, kind_zon, ".directional") or std.mem.eql(u8, kind_zon, ".spot");
 }
 
-/// The arrow for a light placed by `placed` (its world matrix, as columns), sized and projected
+/// The arrow for a light placed by `placed` (its world matrix), sized and projected
 /// like `handles`; null when the light's end is behind the camera.
-pub fn arrow(handles: gizmo.Layout, placed: [4][4]f32) ?Arrow {
-    const shine = eggy.camera.normalize(.{ -placed[2][0], -placed[2][1], -placed[2][2] });
-    const length = handles.world_length * arrow_lengths;
-    const tip_world = [3]f32{
-        handles.origin_world[0] + shine[0] * length,
-        handles.origin_world[1] + shine[1] * length,
-        handles.origin_world[2] + shine[2] * length,
-    };
+pub fn arrow(handles: gizmo.Layout, placed: eggy.math.Mat4) ?Arrow {
+    const shine = eggy.math.transformDirection4x4(f32, placed, .forward).normalize();
+    const tip_world = handles.origin_world.add(shine.scale(handles.world_length * arrow_lengths));
     const projected = eggy.camera.project(handles.view.viewProjection(handles.scene.w / handles.scene.h), tip_world);
     if (!projected.in_front) return null;
     const scene = handles.scene;
@@ -73,10 +68,10 @@ test "only directional and spot lights get an arrow" {
 }
 
 test "an unrotated light's arrow runs along the world's -Z" {
-    const identity = [4][4]f32{ .{ 1, 0, 0, 0 }, .{ 0, 1, 0, 0 }, .{ 0, 0, 1, 0 }, .{ 0, 0, 0, 1 } };
+    const identity = eggy.math.identity(f32, 4);
     const scene = ui.Rect{ .x = 0, .y = 0, .w = 800, .h = 600 };
     // From +X looking back at the origin, world -Z is to the right of the screen.
-    const view = eggy.camera.View.lookingAt(.{ 10, 0, 0 }, .{ 0, 0, 0 }, .{});
+    const view = eggy.camera.View.lookingAt(.init(10, 0, 0), .zero, .{});
     const handles = gizmo.layout(.move, .world, identity, view, scene).?;
     const shown = arrow(handles, identity).?;
     try std.testing.expect(shown.to.x > shown.from.x + 10);

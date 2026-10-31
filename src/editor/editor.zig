@@ -2493,11 +2493,11 @@ pub fn Editor(comptime project: type) type {
                 },
                 // The arrow keys nudge the selection a grid step in the 2D panel.
                 .up, .down, .left, .right => if (over_flat) if (self.sceneTarget()) |target| {
-                    const steps: [2]f32 = switch (key) {
-                        .up => .{ 0, 1 },
-                        .down => .{ 0, -1 },
-                        .left => .{ -1, 0 },
-                        else => .{ 1, 0 },
+                    const steps: eggy.math.Vec2 = switch (key) {
+                        .up => .unit_y,
+                        .down => .init(0, -1),
+                        .left => .init(-1, 0),
+                        else => .unit_x,
                     };
                     if (self.scene_2d.nudge(target, steps)) return .run;
                 },
@@ -3362,7 +3362,7 @@ pub fn Editor(comptime project: type) type {
                 _ = self.entity_editor.spawnFrom(&self.app, game, dropped, self.scene_view.dropPoint(scene, at), null);
                 return;
             };
-            if (over == panels.hierarchy_page) _ = self.entity_editor.spawnFrom(&self.app, game, dropped, .{ 0, 0, 0 }, self.entity_editor.hierarchy.entityAt(&self.hierarchy_ui, at));
+            if (over == panels.hierarchy_page) _ = self.entity_editor.spawnFrom(&self.app, game, dropped, .zero, self.entity_editor.hierarchy.entityAt(&self.hierarchy_ui, at));
         }
 
         /// Bring each scene instance's entities up to date with its file (see `SceneInstances`).
@@ -3791,10 +3791,11 @@ pub fn Editor(comptime project: type) type {
             const placed = game.worldMatrix(&self.app, entity) orelse return;
             // Its size: the longest of its axes, as scaled.
             var radius: f32 = 0.5;
-            for (placed[0..3]) |axis| radius = @max(radius, @sqrt(axis[0] * axis[0] + axis[1] * axis[1] + axis[2] * axis[2]));
+            for ([_]eggy.math.Vec3{ .unit_x, .up, .unit_z }) |axis| radius = @max(radius, eggy.math.transformDirection4x4(f32, placed, axis).length());
+            const centre = eggy.math.transformPoint4x4(f32, placed, .zero);
             switch (panel) {
-                .scene => self.scene_view.camera.frame(.{ placed[3][0], placed[3][1], placed[3][2] }, radius),
-                .flat => self.scene_2d.frame(.{ placed[3][0], placed[3][1] }, radius),
+                .scene => self.scene_view.camera.frame(centre, radius),
+                .flat => self.scene_2d.frame(centre.xy(), radius),
             }
         }
 

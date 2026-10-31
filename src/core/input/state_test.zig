@@ -236,12 +236,12 @@ test "higher priority maps own overlapping sources and activation does not inven
 test "touch IDs are stable and quick taps survive until the frame ends" {
     var state = State.init(std.testing.allocator);
     defer state.deinit();
-    var input = input_api.Input{ .backend = state.interface(), .viewport_points = .{ 200, 100 } };
+    var input = input_api.Input{ .backend = state.interface(), .viewport_points = .init(200, 100) };
     var finger = sdl.events.TouchFinger{ .common = undefined, .id = .{ .value = 1 }, .finger_id = .{ .value = 2 }, .x = 0.5, .y = 0.25, .dx = 0, .dy = 0, .pressure = 1 };
     try input.handle(.{ .finger_down = finger });
     var touches: [1]input_api.Touch = undefined;
     const id = (try input.touches(&touches))[0].id;
-    try std.testing.expectEqual([2]f32{ 100, 25 }, touches[0].position_points);
+    try std.testing.expect(touches[0].position_points.eql(.init(100, 25)));
     finger.x = 0.75;
     finger.dx = 0.25;
     try input.handle(.{ .finger_motion = finger });

@@ -3,6 +3,7 @@
 //! pose, so the preview follows its play, pause and scrub exactly.
 const std = @import("std");
 const ecs = @import("clutch");
+const math = @import("eggenvector");
 const refs = @import("refs.zig");
 const animation = @import("animation.zig");
 const Animator = animation.Animator;
@@ -126,7 +127,7 @@ pub fn transformAt(world: *ecs.World, root: ecs.EntityId, path: []const u8) ?[9]
         while (names.next()) |name| at = animation.childNamed(world, at, name) orelse return null;
     }
     const transform = world.get(at, Transform) orelse return null;
-    return transform.position ++ transform.rotation_deg ++ transform.scale;
+    return transform.position.toArray() ++ transform.rotation_deg.toArray() ++ transform.scale.toArray();
 }
 
 const walk_key = refs.AssetRef(.animation).fromId(0x31).key();
@@ -142,22 +143,22 @@ test "a preview poses an entity and its child by a clip, then restores both and 
     } });
     var world = ecs.World.init(gpa);
     defer world.deinit();
-    const root = try world.spawn(.{ Name.init("Root"), Transform{ .position = .{ 9, 9, 9 } } });
+    const root = try world.spawn(.{ Name.init("Root"), Transform{ .position = .init(9, 9, 9) } });
     const hand = try world.spawn(.{ Name.init("Hand"), Transform{} });
     try world.setParent(hand, root);
 
     var preview = try Preview.begin(gpa, &world, root);
     try preview.show(&world, &cache, .{ .clip = walk_key, .time_s = 1 });
-    try std.testing.expectEqual(@as(f32, 2), world.get(root, Transform).?.position[0]);
-    try std.testing.expectEqual(@as(f32, 45), world.get(hand, Transform).?.rotation_deg[1]);
+    try std.testing.expectEqual(@as(f32, 2), world.get(root, Transform).?.position.x);
+    try std.testing.expectEqual(@as(f32, 45), world.get(hand, Transform).?.rotation_deg.y);
     try std.testing.expect(world.get(root, Animator) != null);
 
     // Scrubbing back shows the earlier pose; ending restores the untouched scene.
     try preview.show(&world, &cache, .{ .clip = walk_key, .time_s = 0 });
-    try std.testing.expectEqual(@as(f32, 0), world.get(root, Transform).?.position[0]);
+    try std.testing.expectEqual(@as(f32, 0), world.get(root, Transform).?.position.x);
     preview.end(&world);
-    try std.testing.expectEqual([3]f32{ 9, 9, 9 }, world.get(root, Transform).?.position);
-    try std.testing.expectEqual([3]f32{ 0, 0, 0 }, world.get(hand, Transform).?.rotation_deg);
+    try std.testing.expectEqual(math.Vec3.splat(9), world.get(root, Transform).?.position);
+    try std.testing.expectEqual(math.Vec3.zero, world.get(hand, Transform).?.rotation_deg);
     try std.testing.expect(world.get(root, Animator) == null);
 }
 
@@ -184,8 +185,8 @@ test "targets list reachable child paths and a transform reads by path" {
     var world = ecs.World.init(gpa);
     defer world.deinit();
     const root = try world.spawn(.{ Name.init("Root"), Transform{} });
-    const arm = try world.spawn(.{ Name.init("Arm"), Transform{ .position = .{ 1, 2, 3 } } });
-    const hand = try world.spawn(.{ Name.init("Hand"), Transform{ .scale = .{ 2, 2, 2 } } });
+    const arm = try world.spawn(.{ Name.init("Arm"), Transform{ .position = .init(1, 2, 3) } });
+    const hand = try world.spawn(.{ Name.init("Hand"), Transform{ .scale = .init(2, 2, 2) } });
     const twin = try world.spawn(.{ Name.init("Arm"), Transform{} });
     try world.setParent(arm, root);
     try world.setParent(twin, root);

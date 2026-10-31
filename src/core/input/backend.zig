@@ -139,7 +139,7 @@ test "SDL virtual gamepads hotplug, normalize state, route edges and receive rum
     const state = try input.controllerState(controller);
     try std.testing.expect(state.buttons.contains(.south));
     try std.testing.expect(state.buttons_pressed.contains(.south));
-    try std.testing.expectEqual([2]f32{ -1, 1 }, state.left_stick);
+    try std.testing.expect(state.left_stick.eql(.init(-1, 1)));
     try input.rumble(controller, 0.5, 1, 0.1);
     try std.testing.expectEqual(@as(u16, 32768), virtual.low);
     try std.testing.expectEqual(@as(u16, 65535), virtual.high);

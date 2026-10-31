@@ -276,7 +276,7 @@ pub const Preview = struct {
         const px = @as(f32, @floatFromInt(extent.width)) / window.w;
         const py = @as(f32, @floatFromInt(extent.height)) / window.h;
         cmd.setViewport(.{ .x = (scene.x - window.x) * px, .y = (scene.y - window.y) * py, .width = scene.w * px, .height = scene.h * py });
-        try self.meshes.draw(cmd, drawables, sources, view.viewProjection(scene.w / scene.h), .{ scene.w * px, scene.h * py }, view.eye, selected, srgb);
+        try self.meshes.draw(cmd, drawables, sources, view.viewProjection(scene.w / scene.h), .init(scene.w * px, scene.h * py), view.eye, selected, srgb);
         if (grid) try self.grid.draw(cmd, view, .{ .x = (scene.x - window.x) * px, .y = (scene.y - window.y) * py, .w = scene.w * px, .h = scene.h * py }, srgb);
         const quads = self.world_draw.draw(cmd);
         sources.stats.draw_calls += quads;

@@ -24,7 +24,7 @@ if (app.input.held(.left_shift)) sprint();
 if (app.input.released(.space)) finishJump();
 
 const sideways = app.input.axis(.a, .d);
-const across, const ahead = app.input.direction(.{});
+const movement = app.input.direction(.{}); // .x across, .y ahead
 ```
 
 Use `pressed` for a one-frame action, `held` for an action that continues while a
@@ -56,7 +56,7 @@ time or the physical pixel scale.
 
 ```zig
 if (app.input.mouseHeld(.right)) {
-    transform.rotation_deg[1] -= app.input.mouse_delta[0] * sensitivity_deg_per_point;
+    transform.rotation_deg.y -= app.input.mouse_delta.x * sensitivity_deg_per_point;
 }
 ```
 

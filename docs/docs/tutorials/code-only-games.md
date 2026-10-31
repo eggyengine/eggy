@@ -85,7 +85,7 @@ pub const Game = struct {
             _ = try app.world.spawn(.{
                 eggy.Name.init("Camera"),
                 eggy.Camera{},
-                eggy.Transform{ .position = .{ 0, 3, 7 }, .rotation_deg = .{ -20, 0, 0 } },
+                eggy.Transform{ .position = .init(0, 3, 7), .rotation_deg = .init(-20, 0, 0) },
             });
         }
         return .{ .player = .init(player) };
@@ -95,7 +95,7 @@ pub const Game = struct {
         const move = try app.input.map(PlayerInput).vector(.move);
         const player = self.player.get(&app.world) orelse return;
         const step = 3 * app.time.delta_s;
-        player.translate(.{ move.x * step, 0, move.y * step });
+        player.translate(.init(move.x * step, 0, move.y * step));
         app.world.markChanged(self.player.entity.?, eggy.Transform);
     }
 

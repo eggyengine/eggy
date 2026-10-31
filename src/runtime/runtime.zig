@@ -270,10 +270,10 @@ pub fn Runtime(comptime project: type) type {
             if (eggy.dev_console.overlay.event(&self.app.dev_console, &self.app, curr_event, false)) return .run;
             if (self.app.graphics_settings_ui.event(&self.app, curr_event)) return .run;
             const width, const height = try self.app.window.window.getSize();
-            self.app.input.viewport_points = .{ @floatFromInt(width), @floatFromInt(height) };
+            self.app.input.viewport_points = .init(@floatFromInt(width), @floatFromInt(height));
             if (eggy.game_ui.isTouchInput(curr_event) and (width == 0 or height == 0)) return .run;
             const consumed = if (self.app.ui_layer) |layer| layer.handle(curr_event, false) else false;
-            if (eggy.game_ui.isInput(curr_event) and (consumed or try self.plugins.uiEvent(&self.app, curr_event) or try self.pressBillboard(curr_event, .{ @floatFromInt(width), @floatFromInt(height) }))) {
+            if (eggy.game_ui.isInput(curr_event) and (consumed or try self.plugins.uiEvent(&self.app, curr_event) or try self.pressBillboard(curr_event, .init(@floatFromInt(width), @floatFromInt(height))))) {
                 self.app.input.suppress(curr_event);
                 return .run;
             }
@@ -284,14 +284,14 @@ pub fn Runtime(comptime project: type) type {
 
         /// Press a billboard's button under a left click, seen through the game's camera
         /// across the window (`viewport_points`). Returns whether one was pressed.
-        fn pressBillboard(self: *Self, curr_event: sdl3.events.Event, viewport_points: [2]f32) !bool {
+        fn pressBillboard(self: *Self, curr_event: sdl3.events.Event, viewport_points: eggy.math.Vec2) !bool {
             const down = switch (curr_event) {
                 .mouse_button_down => |down| down,
                 else => return false,
             };
             if (down.button != .left or self.app.ui_scenes.billboard_count == 0) return false;
             const view = eggy.camera.find(&self.app.world) orelse return false;
-            return eggy.ui_scenes.billboards.press(&self.app.ui_scenes, self.app.resources(), view, viewport_points, .{ down.x, down.y });
+            return eggy.ui_scenes.billboards.press(&self.app.ui_scenes, self.app.resources(), view, viewport_points, .init(down.x, down.y));
         }
     };
 }

@@ -73,7 +73,7 @@ pub const State = struct {
         if (eggy.game_ui.syntheticTouchMouse(event)) return;
         if (viewport.w <= 0 or viewport.h <= 0) return;
         const local = eggy.game_ui.localEvent(event, viewport, window_points);
-        app.input.viewport_points = .{ viewport.w, viewport.h };
+        app.input.viewport_points = .init(viewport.w, viewport.h);
         const at: ?[2]f32 = switch (local) {
             .mouse_motion => |e| .{ e.x, e.y },
             .mouse_button_down, .mouse_button_up => |e| .{ e.x, e.y },
@@ -120,7 +120,7 @@ fn pressBillboard(app: *eggy.App, local: eggy.Event, view: ?eggy.camera.View, vi
     };
     const seen_from = view orelse return false;
     if (down.button != .left or app.ui_scenes.billboard_count == 0) return false;
-    return eggy.ui_scenes.billboards.press(&app.ui_scenes, app.resources(), seen_from, .{ viewport.w, viewport.h }, .{ down.x, down.y });
+    return eggy.ui_scenes.billboards.press(&app.ui_scenes, app.resources(), seen_from, .init(viewport.w, viewport.h), .init(down.x, down.y));
 }
 
 fn buttonBit(button: sdl.mouse.Button) u32 {
@@ -235,7 +235,7 @@ test "relative capture keeps tracking outside the viewport without hovering or c
     const viewport = eggy.ui.Rect{ .x = 100, .y = 50, .w = 300, .h = 200 };
     try state.route(&app, &game, motion, viewport, .{ 1200, 800 }, true, null);
     try state.route(&app, &game, motion, viewport, .{ 1200, 800 }, true, null);
-    try std.testing.expectEqual([2]f32{ 800, -500 }, app.input.mouse_delta);
+    try std.testing.expectEqual(eggy.math.Vec2.init(800, -500), app.input.mouse_delta);
     try std.testing.expect(state.pointer_in_scene);
     try std.testing.expectEqual(@as(usize, 0), game.ui_events);
     try std.testing.expectEqual(@as(usize, 2), game.events);

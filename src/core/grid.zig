@@ -6,6 +6,7 @@ const vit = @import("vitellus");
 const ui = @import("weeoui");
 const shaders = @import("scene_shaders");
 const frames_in_flight = @import("weeoui_vitellus").frames_in_flight;
+const math = @import("eggenvector");
 const camera = @import("camera.zig");
 
 /// (0, 0), (2, 0) and (0, 2): one triangle that covers the viewport.
@@ -116,13 +117,13 @@ pub const Grid = struct {
         self.slot = (self.slot + 1) % frames_in_flight;
         const aspect = viewport_px.w / viewport_px.h;
         const half_height = if (view.projection == .orthographic) view.orthographic_height_m / 2 else @tan(view.fov_deg * std.math.rad_per_deg / 2);
-        const right = camera.normalize(camera.cross(view.forward, view.up));
+        const right = view.forward.cross(view.up).normalize();
         const uniforms = Uniforms{
-            .view_projection = view.viewProjection(aspect),
-            .eye = .{ view.eye[0], view.eye[1], view.eye[2], 0 },
-            .forward = .{ view.forward[0], view.forward[1], view.forward[2], 0 },
-            .across = .{ right[0] * half_height * aspect, right[1] * half_height * aspect, right[2] * half_height * aspect, 0 },
-            .upward = .{ view.up[0] * half_height, view.up[1] * half_height, view.up[2] * half_height, 0 },
+            .view_projection = @import("transform.zig").columns(view.viewProjection(aspect)),
+            .eye = math.Vec4.fromVec3(view.eye, 0).toArray(),
+            .forward = math.Vec4.fromVec3(view.forward, 0).toArray(),
+            .across = math.Vec4.fromVec3(right.scale(half_height * aspect), 0).toArray(),
+            .upward = math.Vec4.fromVec3(view.up.scale(half_height), 0).toArray(),
             .viewport = .{ viewport_px.x, viewport_px.y, viewport_px.w, viewport_px.h },
             .options = .{ if (srgb) 1 else 0, 0, if (view.projection == .orthographic) 1 else 0, 0 },
         };

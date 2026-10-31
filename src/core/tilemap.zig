@@ -30,6 +30,6 @@ pub const Tilemap = struct {
     /// `world`, the entity's matrix (columns), scaled to the tile size and lifted by its layer,
     /// for the map's model (one unit per tile).
     pub fn placed(self: Tilemap, world: [4][4]f32) [4][4]f32 {
-        return (sprite.Sprite{ .size_m = .{ self.tile_size_m, self.tile_size_m }, .layer = self.layer }).placed(world);
+        return (sprite.Sprite{ .size_m = .splat(self.tile_size_m), .layer = self.layer }).placed(world);
     }
 };

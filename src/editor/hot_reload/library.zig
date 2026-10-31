@@ -538,7 +538,7 @@ var invalid_lights_reported: u32 = 0;
 fn worldMatrix(world: *anyopaque, entity: api.Entity, out: *[4][4]f32) callconv(.c) bool {
     const id = entityOf(entity);
     if (!worldOf(world).isAlive(id)) return false;
-    for (out, eggy.transform.worldMatrix(worldOf(world), id).data) |*column, data| column.* = data;
+    out.* = eggy.transform.columns(eggy.transform.worldMatrix(worldOf(world), id));
     return true;
 }
 

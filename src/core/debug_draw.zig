@@ -4,13 +4,15 @@ const ui = @import("weeoui");
 const camera = @import("camera.zig");
 const game_ui = @import("game_ui/game_ui.zig");
 const vit = @import("vitellus");
+const math = @import("eggenvector");
+const transform = @import("transform.zig");
 pub const support: @import("support.zig").Support = .available;
 pub const max_lines = 1024;
 pub const max_labels = 128;
 
-pub const Line = struct { from_m: [3]f32, to_m: [3]f32, color: [4]f32 };
+pub const Line = struct { from_m: math.Vec3, to_m: math.Vec3, color: [4]f32 };
 pub const Label = struct {
-    position_m: [3]f32,
+    position_m: math.Vec3,
     bytes: [256]u8 = undefined,
     len: u16,
 };
@@ -38,7 +40,7 @@ pub const DebugDraw = struct {
         self.* = .{};
     }
 
-    pub fn line(self: *DebugDraw, from_m: [3]f32, to_m: [3]f32, color: [4]f32) !void {
+    pub fn line(self: *DebugDraw, from_m: math.Vec3, to_m: math.Vec3, color: [4]f32) !void {
         try validatePoint(from_m);
         try validatePoint(to_m);
         try validateColor(color);
@@ -48,11 +50,13 @@ pub const DebugDraw = struct {
     }
 
     /// Record all twelve box edges atomically.
-    pub fn box(self: *DebugDraw, min_m: [3]f32, max_m: [3]f32, color: [4]f32) !void {
+    pub fn box(self: *DebugDraw, min_m: math.Vec3, max_m: math.Vec3, color: [4]f32) !void {
         try validatePoint(min_m);
         try validatePoint(max_m);
+        const low = min_m.toArray();
+        const high_m = max_m.toArray();
         try validateColor(color);
-        for (min_m, max_m) |min, max| if (min > max) return error.InvalidDebugBounds;
+        for (low, high_m) |min, max| if (min > max) return error.InvalidDebugBounds;
         if (max_lines - self.line_count < 12) return error.DebugDrawCapacity;
         for (0..8) |corner| {
             for (0..3) |axis| {
@@ -62,17 +66,17 @@ pub const DebugDraw = struct {
                 var to: [3]f32 = undefined;
                 for (0..3) |dimension| {
                     const high = corner & (@as(usize, 1) << @intCast(dimension)) != 0;
-                    from[dimension] = if (high) max_m[dimension] else min_m[dimension];
+                    from[dimension] = if (high) high_m[dimension] else low[dimension];
                     to[dimension] = from[dimension];
                 }
-                to[axis] = max_m[axis];
-                try self.line(from, to, color);
+                to[axis] = high_m[axis];
+                try self.line(.fromArray(from), .fromArray(to), color);
             }
         }
     }
 
     /// Copy a UTF-8 label of at most 256 bytes; displayed at a fixed screen-space size.
-    pub fn text(self: *DebugDraw, position_m: [3]f32, message: []const u8) !void {
+    pub fn text(self: *DebugDraw, position_m: math.Vec3, message: []const u8) !void {
         try validatePoint(position_m);
         if (message.len > 256) return error.DebugLabelTooLong;
         if (!std.unicode.utf8ValidateSlice(message)) return error.InvalidUtf8;
@@ -96,7 +100,7 @@ pub const DebugDraw = struct {
         const overlay = self.overlay.?;
         overlay.begin(draw, 0);
         const builder = overlay.context.builder();
-        const paint = Paint{ .debug = self, .matrix = view.viewProjection(draw.viewport.w / draw.viewport.h) };
+        const paint = Paint{ .debug = self, .matrix = transform.columns(view.viewProjection(draw.viewport.w / draw.viewport.h)) };
         const node = try builder.node(0, .{ .width = draw.viewport.w, .height = draw.viewport.h }, .{ .custom = .{ .context = &paint, .draw = Paint.draw } }, &.{});
         node.overlay = .{ .point = .init(draw.viewport.x, draw.viewport.y) };
         node.accessibility.role = .ignored;
@@ -134,17 +138,17 @@ const Paint = struct {
     }
 };
 
-fn validatePoint(point: [3]f32) !void {
-    for (point) |value| if (!std.math.isFinite(value)) return error.InvalidDebugPoint;
+fn validatePoint(point: math.Vec3) !void {
+    for (point.toArray()) |value| if (!std.math.isFinite(value)) return error.InvalidDebugPoint;
 }
 
 fn validateColor(color: [4]f32) !void {
     for (color) |value| if (!std.math.isFinite(value) or value < 0 or value > 1) return error.InvalidDebugColor;
 }
 
-fn toClip(matrix: [4][4]f32, point: [3]f32) @Vector(4, f32) {
+fn toClip(matrix: [4][4]f32, point: math.Vec3) @Vector(4, f32) {
     var clip: @Vector(4, f32) = matrix[3];
-    for (0..3) |axis| clip += @as(@Vector(4, f32), matrix[axis]) * @as(@Vector(4, f32), @splat(point[axis]));
+    for (0..3, point.toArray()) |axis, value| clip += @as(@Vector(4, f32), matrix[axis]) * @as(@Vector(4, f32), @splat(value));
     return clip;
 }
 
@@ -153,7 +157,7 @@ fn screen(clip: @Vector(4, f32), rect: ui.Rect) [2]f32 {
 }
 
 /// Clip in homogeneous coordinates, including lines crossing the camera's near plane.
-fn clippedLine(matrix: [4][4]f32, from: [3]f32, to: [3]f32) ?[2]@Vector(4, f32) {
+fn clippedLine(matrix: [4][4]f32, from: math.Vec3, to: math.Vec3) ?[2]@Vector(4, f32) {
     var a = toClip(matrix, from);
     var b = toClip(matrix, to);
     const planes = [_]@Vector(4, f32){
@@ -175,25 +179,25 @@ fn clippedLine(matrix: [4][4]f32, from: [3]f32, to: [3]f32) ?[2]@Vector(4, f32) 
 
 test "debug boxes reserve twelve edges and requests validate before recording" {
     var debug = DebugDraw{};
-    try debug.box(.{ -1, -1, -1 }, .{ 1, 1, 1 }, @splat(1));
+    try debug.box(.splat(-1), .one, @splat(1));
     try std.testing.expectEqual(@as(usize, 12), debug.line_count);
-    try std.testing.expectError(error.InvalidDebugBounds, debug.box(.{ 2, 0, 0 }, .{ 1, 1, 1 }, @splat(1)));
-    try std.testing.expectError(error.InvalidDebugPoint, debug.line(.{ std.math.nan(f32), 0, 0 }, @splat(0), @splat(1)));
+    try std.testing.expectError(error.InvalidDebugBounds, debug.box(.init(2, 0, 0), .one, @splat(1)));
+    try std.testing.expectError(error.InvalidDebugPoint, debug.line(.init(std.math.nan(f32), 0, 0), .zero, @splat(1)));
     debug.line_count = max_lines - 11;
-    try std.testing.expectError(error.DebugDrawCapacity, debug.box(@splat(0), @splat(1), @splat(1)));
+    try std.testing.expectError(error.DebugDrawCapacity, debug.box(.zero, .one, @splat(1)));
     try std.testing.expectEqual(max_lines - 11, debug.line_count);
     debug.clear();
     var message = [_]u8{ 'h', 'i' };
-    try debug.text(@splat(0), &message);
+    try debug.text(.zero, &message);
     message[0] = 'x';
     try std.testing.expectEqualStrings("hi", debug.labels[0].bytes[0..2]);
-    try std.testing.expectError(error.DebugLabelTooLong, debug.text(@splat(0), &@as([257]u8, @splat('x'))));
+    try std.testing.expectError(error.DebugLabelTooLong, debug.text(.zero, &@as([257]u8, @splat('x'))));
 }
 
 test "debug lines clip across the near plane and reject segments behind the camera" {
-    const matrix = camera.View.lookingAt(.{ 0, 0, 0 }, .{ 0, 0, -1 }, .{}).viewProjection(1);
-    const clipped = clippedLine(matrix, .{ 0, 0, 1 }, .{ 0, 0, -2 }).?;
+    const matrix = transform.columns(camera.View.lookingAt(.zero, .forward, .{}).viewProjection(1));
+    const clipped = clippedLine(matrix, .init(0, 0, 1), .init(0, 0, -2)).?;
     try std.testing.expect(clipped[0][3] > 0);
     try std.testing.expect(clipped[0][2] >= -0.00001);
-    try std.testing.expect(clippedLine(matrix, .{ 0, 0, 1 }, .{ 0, 0, 2 }) == null);
+    try std.testing.expect(clippedLine(matrix, .init(0, 0, 1), .init(0, 0, 2)) == null);
 }

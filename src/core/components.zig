@@ -366,7 +366,8 @@ fn Stored(comptime T: type) type {
         .entity => ?ecs.EntityId,
         .asset => []const u8,
     };
-    if (!holdsRef(T)) return T;
+    if (mathVectorLen(T)) |len| return [len]numberOf(T).?;
+    if (!needsStoring(T)) return T;
     return switch (@typeInfo(T)) {
         .array => |info| [info.len]Stored(info.child),
         .optional => |info| ?Stored(info.child),
@@ -382,15 +383,22 @@ fn storedTypes(comptime types: []const type) [types.len]type {
     return stored;
 }
 
-/// Whether `T` has a reference anywhere inside it.
-fn holdsRef(comptime T: type) bool {
+/// The length of `T` when it is a struct vector (`x`, `y`, `z`, `w`, as `eggy.math` vectors
+/// are), which scenes keep as a plain tuple, `.{ 1, 2, 3 }`.
+fn mathVectorLen(comptime T: type) ?u32 {
+    return if (@typeInfo(T) == .@"struct") vectorLen(T) else null;
+}
+
+/// Whether `T` has a reference or struct vector anywhere inside it, so it is stored as
+/// something else.
+fn needsStoring(comptime T: type) bool {
     @setEvalBranchQuota(100_000);
-    if (refs.refKind(T) != null) return true;
+    if (refs.refKind(T) != null or mathVectorLen(T) != null) return true;
     return switch (@typeInfo(T)) {
-        .array => |info| holdsRef(info.child),
-        .optional => |info| holdsRef(info.child),
+        .array => |info| needsStoring(info.child),
+        .optional => |info| needsStoring(info.child),
         inline .@"struct", .@"union" => |info| for (info.field_types) |Member| {
-            if (holdsRef(Member)) break true;
+            if (needsStoring(Member)) break true;
         } else false,
         else => false,
     };
@@ -402,7 +410,12 @@ fn store(comptime T: type, value: *const T) Stored(T) {
         .entity => value.entity,
         .asset => value.key(),
     };
-    if (comptime !holdsRef(T)) return value.*;
+    if (comptime mathVectorLen(T)) |len| {
+        var out: Stored(T) = undefined;
+        inline for (@typeInfo(T).@"struct".field_names[0..len], 0..) |name, i| out[i] = @field(value.*, name);
+        return out;
+    }
+    if (comptime !needsStoring(T)) return value.*;
     var out: Stored(T) = undefined;
     switch (@typeInfo(T)) {
         .array => for (&out, value) |*part, *source| {
@@ -450,6 +463,15 @@ pub fn validateSnapshot(comptime T: type, value: *const T) !void {
     }
 }
 
+test "math vectors are stored as plain tuples, so older scenes still load" {
+    const Vec3 = @import("eggenvector").Vec3;
+    var text: [64]u8 = undefined;
+    var writer: std.Io.Writer = .fixed(&text);
+    try std.zon.stringify.serialize(store(Vec3, &Vec3.init(1, 2, 3)), .{ .whitespace = false }, &writer);
+    try std.testing.expectEqualStrings(".{1,2,3}", writer.buffered());
+    try std.testing.expect((try parseFieldValue(Vec3, ".{ 4, 5, 6 }")).eql(.init(4, 5, 6)));
+}
+
 test "typed snapshots preflight the actual field size and parse budget" {
     const Small = struct { value: u32 = 42, texture: refs.AssetRef(.image) = .init("ship.png") };
     try validateSnapshot(Small, &Small{});
@@ -485,7 +507,12 @@ fn restore(comptime T: type, stored: Stored(T)) error{ParseZon}!T {
             return T.parse(stored) catch return error.ParseZon;
         },
     };
-    if (comptime !holdsRef(T)) return stored;
+    if (comptime mathVectorLen(T)) |len| {
+        var out: T = undefined;
+        inline for (@typeInfo(T).@"struct".field_names[0..len], 0..) |name, i| @field(out, name) = stored[i];
+        return out;
+    }
+    if (comptime !needsStoring(T)) return stored;
     var out: T = undefined;
     switch (@typeInfo(T)) {
         .array => for (&out, stored) |*part, source| {

@@ -7,6 +7,8 @@ const std = @import("std");
 const eggy = @import("eggy");
 const ui = eggy.ui;
 const Drawable = eggy.mesh.Drawable;
+const math = eggy.math;
+const Vec3 = math.Vec3;
 const HotGame = @import("../hot_reload/hot_reload.zig").HotGame;
 
 /// How a part's shape is turned before it is placed: built-in cylinders and cones run along +Y.
@@ -15,8 +17,8 @@ const Turn = enum { none, along_z, along_x };
 /// One shape of a stand-in, in its entity's space (metres): where, how big, which way, and colour.
 const Part = struct {
     shape: eggy.mesh.Shape,
-    at: [3]f32 = .{ 0, 0, 0 },
-    size: [3]f32,
+    at: Vec3 = .zero,
+    size: Vec3,
     turn: Turn = .none,
     color: [3]f32,
     /// How much of the colour it gives off, so it reads in an unlit scene; `glows` takes the
@@ -32,31 +34,31 @@ const glass = [3]f32{ 0.35, 0.55, 0.9 };
 
 /// A bulb, its glass round the entity's origin and its screw cap below.
 const bulb = [_]Part{
-    .{ .shape = .sphere, .at = .{ 0, 0.04, 0 }, .size = @splat(0.26), .color = .{ 1, 1, 1 }, .glows = true },
-    .{ .shape = .sphere, .at = .{ 0, -0.08, 0 }, .size = .{ 0.15, 0.12, 0.15 }, .color = .{ 1, 1, 1 }, .glows = true },
-    .{ .shape = .cylinder, .at = .{ 0, -0.15, 0 }, .size = .{ 0.13, 0.1, 0.13 }, .color = metal, .metallic = 0.8 },
-    .{ .shape = .cylinder, .at = .{ 0, -0.13, 0 }, .size = .{ 0.145, 0.02, 0.145 }, .color = metal, .metallic = 0.8 },
-    .{ .shape = .cylinder, .at = .{ 0, -0.17, 0 }, .size = .{ 0.145, 0.02, 0.145 }, .color = metal, .metallic = 0.8 },
-    .{ .shape = .sphere, .at = .{ 0, -0.205, 0 }, .size = @splat(0.06), .color = dark },
+    .{ .shape = .sphere, .at = .init(0, 0.04, 0), .size = .splat(0.26), .color = .{ 1, 1, 1 }, .glows = true },
+    .{ .shape = .sphere, .at = .init(0, -0.08, 0), .size = .init(0.15, 0.12, 0.15), .color = .{ 1, 1, 1 }, .glows = true },
+    .{ .shape = .cylinder, .at = .init(0, -0.15, 0), .size = .init(0.13, 0.1, 0.13), .color = metal, .metallic = 0.8 },
+    .{ .shape = .cylinder, .at = .init(0, -0.13, 0), .size = .init(0.145, 0.02, 0.145), .color = metal, .metallic = 0.8 },
+    .{ .shape = .cylinder, .at = .init(0, -0.17, 0), .size = .init(0.145, 0.02, 0.145), .color = metal, .metallic = 0.8 },
+    .{ .shape = .sphere, .at = .init(0, -0.205, 0), .size = .splat(0.06), .color = dark },
 };
 
 /// A can light shining along local -Z: its housing narrows to the back, its lens at the front.
 const spotlight = [_]Part{
-    .{ .shape = .cone, .at = .{ 0, 0, 0.02 }, .size = .{ 0.3, 0.34, 0.3 }, .turn = .along_z, .color = dark, .metallic = 0.5 },
-    .{ .shape = .cylinder, .at = .{ 0, 0, 0.2 }, .size = .{ 0.13, 0.08, 0.13 }, .turn = .along_z, .color = metal, .metallic = 0.8 },
-    .{ .shape = .cylinder, .at = .{ 0, 0, -0.155 }, .size = .{ 0.31, 0.03, 0.31 }, .turn = .along_z, .color = metal, .metallic = 0.8 },
-    .{ .shape = .cylinder, .at = .{ 0, 0, -0.17 }, .size = .{ 0.27, 0.01, 0.27 }, .turn = .along_z, .color = .{ 1, 1, 1 }, .glows = true },
+    .{ .shape = .cone, .at = .init(0, 0, 0.02), .size = .init(0.3, 0.34, 0.3), .turn = .along_z, .color = dark, .metallic = 0.5 },
+    .{ .shape = .cylinder, .at = .init(0, 0, 0.2), .size = .init(0.13, 0.08, 0.13), .turn = .along_z, .color = metal, .metallic = 0.8 },
+    .{ .shape = .cylinder, .at = .init(0, 0, -0.155), .size = .init(0.31, 0.03, 0.31), .turn = .along_z, .color = metal, .metallic = 0.8 },
+    .{ .shape = .cylinder, .at = .init(0, 0, -0.17), .size = .init(0.27, 0.01, 0.27), .turn = .along_z, .color = .{ 1, 1, 1 }, .glows = true },
 };
 
 /// A film camera looking along local -Z with +Y up: its body, lens, and two reels on top.
 const film_camera = [_]Part{
-    .{ .shape = .cube, .at = .{ 0, 0, 0.05 }, .size = .{ 0.18, 0.24, 0.4 }, .color = dark },
-    .{ .shape = .cylinder, .at = .{ 0, 0, -0.2 }, .size = .{ 0.13, 0.1, 0.13 }, .turn = .along_z, .color = metal, .metallic = 0.8 },
-    .{ .shape = .cone, .at = .{ 0, 0, -0.3 }, .size = .{ 0.22, 0.12, 0.22 }, .turn = .along_z, .color = glass, .glow = 0.35 },
-    .{ .shape = .cylinder, .at = .{ 0, 0.22, 0.16 }, .size = .{ 0.2, 0.06, 0.2 }, .turn = .along_x, .color = dark },
-    .{ .shape = .cylinder, .at = .{ 0, 0.22, -0.06 }, .size = .{ 0.2, 0.06, 0.2 }, .turn = .along_x, .color = dark },
-    .{ .shape = .cylinder, .at = .{ 0, 0.22, 0.16 }, .size = .{ 0.08, 0.065, 0.08 }, .turn = .along_x, .color = metal, .metallic = 0.8 },
-    .{ .shape = .cylinder, .at = .{ 0, 0.22, -0.06 }, .size = .{ 0.08, 0.065, 0.08 }, .turn = .along_x, .color = metal, .metallic = 0.8 },
+    .{ .shape = .cube, .at = .init(0, 0, 0.05), .size = .init(0.18, 0.24, 0.4), .color = dark },
+    .{ .shape = .cylinder, .at = .init(0, 0, -0.2), .size = .init(0.13, 0.1, 0.13), .turn = .along_z, .color = metal, .metallic = 0.8 },
+    .{ .shape = .cone, .at = .init(0, 0, -0.3), .size = .init(0.22, 0.12, 0.22), .turn = .along_z, .color = glass, .glow = 0.35 },
+    .{ .shape = .cylinder, .at = .init(0, 0.22, 0.16), .size = .init(0.2, 0.06, 0.2), .turn = .along_x, .color = dark },
+    .{ .shape = .cylinder, .at = .init(0, 0.22, -0.06), .size = .init(0.2, 0.06, 0.2), .turn = .along_x, .color = dark },
+    .{ .shape = .cylinder, .at = .init(0, 0.22, 0.16), .size = .init(0.08, 0.065, 0.08), .turn = .along_x, .color = metal, .metallic = 0.8 },
+    .{ .shape = .cylinder, .at = .init(0, 0.22, -0.06), .size = .init(0.08, 0.065, 0.08), .turn = .along_x, .color = metal, .metallic = 0.8 },
 };
 
 /// Append the stand-ins of `lights` (point and spot ones; directional ones are `suns`) and of
@@ -103,15 +105,15 @@ fn lightKind(light: eggy.lighting.GpuLight) LightKind {
     };
 }
 
-/// Write `parts` placed by `placed` (the entity's world matrix, by column) into `out` from `at`.
-fn place(parts: []const Part, placed: [4][4]f32, entity: eggy.ecs.EntityId, shine: [3]f32, out: []Drawable, at: usize) usize {
+/// Write `parts` placed by `placed` (the entity's world matrix) into `out` from `at`.
+fn place(parts: []const Part, placed: math.Mat4, entity: eggy.ecs.EntityId, shine: [3]f32, out: []Drawable, at: usize) usize {
     var written = at;
     for (parts) |part| {
         if (written >= out.len) break;
         const color = if (part.glows) brightest(shine) else part.color;
         const glow: f32 = if (part.glows) 0.85 else part.glow;
         out[written] = .{
-            .model = multiply(placed, local(part)),
+            .model = eggy.transform.columns(math.mul(f32, 4, 4, 4, placed, local(part))),
             .color = .{ 1, 1, 1, 1 },
             .shape = part.shape,
             .entity_id = entity.id,
@@ -133,8 +135,8 @@ fn brightest(color: [3]f32) [3]f32 {
     return .{ color[0] / top, color[1] / top, color[2] / top };
 }
 
-/// The part's own matrix, by column: sized, turned, then moved to `at`.
-fn local(part: Part) [4][4]f32 {
+/// The part's own matrix: sized, turned, then moved to `at`.
+fn local(part: Part) math.Mat4 {
     const x: [3]f32, const y: [3]f32, const z: [3]f32 = switch (part.turn) {
         .none => .{ .{ 1, 0, 0 }, .{ 0, 1, 0 }, .{ 0, 0, 1 } },
         // A quarter turn round X: +Y becomes +Z (a cone's tip then points backwards).
@@ -143,25 +145,12 @@ fn local(part: Part) [4][4]f32 {
         .along_x => .{ .{ 0, 1, 0 }, .{ -1, 0, 0 }, .{ 0, 0, 1 } },
     };
     const s = part.size;
-    return .{
-        .{ x[0] * s[0], x[1] * s[0], x[2] * s[0], 0 },
-        .{ y[0] * s[1], y[1] * s[1], y[2] * s[1], 0 },
-        .{ z[0] * s[2], z[1] * s[2], z[2] * s[2], 0 },
-        .{ part.at[0], part.at[1], part.at[2], 1 },
-    };
-}
-
-/// `a` times `b`, both by column.
-fn multiply(a: [4][4]f32, b: [4][4]f32) [4][4]f32 {
-    var result: [4][4]f32 = undefined;
-    for (0..4) |column| {
-        for (0..4) |row| {
-            var sum: f32 = 0;
-            for (0..4) |k| sum += a[k][row] * b[column][k];
-            result[column][row] = sum;
-        }
-    }
-    return result;
+    return math.fromArray(f32, 4, 4, .{
+        .{ x[0] * s.x, x[1] * s.x, x[2] * s.x, 0 },
+        .{ y[0] * s.y, y[1] * s.y, y[2] * s.y, 0 },
+        .{ z[0] * s.z, z[1] * s.z, z[2] * s.z, 0 },
+        .{ part.at.x, part.at.y, part.at.z, 1 },
+    });
 }
 
 /// A directional light's badge on the Scene panel, in its points: where the light is, the end of
@@ -183,9 +172,9 @@ pub fn suns(lights: *const eggy.lighting.Frame, view: eggy.camera.View, scene: u
     var count: usize = 0;
     for (lights.lights[0..lights.count], lights.entities[0..lights.count]) |light, source| {
         if (lightKind(light) != .directional or count >= out.len) continue;
-        const position = [3]f32{ light.position_kind[0], light.position_kind[1], light.position_kind[2] };
+        const position = Vec3.init(light.position_kind[0], light.position_kind[1], light.position_kind[2]);
         const at = onPanel(view_projection, scene, position) orelse continue;
-        const ahead = [3]f32{ position[0] + light.direction_range[0], position[1] + light.direction_range[1], position[2] + light.direction_range[2] };
+        const ahead = position.add(.init(light.direction_range[0], light.direction_range[1], light.direction_range[2]));
         out[count] = .{
             .at = at,
             .tip = onPanel(view_projection, scene, ahead),
@@ -198,7 +187,7 @@ pub fn suns(lights: *const eggy.lighting.Frame, view: eggy.camera.View, scene: u
 }
 
 /// Where `point` is on the panel at `scene`, null when it is behind the view.
-fn onPanel(view_projection: [4][4]f32, scene: ui.Rect, point: [3]f32) ?ui.Vec2 {
+fn onPanel(view_projection: math.Mat4, scene: ui.Rect, point: Vec3) ?ui.Vec2 {
     const projected = eggy.camera.project(view_projection, point);
     if (!projected.in_front) return null;
     return .{ .x = scene.x + (projected.x + 1) / 2 * scene.w, .y = scene.y + (1 - projected.y) / 2 * scene.h };
@@ -272,7 +261,7 @@ fn line(c: *ui.Canvas, from: ui.Vec2, to: ui.Vec2, half_width: f32, color: [4]f3
 
 test "a part is placed by its entity: a turned spotlight's lens follows the turn" {
     // The entity half a turn round Y, at (5, 0, 0): its -Z (where the lens sits) is world +Z.
-    const turned = [4][4]f32{ .{ -1, 0, 0, 0 }, .{ 0, 1, 0, 0 }, .{ 0, 0, -1, 0 }, .{ 5, 0, 0, 1 } };
+    const turned = math.fromArray(f32, 4, 4, .{ .{ -1, 0, 0, 0 }, .{ 0, 1, 0, 0 }, .{ 0, 0, -1, 0 }, .{ 5, 0, 0, 1 } });
     var out: [spotlight.len]Drawable = undefined;
     const written = place(&spotlight, turned, .init(3, 1), .{ 2, 1, 0 }, &out, 0);
     try std.testing.expectEqual(spotlight.len, written);
@@ -293,7 +282,7 @@ test "only directional lights get a badge, placed where they are and ticked the 
     lights.entities[0] = .{ .id = 7, .generation = 2 };
     const scene = ui.Rect{ .x = 0, .y = 0, .w = 800, .h = 600 };
     // From +X looking back at the origin: world -Z is to the right.
-    const view = eggy.camera.View.lookingAt(.{ 10, 0, 0 }, .{ 0, 0, 0 }, .{});
+    const view = eggy.camera.View.lookingAt(.init(10, 0, 0), .zero, .{});
     var shown: [4]Sun = undefined;
     try std.testing.expectEqual(@as(usize, 1), suns(&lights, view, scene, &shown));
     try std.testing.expectApproxEqAbs(@as(f32, 400), shown[0].at.x, 0.5);

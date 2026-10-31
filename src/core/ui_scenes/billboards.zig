@@ -6,6 +6,7 @@ const ecs = @import("clutch");
 const vit = @import("vitellus");
 const ui = @import("weeoui");
 const weeoui_vitellus = @import("weeoui_vitellus");
+const math = @import("eggenvector");
 const camera = @import("../camera.zig");
 const world_draw = @import("../world_draw.zig");
 const Resources = @import("../resources/resources.zig").Resources;
@@ -184,14 +185,14 @@ fn noteButtons(state: *State, entity: ecs.EntityId, placed: []const @import("lay
 /// for that billboard's entity. Returns whether a button was pressed, so the game doesn't also
 /// take the press.
 // ponytail: what stands in front of a billboard doesn't stop the press; ray-test meshes too if presses go through walls.
-pub fn press(state: *State, resources: Resources, view: camera.View, viewport_points: [2]f32, at: [2]f32) !bool {
-    if (!(viewport_points[0] > 0 and viewport_points[1] > 0)) return false;
-    const ndc = [2]f32{ at[0] / viewport_points[0] * 2 - 1, 1 - at[1] / viewport_points[1] * 2 };
-    const found = hit(state, resources, view, view.ray(ndc, viewport_points[0] / viewport_points[1])) orelse return false;
+pub fn press(state: *State, resources: Resources, view: camera.View, viewport_points: math.Vec2, at: math.Vec2) !bool {
+    if (!(viewport_points.x > 0 and viewport_points.y > 0)) return false;
+    const ndc = math.Vec2.init(at.x / viewport_points.x * 2 - 1, 1 - at.y / viewport_points.y * 2);
+    const found = hit(state, resources, view, view.ray(ndc, viewport_points.x / viewport_points.y)) orelse return false;
     // The topmost button there: the last painted.
     var pressed: ?[]const u8 = null;
     for (state.billboard_buttons.items) |button| {
-        if (button.entity.eql(found.entity) and button.rect.contains(found.at[0], found.at[1])) pressed = button.node;
+        if (button.entity.eql(found.entity) and button.rect.contains(found.at.x, found.at.y)) pressed = button.node;
     }
     const name = pressed orelse return false;
     try state.recordClick(found.entity, name);
@@ -203,7 +204,7 @@ pub fn press(state: *State, resources: Resources, view: camera.View, viewport_po
 pub const Hit = struct {
     entity: ecs.EntityId,
     distance: f32,
-    at: [2]f32,
+    at: math.Vec2,
 };
 
 /// The nearest of this frame's billboards (`gatherInto`) that `ray` meets, their faces turned as
@@ -227,25 +228,20 @@ pub fn hit(state: *State, resources: Resources, view: camera.View, ray: camera.R
 
 /// A billboard's face in the world: its bottom-left corner and its edges along its width and
 /// its height.
-const Face = struct { origin: [3]f32, across: [3]f32, upward: [3]f32 };
+const Face = struct { origin: math.Vec3, across: math.Vec3, upward: math.Vec3 };
 
 /// Where `ray` crosses `face` from its front or back, with no entity yet.
 fn hitFace(face: Face, ray: camera.Ray) ?Hit {
-    const normal = camera.cross(face.across, face.upward);
-    const facing = dot(ray.direction, normal);
+    const normal = face.across.cross(face.upward);
+    const facing = ray.direction.dot(normal);
     if (@abs(facing) < 1e-9) return null;
-    const distance = dot(camera.sub(face.origin, ray.origin), normal) / facing;
+    const distance = face.origin.sub(ray.origin).dot(normal) / facing;
     if (distance < 0) return null;
-    var offset: [3]f32 = undefined;
-    for (&offset, ray.origin, ray.direction, face.origin) |*o, start, step, corner| o.* = start + step * distance - corner;
-    const u = dot(offset, face.across) / dot(face.across, face.across);
-    const v = dot(offset, face.upward) / dot(face.upward, face.upward);
+    const offset = ray.origin.add(ray.direction.scale(distance)).sub(face.origin);
+    const u = offset.dot(face.across) / face.across.lengthSquared();
+    const v = offset.dot(face.upward) / face.upward.lengthSquared();
     if (u < 0 or u > 1 or v < 0 or v > 1) return null;
-    return .{ .entity = .{ .id = 0, .generation = 0 }, .distance = distance, .at = .{ u, 1 - v } };
-}
-
-fn dot(a: [3]f32, b: [3]f32) f32 {
-    return a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+    return .{ .entity = .{ .id = 0, .generation = 0 }, .distance = distance, .at = .init(u, 1 - v) };
 }
 
 /// Where `billboard`'s `tile` shows in the world (`faceOf`).
@@ -263,28 +259,19 @@ fn panelFor(billboard: Billboard, tile: ui.Rect, aspect: f32, view: camera.View,
 /// Where `billboard`'s face is: centred on its entity, `width_m` wide and `aspect` (height over
 /// width) of that tall, facing the camera or along its own X and Y, whatever its scale.
 fn faceOf(billboard: Billboard, aspect: f32, view: camera.View) Face {
-    const model = billboard.model;
+    const model = math.fromArray(f32, 4, 4, billboard.model);
     const width_m = billboard.width_m;
     const height_m = width_m * aspect;
-    var across: [3]f32 = undefined;
-    var upward: [3]f32 = undefined;
     // `width_m` is metres in the world whichever way it faces: the entity's scale (or its
     // parent's) turns it but doesn't shrink or stretch it.
     const right, const up = if (billboard.face_camera) blk: {
-        const right = camera.normalize(camera.cross(view.forward, view.up));
-        break :blk .{ right, camera.normalize(camera.cross(right, view.forward)) };
-    } else .{ camera.normalize(model[0][0..3].*), camera.normalize(model[1][0..3].*) };
-    for (&across, &upward, right, up) |*a, *u, r, v| {
-        a.* = r * width_m;
-        u.* = v * height_m;
-    }
-    var origin: [3]f32 = undefined;
-    for (&origin, across, upward, 0..) |*o, a, u, i| o.* = model[3][i] - (a + u) / 2;
+        const right = view.forward.cross(view.up).normalize();
+        break :blk .{ right, right.cross(view.forward).normalize() };
+    } else .{ math.transformDirection4x4(f32, model, .right).normalize(), math.transformDirection4x4(f32, model, .up).normalize() };
+    const across = right.scale(width_m);
+    const upward = up.scale(height_m);
+    const origin = math.transformPoint4x4(f32, model, .zero).sub(across.add(upward).scale(0.5));
     return .{ .origin = origin, .across = across, .upward = upward };
-}
-
-fn length(v: [3]f32) f32 {
-    return @sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]);
 }
 
 test "tiles fill rows and stop when the texture is full" {
@@ -303,22 +290,22 @@ test "a camera-facing panel is centred on its entity" {
     billboard.width_m = 2;
     billboard.face_camera = true;
     billboard.model = .{ .{ 1, 0, 0, 0 }, .{ 0, 1, 0, 0 }, .{ 0, 0, 1, 0 }, .{ 5, 1, 0, 1 } };
-    const view = camera.View{ .eye = .{ 5, 1, 10 }, .forward = .{ 0, 0, -1 }, .up = .{ 0, 1, 0 } };
+    const view = camera.View{ .eye = .init(5, 1, 10), .forward = .forward, .up = .up };
     const panel = panelFor(billboard, .{ .x = 0, .y = 0, .w = 100, .h = 50 }, 0.5, view, undefined);
-    try std.testing.expectApproxEqAbs(@as(f32, 4), panel.origin[0], 1e-5);
-    try std.testing.expectApproxEqAbs(@as(f32, 0.5), panel.origin[1], 1e-5);
-    try std.testing.expectApproxEqAbs(@as(f32, 2), panel.across[0], 1e-5);
-    try std.testing.expectApproxEqAbs(@as(f32, 1), panel.upward[1], 1e-5);
+    try std.testing.expectApproxEqAbs(@as(f32, 4), panel.origin.x, 1e-5);
+    try std.testing.expectApproxEqAbs(@as(f32, 0.5), panel.origin.y, 1e-5);
+    try std.testing.expectApproxEqAbs(@as(f32, 2), panel.across.x, 1e-5);
+    try std.testing.expectApproxEqAbs(@as(f32, 1), panel.upward.y, 1e-5);
 }
 
 test "a ray meets a face where it crosses it, measured from the top left" {
-    const face = Face{ .origin = .{ -1, -0.5, 0 }, .across = .{ 2, 0, 0 }, .upward = .{ 0, 1, 0 } };
-    const found = hitFace(face, .{ .origin = .{ 0.5, 0.25, 5 }, .direction = .{ 0, 0, -1 } }).?;
+    const face = Face{ .origin = .init(-1, -0.5, 0), .across = .init(2, 0, 0), .upward = .up };
+    const found = hitFace(face, .{ .origin = .init(0.5, 0.25, 5), .direction = .forward }).?;
     try std.testing.expectApproxEqAbs(@as(f32, 5), found.distance, 1e-5);
-    try std.testing.expectApproxEqAbs(@as(f32, 0.75), found.at[0], 1e-5);
-    try std.testing.expectApproxEqAbs(@as(f32, 0.25), found.at[1], 1e-5);
-    try std.testing.expect(hitFace(face, .{ .origin = .{ 3, 0, 5 }, .direction = .{ 0, 0, -1 } }) == null);
-    try std.testing.expect(hitFace(face, .{ .origin = .{ 0, 0, 5 }, .direction = .{ 0, 0, 1 } }) == null);
+    try std.testing.expectApproxEqAbs(@as(f32, 0.75), found.at.x, 1e-5);
+    try std.testing.expectApproxEqAbs(@as(f32, 0.25), found.at.y, 1e-5);
+    try std.testing.expect(hitFace(face, .{ .origin = .init(3, 0, 5), .direction = .forward }) == null);
+    try std.testing.expect(hitFace(face, .{ .origin = .init(0, 0, 5), .direction = .back }) == null);
 }
 
 test "a press over a painted button records its click" {
@@ -340,13 +327,13 @@ test "a press over a painted button records its click" {
     parsed.* = try @import("eggy_assets").ui_scene.parse(state.gpa, ".{ .design_size = .{ 200, 100 }, .root = .{} }");
     try state.sceneCache().entries.put(state.gpa, try state.gpa.dupe(u8, "s.ui.zon"), parsed);
     try state.billboard_buttons.append(state.gpa, .{ .entity = sign, .node = "go", .rect = .{ .x = 0.5, .y = 0, .w = 0.5, .h = 0.5 } });
-    const view = camera.View{ .eye = .{ 0, 0, 10 }, .forward = .{ 0, 0, -1 }, .up = .{ 0, 1, 0 } };
+    const view = camera.View{ .eye = .init(0, 0, 10), .forward = .forward, .up = .up };
     // The view's top right quarter is the billboard's; its middle is not a button.
-    try std.testing.expect(!try press(&state, .{}, view, .{ 800, 600 }, .{ 400, 300 }));
+    try std.testing.expect(!try press(&state, .{}, view, .init(800, 600), .init(400, 300)));
     const half_height = 10 * @tan(30 * std.math.rad_per_deg);
     const x = 400 + 0.5 / (half_height * 800.0 / 600.0) * 400;
     const y = 300 - 0.25 / half_height * 300;
-    try std.testing.expect(try press(&state, .{}, view, .{ 800, 600 }, .{ x, y }));
+    try std.testing.expect(try press(&state, .{}, view, .init(800, 600), .init(x, y)));
     try std.testing.expectEqualStrings("go", state.clicks.items[0].node);
     try std.testing.expect(state.clicks.items[0].entity.eql(sign));
 }
@@ -355,15 +342,15 @@ test "a panel is width_m wide facing either way, however its entity is scaled" {
     var billboard = std.mem.zeroes(Billboard);
     billboard.width_m = 2;
     billboard.model = .{ .{ 0.5, 0, 0, 0 }, .{ 0, 0.5, 0, 0 }, .{ 0, 0, 0.5, 0 }, .{ 0, 0, 0, 1 } };
-    const view = camera.View{ .eye = .{ 3, 0, 3 }, .forward = camera.normalize(.{ -1, 0, -1 }), .up = .{ 0, 1, 0 } };
+    const view = camera.View{ .eye = .init(3, 0, 3), .forward = math.Vec3.init(-1, 0, -1).normalize(), .up = .up };
     const tile = ui.Rect{ .x = 0, .y = 0, .w = 100, .h = 50 };
     billboard.face_camera = false;
     const fixed = panelFor(billboard, tile, 0.5, view, undefined);
     billboard.face_camera = true;
     const facing = panelFor(billboard, tile, 0.5, view, undefined);
     for ([_]world_draw.Panel{ fixed, facing }) |panel| {
-        try std.testing.expectApproxEqAbs(@as(f32, 2), length(panel.across), 1e-5);
-        try std.testing.expectApproxEqAbs(@as(f32, 1), length(panel.upward), 1e-5);
+        try std.testing.expectApproxEqAbs(@as(f32, 2), panel.across.length(), 1e-5);
+        try std.testing.expectApproxEqAbs(@as(f32, 1), panel.upward.length(), 1e-5);
     }
 }
 
