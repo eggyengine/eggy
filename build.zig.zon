@@ -73,6 +73,12 @@
             .url = "https://github.com/vnmakarov/mir/archive/477d820e7b3054980ea1b936ecb2945c0e6465e8.tar.gz",
             .hash = "N-V-__8AADEDBgMQnKuOdwBaHQ1zE_oloF3b5dMpuIgPXT_T",
         },
+        .tinyexr = .{
+            .url = "https://github.com/syoyo/tinyexr/archive/refs/tags/v1.0.13.tar.gz",
+            .hash = "N-V-__8AAIdisgHfRde7QqgG-w8z6G6NvLaRVTxUVM02cKjk",
+            // Decodes OpenEXR images in `eggy_assimp`, so it is fetched only with assimp.
+            .lazy = true,
+        },
     },
     .paths = .{
         "build.zig",

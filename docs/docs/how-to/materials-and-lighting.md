@@ -116,8 +116,12 @@ The sky then lights the scene in place of `ambient_color`, softly from every sid
 reflections, which are sharper on smoother surfaces. `sky_intensity` sets how bright it looks
 and lights; `ambient_intensity` still scales its light, and the default 0.03 leaves it as is.
 
+A high-dynamic-range panorama (Radiance `.hdr` or OpenEXR `.exr`) keeps light brighter than
+white, so a sun in it lights and reflects as brightly as it was captured; a PNG or JPEG sky
+stops at white. Lower `sky_intensity` if an HDR sky is brighter than the scene's lights.
+
 ```zig
-try app.lighting().setEnvironment(.{ .sky = .init("resources/sky/meadow.png"), .sky_intensity = 1.5 });
+try app.lighting().setEnvironment(.{ .sky = .init("resources/sky/meadow.hdr"), .sky_intensity = 1.5 });
 ```
 
 Positive exposure EV doubles brightness per stop; negative EV halves it. Disabling

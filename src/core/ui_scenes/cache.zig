@@ -216,7 +216,10 @@ const max_side = 512;
 const max_pixels = ui.color_atlas_size * ui.color_atlas_size / 4;
 
 /// `texture`'s frames packed into `font`'s color atlas, shrunk to fit it; an owned image.
-pub fn pack(gpa: std.mem.Allocator, font: *ui.Font, texture: assets.Texture) !*ui.Image {
+pub fn pack(gpa: std.mem.Allocator, font: *ui.Font, decoded: assets.Texture) !*ui.Image {
+    // The atlas holds bytes: a high-dynamic-range image shows clipped to white.
+    var texture = if (decoded.format == .rgba8_srgb) decoded else try decoded.toSrgb8(gpa);
+    defer if (decoded.format != .rgba8_srgb) texture.deinit(gpa);
     const count = texture.frameCount();
     const width: usize = texture.width;
     const height: usize = texture.height;

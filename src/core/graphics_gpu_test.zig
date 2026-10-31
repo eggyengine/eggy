@@ -86,9 +86,18 @@ test "GPU renders every supported AA mode through live texture and scene changes
     try std.testing.expectEqualDeep(restart, (try state.store.?.load()).?);
 }
 
-fn checker(_: *anyopaque, gpa: std.mem.Allocator, _: []const u8) !assets.Texture {
+/// A black and white checkerboard; for an `.hdr` path, in floats with its light four times white.
+fn checker(_: *anyopaque, gpa: std.mem.Allocator, path: []const u8) !assets.Texture {
     const width = 63;
     const height = 35;
+    if (std.mem.endsWith(u8, path, ".hdr")) {
+        const pixels = try gpa.alloc(u8, width * height * 8);
+        for (0..height) |y| for (0..width) |x| {
+            const value: f32 = if ((x / 2 + y / 2) % 2 == 0) 4 else 0;
+            for (0..4) |channel| assets.texture.setHalf(pixels, (y * width + x) * 4 + channel, if (channel == 3) 1 else value);
+        };
+        return .{ .width = width, .height = height, .pixels = pixels, .format = .rgba16_float };
+    }
     const pixels = try gpa.alloc(u8, width * height * 4);
     for (0..height) |y| for (0..width) |x| {
         const offset = (y * width + x) * 4;
@@ -279,13 +288,13 @@ test "GPU culls back faces, blends over what is behind, follows material maps, l
     try std.testing.expect(@max(blended[middle], blended[middle + 2]) > 200);
     try std.testing.expect(blended[middle + 1] > 60 and blended[middle + 1] + 20 < cut_out[middle + 1]);
 
-    // A smooth metal ball is black with nothing round it, and reflects a sky
+    // A smooth metal ball is black with nothing round it, and reflects a sky (a float one).
     var ball = [_]mesh.Drawable{.{ .model = .{ .{ 2, 0, 0, 0 }, .{ 0, 2, 0, 0 }, .{ 0, 0, 2, 0 }, .{ 0, 0, 0, 1 } }, .color = @splat(1), .shape = .sphere, .entity_id = 0, .entity_generation = 0, .material_params = .{ 1, 0.1, 0, 1 } }};
     graphics.lights.ambient = .{ 1, 1, 1, 0 };
     const ahead = camera.View.lookingAt(.init(0, 1, 5), .zero, .{});
     const dark = try scenePixels(gpa, &graphics, &scene, &ball, ahead);
     defer gpa.free(dark);
-    const sky_name = "generated-sky.png";
+    const sky_name = "generated-sky.hdr";
     graphics.lights.sky_file = sky_name;
     graphics.lights.sky_file_len = sky_name.len;
     graphics.lights.sky = .{ 1, 1, 0, 0 };
@@ -507,7 +516,7 @@ fn checkTextureRows(device: vit.Device, queue: vit.Queue, width: u32, height: u3
     for (0..height) |y| for (0..width) |x| {
         pixels[(y * width + x) * 4 ..][0..4].* = .{ @truncate(x * 7), @truncate(y * 11), @truncate((x + y) * 3), 255 };
     };
-    var chain = try mipmaps.Chain.init(gpa, width, height, pixels, true);
+    var chain = try mipmaps.Chain.init(gpa, width, height, pixels, .rgba8_srgb, true);
     defer chain.deinit(gpa);
     const source = try vit.Buffer.init(device, .{ .size = chain.bytes.len, .usage = .{ .transfer_src = true }, .memory = .upload, .initial_data = chain.bytes });
     defer source.deinit();

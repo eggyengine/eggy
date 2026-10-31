@@ -124,7 +124,9 @@ pub fn Runtime(comptime project: type) type {
         /// can't be loaded or set leaves the default, having said why.
         fn setWindowIcon(gpa: std.mem.Allocator, data: *packaged_assets.Data, window: sdl3.video.Window, key: []const u8) void {
             const loader = data.textures();
-            var texture = loader.load(loader.context, gpa, key) catch |err| return std.log.warn("cannot load the game's icon: {t}", .{err});
+            var decoded = loader.load(loader.context, gpa, key) catch |err| return std.log.warn("cannot load the game's icon: {t}", .{err});
+            defer decoded.deinit(gpa);
+            var texture = decoded.toSrgb8(gpa) catch |err| return std.log.warn("cannot use the game's icon: {t}", .{err});
             defer texture.deinit(gpa);
             const surface = sdl3.surface.Surface.initFrom(texture.width, texture.height, .array_rgba_32, texture.frame(0)) catch |err| return std.log.warn("cannot use the game's icon: {t}", .{err});
             defer surface.deinit();

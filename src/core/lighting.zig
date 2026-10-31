@@ -25,8 +25,8 @@ pub const Environment = struct {
     /// Without a `sky`, light reaching every surface evenly from all round.
     ambient_color: [3]f32 = @splat(1),
     ambient_intensity: f32 = 0.03,
-    /// A panorama (twice as wide as it is tall, the horizon across its middle) shown behind the
-    /// scene, which lights it in place of `ambient_color`: dimly from every side, and in
+    /// A panorama (twice as wide as it is tall, the horizon across its middle; an `.hdr` or
+    /// `.exr` keeps light past white) shown behind the scene, which lights it in place of `ambient_color`: dimly from every side, and in
     /// reflections, sharper the smoother the surface.
     sky: AssetRef(.image) = .{},
     /// How bright the sky is: shown, and the light it gives (scaled by `ambient_intensity`

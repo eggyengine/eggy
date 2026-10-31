@@ -23,7 +23,9 @@ pub fn main(init: std.process.Init) !void {
     defer input.close(io);
     var input_buffer: [64 * 1024]u8 = undefined;
     var reader = input.reader(io, &input_buffer);
-    var texture = try assets.texture.read(gpa, &reader.interface);
+    var decoded = try assets.texture.read(gpa, &reader.interface);
+    defer decoded.deinit(gpa);
+    var texture = try decoded.toSrgb8(gpa);
     defer texture.deinit(gpa);
 
     const ico = try icoFor(gpa, texture.frame(0), texture.width, texture.height);

@@ -140,6 +140,38 @@ test "an image decodes into its pixels, and a model's material brings its textur
     try std.testing.expectError(error.ImportFailed, decodeImage(gpa, "/nonexistent/rat.png"));
 }
 
+extern fn SaveEXR(data: [*]const f32, width: c_int, height: c_int, components: c_int, save_as_fp16: c_int, filename: [*:0]const u8, err: *?[*:0]const u8) c_int;
+
+test "a Radiance or OpenEXR image decodes into linear light brighter than white" {
+    const gpa = std.testing.allocator;
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const dir = try tmp.dir.realPathFileAlloc(io, ".", gpa);
+    defer gpa.free(dir);
+
+    // Two flat RGBE pixels: (2, 0, 0) is mantissa 128 at exponent 130, (1, 1, 1) 128s at 129.
+    try tmp.dir.writeFile(io, .{ .sub_path = "pair.hdr", .data = "#?RADIANCE\nFORMAT=32-bit_rle_rgbe\n\n-Y 1 +X 2\n" ++ [_]u8{ 128, 0, 0, 130, 128, 128, 128, 129 } });
+    const hdr_path = try std.fs.path.joinZ(gpa, &.{ dir, "pair.hdr" });
+    defer gpa.free(hdr_path);
+    var hdr = try decodeImage(gpa, hdr_path);
+    defer hdr.deinit(gpa);
+    try std.testing.expectEqual(assets.Texture.Format.rgba16_float, hdr.format);
+    try std.testing.expectEqual(@as(f32, 2), hdr.linear(hdr.frame(0), 0)[0]);
+    try std.testing.expectEqual(@as(f32, 1), hdr.linear(hdr.frame(0), 1)[2]);
+
+    const exr_path = try std.fs.path.joinZ(gpa, &.{ dir, "pair.exr" });
+    defer gpa.free(exr_path);
+    const light = [_]f32{ 6, 0.5, 0, 1, 0, 0, 0.25, 1 };
+    var message: ?[*:0]const u8 = null;
+    try std.testing.expectEqual(@as(c_int, 0), SaveEXR(&light, 2, 1, 4, 1, exr_path, &message));
+    var exr = try decodeImage(gpa, exr_path);
+    defer exr.deinit(gpa);
+    try std.testing.expectEqual(@as(u32, 2), exr.width);
+    try std.testing.expectEqual(@as(f32, 6), exr.linear(exr.frame(0), 0)[0]);
+    try std.testing.expectEqual(@as(f32, 0.25), exr.linear(exr.frame(0), 1)[2]);
+}
+
 /// A glTF file written as `name` in a new temporary folder, imported with `settings`.
 fn importGltf(tmp: *std.testing.TmpDir, name: []const u8, source: []const u8, settings: assets.descriptor.ModelImport) !assets.Model {
     const gpa = std.testing.allocator;

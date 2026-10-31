@@ -58,7 +58,9 @@ pub fn useProjectIcon(gpa: std.mem.Allocator, project_dir: []const u8, icon_path
 pub fn decodeBadge(gpa: std.mem.Allocator, project_dir: []const u8, path: []const u8, out: *Badged) !void {
     const full_path = try std.fs.path.joinZ(gpa, &.{ project_dir, path });
     defer gpa.free(full_path);
-    var texture = try @import("eggy_model_import").decodeImage(gpa, full_path);
+    var decoded = try @import("eggy_model_import").decodeImage(gpa, full_path);
+    defer decoded.deinit(gpa);
+    var texture = try decoded.toSrgb8(gpa);
     defer texture.deinit(gpa);
     try badge(texture.pixels, texture.width, texture.height, out);
 }

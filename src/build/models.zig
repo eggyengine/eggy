@@ -1,5 +1,5 @@
 //! Models and images in the build: `eggy_assimp`, the shared library the editor imports model
-//! files and decodes images with, plus identity-addressed payloads and the compiled asset lookup.
+//! files and decodes images with (stb_image, and tinyexr for OpenEXR), plus identity-addressed payloads and the compiled asset lookup.
 const std = @import("std");
 const package_root = @import("package_root.zig");
 const assimp = @import("assimp.zig");
@@ -72,6 +72,13 @@ pub fn addImporter(eggy: *std.Build, target: std.Build.ResolvedTarget, optimize:
     // stb_image, from assimp's copy, for images.
     library.root_module.addIncludePath(source.path("contrib"));
     library.root_module.addCSourceFile(.{ .file = eggy.path("src/model_import/stb_image.c"), .flags = &.{"-fno-sanitize=undefined"} });
+    // tinyexr for OpenEXR images, on assimp's zlib (and its `zconf.h`).
+    const tinyexr = eggy.lazyDependency("tinyexr", .{}) orelse return null;
+    library.root_module.addIncludePath(tinyexr.path(""));
+    library.root_module.addIncludePath(source.path("contrib/zlib"));
+    library.root_module.addIncludePath(eggy.path("src/build/assimp"));
+    library.root_module.addCSourceFile(.{ .file = eggy.path("src/model_import/tinyexr.cc"), .flags = &.{ "-std=c++14", "-fno-sanitize=undefined" } });
+    library.root_module.link_libcpp = target.result.abi != .msvc;
     mingw_fortify.disable(library.root_module, target, optimize);
 
     const module = eggy.createModule(.{

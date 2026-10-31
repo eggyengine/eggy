@@ -1,4 +1,4 @@
-//! `eggy_assimp`: a shared library holding assimp and stb_image, so only the editor and
+//! `eggy_assimp`: a shared library holding assimp, stb_image and tinyexr, so only the editor and
 //! packaging carry them, and the editor links it rather than building it into itself. It
 //! imports a model file into one list of triangles, every part placed where the file puts it,
 //! scaled, with smooth normals, each mesh a part with its material's texture (an image file
@@ -56,10 +56,11 @@ export fn eggy_import_model(path: [*:0]const u8, scale: f32, out: *Bytes) bool {
     return serialize(assets.model.write, model, out);
 }
 
-/// Decode the image file at `path` into `out` as an `.eggtexture`'s bytes. False when it can't
-/// be (`eggy_import_error` says why).
+/// Decode the image file at `path` into `out` as an `.eggtexture`'s bytes: a Radiance `.hdr` or
+/// OpenEXR one in `.rgba16_float`, others in `.rgba8_srgb`. False when it can't be
+/// (`eggy_import_error` says why).
 /// C ABI: `path` is null-terminated and `out` writable. Success initializes C-owned serialized
-/// RGBA8 texture bytes; failure leaves `out` unusable and exposes diagnostics on this thread.
+/// texture bytes; failure leaves `out` unusable and exposes diagnostics on this thread.
 ///
 /// ```zig
 /// var bytes: Bytes = undefined;
@@ -69,6 +70,8 @@ export fn eggy_import_model(path: [*:0]const u8, scale: f32, out: *Bytes) bool {
 export fn eggy_decode_image(path: [*:0]const u8, out: *Bytes) bool {
     failure = null;
     if (decodeGif(path, out)) |decoded| return decoded;
+    if (IsEXR(path) == 0) return decodeExr(path, out);
+    if (c.stbi_is_hdr(path) != 0) return decodeHdr(path, out);
     var width: c_int = 0;
     var height: c_int = 0;
     var channels: c_int = 0;
@@ -76,6 +79,52 @@ export fn eggy_decode_image(path: [*:0]const u8, out: *Bytes) bool {
     defer c.stbi_image_free(pixels);
     const size: usize = @intCast(width * height * 4);
     return serialize(assets.texture.write, assets.Texture{ .width = @intCast(width), .height = @intCast(height), .pixels = pixels[0..size] }, out);
+}
+
+/// Decode the Radiance `.hdr` at `path` into `out`, as `eggy_decode_image` does.
+fn decodeHdr(path: [*:0]const u8, out: *Bytes) bool {
+    var width: c_int = 0;
+    var height: c_int = 0;
+    var channels: c_int = 0;
+    const pixels = c.stbi_loadf(path, &width, &height, &channels, 4) orelse return fail(c.stbi_failure_reason());
+    defer c.stbi_image_free(pixels);
+    return serializeFloat(pixels, width, height, out);
+}
+
+// tinyexr's C API (`tinyexr.cc`): what `decodeExr` uses of it.
+extern fn IsEXR(filename: [*:0]const u8) c_int;
+extern fn LoadEXR(out_rgba: *?[*]f32, width: *c_int, height: *c_int, filename: [*:0]const u8, err: *?[*:0]const u8) c_int;
+extern fn FreeEXRErrorMessage(message: [*:0]const u8) void;
+
+/// Why the last OpenEXR on this thread couldn't be decoded, copied from tinyexr's message.
+threadlocal var exr_failure: [256:0]u8 = undefined;
+
+/// Decode the OpenEXR at `path` (its RGBA layer) into `out`, as `eggy_decode_image` does.
+fn decodeExr(path: [*:0]const u8, out: *Bytes) bool {
+    var pixels: ?[*]f32 = null;
+    var width: c_int = 0;
+    var height: c_int = 0;
+    var message: ?[*:0]const u8 = null;
+    if (LoadEXR(&pixels, &width, &height, path, &message) != 0) {
+        const why = message orelse return fail("it isn't an OpenEXR image tinyexr reads");
+        defer FreeEXRErrorMessage(why);
+        const text = std.mem.span(why);
+        const length = @min(text.len, exr_failure.len);
+        @memcpy(exr_failure[0..length], text[0..length]);
+        exr_failure[length] = 0;
+        return fail(&exr_failure);
+    }
+    defer std.c.free(pixels);
+    return serializeFloat(pixels.?, width, height, out);
+}
+
+/// Linear float RGBA `pixels`, `width` by `height`, as an `.rgba16_float` texture in `out`.
+fn serializeFloat(pixels: [*]const f32, width: c_int, height: c_int, out: *Bytes) bool {
+    const count: usize = @intCast(width * height * 4);
+    const halves = gpa.alloc(u8, count * 2) catch return fail("out of memory");
+    defer gpa.free(halves);
+    for (pixels[0..count], 0..) |value, index| assets.texture.setHalf(halves, index, value);
+    return serialize(assets.texture.write, assets.Texture{ .width = @intCast(width), .height = @intCast(height), .pixels = halves, .format = .rgba16_float }, out);
 }
 
 /// Decode the GIF at `path` with every frame into `out`, as `eggy_decode_image` does; null when

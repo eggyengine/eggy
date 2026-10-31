@@ -46,7 +46,7 @@ pub const Kind = enum(u8) {
         const kinds = [_]struct { []const []const u8, Kind }{
             .{ &.{".zig"}, .code },
             .{ &.{ ".zon", ".md", ".txt", ".json", ".toml" }, .text },
-            .{ &.{ ".png", ".jpg", ".jpeg", ".gif", ".svg", ".bmp", ".webp" }, .image },
+            .{ &.{ ".png", ".jpg", ".jpeg", ".gif", ".svg", ".bmp", ".webp", ".hdr", ".exr" }, .image },
             .{ &.{ ".wav", ".ogg", ".mp3", ".flac" }, .audio },
             .{ &.{ ".glb", ".gltf", ".obj", ".fbx", ".dae", ".3ds", ".ply", ".stl" }, .model },
             .{ &.{ ".ttf", ".otf" }, .font },
@@ -58,8 +58,8 @@ pub const Kind = enum(u8) {
         return .any;
     }
 
-    /// Whether the file at `path` is an image a mesh can be painted with: one stb_image decodes
-    /// (not an SVG or WebP).
+    /// Whether the file at `path` is an image a mesh can be painted with: one stb_image or, for
+    /// OpenEXR, tinyexr decodes (not an SVG or WebP).
     /// Checks the extension without decoding or opening the file.
     ///
     /// ```zig
@@ -67,7 +67,7 @@ pub const Kind = enum(u8) {
     /// ```
     pub fn isTexture(path: []const u8) bool {
         const extension = std.fs.path.extension(path);
-        for ([_][]const u8{ ".png", ".jpg", ".jpeg", ".gif", ".bmp" }) |known| {
+        for ([_][]const u8{ ".png", ".jpg", ".jpeg", ".gif", ".bmp", ".hdr", ".exr" }) |known| {
             if (std.ascii.eqlIgnoreCase(extension, known)) return true;
         }
         return false;
@@ -97,5 +97,6 @@ test "a file's kind comes from its name" {
     try std.testing.expectEqual(Kind.font, Kind.of("ui/Title.OTF"));
     try std.testing.expectEqual(Kind.shader, Kind.of("shaders/water.slang"));
     try std.testing.expect(Kind.isTexture("art/Wood.PNG"));
+    try std.testing.expect(Kind.isTexture("skies/dusk.hdr") and Kind.isTexture("skies/noon.EXR"));
     try std.testing.expect(!Kind.isTexture("art/logo.svg"));
 }

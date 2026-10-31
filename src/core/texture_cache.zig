@@ -146,14 +146,17 @@ pub const TextureCache = struct {
     /// textures.release(paint);
     /// ```
     pub fn make(self: *TextureCache, texture: assets.Texture, label: []const u8) !Gpu {
-        var chain = try mipmaps.Chain.init(self.gpa, texture.width, texture.height, texture.frame(0), self.settings.mipmaps);
+        var chain = try mipmaps.Chain.init(self.gpa, texture.width, texture.height, texture.frame(0), texture.format, self.settings.mipmaps);
         defer chain.deinit(self.gpa);
         const made = try vit.Texture.init(self.device, .{
             .label = label,
             .width = texture.width,
             .height = texture.height,
             .mip_levels = chain.count,
-            .format = .rgba8_unorm,
+            .format = switch (texture.format) {
+                .rgba8_srgb => .rgba8_unorm,
+                .rgba16_float => .rgba16_float,
+            },
             .usage = .{ .sampled = true, .transfer_dst = true },
         });
         errdefer made.deinit();

@@ -34,7 +34,7 @@ fn basis(d: math.Vec3) [9]f32 {
     };
 }
 
-/// The light `panorama` (sRGB) gives, in linear light, sampled on a grid of at most 256 by 128.
+/// The light `panorama` gives, in linear light, sampled on a grid of at most 256 by 128.
 pub fn irradiance(panorama: assets.Texture) Irradiance {
     const pixels = panorama.frame(0);
     const step_x = @max(1, panorama.width / 256);
@@ -48,10 +48,9 @@ pub fn irradiance(panorama: assets.Texture) Irradiance {
         var x: u32 = step_x / 2;
         while (x < panorama.width) : (x += step_x) {
             const u = (@as(f32, @floatFromInt(x)) + 0.5) / @as(f32, @floatFromInt(panorama.width));
-            const at = (@as(usize, y) * panorama.width + x) * 4;
+            const color = panorama.linear(pixels, @as(usize, y) * panorama.width + x);
             const terms = basis(direction(u, v));
-            for (0..3) |channel| {
-                const linear = std.math.pow(f32, @as(f32, @floatFromInt(pixels[at + channel])) / 255, 2.2);
+            for (color[0..3], 0..) |linear, channel| {
                 for (&sums, terms) |*sum, term| sum[channel] += linear * term * solid_angle;
             }
         }
@@ -121,3 +120,9 @@ test "a sky bright only above lights upward-facing surfaces more" {
     try std.testing.expect(light[1][0] > 0.1);
 }
 
+test "a high-dynamic-range sky lights as brightly as its light, past white" {
+    var pixels: [64 * 32 * 8]u8 = undefined;
+    for (0..64 * 32 * 4) |i| assets.texture.setHalf(&pixels, i, 3);
+    const light = irradiance(.{ .width = 64, .height = 32, .pixels = &pixels, .format = .rgba16_float });
+    try std.testing.expectApproxEqAbs(@as(f32, 3), light[0][0] * 0.282095, 0.06);
+}

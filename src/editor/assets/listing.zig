@@ -43,7 +43,7 @@ pub const Kind = enum {
         const kinds = [_]struct { []const []const u8, Kind }{
             .{ &.{".zig"}, .code },
             .{ &.{ ".zon", ".md", ".txt", ".json", ".toml" }, .text },
-            .{ &.{ ".png", ".jpg", ".jpeg", ".gif", ".svg", ".bmp", ".webp" }, .image },
+            .{ &.{ ".png", ".jpg", ".jpeg", ".gif", ".svg", ".bmp", ".webp", ".hdr", ".exr" }, .image },
             .{ &.{ ".wav", ".ogg", ".mp3", ".flac" }, .audio },
         };
         for (kinds) |entry| for (entry[0]) |known| {
