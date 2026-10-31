@@ -2133,6 +2133,10 @@ pub fn Editor(comptime project: type) type {
                 if (!self.play_mode.playing()) self.entity_editor.view_state.visibleLights(&self.app.world, &self.app.graphics.lights);
                 const visible = if (self.play_mode.playing()) gathered else self.entity_editor.view_state.visibleMeshes(&self.app.world, gathered);
                 const meshes = if (self.scene_view.no_camera) visible[0..0] else visible;
+                // The selected camera's view, unoutlined, before the stand-ins go in: rendering sorts
+                // what it draws in place, so after the panel's render the stand-ins (shapes, which
+                // sort first) would sit where `meshes` reads, and the camera would see its own.
+                if (preview_px) |inset| try self.camera_preview.render(&self.app.graphics, frame.cmd, pixelSize(inset), meshes, self.scene_view.preview.?, &.{}, false);
                 // Lights and cameras get stand-ins after the game's meshes, only through the panel's own camera.
                 const shown = if (self.game) |*game| if (!self.scene_view.throughGameCamera()) block: {
                     const count = scene_view.stand_ins.append(game, &self.app, &self.app.graphics.lights, self.drawables, meshes.len);
@@ -2173,8 +2177,6 @@ pub fn Editor(comptime project: type) type {
                     try self.app.drawDebug(draw_context, self.scene_view.view);
                     try self.scene.endOverlay(frame.cmd);
                 }
-                // The selected camera's view, unoutlined. Rendering sorts `meshes`, which is no matter.
-                if (preview_px) |inset| try self.camera_preview.render(&self.app.graphics, frame.cmd, pixelSize(inset), meshes, self.scene_view.preview.?, &.{}, false);
             }
 
             const model_px = if (drawn.asset_preview_at != null) try self.renderModelPreview(frame.cmd, viewport, frame.extent) else null;
