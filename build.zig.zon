@@ -18,8 +18,8 @@
             .hash = "vitellus-0.1.0-JC2CjOgqCgCKoBQ68R-5-Z6njoD8GjFMuLyBYXsBJBtz",
         },
         .humpty = .{
-            .url = "git+https://github.com/eggyengine/humpty#9280090cfd7f8c62cadc278b2538731bb93ccafe",
-            .hash = "humpty-0.1.0-h_J630EWAABaVPzs2AgF7nWfJxt-a-pyt8qNnkG4wMND",
+            .url = "git+https://github.com/eggyengine/humpty#34e9ec524a9acca018acbb8d90d9b798a8d5e63e",
+            .hash = "humpty-0.1.0-h_J6348TAAAENna-FsDlrS7ANu44Dzq1tJIUZf22LXbu",
         },
         .clutch = .{
             .url = "git+https://github.com/eggyengine/clutch#ca6b3fb364fcdb1326a6c78204f35bff2ec7de40",
