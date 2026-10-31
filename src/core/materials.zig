@@ -25,11 +25,17 @@ pub fn parse(gpa: std.mem.Allocator, source: [:0]const u8) !Material {
     const File = struct {
         color: [4]f32 = @splat(1),
         texture: []const u8 = "",
+        normal_texture: []const u8 = "",
+        metallic_roughness_texture: []const u8 = "",
+        emissive_texture: []const u8 = "",
+        occlusion_texture: []const u8 = "",
         metallic: f32 = 0,
         roughness: f32 = 1,
         emissive_color: [3]f32 = @splat(0),
         unlit: bool = false,
+        alpha_mode: Material.AlphaMode = .cutout,
         alpha_cutoff: f32 = 0.01,
+        double_sided: bool = false,
         shader: []const u8 = "",
     };
     var arena: std.heap.ArenaAllocator = .init(gpa);
@@ -38,11 +44,17 @@ pub fn parse(gpa: std.mem.Allocator, source: [:0]const u8) !Material {
     const material = Material{
         .color = file.color,
         .texture = try refs.AssetRef(.image).parse(file.texture),
+        .normal_texture = try refs.AssetRef(.image).parse(file.normal_texture),
+        .metallic_roughness_texture = try refs.AssetRef(.image).parse(file.metallic_roughness_texture),
+        .emissive_texture = try refs.AssetRef(.image).parse(file.emissive_texture),
+        .occlusion_texture = try refs.AssetRef(.image).parse(file.occlusion_texture),
         .metallic = file.metallic,
         .roughness = file.roughness,
         .emissive_color = file.emissive_color,
         .unlit = file.unlit,
+        .alpha_mode = file.alpha_mode,
         .alpha_cutoff = file.alpha_cutoff,
+        .double_sided = file.double_sided,
         .shader = try refs.AssetRef(.shader).parse(file.shader),
     };
     try material.validate();
@@ -52,8 +64,12 @@ pub fn parse(gpa: std.mem.Allocator, source: [:0]const u8) !Material {
 test "material files validate parameters and own texture references" {
     const material = try parse(std.testing.allocator,
         \\.{ .color = .{ 1, 0.5, 0.2, 1 }, .metallic = 0.7,
-        \\ .roughness = 0.3, .texture = "resources/metal.png", .shader = "resources/shine.slang" }
+        \\ .roughness = 0.3, .texture = "resources/metal.png", .shader = "resources/shine.slang",
+        \\ .normal_texture = "resources/metal_normal.png", .alpha_mode = .blend, .double_sided = true }
     );
+    try std.testing.expectEqual(refs.AssetRef(.image).init("resources/metal_normal.png").id(), material.normal_texture.id());
+    try std.testing.expectEqual(Material.AlphaMode.blend, material.alpha_mode);
+    try std.testing.expect(material.double_sided);
     try std.testing.expectEqual(refs.AssetRef(.shader).init("resources/shine.slang").id(), material.shader.id());
     try std.testing.expectEqual(@as(f32, 0.7), material.metallic);
     try std.testing.expectEqual(refs.AssetRef(.image).init("resources/metal.png").id(), material.texture.id());

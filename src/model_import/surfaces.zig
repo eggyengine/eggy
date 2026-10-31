@@ -1,4 +1,5 @@
-//! What a model's materials give its parts: colours, and the texture each one uses, decoded once.
+//! What a model's materials give its parts: colours, the textures each one uses (decoded once),
+//! how its alpha shows and whether it has a back.
 const std = @import("std");
 const c = @import("assimp");
 const assets = @import("eggy_assets");
@@ -31,6 +32,56 @@ pub fn materialOf(scene: *const c.struct_aiScene, index: u32) error{InvalidMater
     return surface;
 }
 
+/// A part painted with material `index`: its textures, alpha and sides, the rest left for the
+/// caller to fill in. glTF's opaque surfaces ignore alpha; masked ones cut it at their cutoff.
+pub fn partOf(scene: *const c.struct_aiScene, textures: *Textures, index: u32) !assets.model.Part {
+    var part = assets.model.Part{ .first_index = 0, .index_count = 0, .material = materialIndex(scene, index) };
+    part.texture = try textures.ofMaterial(index, .base);
+    inline for (@typeInfo(assets.model.Maps).@"struct".field_names) |name| {
+        @field(part.maps, name) = try textures.ofMaterial(index, @field(Slot, name));
+    }
+    if (index >= scene.mNumMaterials) return part;
+    const material = scene.mMaterials[index];
+    var mode: c.struct_aiString = undefined;
+    if (c.aiGetMaterialString(material, "$mat.gltf.alphaMode", 0, 0, &mode) == c.aiReturn_SUCCESS) {
+        const named = mode.data[0..mode.length];
+        if (std.mem.eql(u8, named, "BLEND")) part.alpha_mode = .blend;
+        if (std.mem.eql(u8, named, "OPAQUE")) part.alpha_cutoff = 0;
+        if (std.mem.eql(u8, named, "MASK")) {
+            var cutoff: f32 = 0.5;
+            var count: c_uint = 1;
+            _ = c.aiGetMaterialFloatArray(material, "$mat.gltf.alphaCutoff", 0, 0, &cutoff, &count);
+            if (!std.math.isFinite(cutoff) or cutoff < 0 or cutoff > 1) return error.InvalidMaterial;
+            part.alpha_cutoff = cutoff;
+        }
+    }
+    var two_sided: c_int = 0;
+    var count: c_uint = 1;
+    if (c.aiGetMaterialIntegerArray(material, "$mat.twosided", 0, 0, &two_sided, &count) == c.aiReturn_SUCCESS) part.double_sided = two_sided != 0;
+    return part;
+}
+
+/// Which texture of a material: its colour, or one of its maps (`assets.model.Maps`).
+pub const Slot = enum(u3) {
+    base,
+    normal,
+    metallic_roughness,
+    emissive,
+    occlusion,
+
+    /// Where assimp keeps it, most specific first (glTF's metallic-roughness texture is its
+    /// `UNKNOWN` one, and its occlusion its lightmap).
+    fn kinds(self: Slot) []const c_uint {
+        return switch (self) {
+            .base => &.{ c.aiTextureType_BASE_COLOR, c.aiTextureType_DIFFUSE },
+            .normal => &.{ c.aiTextureType_NORMALS, c.aiTextureType_NORMAL_CAMERA },
+            .metallic_roughness => &.{ c.aiTextureType_UNKNOWN, c.aiTextureType_DIFFUSE_ROUGHNESS, c.aiTextureType_METALNESS },
+            .emissive => &.{ c.aiTextureType_EMISSIVE, c.aiTextureType_EMISSION_COLOR },
+            .occlusion => &.{ c.aiTextureType_LIGHTMAP, c.aiTextureType_AMBIENT_OCCLUSION },
+        };
+    }
+};
+
 /// Which of `scene`'s materials `index` is, when it is one.
 pub fn materialIndex(scene: *const c.struct_aiScene, index: u32) ?u32 {
     return if (index < scene.mNumMaterials) index else null;
@@ -60,33 +111,56 @@ pub const Textures = struct {
     /// The model file's folder, which a material's texture path is relative to.
     dir: []const u8,
     list: std.ArrayList(assets.Texture) = .empty,
-    /// Which of `list` each material's texture is (null: it has none, or it didn't decode).
+    /// Which of `list` each material's texture in each slot is (null: it has none, or it didn't
+    /// decode), by material index times eight plus slot.
     by_material: std.AutoHashMapUnmanaged(u32, ?u32) = .empty,
+    /// Which of `list` each file or embedded texture already is, by the name the material gives
+    /// it, so a map shared by slots (an ORM texture) is decoded once. Keys are owned.
+    by_name: std.StringHashMapUnmanaged(u32) = .empty,
 
     pub fn deinit(self: *Textures) void {
         for (self.list.items) |*texture| texture.deinit(gpa);
         self.list.deinit(gpa);
         self.by_material.deinit(gpa);
+        self.forgetNames();
     }
 
-    /// The texture of material `index` (its base colour's, else its diffuse one's).
-    pub fn ofMaterial(self: *Textures, index: u32) !?u32 {
-        if (self.by_material.get(index)) |known| return known;
-        const found = self.decode(index);
-        if (found) |texture| try self.list.append(gpa, texture);
-        const result: ?u32 = if (found != null) @intCast(self.list.items.len - 1) else null;
-        try self.by_material.put(gpa, index, result);
+    /// Free the name index, once the list has been taken.
+    pub fn forgetNames(self: *Textures) void {
+        var names = self.by_name.keyIterator();
+        while (names.next()) |name| gpa.free(name.*);
+        self.by_name.deinit(gpa);
+    }
+
+    /// Material `index`'s texture in `slot`.
+    pub fn ofMaterial(self: *Textures, index: u32, slot: Slot) !?u32 {
+        const key = index * 8 + @backingInt(slot);
+        if (self.by_material.get(key)) |known| return known;
+        const result = try self.find(index, slot);
+        try self.by_material.put(gpa, key, result);
         return result;
     }
 
-    fn decode(self: *Textures, index: u32) ?assets.Texture {
+    fn find(self: *Textures, index: u32, slot: Slot) !?u32 {
         if (index >= self.scene.mNumMaterials) return null;
         const material = self.scene.mMaterials[index];
         var path: c.aiString = undefined;
-        const kinds = [_]c_uint{ c.aiTextureType_BASE_COLOR, c.aiTextureType_DIFFUSE };
-        const named = for (kinds) |kind| {
+        const named = for (slot.kinds()) |kind| {
             if (c.aiGetMaterialTexture(material, kind, 0, &path, null, null, null, null, null, null) == c.aiReturn_SUCCESS) break path.data[0..path.length];
         } else return null;
+        if (self.by_name.get(named)) |known| return known;
+        const texture = self.decode(named) orelse return null;
+        try self.list.append(gpa, texture);
+        const at: u32 = @intCast(self.list.items.len - 1);
+        const key = try gpa.dupe(u8, named);
+        self.by_name.put(gpa, key, at) catch |err| {
+            gpa.free(key);
+            return err;
+        };
+        return at;
+    }
+
+    fn decode(self: *Textures, named: []const u8) ?assets.Texture {
         if (self.embedded(named)) |texture| return decodeEmbedded(texture);
         // A file beside the model.
         var buffer: [std.fs.max_path_bytes]u8 = undefined;

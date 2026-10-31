@@ -53,6 +53,7 @@ pub fn import(scene: *const c.struct_aiScene, dir: []const u8, scale: f32) Error
     if (!skinned) builder.influences.clearAndFree(gpa);
     const decoded = try textures.list.toOwnedSlice(gpa);
     textures.by_material.deinit(gpa);
+    textures.forgetNames();
     errdefer for (decoded) |*texture| texture.deinit(gpa);
     const result = assets.Model{
         .vertices = try builder.vertices.toOwnedSlice(gpa),
@@ -160,7 +161,7 @@ const Builder = struct {
         }
         if (triangles == 0 or mesh.*.mNumVertices == 0) return;
         const surface = try surfaces.materialOf(scene, mesh.*.mMaterialIndex);
-        const texture = try textures.ofMaterial(mesh.*.mMaterialIndex);
+        var part = try surfaces.partOf(scene, textures, mesh.*.mMaterialIndex);
         const first_vertex: u32 = @intCast(self.vertices.items.len);
         const count = mesh.*.mNumVertices;
 
@@ -198,18 +199,15 @@ const Builder = struct {
         const morph_first: u32 = @intCast(self.morphs.items.len);
         if (!isCacheMesh(scene, mesh)) try self.addMorphTargets(mesh, first_vertex);
         try self.placements.append(gpa, .{ .mesh = mesh_index, .part = @intCast(self.parts.items.len) });
-        try self.parts.append(gpa, .{
-            .first_index = first_index,
-            .index_count = @intCast(triangles * 3),
-            .texture = texture,
-            .material = surfaces.materialIndex(scene, mesh.*.mMaterialIndex),
-            .first_vertex = first_vertex,
-            .vertex_count = count,
-            .node = node,
-            .skin = skin,
-            .morph_first = morph_first,
-            .morph_count = @intCast(self.morphs.items.len - morph_first),
-        });
+        part.first_index = first_index;
+        part.index_count = @intCast(triangles * 3);
+        part.first_vertex = first_vertex;
+        part.vertex_count = count;
+        part.node = node;
+        part.skin = skin;
+        part.morph_first = morph_first;
+        part.morph_count = @intCast(self.morphs.items.len - morph_first);
+        try self.parts.append(gpa, part);
     }
 
     /// The four strongest joints pulling each corner of `mesh`, weights adding up to one; a

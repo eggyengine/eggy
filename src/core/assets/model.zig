@@ -20,7 +20,23 @@ pub const Vertex = extern struct {
 
 /// The `.eggmodel` layout this build reads and writes. A file of another version fails to read
 /// with `error.UnexpectedData`; bump it whenever the stored types below change shape or meaning.
-pub const format_version: u32 = 3;
+pub const format_version: u32 = 4;
+
+/// How a surface's alpha shows: pixels below its cutoff left out, the rest opaque; or blended
+/// over what is behind it, drawn after everything opaque, farthest first.
+pub const AlphaMode = enum { cutout, blend };
+
+/// A surface's maps beyond its colour, each one of the model's `textures`, or none.
+pub const Maps = struct {
+    /// Tangent-space normals, +y towards the top of the image (glTF's way).
+    normal: ?u32 = null,
+    /// Roughness in green, metallic in blue, multiplying the surface's own.
+    metallic_roughness: ?u32 = null,
+    /// Light given off, multiplying the surface's emissive colour.
+    emissive: ?u32 = null,
+    /// How much ambient light reaches the surface, in red.
+    occlusion: ?u32 = null,
+};
 
 /// A run of a model's `indices` drawn with one texture: its own, or none (the `Mesh`'s, or
 /// plain colour).
@@ -31,6 +47,12 @@ pub const Part = struct {
     texture: ?u32 = null,
     /// Which of the model's `materials` paints it; its colours are in its corners.
     material: ?u32 = null,
+    maps: Maps = .{},
+    alpha_mode: AlphaMode = .cutout,
+    /// Below this alpha a `.cutout` surface isn't drawn.
+    alpha_cutoff: f32 = 0.01,
+    /// Drawn from behind too; otherwise only its front (counter-clockwise) faces show.
+    double_sided: bool = false,
     /// The corners this part owns, which its indices point into. Only a model with a `Rig` fills
     /// them in; a part of a static model leaves them zero.
     first_vertex: u32 = 0,
@@ -244,6 +266,10 @@ pub const Model = struct {
         for (self.parts) |part| {
             if (@as(usize, part.first_index) + part.index_count > self.indices.len) return false;
             if (part.texture) |texture| if (texture >= self.textures.len) return false;
+            inline for (@typeInfo(Maps).@"struct".field_names) |name| {
+                if (@field(part.maps, name)) |texture| if (texture >= self.textures.len) return false;
+            }
+            if (!std.math.isFinite(part.alpha_cutoff) or part.alpha_cutoff < 0 or part.alpha_cutoff > 1) return false;
             if (part.material) |material| if (material >= self.materials.len) return false;
         }
         for (self.textures) |texture| if (!texture.isWhole()) return false;
@@ -371,7 +397,7 @@ test "a model reads back as written" {
     var indices = [_]u32{ 0, 2, 1 };
     var bytes: std.Io.Writer.Allocating = .init(std.testing.allocator);
     defer bytes.deinit();
-    var parts = [_]Part{.{ .first_index = 0, .index_count = 3, .texture = 0 }};
+    var parts = [_]Part{.{ .first_index = 0, .index_count = 3, .texture = 0, .maps = .{ .normal = 0 }, .alpha_mode = .blend, .double_sided = true }};
     var pixels = [_]u8{ 1, 2, 3, 4 };
     var textures = [_]Texture{.{ .width = 1, .height = 1, .pixels = &pixels }};
     try write(&bytes.writer, .{ .vertices = &vertices, .indices = &indices, .parts = &parts, .textures = &textures });
@@ -381,11 +407,22 @@ test "a model reads back as written" {
     defer model.deinit(std.testing.allocator);
     try std.testing.expectEqualSlices(u32, &indices, model.indices);
     try std.testing.expectEqual(@as(?u32, 0), model.parts[0].texture);
+    try std.testing.expectEqual(@as(?u32, 0), model.parts[0].maps.normal);
+    try std.testing.expectEqual(AlphaMode.blend, model.parts[0].alpha_mode);
+    try std.testing.expect(model.parts[0].double_sided);
     try std.testing.expectEqualSlices(u8, &pixels, model.textures[0].pixels);
     try std.testing.expectEqual(@as(f32, 1), model.vertices[1].position[0]);
     try std.testing.expectEqualSlices(f32, &vertices[0].color, &model.vertices[0].color);
     try std.testing.expectEqualSlices(f32, &vertices[0].metallic_roughness, &model.vertices[0].metallic_roughness);
     try std.testing.expectEqualSlices(f32, &vertices[0].emissive_color, &model.vertices[0].emissive_color);
+}
+
+test "a part whose map is past the model's textures is refused" {
+    var vertices = [_]Vertex{.{ .position = .{ 0, 0, 0 }, .normal = .{ 0, 1, 0 } }};
+    var indices = [_]u32{ 0, 0, 0 };
+    var parts = [_]Part{.{ .first_index = 0, .index_count = 3, .maps = .{ .occlusion = 1 } }};
+    const model = Model{ .vertices = &vertices, .indices = &indices, .parts = &parts, .textures = &.{} };
+    try std.testing.expect(!model.isWhole());
 }
 
 test "a model pointing past its vertices is refused" {

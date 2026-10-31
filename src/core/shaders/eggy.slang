@@ -18,13 +18,14 @@ struct PostInput {
 // One point on a mesh, before it is lit.
 struct SurfaceInput {
     float3 world_position;
-    // Unit length, in the world.
+    // Unit length, in the world, bent by the material's normal map.
     float3 normal;
     // Unit length, from the point towards the camera.
     float3 view_direction;
     float2 uv;
     // The material's colour times its texture's, in linear light.
     float4 color;
+    // The material's, times its metallic-roughness and emissive maps.
     float metallic;
     float roughness;
     float3 emissive;
@@ -37,7 +38,7 @@ struct SurfaceInput {
 struct Surface {
     // Linear light, 0 to 1.
     float3 base_color;
-    // Below the material's alpha cutoff the point isn't drawn.
+    // Below the material's alpha cutoff the point isn't drawn; a blended material mixes by it.
     float alpha;
     float metallic;
     float roughness;

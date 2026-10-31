@@ -37,6 +37,7 @@ is in the world shows in the bottom left corner.
 | `flip_x`, `flip_y` | Mirror it, without turning it over. |
 | `layer` | Higher layers draw over lower ones, whatever their position. |
 | `alpha_cutoff` | Pixels with less alpha than this aren't drawn. |
+| `alpha_mode` | `.blend` shows soft edges and fades, mixed over what is behind; `.cutout` shows each pixel above the cutoff opaque. |
 
 For crisp pixel art, open File > Project Settings and, under **Graphics**, set **Texture
 filtering** to **Nearest (pixelated)**.

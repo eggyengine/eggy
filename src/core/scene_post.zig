@@ -352,7 +352,7 @@ pub const ScenePost = struct {
     // pass) when it doesn't load or isn't a post shader.
     fn passPipeline(self: *ScenePost, key: []const u8, cache: *ShaderCache) ?vit.GraphicsPipeline {
         const loaded = cache.get(key) orelse return null;
-        if (self.passes.get(key, cache.revision)) |known| return known;
+        if (self.passes.get(key, 0, cache.revision)) |known| return known;
         if (loaded.role != .post) {
             const hash = std.hash.Wyhash.hash(0, key);
             if (self.wrong_role_reported != hash) std.log.err("post pass shader {s} is a {t} shader, not a post shader: the pass is skipped", .{ key, loaded.role });
@@ -363,7 +363,7 @@ pub const ScenePost = struct {
             std.log.err("cannot make post pass {s}: {t}", .{ key, err });
             return null;
         };
-        return self.passes.put(key, pipeline);
+        return self.passes.put(key, 0, pipeline);
     }
 
     // Halve `scene`'s bright light down the levels, then add each back onto the one above.

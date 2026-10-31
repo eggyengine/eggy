@@ -156,6 +156,8 @@ test {
     _ = @import("camera.zig");
     _ = @import("bounds.zig");
     _ = @import("shadows.zig");
+    _ = @import("sky.zig");
+    _ = @import("material_maps.zig");
     _ = draw2d;
     _ = @import("world_draw.zig");
     _ = @import("refs.zig");

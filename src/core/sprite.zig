@@ -7,8 +7,6 @@ const Transform = @import("transform.zig").Transform;
 const AssetRef = @import("refs.zig").AssetRef;
 
 /// How far one sorting layer sits in front of the one below it, in metres along +z.
-// ponytail: sprites sort by depth with an alpha cutout, not by blending; semi-transparent
-// pixels show as opaque. Add a blended, back-to-front sprite pass if soft edges are needed.
 pub const layer_step_m: f32 = 0.001;
 
 pub const Sprite = struct {
@@ -32,6 +30,9 @@ pub const Sprite = struct {
     layer: i32 = 0,
     /// Pixels with less alpha than this aren't drawn.
     alpha_cutoff: f32 = 0.5,
+    /// `.blend` shows soft edges and fades, mixed over what is behind (farther sprites drawn
+    /// first); `.cutout` shows each pixel above `alpha_cutoff` opaque.
+    alpha_mode: @import("material.zig").Material.AlphaMode = .cutout,
 
     /// The image's texture coordinates to draw, flipped as asked: left, top, right, bottom.
     pub fn uvRect(self: Sprite) [4]f32 {

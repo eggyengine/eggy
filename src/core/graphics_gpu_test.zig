@@ -230,6 +230,124 @@ test "GPU directional shadows darken receivers and world sprites and text reach 
     try graphics.endFrame(overflow_frame);
 }
 
+test "GPU culls back faces, blends over what is behind, follows material maps, lights from the sky and shadows point and spot lights" {
+    if (comptime builtin.os.tag == .emscripten) return error.SkipZigTest;
+    if ((try sdl.getEnvironment()).getVariable("EGGY_GPU_TEST") == null) return error.SkipZigTest;
+    const gpa = std.testing.allocator;
+    const flags = sdl.InitFlags{ .video = true };
+    try sdl.init(flags);
+    defer sdl.quit(flags);
+    const window = adapter.Sdl3Window.init(try sdl.video.Window.init("Eggy surfaces, sky and local shadows", 320, 240, .{ .vulkan = true }));
+    defer window.window.deinit();
+    var graphics = try Graphics.initWithSettings(gpa, window, .{ .backend = .vulkan, .anti_aliasing = .off, .shadow_quality = .low, .width = 320, .height = 240 });
+    defer graphics.deinit();
+    var scene = try SceneTexture.init(&graphics);
+    defer scene.deinit();
+    defer graphics.queue.waitIdle() catch @panic("surface GPU work did not finish");
+    var context: u8 = 0;
+    graphics.textures.loader = .{ .context = &context, .load = checker };
+    graphics.lights.options = .{ 1, 0, -1, 0 };
+    const unlit = [4]f32{ 0, 1, 1, 1 };
+
+    // A plane faces up, so from below only its back shows: nothing, unless it is double-sided.
+    var plane = [_]mesh.Drawable{.{ .model = .{ .{ 4, 0, 0, 0 }, .{ 0, 1, 0, 0 }, .{ 0, 0, 4, 0 }, .{ 0, 0, 0, 1 } }, .color = @splat(1), .shape = .plane, .entity_id = 0, .entity_generation = 0, .material_params = unlit }};
+    const below = camera.View.lookingAt(.init(0, -3, 3), .zero, .{});
+    const nothing = try scenePixels(gpa, &graphics, &scene, plane[0..0], below);
+    defer gpa.free(nothing);
+    const back = try scenePixels(gpa, &graphics, &scene, &plane, below);
+    defer gpa.free(back);
+    try std.testing.expectEqualSlices(u8, nothing, back);
+    plane[0].double_sided = 1;
+    const both_sides = try scenePixels(gpa, &graphics, &scene, &plane, below);
+    defer gpa.free(both_sides);
+    try std.testing.expect(!std.mem.eql(u8, nothing, both_sides));
+
+    // A half-transparent white quad over a red one: cut out it hides the red, blended it mixes.
+    const front = camera.View{ .eye = .init(0, 0, 10), .forward = .init(0, 0, -1), .up = .init(0, 1, 0), .near = 0.1, .far = 100, .projection = .orthographic, .orthographic_height_m = 2 };
+    var quads = [_]mesh.Drawable{
+        .{ .model = .{ .{ 1, 0, 0, 0 }, .{ 0, 1, 0, 0 }, .{ 0, 0, 1, 0 }, .{ 0, 0, 0, 1 } }, .color = .{ 1, 1, 1, 0.5 }, .shape = .quad, .entity_id = 0, .entity_generation = 0, .material_params = unlit },
+        .{ .model = .{ .{ 1, 0, 0, 0 }, .{ 0, 1, 0, 0 }, .{ 0, 0, 1, 0 }, .{ 0, 0, -1, 1 } }, .color = .{ 1, 0, 0, 1 }, .shape = .quad, .entity_id = 1, .entity_generation = 0, .material_params = unlit },
+    };
+    const cut_out = try scenePixels(gpa, &graphics, &scene, &quads, front);
+    defer gpa.free(cut_out);
+    quads[0].alpha_blend = 1;
+    const blended = try scenePixels(gpa, &graphics, &scene, &quads, front);
+    defer gpa.free(blended);
+    // Green is the second channel whether the target is RGBA or BGRA; red is first or third.
+    const middle = (64 * 128 + 64) * 4;
+    try std.testing.expect(cut_out[middle] > 200 and cut_out[middle + 1] > 200 and cut_out[middle + 2] > 200);
+    try std.testing.expect(@max(blended[middle], blended[middle + 2]) > 200);
+    try std.testing.expect(blended[middle + 1] > 60 and blended[middle + 1] + 20 < cut_out[middle + 1]);
+
+    // A smooth metal ball is black with nothing round it, and reflects a sky
+    var ball = [_]mesh.Drawable{.{ .model = .{ .{ 2, 0, 0, 0 }, .{ 0, 2, 0, 0 }, .{ 0, 0, 2, 0 }, .{ 0, 0, 0, 1 } }, .color = @splat(1), .shape = .sphere, .entity_id = 0, .entity_generation = 0, .material_params = .{ 1, 0.1, 0, 1 } }};
+    graphics.lights.ambient = .{ 1, 1, 1, 0 };
+    const ahead = camera.View.lookingAt(.init(0, 1, 5), .zero, .{});
+    const dark = try scenePixels(gpa, &graphics, &scene, &ball, ahead);
+    defer gpa.free(dark);
+    const sky_name = "generated-sky.png";
+    graphics.lights.sky_file = sky_name;
+    graphics.lights.sky_file_len = sky_name.len;
+    graphics.lights.sky = .{ 1, 1, 0, 0 };
+    const reflecting = try scenePixels(gpa, &graphics, &scene, &ball, ahead);
+    defer gpa.free(reflecting);
+    const sky_alone = try scenePixels(gpa, &graphics, &scene, ball[0..0], ahead);
+    defer gpa.free(sky_alone);
+    try std.testing.expect(rgbSum(reflecting) > rgbSum(dark) + 128 * 128);
+    try std.testing.expect(!std.mem.eql(u8, nothing, sky_alone));
+    graphics.lights.sky_file = null;
+    graphics.lights.sky_file_len = 0;
+    graphics.lights.sky = @splat(0);
+
+    // A material's normal map bends how light falls across a lit plane, and its emissive map
+    // shows where it glows.
+    var lit_plane = [_]mesh.Drawable{.{ .model = .{ .{ 4, 0, 0, 0 }, .{ 0, 1, 0, 0 }, .{ 0, 0, 4, 0 }, .{ 0, 0, 0, 1 } }, .color = @splat(1), .shape = .plane, .entity_id = 0, .entity_generation = 0 }};
+    graphics.lights.count = 1;
+    graphics.lights.lights[0] = .{ .direction_range = math.Vec4.fromVec3(math.Vec3.init(0.5, -1, -0.3).normalize(), 0).toArray(), .color_intensity = .{ 1, 1, 1, 3000 } };
+    const above = camera.View.lookingAt(.init(0, 4, 3), .zero, .{});
+    var material = @import("material.zig").Material{ .roughness = 0.6 };
+    lit_plane[0].applyMaterial(&material);
+    const smooth = try scenePixels(gpa, &graphics, &scene, &lit_plane, above);
+    defer gpa.free(smooth);
+    material.normal_texture = .init("generated-bumps.png");
+    const bumpy = try scenePixels(gpa, &graphics, &scene, &lit_plane, above);
+    defer gpa.free(bumpy);
+    try std.testing.expect(!std.mem.eql(u8, smooth, bumpy));
+    material.normal_texture = .{};
+    material.emissive_color = @splat(1);
+    material.emissive_texture = .init("generated-glow.png");
+    lit_plane[0].applyMaterial(&material);
+    const glowing = try scenePixels(gpa, &graphics, &scene, &lit_plane, above);
+    defer gpa.free(glowing);
+    try std.testing.expect(rgbSum(glowing) > rgbSum(smooth));
+
+    // A cube between a light and the ground shadows it, from a point light and a spot light.
+    var ground = [_]mesh.Drawable{
+        .{ .model = .{ .{ 1, 0, 0, 0 }, .{ 0, 1, 0, 0 }, .{ 0, 0, 1, 0 }, .{ 0, 1, 0, 1 } }, .color = .{ 0.8, 0.8, 0.8, 1 }, .shape = .cube, .entity_id = 0, .entity_generation = 0 },
+        .{ .model = .{ .{ 12, 0, 0, 0 }, .{ 0, 1, 0, 0 }, .{ 0, 0, 12, 0 }, .{ 0, 0, 0, 1 } }, .color = .{ 0.8, 0.8, 0.8, 1 }, .shape = .plane, .entity_id = 1, .entity_generation = 0 },
+    };
+    const overhead = camera.View.lookingAt(.init(4, 6, 7), .zero, .{});
+    graphics.lights.count = 1;
+    for ([_]f32{ 1, 2 }) |kind| {
+        graphics.lights.lights[0] = .{
+            .position_kind = .{ 0.3, 3, 0.2, kind },
+            .direction_range = .{ 0, -1, 0, 20 },
+            .color_intensity = .{ 1, 1, 1, 6000 },
+            .cone_shadow = .{ @cos(40 * std.math.rad_per_deg), @cos(60 * std.math.rad_per_deg), 0, 0 },
+        };
+        const open = try scenePixels(gpa, &graphics, &scene, &ground, overhead);
+        defer gpa.free(open);
+        graphics.lights.lights[0].cone_shadow[2] = 1;
+        const shadowed = try scenePixels(gpa, &graphics, &scene, &ground, overhead);
+        defer gpa.free(shadowed);
+        var darkened: usize = 0;
+        for (0..open.len / 4) |pixel| {
+            if (@as(u16, shadowed[pixel * 4]) + 5 < open[pixel * 4]) darkened += 1;
+        }
+        try std.testing.expect(darkened > 20);
+    }
+}
+
 fn rgbSum(pixels: []const u8) u64 {
     var total: u64 = 0;
     for (0..pixels.len / 4) |index| for (pixels[index * 4 ..][0..3]) |channel| {

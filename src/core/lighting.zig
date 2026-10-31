@@ -4,8 +4,12 @@ const ecs = @import("clutch");
 const math = @import("eggenvector");
 const transform = @import("transform.zig");
 const post_process = @import("post_process.zig");
+const AssetRef = @import("refs.zig").AssetRef;
 pub const support: @import("support.zig").Support = .available;
 pub const max_lights = 16;
+/// The shadow maps point and spot lights share: a spot light takes one, a point light six (one
+/// for each side of a cube round it).
+pub const max_local_shadow_maps = 16;
 
 pub const Light = union(enum) {
     directional: struct { color: [3]f32 = @splat(1), illuminance_lux: f32 = 1000 },
@@ -18,8 +22,16 @@ pub const Environment = struct {
     /// Marks it in the editor (nf-md-earth).
     pub const icon = "\u{f01e7}";
     pub const category = "Lighting";
+    /// Without a `sky`, light reaching every surface evenly from all round.
     ambient_color: [3]f32 = @splat(1),
     ambient_intensity: f32 = 0.03,
+    /// A panorama (twice as wide as it is tall, the horizon across its middle) shown behind the
+    /// scene, which lights it in place of `ambient_color`: dimly from every side, and in
+    /// reflections, sharper the smoother the surface.
+    sky: AssetRef(.image) = .{},
+    /// How bright the sky is: shown, and the light it gives (scaled by `ambient_intensity`
+    /// times 33, so the default matches a plain sky's).
+    sky_intensity: f32 = 1,
     exposure_ev: f32 = 0,
     /// Preserve the editor/runtime's helpful light until a scene authors its own lights.
     default_light: bool = true,
@@ -29,6 +41,7 @@ pub const Environment = struct {
     pub fn validate(self: Environment) error{InvalidEnvironment}!void {
         self.post.validate() catch return error.InvalidEnvironment;
         for (self.ambient_color) |value| if (!std.math.isFinite(value) or value < 0) return error.InvalidEnvironment;
+        if (!std.math.isFinite(self.sky_intensity) or self.sky_intensity < 0) return error.InvalidEnvironment;
         if (!std.math.isFinite(self.ambient_intensity) or self.ambient_intensity < 0 or
             !std.math.isFinite(self.exposure_ev) or @abs(self.exposure_ev) > 32) return error.InvalidEnvironment;
     }
@@ -47,10 +60,21 @@ pub const SceneLight = struct {
     range_m: f32 = 10,
     inner_angle_deg: f32 = 20,
     outer_angle_deg: f32 = 30,
-    /// One directional shadow caster per world; point/spot shadow maps are not implemented.
+    /// One directional light per world casts shadows; point and spot lights share
+    /// `max_local_shadow_maps` (six each for point lights, one for spot lights).
     casts_shadows: bool = false,
 
-    pub fn validate(self: SceneLight) error{ InvalidLight, UnsupportedShadowLight }!void {
+    /// How many of the shared local shadow maps it takes.
+    pub fn shadowMaps(self: SceneLight) u32 {
+        if (!self.casts_shadows) return 0;
+        return switch (self.kind) {
+            .directional => 0,
+            .point => 6,
+            .spot => 1,
+        };
+    }
+
+    pub fn validate(self: SceneLight) error{InvalidLight}!void {
         for (self.color) |value| if (!std.math.isFinite(value) or value < 0) return error.InvalidLight;
         for ([_]f32{ self.illuminance_lux, self.intensity_cd, self.range_m }) |value| {
             if (!std.math.isFinite(value) or value < 0) return error.InvalidLight;
@@ -59,7 +83,6 @@ pub const SceneLight = struct {
         if (!std.math.isFinite(self.inner_angle_deg) or !std.math.isFinite(self.outer_angle_deg) or
             self.inner_angle_deg < 0 or self.inner_angle_deg >= self.outer_angle_deg or self.outer_angle_deg >= 90)
             return error.InvalidLight;
-        if (self.casts_shadows and self.kind != .directional) return error.UnsupportedShadowLight;
     }
 };
 
@@ -87,6 +110,14 @@ pub const Frame = extern struct {
     ambient: [4]f32 = .{ 1, 1, 1, 0.03 },
     /// x: exposure multiplier, y: default-light enabled, z: shadow-light index (-1 for none).
     options: [4]f32 = .{ 1, 1, -1, 0 },
+    /// How many local shadow maps the lights take (`GpuLight.cone_shadow` w: a light's first).
+    local_shadow_maps: u32 = 0,
+    /// The sky's image's identity key, if any; it borrows the world's `Environment`, so it
+    /// lasts until the world next changes.
+    sky_file: ?[*]const u8 = null,
+    sky_file_len: u32 = 0,
+    /// x: the sky's brightness as shown, y: as light (both 0 without a sky).
+    sky: [4]f32 = @splat(0),
     /// The post-processing the active camera sees (`post_process.forActiveCamera`).
     post: post_process.Frame = .{},
 };
@@ -102,8 +133,7 @@ pub const Lighting = struct {
             .point => |value| .{ .kind = .point, .color = value.color, .intensity_cd = value.intensity_cd, .range_m = value.range_m },
             .spot => |value| .{ .kind = .spot, .color = value.color, .intensity_cd = value.intensity_cd, .range_m = value.range_m, .inner_angle_deg = value.inner_angle_deg, .outer_angle_deg = value.outer_angle_deg },
         };
-        if (self.world.get(entity, SceneLight)) |previous|
-            component.casts_shadows = previous.casts_shadows and component.kind == .directional;
+        if (self.world.get(entity, SceneLight)) |previous| component.casts_shadows = previous.casts_shadows;
         try component.validate();
         if (self.world.get(entity, transform.Transform) == null) try self.world.addComponent(entity, transform.Transform{});
         try self.world.addComponent(entity, component);
@@ -121,7 +151,9 @@ pub const Lighting = struct {
         return if (self.world.get(entity, SceneLight)) |value| value.* else null;
     }
 
-    /// Enable one directional shadow caster without changing existing lights on failure.
+    /// Make one directional light the shadow caster (none for no directional shadows), without
+    /// changing existing lights on failure. Point and spot lights cast shadows through their
+    /// own `casts_shadows`.
     pub fn setShadowCaster(self: Lighting, entity: ?ecs.EntityId) !void {
         if (entity) |id| {
             if (!self.world.isAlive(id)) return error.InvalidEntity;
@@ -131,7 +163,9 @@ pub const Lighting = struct {
         }
         var lights = self.world.query(.{*SceneLight});
         while (lights.next()) |view| {
-            view.get(*SceneLight).casts_shadows = if (entity) |id| view.entity.eql(id) else false;
+            const light = view.get(*SceneLight);
+            if (light.kind != .directional) continue;
+            light.casts_shadows = if (entity) |id| view.entity.eql(id) else false;
             self.world.markChanged(view.entity, SceneLight);
         }
     }
@@ -161,8 +195,9 @@ pub fn aimNewLight(world: *ecs.World, entity: ecs.EntityId) void {
 const default_environment = Environment{};
 
 /// Gather up to sixteen validated lights. A light whose values don't validate is left out and
-/// counted in `invalid`, so one bad light doesn't stop the rest; overflow, a second shadow caster
-/// and a second environment are explicit errors.
+/// counted in `invalid`, so one bad light doesn't stop the rest; overflow, a second directional
+/// shadow caster, more local shadow maps than there are and a second environment are explicit
+/// errors.
 pub fn gather(world: *ecs.World) !Frame {
     var result = Frame{};
     // Borrowed, so the post passes' shader keys stay pointing into the world.
@@ -174,6 +209,11 @@ pub fn gather(world: *ecs.World) !Frame {
     }
     try environment.validate();
     result.ambient = .{ environment.ambient_color[0], environment.ambient_color[1], environment.ambient_color[2], environment.ambient_intensity };
+    if (environment.sky.len != 0) {
+        result.sky_file = &environment.sky.buffer;
+        result.sky_file_len = environment.sky.len;
+        result.sky = .{ environment.sky_intensity, environment.sky_intensity * environment.ambient_intensity / default_environment.ambient_intensity, 0, 0 };
+    }
     result.options = .{ std.math.exp2(environment.exposure_ev), if (environment.default_light) 1 else 0, -1, 0 };
     result.post = (try post_process.forActiveCamera(world, &environment.post)).frame();
     var lights = world.query(.{ *const SceneLight, *const transform.Transform });
@@ -193,15 +233,18 @@ pub fn gather(world: *ecs.World) !Frame {
         const length = @sqrt(@reduce(.Add, forward * forward));
         if (light.kind != .point and length < 0.000001) return error.InvalidLightTransform;
         const direction: @Vector(3, f32) = if (light.kind != .point) forward / @as(@Vector(3, f32), @splat(length)) else .{ 0, 0, -1 };
-        if (light.casts_shadows) {
+        const first_map = result.local_shadow_maps;
+        if (light.casts_shadows and light.kind == .directional) {
             if (result.options[2] >= 0) return error.TooManyShadowLights;
             result.options[2] = @floatFromInt(result.count);
         }
+        if (first_map + light.shadowMaps() > max_local_shadow_maps) return error.TooManyShadowLights;
+        result.local_shadow_maps += light.shadowMaps();
         result.lights[result.count] = .{
             .position_kind = .{ matrix[3][0], matrix[3][1], matrix[3][2], @floatFromInt(@backingInt(light.kind)) },
             .direction_range = .{ direction[0], direction[1], direction[2], light.range_m },
             .color_intensity = .{ light.color[0], light.color[1], light.color[2], if (light.kind == .directional) light.illuminance_lux else light.intensity_cd },
-            .cone_shadow = .{ @cos(light.inner_angle_deg * std.math.rad_per_deg), @cos(light.outer_angle_deg * std.math.rad_per_deg), if (light.casts_shadows) 1 else 0, 0 },
+            .cone_shadow = .{ @cos(light.inner_angle_deg * std.math.rad_per_deg), @cos(light.outer_angle_deg * std.math.rad_per_deg), if (light.casts_shadows) 1 else 0, @floatFromInt(first_map) },
         };
         result.entities[result.count] = .{ .id = view.entity.id, .generation = view.entity.generation };
         result.count += 1;
@@ -270,15 +313,15 @@ test "light source identities retain reused generations without changing GPU rec
 test "spot cones exposure and exclusive directional shadows are validated" {
     var world = ecs.World.init(std.testing.allocator);
     defer world.deinit();
-    const spot = try world.spawn(.{ transform.Transform{}, SceneLight{ .kind = .spot } });
+    const spot = try world.spawn(.{ transform.Transform{}, SceneLight{ .kind = .spot, .casts_shadows = true } });
     const sun = try world.spawn(.{ transform.Transform{}, SceneLight{} });
     const controls = Lighting{ .world = &world };
     try std.testing.expectError(error.UnsupportedShadowLight, controls.setShadowCaster(spot));
     try controls.setShadowCaster(sun);
     try controls.setLight(sun, .{ .directional = .{ .illuminance_lux = 2000 } });
     try std.testing.expect((try controls.getLight(sun)).?.casts_shadows);
-    try std.testing.expectError(error.UnsupportedShadowLight, controls.setShadowCaster(spot));
-    try std.testing.expect((try controls.getLight(sun)).?.casts_shadows);
+    // Choosing the directional caster leaves the spot light's own shadows alone.
+    try std.testing.expect((try controls.getLight(spot)).?.casts_shadows);
     try controls.setEnvironment(.{ .default_light = false, .exposure_ev = 1 });
     const frame = try gather(&world);
     try std.testing.expectEqual(@as(f32, 2), frame.options[0]);
@@ -305,14 +348,47 @@ test "multiple authored environments or shadow casters are explicit errors" {
 pub fn reportInvalid(frame: Frame, reported: *u32) void {
     if (frame.invalid == reported.*) return;
     reported.* = frame.invalid;
-    if (frame.invalid > 0) std.log.warn("{d} scene light(s) left out: check their values (only directional lights cast shadows)", .{frame.invalid});
+    if (frame.invalid > 0) std.log.warn("{d} scene light(s) left out: check their values", .{frame.invalid});
+}
+
+test "point and spot shadows take their maps in turn, and running out is an error" {
+    var world = ecs.World.init(std.testing.allocator);
+    defer world.deinit();
+    _ = try world.spawn(.{ transform.Transform{}, SceneLight{ .kind = .point, .casts_shadows = true } });
+    _ = try world.spawn(.{ transform.Transform{}, SceneLight{ .kind = .spot, .casts_shadows = true } });
+    _ = try world.spawn(.{ transform.Transform{}, SceneLight{ .kind = .point } });
+    const frame = try gather(&world);
+    try std.testing.expectEqual(@as(u32, 7), frame.local_shadow_maps);
+    var firsts: [2]f32 = undefined;
+    var casting: usize = 0;
+    for (frame.lights[0..frame.count]) |light| if (light.cone_shadow[2] > 0.5) {
+        firsts[casting] = light.cone_shadow[3];
+        casting += 1;
+    };
+    try std.testing.expectEqual(@as(usize, 2), casting);
+    // Whichever comes first, the second starts where the first's maps end.
+    try std.testing.expect((firsts[0] == 0 and (firsts[1] == 6 or firsts[1] == 1)) or (firsts[1] == 0 and (firsts[0] == 6 or firsts[0] == 1)));
+    _ = try world.spawn(.{ transform.Transform{}, SceneLight{ .kind = .point, .casts_shadows = true } });
+    _ = try world.spawn(.{ transform.Transform{}, SceneLight{ .kind = .point, .casts_shadows = true } });
+    try std.testing.expectError(error.TooManyShadowLights, gather(&world));
+}
+
+test "a sky lights in proportion to the ambient intensity" {
+    var world = ecs.World.init(std.testing.allocator);
+    defer world.deinit();
+    try (Lighting{ .world = &world }).setEnvironment(.{ .sky = .init("resources/sky.png"), .sky_intensity = 2, .ambient_intensity = 0.06 });
+    const frame = try gather(&world);
+    try std.testing.expectEqualStrings(AssetRef(.image).init("resources/sky.png").key(), frame.sky_file.?[0..frame.sky_file_len]);
+    try std.testing.expectEqual(@as(f32, 2), frame.sky[0]);
+    try std.testing.expectApproxEqAbs(@as(f32, 4), frame.sky[1], 1e-5);
+    try std.testing.expectError(error.InvalidEnvironment, (Environment{ .sky_intensity = -1 }).validate());
 }
 
 test "an invalid light is left out, and the others still gathered" {
     var world = ecs.World.init(std.testing.allocator);
     defer world.deinit();
     _ = try world.spawn(.{ transform.Transform{}, SceneLight{ .kind = .directional } });
-    _ = try world.spawn(.{ transform.Transform{}, SceneLight{ .kind = .point, .casts_shadows = true } });
+    _ = try world.spawn(.{ transform.Transform{}, SceneLight{ .kind = .point, .range_m = 0 } });
     const frame = try gather(&world);
     try std.testing.expectEqual(@as(u32, 1), frame.count);
     try std.testing.expectEqual(@as(u32, 1), frame.invalid);

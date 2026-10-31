@@ -9,6 +9,7 @@ const vit = @import("vitellus");
 const assets = @import("eggy_assets");
 const settings_zig = @import("render_settings.zig");
 const mipmaps = @import("mipmaps.zig");
+const material_maps = @import("material_maps.zig");
 const log = std.log.scoped(.textures);
 
 /// How an asset's canonical identity key becomes CPU pixels.
@@ -49,6 +50,10 @@ pub const TextureCache = struct {
     sampler: vit.Sampler,
     /// One white pixel, for meshes without a texture.
     white: Gpu,
+    /// One pixel of a normal map facing straight out, for surfaces without one.
+    neutral_normal: Gpu,
+    /// Surfaces' maps, grouped for the meshes' set 2.
+    maps: material_maps.MaterialMaps,
     /// Where image files come from; none (every image file paints white) until set.
     loader: ?Loader = null,
     /// By path, which the map owns; null for one that didn't load, so it isn't tried again.
@@ -79,9 +84,14 @@ pub const TextureCache = struct {
             .max_anisotropy = settings.anisotropy,
         });
         errdefer sampler.deinit();
-        var self = TextureCache{ .gpa = gpa, .device = device, .queue = queue, .settings = settings, .layout = layout, .sampler = sampler, .white = undefined };
+        var self = TextureCache{ .gpa = gpa, .device = device, .queue = queue, .settings = settings, .layout = layout, .sampler = sampler, .white = undefined, .neutral_normal = undefined, .maps = undefined };
         var white = [_]u8{ 255, 255, 255, 255 };
         self.white = try self.make(.{ .width = 1, .height = 1, .pixels = &white }, "white");
+        errdefer self.white.deinit();
+        var straight_out = [_]u8{ 128, 128, 255, 255 };
+        self.neutral_normal = try self.make(.{ .width = 1, .height = 1, .pixels = &straight_out }, "neutral normal");
+        errdefer self.neutral_normal.deinit();
+        self.maps = try .init(gpa, device, sampler, self.neutral_normal.view, self.white.view);
         return self;
     }
 
@@ -96,6 +106,8 @@ pub const TextureCache = struct {
     pub fn deinit(self: *TextureCache) void {
         self.forgetAll();
         self.entries.deinit(self.gpa);
+        self.maps.deinit();
+        self.neutral_normal.deinit();
         self.white.deinit();
         self.sampler.deinit();
         self.layout.deinit();
@@ -207,8 +219,17 @@ pub const TextureCache = struct {
     /// textures.release(owned_paint);
     /// ```
     pub fn release(self: *TextureCache, gpu: Gpu) void {
-        _ = self;
+        self.maps.forget(gpu.texture);
         gpu.deinit();
+    }
+
+    /// The maps group (set 2) for `set` (null: a neutral map), and an imported part's alpha
+    /// `cutoff`; the neutral group when it can't be made.
+    /// Host-only, borrowed until one of its textures is released.
+    pub fn mapsGroup(self: *TextureCache, set: [4]?Gpu, cutoff: f32) ?vit.BindGroup {
+        var maps: material_maps.Set = undefined;
+        for (&maps, set) |*map, gpu| map.* = if (gpu) |known| .{ .texture = known.texture, .view = known.view } else null;
+        return self.maps.group(maps, cutoff);
     }
 
     /// Load the image at `path` and put it on the GPU.

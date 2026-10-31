@@ -49,7 +49,7 @@ pub const SceneTexture = struct {
     /// ```
     pub fn init(graphics: *const Graphics) !SceneTexture {
         const device = graphics.device;
-        var preview = try viewport3d.Preview.init(device, graphics.color_format, .{ .width = 1, .height = 1 }, graphics.textures.layout, graphics.render_settings);
+        var preview = try viewport3d.Preview.init(device, graphics.color_format, .{ .width = 1, .height = 1 }, graphics.textures.layout, graphics.textures.maps.layout, graphics.render_settings);
         errdefer preview.deinit();
         // A vertex buffer rather than SV_VertexID, which needs Vulkan's shaderDrawParameters.
         const triangle = try vit.Buffer.init(device, .{ .label = "scene blit triangle", .size = @sizeOf(@TypeOf(blit_triangle)), .usage = .{ .vertex = true }, .initial_data = std.mem.asBytes(&blit_triangle) });
@@ -112,7 +112,7 @@ pub const SceneTexture = struct {
         if (extent_px.width == 0 or extent_px.height == 0) return;
         if (self.settings_revision != graphics.settings_revision) {
             try graphics.queue.waitIdle();
-            const preview = try viewport3d.Preview.init(graphics.device, graphics.color_format, extent_px, graphics.textures.layout, graphics.render_settings);
+            const preview = try viewport3d.Preview.init(graphics.device, graphics.color_format, extent_px, graphics.textures.layout, graphics.textures.maps.layout, graphics.render_settings);
             self.preview.deinit();
             self.preview = preview;
             self.settings_revision = graphics.settings_revision;

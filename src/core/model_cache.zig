@@ -33,15 +33,22 @@ pub const Gpu = struct {
         index_count: u32,
         /// One of `textures`; null to paint it with the `Mesh`'s texture, or white.
         texture: ?texture_cache.Gpu,
+        /// Its normal, metallic-roughness, emissive and occlusion maps (`assets.model.Maps`).
+        maps: [4]?texture_cache.Gpu = @splat(null),
+        alpha_mode: assets.model.AlphaMode = .cutout,
+        alpha_cutoff: f32 = 0.01,
+        double_sided: bool = false,
+
+        /// Every texture it is painted with, colour first.
+        pub fn all(self: Part) [5]?texture_cache.Gpu {
+            return .{ self.texture, self.maps[0], self.maps[1], self.maps[2], self.maps[3] };
+        }
     };
 
     fn deinit(self: Gpu, gpa: std.mem.Allocator, textures: *TextureCache) void {
-        // Each texture once, though several parts may share it.
-        for (self.parts, 0..) |part, i| if (part.texture) |texture| {
-            const shared = for (self.parts[0..i]) |earlier| {
-                if (earlier.texture) |seen| if (std.meta.eql(seen.texture, texture.texture)) break true;
-            } else false;
-            if (!shared) textures.release(texture);
+        // Each texture once, though several parts (or maps) may share it.
+        for (self.parts, 0..) |part, i| for (part.all(), 0..) |slot, j| if (slot) |texture| {
+            if (!usedBefore(self.parts[0..i], part.all()[0..j], texture)) textures.release(texture);
         };
         gpa.free(self.parts);
         if (self.rig) |kept| {
@@ -52,6 +59,13 @@ pub const Gpu = struct {
         self.vertices.deinit();
     }
 };
+
+/// Whether `texture` is one of `earlier`'s, or of `same_part`'s.
+fn usedBefore(earlier: []const Gpu.Part, same_part: []const ?texture_cache.Gpu, texture: texture_cache.Gpu) bool {
+    for (earlier) |part| for (part.all()) |slot| if (slot) |seen| if (std.meta.eql(seen.texture, texture.texture)) return true;
+    for (same_part) |slot| if (slot) |seen| if (std.meta.eql(seen.texture, texture.texture)) return true;
+    return false;
+}
 
 pub const ModelCache = struct {
     gpa: std.mem.Allocator,
@@ -206,14 +220,23 @@ pub const ModelCache = struct {
         const whole = [_]assets.model.Part{.{ .first_index = 0, .index_count = @intCast(model.indices.len) }};
         const source = if (model.parts.len > 0) model.parts else &whole;
         const parts = try self.gpa.alloc(Gpu.Part, source.len);
-        for (source, parts) |part, *gpu| gpu.* = .{ .first_index = part.first_index, .index_count = part.index_count, .texture = if (part.texture) |at| made[at] else null };
+        for (source, parts) |part, *gpu| gpu.* = .{
+            .first_index = part.first_index,
+            .index_count = part.index_count,
+            .texture = if (part.texture) |at| made[at] else null,
+            .maps = .{ pick(made, part.maps.normal), pick(made, part.maps.metallic_roughness), pick(made, part.maps.emissive), pick(made, part.maps.occlusion) },
+            .alpha_mode = part.alpha_mode,
+            .alpha_cutoff = part.alpha_cutoff,
+            .double_sided = part.double_sided,
+        };
         // A texture no part paints with goes now: the parts are what free them.
-        for (made, 0..) |texture, at| if (texture) |gpu| {
-            const used = for (source) |part| {
-                if (part.texture == @as(u32, @intCast(at))) break true;
-            } else false;
-            if (!used) textures.release(gpu);
+        for (made) |texture| if (texture) |gpu| {
+            if (!usedBefore(parts, &.{}, gpu)) textures.release(gpu);
         };
         return .{ .vertices = vertices, .indices = indices, .parts = parts, .bounds = model.bounds() };
     }
 };
+
+fn pick(made: []const ?texture_cache.Gpu, index: ?u32) ?texture_cache.Gpu {
+    return if (index) |at| made[at] else null;
+}

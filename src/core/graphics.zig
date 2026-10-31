@@ -143,7 +143,7 @@ pub const Graphics = struct {
         try settings.validate(caps);
         var textures = try TextureCache.init(allocator, device, queue, settings);
         errdefer textures.deinit();
-        const preview = try viewport3d.Preview.init(device, color_format, surface.extent, textures.layout, settings);
+        const preview = try viewport3d.Preview.init(device, color_format, surface.extent, textures.layout, textures.maps.layout, settings);
         std.log.info("Graphics ready: {d}x{d} px, {s}", .{ surface.extent.width, surface.extent.height, @tagName(color_format) });
         return .{
             .instance = instance,
@@ -187,7 +187,7 @@ pub const Graphics = struct {
         var preview: ?viewport3d.Preview = null;
         errdefer if (preview) |*made| made.deinit();
         if (replace_preview)
-            preview = try viewport3d.Preview.init(self.device, self.color_format, self.surface.extent, if (textures) |made| made.layout else self.textures.layout, settings);
+            preview = try viewport3d.Preview.init(self.device, self.color_format, self.surface.extent, if (textures) |made| made.layout else self.textures.layout, if (textures) |made| made.maps.layout else self.textures.maps.layout, settings);
         if (preview) |made| {
             self.preview.deinit();
             self.preview = made;

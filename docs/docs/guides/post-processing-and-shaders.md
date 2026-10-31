@@ -117,16 +117,16 @@ the material describes it; start from it and change what you need.
 | In `SurfaceInput` | Meaning |
 | --- | --- |
 | `world_position` | The point in the world |
-| `normal`, `view_direction` | Which way it faces, and towards the camera, both unit length |
+| `normal`, `view_direction` | Which way it faces (bent by its normal map), and towards the camera, both unit length |
 | `uv` | Its texture coordinates |
 | `color` | The material's colour times its texture, in linear light, with alpha |
-| `metallic`, `roughness`, `emissive`, `unlit` | The material's values |
+| `metallic`, `roughness`, `emissive`, `unlit` | The material's values, times its maps |
 | `time_s` | Seconds the game has run |
 
 | In `Surface` | Meaning |
 | --- | --- |
 | `base_color` | Its colour, in linear light |
-| `alpha` | Below the material's **alpha_cutoff** the point isn't drawn |
+| `alpha` | Below the material's **alpha_cutoff** the point isn't drawn; a blended material mixes by it |
 | `metallic`, `roughness` | How it reflects light |
 | `emissive` | Light it gives off, added after lighting |
 | `normal` | Which way it faces, for lighting |

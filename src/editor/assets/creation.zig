@@ -30,7 +30,7 @@ const builtins = [_]Entry{
         .key = "eggy/material",
         .title = "Material",
         .extension = ".material.zon",
-        .contents = ".{\n    .color = .{ 1, 1, 1, 1 },\n    .metallic = 0,\n    .roughness = 1,\n    .texture = \"\",\n    .emissive_color = .{ 0, 0, 0 },\n    .unlit = false,\n    .alpha_cutoff = 0.01,\n    .shader = \"\",\n}\n",
+        .contents = ".{\n    .color = .{ 1, 1, 1, 1 },\n    .metallic = 0,\n    .roughness = 1,\n    .texture = \"\",\n    .normal_texture = \"\",\n    .metallic_roughness_texture = \"\",\n    .emissive_texture = \"\",\n    .occlusion_texture = \"\",\n    .emissive_color = .{ 0, 0, 0 },\n    .unlit = false,\n    .alpha_mode = .cutout,\n    .alpha_cutoff = 0.01,\n    .double_sided = false,\n    .shader = \"\",\n}\n",
         .category = "Rendering",
     } },
     .{ .file = .{

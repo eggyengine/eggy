@@ -497,6 +497,8 @@ fn addEngine(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.buil
     const outline_vertex = vitellus_build.compileSlang(b, vitellus, target, mesh_shader, "vertexOutline", .vertex) orelse return null;
     const outline_fragment = vitellus_build.compileSlang(b, vitellus, target, mesh_shader, "fragmentOutline", .fragment) orelse return null;
     const mask_vertex = vitellus_build.compileSlang(b, vitellus, target, mesh_shader, "vertexMask", .vertex) orelse return null;
+    const sky_vertex = vitellus_build.compileSlang(b, vitellus, target, mesh_shader, "vertexSky", .vertex) orelse return null;
+    const sky_fragment = vitellus_build.compileSlang(b, vitellus, target, mesh_shader, "fragmentSky", .fragment) orelse return null;
     const blit_shader = b.path("src/core/shaders/scene_blit.slang");
     const blit_vertex = vitellus_build.compileSlang(b, vitellus, target, blit_shader, "vertexMain", .vertex) orelse return null;
     const blit_fragment = vitellus_build.compileSlang(b, vitellus, target, blit_shader, "fragmentMain", .fragment) orelse return null;
@@ -521,6 +523,8 @@ fn addEngine(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.buil
     _ = shader_files.addCopyFile(outline_vertex, "outline.vert");
     _ = shader_files.addCopyFile(outline_fragment, "outline.frag");
     _ = shader_files.addCopyFile(mask_vertex, "mask.vert");
+    _ = shader_files.addCopyFile(sky_vertex, "sky.vert");
+    _ = shader_files.addCopyFile(sky_fragment, "sky.frag");
     _ = shader_files.addCopyFile(blit_vertex, "scene_blit.vert");
     _ = shader_files.addCopyFile(blit_fragment, "scene_blit.frag");
     _ = shader_files.addCopyFile(grid_vertex, "grid.vert");
@@ -542,6 +546,8 @@ fn addEngine(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.buil
             \\pub const outline_vertex = @embedFile("outline.vert");
             \\pub const outline_fragment = @embedFile("outline.frag");
             \\pub const mask_vertex = @embedFile("mask.vert");
+            \\pub const sky_vertex = @embedFile("sky.vert");
+            \\pub const sky_fragment = @embedFile("sky.frag");
             \\pub const blit_vertex = @embedFile("scene_blit.vert");
             \\pub const blit_fragment = @embedFile("scene_blit.frag");
             \\pub const grid_vertex = @embedFile("grid.vert");

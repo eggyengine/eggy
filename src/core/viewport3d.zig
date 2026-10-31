@@ -55,16 +55,17 @@ pub const Preview = struct {
 
     /// The backdrop and meshes for a target in `format` at `extent` (graded into it from an HDR
     /// target of their own), painting with textures
-    /// bound as `texture_layout` describes (`TextureCache.layout`).
+    /// bound as `texture_layout` describes (`TextureCache.layout`) and maps as `maps_layout`
+    /// does (`TextureCache.maps.layout`).
     /// Host renderer setup: `extent` is the nonzero physical-pixel depth-buffer size.
     /// The device/layout must remain alive; GPU/shader/allocation errors propagate.
     /// Owns render resources and must be deinitialized after their GPU work completes.
     ///
     /// ```zig
-    /// var preview = try Preview.init(device, color_format, target_extent_pixels, textures.layout, graphics.render_settings);
+    /// var preview = try Preview.init(device, color_format, target_extent_pixels, textures.layout, textures.maps.layout, graphics.render_settings);
     /// defer preview.deinit(); // Finish GPU use before this host scope ends.
     /// ```
-    pub fn init(device: vit.Device, format: vit.Format, extent: vit.Extent2D, texture_layout: vit.BindGroupLayout, settings: Settings) !Preview {
+    pub fn init(device: vit.Device, format: vit.Format, extent: vit.Extent2D, texture_layout: vit.BindGroupLayout, maps_layout: vit.BindGroupLayout, settings: Settings) !Preview {
         const sample_count = settings.anti_aliasing.samples();
         const hdr = scene_post.hdr_format;
         const render_extent = renderExtent(extent, settings.render_scale);
@@ -128,7 +129,7 @@ pub const Preview = struct {
         errdefer depth.deinit();
         const depth_view = try vit.TextureView.init(device, .{ .texture = depth, .aspect = .depth });
         errdefer depth_view.deinit();
-        var meshes = try MeshRenderer.init(device, hdr, shaderSource, texture_layout, sample_count, settings.shadow_quality);
+        var meshes = try MeshRenderer.init(device, hdr, shaderSource, texture_layout, maps_layout, sample_count, settings.shadow_quality);
         errdefer meshes.deinit();
         var grid = try Grid.init(device, hdr, shaderSource, sample_count);
         errdefer grid.deinit();
@@ -276,7 +277,7 @@ pub const Preview = struct {
         const px = @as(f32, @floatFromInt(extent.width)) / window.w;
         const py = @as(f32, @floatFromInt(extent.height)) / window.h;
         cmd.setViewport(.{ .x = (scene.x - window.x) * px, .y = (scene.y - window.y) * py, .width = scene.w * px, .height = scene.h * py });
-        try self.meshes.draw(cmd, drawables, sources, view.viewProjection(scene.w / scene.h), .init(scene.w * px, scene.h * py), view.eye, selected, srgb);
+        try self.meshes.draw(cmd, drawables, sources, view, scene.w / scene.h, .init(scene.w * px, scene.h * py), selected, srgb);
         if (grid) try self.grid.draw(cmd, view, .{ .x = (scene.x - window.x) * px, .y = (scene.y - window.y) * py, .w = scene.w * px, .h = scene.h * py }, srgb);
         const quads = self.world_draw.draw(cmd);
         sources.stats.draw_calls += quads;

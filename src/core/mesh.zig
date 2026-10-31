@@ -98,6 +98,14 @@ pub const Drawable = extern struct {
     /// The material's surface shader's identity key, if any; borrowed like `material_file`.
     shader_file: ?[*]const u8 = null,
     shader_file_len: u32 = 0,
+    /// The authored material it is drawn with, for its maps; borrowed like `animator`. None
+    /// leaves a model's parts their own maps, alpha and sides.
+    material: ?*const Material = null,
+    /// 1 when blended over what is behind it (`Material.AlphaMode.blend`), drawn after
+    /// everything opaque, farthest first.
+    alpha_blend: u32 = 0,
+    /// 1 when its back faces are drawn too.
+    double_sided: u32 = 0,
 
     /// Reconstruct the source entity ID by value, without checking that it is still alive.
     /// Resolve it only against the world from which this drawable was gathered.
@@ -141,6 +149,9 @@ pub const Drawable = extern struct {
         self.surface_color = material.color;
         self.material_params = .{ material.metallic, material.roughness, if (material.unlit) 1 else 0, 1 };
         self.emissive_cutoff = .{ material.emissive_color[0], material.emissive_color[1], material.emissive_color[2], material.alpha_cutoff };
+        self.material = material;
+        self.alpha_blend = @intFromBool(material.alpha_mode == .blend);
+        self.double_sided = @intFromBool(material.double_sided);
         if (material.texture.len != 0) {
             self.texture_file = &material.texture.buffer;
             self.texture_file_len = material.texture.len;
@@ -236,6 +247,7 @@ fn tilemapDrawable(world: *ecs.World, entity: ecs.EntityId, tilemap: *const Tile
         .material_params = .{ 0, 1, 1, 1 },
         .emissive_cutoff = .{ 0, 0, 0, tilemap.alpha_cutoff },
         .casts_shadow = 0,
+        .double_sided = 1,
     };
 }
 
@@ -259,6 +271,8 @@ fn spriteDrawable(world: *ecs.World, entity: ecs.EntityId, sprite: *const Sprite
         .emissive_cutoff = .{ 0, 0, 0, shown.alpha_cutoff },
         .casts_shadow = 0,
         .uv_rect = shown.uvRect(),
+        .alpha_blend = @intFromBool(shown.alpha_mode == .blend),
+        .double_sided = 1,
     };
 }
 
@@ -389,11 +403,12 @@ const Builder = struct {
                 _ = try self.vertex(.{ normal[0] * 0.5, normal[1] * 0.5, normal[2] * 0.5 }, normal, uv);
             }
         }
+        // Counter-clockwise from outside, as every shape's front faces are.
         for (0..rings) |ring| for (0..segments) |side| {
             const a: u32 = first + @as(u32, @intCast(ring * (segments + 1) + side));
             const b = a + segments + 1;
-            try self.triangle(a, b, a + 1);
-            try self.triangle(a + 1, b, b + 1);
+            try self.triangle(a, a + 1, b);
+            try self.triangle(a + 1, b + 1, b);
         };
     }
 
@@ -430,7 +445,11 @@ const Builder = struct {
                 const round = std.math.tau * @as(f32, @floatFromInt(side)) / segments;
                 _ = try self.vertex(.{ @cos(round) * end.radius, end.y, @sin(round) * end.radius }, normal, .{ 0.5 + @cos(round) * 0.5, 0.5 + @sin(round) * 0.5 });
             }
-            for (0..segments) |side| try self.triangle(centre, centre + 1 + @as(u32, @intCast(side)), centre + 2 + @as(u32, @intCast(side)));
+            // Round one way seen from below, the other from above.
+            for (0..segments) |side| {
+                const rim = centre + 1 + @as(u32, @intCast(side));
+                if (end.y > 0) try self.triangle(centre, rim + 1, rim) else try self.triangle(centre, rim, rim + 1);
+            }
         }
     }
 };
@@ -444,6 +463,25 @@ test "every shape has triangles, each pointing at a real vertex" {
         try std.testing.expectEqual(@as(u32, 0), range.index_count % 3);
     }
     for (geometry.indices) |index| try std.testing.expect(index < geometry.vertices.len);
+}
+
+test "every shape's triangles turn counter-clockwise seen from the side their normals face" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const geometry = try Geometry.build(arena.allocator());
+    var index: usize = 0;
+    while (index < geometry.indices.len) : (index += 3) {
+        const corners = geometry.indices[index..][0..3];
+        const a: math.Vec3 = .fromArray(geometry.vertices[corners[0]].position);
+        const b: math.Vec3 = .fromArray(geometry.vertices[corners[1]].position);
+        const c: math.Vec3 = .fromArray(geometry.vertices[corners[2]].position);
+        const facing = b.sub(a).cross(c.sub(a));
+        // The sphere's poles squeeze some triangles to nothing.
+        if (facing.length() < 1e-7) continue;
+        var normal: math.Vec3 = .zero;
+        for (corners) |corner| normal = normal.add(.fromArray(geometry.vertices[corner].normal));
+        try std.testing.expect(facing.dot(normal) > 0);
+    }
 }
 
 test "allocated gathering includes every drawable and preserves borrowed asset identities" {
