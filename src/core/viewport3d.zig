@@ -304,7 +304,7 @@ fn billboardPanelsOf(self: *Preview, cmd: vit.CommandBuffer, frame: *const billb
 pub fn shaderSource(code: []const u8, entry_point: []const u8) vit.ShaderModule {
     if (@import("builtin").os.tag == .emscripten)
         return vit.BinaryShaderModule.init(.{ .backend = .webgpu, .format = .wgsl, .bytes = code, .entry_point = entry_point });
-    return @import("vitellus_spirv").SPIRVShaderModule.init(.{ .code = code });
+    return @import("vitellus_spirv").SPIRVShaderModule.init(.{ .code = code, .cache = @import("compiled_shader_cache.zig").get() });
 }
 
 fn makeDepth(device: vit.Device, extent: vit.Extent2D, samples: u32) !vit.Texture {

@@ -388,7 +388,15 @@ pub const ProjectAssets = struct {
         const whole = try eggy.shader_compose.compose(gpa, source, std.fs.path.basename(found.path));
         defer gpa.free(whole);
         const role = try eggy.shader_compose.roleOf(source);
-        return .{ .bytes = try eggy.slangc.compileSource(gpa, whole, eggy.shader_compose.Role.entry_point, .fragment, .spirv), .role = role };
+        const entry_point = eggy.shader_compose.Role.entry_point;
+        // Slang is slow to start, so an unchanged shader is read back from the last compile.
+        const disk = eggy.compiled_shader_cache.get() orelse
+            return .{ .bytes = try eggy.slangc.compileSource(gpa, whole, entry_point, .fragment, .spirv), .role = role };
+        const entry = eggy.vit.ShaderDiskCache.key(&.{ eggy.slangc.compiler_version, "spirv fragment", entry_point, whole });
+        if (disk.load(gpa, entry)) |spirv| return .{ .bytes = spirv, .role = role };
+        const spirv = try eggy.slangc.compileSource(gpa, whole, entry_point, .fragment, .spirv);
+        disk.store(entry, spirv);
+        return .{ .bytes = spirv, .role = role };
     }
 
     fn readAsset(context: *anyopaque, gpa: std.mem.Allocator, key: []const u8) ![:0]u8 {
