@@ -204,10 +204,14 @@ pub const ModelCache = struct {
         // A rigged model's stored corners are in their own space; draw it as its rest pose places them.
         const rest = try assets.rig.restVertices(self.gpa, model);
         defer self.gpa.free(rest);
-        const vertices = try vit.Buffer.init(self.device, .{ .label = "model vertices", .size = rest.len * @sizeOf(assets.model.Vertex), .usage = .{ .vertex = true }, .initial_data = std.mem.sliceAsBytes(rest) });
-        errdefer vertices.deinit();
-        const indices = try vit.Buffer.init(self.device, .{ .label = "model indices", .size = model.indices.len * @sizeOf(u32), .usage = .{ .index = true }, .initial_data = std.mem.sliceAsBytes(model.indices) });
-        errdefer indices.deinit();
+        // In GPU memory, copied in with the next frame's submit; retired on failure, since a
+        // pending copy may already reference them.
+        const vertices = try vit.Buffer.init(self.device, .{ .label = "model vertices", .size = rest.len * @sizeOf(assets.model.Vertex), .usage = .{ .vertex = true, .transfer_dst = true } });
+        errdefer textures.graveyard.retire(vertices);
+        try textures.uploads.writeBuffer(.{ .buffer = vertices, .data = std.mem.sliceAsBytes(rest), .after = .vertex });
+        const indices = try vit.Buffer.init(self.device, .{ .label = "model indices", .size = model.indices.len * @sizeOf(u32), .usage = .{ .index = true, .transfer_dst = true } });
+        errdefer textures.graveyard.retire(indices);
+        try textures.uploads.writeBuffer(.{ .buffer = indices, .data = std.mem.sliceAsBytes(model.indices), .after = .index });
 
         // Its textures, then its parts painted with them; a model without parts is one.
         const made = try self.gpa.alloc(?texture_cache.Gpu, model.textures.len);

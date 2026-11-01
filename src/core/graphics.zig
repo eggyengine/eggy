@@ -23,6 +23,8 @@ pub const Graphics = struct {
     queue: vit.Queue,
     /// Where objects the GPU may still be using wait until it's done; every frame marks it.
     graveyard: *vit.Graveyard,
+    /// Copies data into GPU resources; every frame flushes it before its submit.
+    uploads: *vit.Uploader,
     /// The format every surface renders in, so pipelines work in any window.
     color_format: vit.Format,
     /// The main window's swapchain.
@@ -125,6 +127,8 @@ pub const Graphics = struct {
         errdefer queue.deinit();
         const graveyard = try vit.Graveyard.create(allocator, device, queue);
         errdefer graveyard.destroy();
+        const uploads = try vit.Uploader.create(allocator, device, queue, graveyard);
+        errdefer uploads.destroy();
 
         // The main window picks the color format; other windows must offer the same one.
         var surface = Surface.initFor(instance, adapter, device, queue, window, null, settings.present_mode) catch |err| switch (err) {
@@ -145,7 +149,7 @@ pub const Graphics = struct {
                 std.log.warn("project graphics defaults adjusted to this device's supported options", .{});
         }
         try settings.validate(caps);
-        var textures = try TextureCache.init(allocator, device, queue, graveyard, settings);
+        var textures = try TextureCache.init(allocator, device, uploads, graveyard, settings);
         errdefer textures.deinit();
         const preview = try viewport3d.Preview.init(device, color_format, surface.extent, textures.layout, textures.maps.layout, settings);
         std.log.info("Graphics ready: {d}x{d} px, {s}", .{ surface.extent.width, surface.extent.height, @tagName(color_format) });
@@ -155,6 +159,7 @@ pub const Graphics = struct {
             .device = device,
             .queue = queue,
             .graveyard = graveyard,
+            .uploads = uploads,
             .color_format = color_format,
             .surface = surface,
             .preview = preview,
@@ -186,7 +191,7 @@ pub const Graphics = struct {
         var textures: ?TextureCache = null;
         errdefer if (textures) |*made| made.deinit();
         if (replace_textures) {
-            textures = try TextureCache.init(self.textures.gpa, self.device, self.queue, self.graveyard, settings);
+            textures = try TextureCache.init(self.textures.gpa, self.device, self.uploads, self.graveyard, settings);
             textures.?.loader = self.textures.loader;
         }
         var preview: ?viewport3d.Preview = null;
@@ -284,6 +289,7 @@ pub const Graphics = struct {
         self.shaders.deinit();
         self.textures.deinit();
         if (self.surface_active) self.surface.deinit();
+        self.uploads.destroy();
         self.graveyard.destroy();
         self.queue.deinit();
         self.device.deinit();
@@ -510,7 +516,9 @@ pub const Surface = struct {
         try frame.cmd.barrier(&.{.{ .texture_view = .{ .view = frame.target, .before = .color_attachment, .after = .present } }});
         try frame.cmd.finish();
 
-        // Submit, then hand the slot on; the next use of this slot waits for `submitted`.
+        // Uploads first, so this frame's commands see what they copied in; then submit, and
+        // hand the slot on; the next use of this slot waits for `submitted`.
+        try graphics.uploads.flush();
         self.submitted += 1;
         const slot = &self.slots[self.slot];
         try queue.submit(.{
