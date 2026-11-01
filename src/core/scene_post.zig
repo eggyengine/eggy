@@ -112,7 +112,7 @@ pub const ScenePost = struct {
         bloom: [bloom_levels]Level,
         bloom_initialized: bool = false,
 
-        fn deinit(self: Target) void {
+        pub fn deinit(self: Target) void {
             for (self.images) |image| image.deinit();
             for (self.bloom) |level| {
                 if (level.up_group) |group| group.deinit();
@@ -203,9 +203,10 @@ pub const ScenePost = struct {
 
     /// Replace targets only after the caller has waited for earlier GPU use. On failure the
     /// previous targets stay.
-    pub fn resize(self: *ScenePost, extent: vit.Extent2D) !void {
+    /// The old target goes to `graveyard`: frames in flight may still be drawing into it.
+    pub fn resize(self: *ScenePost, graveyard: *vit.Graveyard, extent: vit.Extent2D) !void {
         const target = try self.makeTarget(extent);
-        self.target.deinit();
+        graveyard.retire(self.target);
         self.target = target;
     }
 
@@ -352,7 +353,7 @@ pub const ScenePost = struct {
     // pass) when it doesn't load or isn't a post shader.
     fn passPipeline(self: *ScenePost, key: []const u8, cache: *ShaderCache) ?vit.GraphicsPipeline {
         const loaded = cache.get(key) orelse return null;
-        if (self.passes.get(key, 0, cache.revision)) |known| return known;
+        if (self.passes.get(key, 0, cache)) |known| return known;
         if (loaded.role != .post) {
             const hash = std.hash.Wyhash.hash(0, key);
             if (self.wrong_role_reported != hash) std.log.err("post pass shader {s} is a {t} shader, not a post shader: the pass is skipped", .{ key, loaded.role });

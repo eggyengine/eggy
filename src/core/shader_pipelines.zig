@@ -3,6 +3,7 @@
 //! (`ShaderCache.revision`).
 const std = @import("std");
 const vit = @import("vitellus");
+const ShaderCache = @import("shader_cache.zig").ShaderCache;
 
 // ponytail: a fixed handful per renderer, refused past that; grow it if scenes use more shaders.
 const capacity = 64;
@@ -16,12 +17,14 @@ pub const ShaderPipelines = struct {
     /// Whether running out of room was reported, so it is logged once.
     full_reported: bool = false,
 
-    /// The pipeline made for shader `key` as `variant`, or null; forgets them all first when
-    /// `revision` (the shader cache's) moved on, which only happens once the GPU is idle.
-    pub fn get(self: *ShaderPipelines, key: []const u8, variant: u32, revision: u64) ?vit.GraphicsPipeline {
-        if (revision != self.revision) {
-            self.deinit();
-            self.revision = revision;
+    /// The pipeline made for shader `key` as `variant`, or null; first, when `shaders` forgot
+    /// its shaders since, retires every pipeline (frames in flight may still draw with them).
+    pub fn get(self: *ShaderPipelines, key: []const u8, variant: u32, shaders: *const ShaderCache) ?vit.GraphicsPipeline {
+        if (shaders.revision != self.revision) {
+            for (self.pipelines[0..self.len]) |pipeline| shaders.graveyard.retire(pipeline);
+            self.len = 0;
+            self.full_reported = false;
+            self.revision = shaders.revision;
         }
         const hash = std.hash.Wyhash.hash(variant, key);
         for (self.keys[0..self.len], self.pipelines[0..self.len]) |known, pipeline| if (known == hash) return pipeline;

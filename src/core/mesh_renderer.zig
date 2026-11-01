@@ -418,7 +418,7 @@ pub const MeshRenderer = struct {
     // surface) when it doesn't load or isn't a surface shader.
     fn surfacePipeline(self: *MeshRenderer, key: []const u8, variant: Variant, cache: *ShaderCache) ?vit.GraphicsPipeline {
         const loaded = cache.get(key) orelse return null;
-        if (self.surfaces.get(key, variant.index(), cache.revision)) |known| return known;
+        if (self.surfaces.get(key, variant.index(), cache)) |known| return known;
         if (loaded.role != .surface) {
             const hash = std.hash.Wyhash.hash(0, key);
             if (self.wrong_role_reported != hash) std.log.err("material shader {s} is a {t} shader, not a surface shader: drawn without it", .{ key, loaded.role });

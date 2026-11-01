@@ -164,15 +164,16 @@ pub const Preview = struct {
     /// try graphics.queue.waitIdle();
     /// try preview.resize(graphics.device, resized_extent_pixels);
     /// ```
-    pub fn resize(self: *Preview, device: vit.Device, extent: vit.Extent2D) !void {
+    /// The old targets go to `graveyard`: frames in flight may still be drawing into them.
+    pub fn resize(self: *Preview, device: vit.Device, graveyard: *vit.Graveyard, extent: vit.Extent2D) !void {
         const render_extent = renderExtent(extent, self.settings.render_scale);
         const depth = try makeDepth(device, render_extent, self.settings.anti_aliasing.samples());
         errdefer depth.deinit();
         const depth_view = try vit.TextureView.init(device, .{ .texture = depth, .aspect = .depth });
         errdefer depth_view.deinit();
-        try self.post.resize(render_extent);
-        self.depth_view.deinit();
-        self.depth.deinit();
+        try self.post.resize(graveyard, render_extent);
+        graveyard.retire(self.depth_view);
+        graveyard.retire(self.depth);
         self.depth = depth;
         self.depth_view = depth_view;
         self.depth_initialized = false;

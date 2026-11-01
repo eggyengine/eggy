@@ -32,7 +32,7 @@ pub const SceneTexture = struct {
         /// Whether it has been rendered once, so it's in the sampled state rather than undefined.
         rendered: bool = false,
 
-        fn deinit(self: Target) void {
+        pub fn deinit(self: Target) void {
             self.group.deinit();
             self.view.deinit();
             self.texture.deinit();
@@ -99,8 +99,8 @@ pub const SceneTexture = struct {
 
     /// Render the scene, with `drawables` (sorted in place) seen from `view` and each of `selected`'s
     /// outlined, and the editor's ground grid when `grid` says, into the texture at `extent_px`.
-    /// Call outside a render pass. A new size recreates the texture, which first waits for the GPU
-    /// to finish earlier frames.
+    /// Call outside a render pass. A new size recreates the texture; the old one is freed once
+    /// the GPU finishes the frames drawing into it.
     /// Host-only: `extent_px` is physical pixels; zero dimensions skip rendering. Uses the
     /// creating graphics' caches and device, borrows live drawable paths, and leaves the
     /// target sampled for `draw`. GPU/upload errors propagate.
@@ -164,15 +164,13 @@ pub const SceneTexture = struct {
         try cmd.barrier(&.{.{ .texture = .{ .texture = target.texture, .before = .color_attachment, .after = .sampled } }});
     }
 
-    // ponytail: waits for the GPU on every size change, so dragging a splitter stalls a little; keep a spare texture per frame in flight if that shows.
     fn targetSized(self: *SceneTexture, graphics: *Graphics, extent_px: vit.Extent2D) !*Target {
         if (self.target) |*target| if (target.extent.width == extent_px.width and target.extent.height == extent_px.height) return target;
-        try graphics.queue.waitIdle();
-        if (self.target) |target| target.deinit();
+        if (self.target) |target| graphics.graveyard.retire(target);
         self.target = null;
 
         const device = graphics.device;
-        try self.preview.resize(device, extent_px);
+        try self.preview.resize(device, graphics.graveyard, extent_px);
         const texture = try vit.Texture.init(device, .{
             .label = "scene texture",
             .width = extent_px.width,

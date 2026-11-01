@@ -22,6 +22,7 @@ const Entry = struct { set: Set, cutoff: f32, params: vit.Buffer, group: vit.Bin
 pub const MaterialMaps = struct {
     gpa: std.mem.Allocator,
     device: vit.Device,
+    graveyard: *vit.Graveyard,
     layout: vit.BindGroupLayout,
     sampler: vit.Sampler,
     /// What a missing map samples: `normal` faces straight out, `white` leaves the rest as the
@@ -31,7 +32,7 @@ pub const MaterialMaps = struct {
     entries: std.ArrayList(Entry) = .empty,
 
     /// Borrows `sampler` and the two neutral views, which must outlive it.
-    pub fn init(gpa: std.mem.Allocator, device: vit.Device, sampler: vit.Sampler, neutral_normal: vit.TextureView, white: vit.TextureView) !MaterialMaps {
+    pub fn init(gpa: std.mem.Allocator, device: vit.Device, graveyard: *vit.Graveyard, sampler: vit.Sampler, neutral_normal: vit.TextureView, white: vit.TextureView) !MaterialMaps {
         const fragment: vit.hal.binding.ShaderVisibility = .{ .fragment = true };
         const layout = try vit.BindGroupLayout.init(device, .{ .label = "material maps", .entries = &.{
             .{ .binding = 0, .kind = .{ .sampled_texture = .{} }, .visibility = fragment },
@@ -41,12 +42,13 @@ pub const MaterialMaps = struct {
             .{ .binding = 4, .kind = .{ .sampler = .filtering }, .visibility = fragment },
             .{ .binding = 5, .kind = .{ .buffer = .{ .kind = .uniform } }, .visibility = fragment },
         } });
-        return .{ .gpa = gpa, .device = device, .layout = layout, .sampler = sampler, .neutral_normal = neutral_normal, .white = white };
+        return .{ .gpa = gpa, .device = device, .graveyard = graveyard, .layout = layout, .sampler = sampler, .neutral_normal = neutral_normal, .white = white };
     }
 
-    /// Free every group and the layout. The GPU must be done with them.
+    /// Free every group and the layout, waiting for the GPU to finish with them.
     pub fn deinit(self: *MaterialMaps) void {
         self.forgetAll();
+        self.graveyard.drain();
         self.entries.deinit(self.gpa);
         self.layout.deinit();
     }
@@ -67,8 +69,8 @@ pub const MaterialMaps = struct {
         return made.group;
     }
 
-    /// Forget every group sampling `texture`, which is about to be freed. The GPU must be done
-    /// with them.
+    /// Forget every group sampling `texture`, which is about to be freed; each is freed once the
+    /// GPU finishes the frames drawing with it.
     pub fn forget(self: *MaterialMaps, texture: vit.Texture) void {
         var index: usize = 0;
         while (index < self.entries.items.len) {
@@ -80,18 +82,19 @@ pub const MaterialMaps = struct {
                 index += 1;
                 continue;
             }
-            entry.group.deinit();
-            entry.params.deinit();
+            self.retire(entry);
             _ = self.entries.swapRemove(index);
         }
     }
 
     pub fn forgetAll(self: *MaterialMaps) void {
-        for (self.entries.items) |entry| {
-            entry.group.deinit();
-            entry.params.deinit();
-        }
+        for (self.entries.items) |entry| self.retire(entry);
         self.entries.clearRetainingCapacity();
+    }
+
+    fn retire(self: *MaterialMaps, entry: Entry) void {
+        self.graveyard.retire(entry.group);
+        self.graveyard.retire(entry.params);
     }
 
     fn make(self: *MaterialMaps, set: Set, cutoff: f32) !Entry {

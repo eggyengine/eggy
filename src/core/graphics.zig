@@ -21,6 +21,8 @@ pub const Graphics = struct {
     adapter: vit.Adapter,
     device: vit.Device,
     queue: vit.Queue,
+    /// Where objects the GPU may still be using wait until it's done; every frame marks it.
+    graveyard: *vit.Graveyard,
     /// The format every surface renders in, so pipelines work in any window.
     color_format: vit.Format,
     /// The main window's swapchain.
@@ -121,6 +123,8 @@ pub const Graphics = struct {
         errdefer device.deinit();
         const queue = try vit.Queue.init(device, .{ .label = "graphics queue", .kind = .graphics });
         errdefer queue.deinit();
+        const graveyard = try vit.Graveyard.create(allocator, device, queue);
+        errdefer graveyard.destroy();
 
         // The main window picks the color format; other windows must offer the same one.
         var surface = Surface.initFor(instance, adapter, device, queue, window, null, settings.present_mode) catch |err| switch (err) {
@@ -141,7 +145,7 @@ pub const Graphics = struct {
                 std.log.warn("project graphics defaults adjusted to this device's supported options", .{});
         }
         try settings.validate(caps);
-        var textures = try TextureCache.init(allocator, device, queue, settings);
+        var textures = try TextureCache.init(allocator, device, queue, graveyard, settings);
         errdefer textures.deinit();
         const preview = try viewport3d.Preview.init(device, color_format, surface.extent, textures.layout, textures.maps.layout, settings);
         std.log.info("Graphics ready: {d}x{d} px, {s}", .{ surface.extent.width, surface.extent.height, @tagName(color_format) });
@@ -150,13 +154,14 @@ pub const Graphics = struct {
             .adapter = adapter,
             .device = device,
             .queue = queue,
+            .graveyard = graveyard,
             .color_format = color_format,
             .surface = surface,
             .preview = preview,
             .models = .init(allocator, device),
             .textures = textures,
             .materials = .{ .gpa = allocator },
-            .shaders = .{ .gpa = allocator, .device = device, .shaderSource = viewport3d.shaderSource },
+            .shaders = .{ .gpa = allocator, .device = device, .graveyard = graveyard, .shaderSource = viewport3d.shaderSource },
             .clips = .{ .gpa = allocator },
             .render_settings = settings,
             .cached_caps = caps,
@@ -181,7 +186,7 @@ pub const Graphics = struct {
         var textures: ?TextureCache = null;
         errdefer if (textures) |*made| made.deinit();
         if (replace_textures) {
-            textures = try TextureCache.init(self.textures.gpa, self.device, self.queue, settings);
+            textures = try TextureCache.init(self.textures.gpa, self.device, self.queue, self.graveyard, settings);
             textures.?.loader = self.textures.loader;
         }
         var preview: ?viewport3d.Preview = null;
@@ -213,15 +218,14 @@ pub const Graphics = struct {
     }
 
     /// Forget every model file, image and shader, so each loads again when next drawn: their files may
-    /// have changed. Waits for the GPU to finish with them.
-    /// Host-only cache invalidation: invalidates all cached GPU handles and model bounds.
-    /// Queue-idle errors are ignored; do not call while recording draws using those assets.
+    /// have changed. Each is freed once the GPU finishes the frames drawing with it.
+    /// Host-only cache invalidation: invalidates all cached GPU handles and model bounds;
+    /// do not call while recording draws using those assets.
     ///
     /// ```zig
     /// graphics.forgetAssets();
     /// ```
     pub fn forgetAssets(self: *Graphics) void {
-        self.queue.waitIdle() catch {};
         self.models.forgetAll(&self.textures);
         self.materials.forgetAll();
         self.shaders.forgetAll();
@@ -242,7 +246,7 @@ pub const Graphics = struct {
         const before = self.surface.extent;
         try self.surface.syncSize(self.queue, window);
         if (std.meta.eql(before, self.surface.extent)) return;
-        try self.preview.resize(self.device, self.surface.extent);
+        try self.preview.resize(self.device, self.graveyard, self.surface.extent);
     }
 
     /// Release the native surface before Android backgrounds the window, retaining GPU assets.
@@ -258,7 +262,7 @@ pub const Graphics = struct {
         if (self.surface_active) return;
         var surface = try self.addSurface(window);
         errdefer surface.deinit();
-        try self.preview.resize(self.device, surface.extent);
+        try self.preview.resize(self.device, self.graveyard, surface.extent);
         self.surface = surface;
         self.surface_active = true;
     }
@@ -280,6 +284,7 @@ pub const Graphics = struct {
         self.shaders.deinit();
         self.textures.deinit();
         if (self.surface_active) self.surface.deinit();
+        self.graveyard.destroy();
         self.queue.deinit();
         self.device.deinit();
         self.adapter.deinit();
@@ -316,10 +321,7 @@ pub const Graphics = struct {
         const frame = try self.surface.beginFrame();
         // The swapchain can come back another size than asked for (Android rebuilds it when the
         // screen turns), so the scene's targets follow the image it draws into.
-        if (!std.meta.eql(before, frame.extent)) {
-            try self.queue.waitIdle();
-            try self.preview.resize(self.device, frame.extent);
-        }
+        if (!std.meta.eql(before, frame.extent)) try self.preview.resize(self.device, self.graveyard, frame.extent);
         return frame;
     }
 
@@ -333,7 +335,7 @@ pub const Graphics = struct {
     /// try graphics.endFrame(frame);
     /// ```
     pub fn endFrame(self: *Graphics, frame: Frame) !void {
-        return self.surface.endFrame(self.queue, frame);
+        return self.surface.endFrame(self, frame);
     }
 
     /// Draw the 3D scene, with `drawables` (from `eggy.mesh.gather`; sorted in place) seen from
@@ -493,16 +495,18 @@ pub const Surface = struct {
         return .{ .cmd = cmd, .target = acquired.view, .extent = self.extent, .render_done = self.render_done[acquired.index] };
     }
 
-    /// Finish `frame`: submit its commands to `queue` and present the image once they have run.
-    /// Host-only: use the matching frame and graphics queue, with no active render pass and
-    /// the target in color-attachment state. Advances the in-flight slot; propagates submit
-    /// and present errors. Do not record into or submit this frame again.
+    /// Finish `frame`: submit its commands to `graphics`' queue and present the image once they
+    /// have run, then free what the GPU finished with (`Graphics.graveyard`).
+    /// Host-only: use the matching frame, with no active render pass and the target in
+    /// color-attachment state. Advances the in-flight slot; propagates submit and present
+    /// errors. Do not record into or submit this frame again.
     ///
     /// ```zig
     /// const frame = try extra_surface.beginFrame();
-    /// try extra_surface.endFrame(graphics.queue, frame);
+    /// try extra_surface.endFrame(&graphics, frame);
     /// ```
-    pub fn endFrame(self: *Surface, queue: vit.Queue, frame: Frame) !void {
+    pub fn endFrame(self: *Surface, graphics: *Graphics, frame: Frame) !void {
+        const queue = graphics.queue;
         try frame.cmd.barrier(&.{.{ .texture_view = .{ .view = frame.target, .before = .color_attachment, .after = .present } }});
         try frame.cmd.finish();
 
@@ -517,7 +521,10 @@ pub const Surface = struct {
         });
         slot.frame = self.submitted;
         self.slot = (self.slot + 1) % frames_in_flight;
+        // Objects retired while recording this frame wait for it to finish.
+        try graphics.graveyard.mark();
         _ = try self.swapchain.present(&.{frame.render_done});
+        graphics.graveyard.collect();
     }
 };
 

@@ -43,6 +43,8 @@ pub const TextureCache = struct {
     gpa: std.mem.Allocator,
     device: vit.Device,
     queue: vit.Queue,
+    /// Where released textures wait for the GPU to finish with them.
+    graveyard: *vit.Graveyard,
     settings: settings_zig.Settings,
     /// What a texture's bind group holds: the texture, then the sampler (set 1 of the meshes'
     /// pipelines).
@@ -63,11 +65,11 @@ pub const TextureCache = struct {
     /// Borrows `device`, retains `gpa`, and propagates allocation/GPU errors.
     ///
     /// ```zig
-    /// var textures = try TextureCache.init(gpa, graphics.device, graphics.queue, graphics.render_settings);
-    /// defer textures.deinit(); // Finish GPU use and release model caches first.
+    /// var textures = try TextureCache.init(gpa, graphics.device, graphics.queue, graphics.graveyard, graphics.render_settings);
+    /// defer textures.deinit(); // Release model caches first.
     /// textures.loader = image_loader;
     /// ```
-    pub fn init(gpa: std.mem.Allocator, device: vit.Device, queue: vit.Queue, settings: settings_zig.Settings) !TextureCache {
+    pub fn init(gpa: std.mem.Allocator, device: vit.Device, queue: vit.Queue, graveyard: *vit.Graveyard, settings: settings_zig.Settings) !TextureCache {
         const layout = try vit.BindGroupLayout.init(device, .{ .entries = &.{
             .{ .binding = 0, .kind = .{ .sampled_texture = .{} }, .visibility = .{ .fragment = true } },
             .{ .binding = 1, .kind = .{ .sampler = .filtering }, .visibility = .{ .fragment = true } },
@@ -84,28 +86,28 @@ pub const TextureCache = struct {
             .max_anisotropy = settings.anisotropy,
         });
         errdefer sampler.deinit();
-        var self = TextureCache{ .gpa = gpa, .device = device, .queue = queue, .settings = settings, .layout = layout, .sampler = sampler, .white = undefined, .neutral_normal = undefined, .maps = undefined };
+        var self = TextureCache{ .gpa = gpa, .device = device, .queue = queue, .graveyard = graveyard, .settings = settings, .layout = layout, .sampler = sampler, .white = undefined, .neutral_normal = undefined, .maps = undefined };
         var white = [_]u8{ 255, 255, 255, 255 };
         self.white = try self.make(.{ .width = 1, .height = 1, .pixels = &white }, "white");
         errdefer self.white.deinit();
         var straight_out = [_]u8{ 128, 128, 255, 255 };
         self.neutral_normal = try self.make(.{ .width = 1, .height = 1, .pixels = &straight_out }, "neutral normal");
         errdefer self.neutral_normal.deinit();
-        self.maps = try .init(gpa, device, sampler, self.neutral_normal.view, self.white.view);
+        self.maps = try .init(gpa, device, graveyard, sampler, self.neutral_normal.view, self.white.view);
         return self;
     }
 
-    /// Free every texture. The GPU must be done with them (`Graphics.queue.waitIdle`).
+    /// Free every texture, waiting for the GPU to finish with them.
     /// Host teardown: release caller-owned `make` results and dependent model caches first.
     /// Invalidates cached handles, white fallback, layout and sampler; call once.
     ///
     /// ```zig
-    /// try graphics.queue.waitIdle();
     /// textures.deinit();
     /// ```
     pub fn deinit(self: *TextureCache) void {
         self.forgetAll();
         self.entries.deinit(self.gpa);
+        // Groups sampling the white and neutral textures go before they do.
         self.maps.deinit();
         self.neutral_normal.deinit();
         self.white.deinit();
@@ -194,13 +196,12 @@ pub const TextureCache = struct {
     }
 
     /// Forget every image file's texture, so each loads again when next drawn (its file may
-    /// have changed). The GPU must be done with them.
+    /// have changed). Each is freed once the GPU finishes the frames drawing it.
     /// Host invalidation: clears path entries and failures, but retains the white fallback,
     /// map capacity, loader and caller-owned `make` textures. Invalidates borrowed `get`
     /// results; does not wait for GPU completion itself.
     ///
     /// ```zig
-    /// try graphics.queue.waitIdle();
     /// textures.forgetAll();
     /// ```
     pub fn forgetAll(self: *TextureCache) void {
@@ -212,18 +213,16 @@ pub const TextureCache = struct {
         self.entries.clearRetainingCapacity();
     }
 
-    /// Free `gpu`, one this cache made.
-    /// Host-only: use for caller-owned `make` results, never a cached `get` result or white.
-    /// The GPU and any recorded commands must no longer reference it; call exactly once.
+    /// Free `gpu`, one this cache made, once the GPU finishes the frames already submitted or
+    /// being recorded. Host-only: use for caller-owned `make` results, never a cached `get`
+    /// result or white; call exactly once and stop drawing with it.
     ///
     /// ```zig
-    /// // After all commands referencing owned_paint have completed:
-    /// try graphics.queue.waitIdle();
     /// textures.release(owned_paint);
     /// ```
     pub fn release(self: *TextureCache, gpu: Gpu) void {
         self.maps.forget(gpu.texture);
-        gpu.deinit();
+        self.graveyard.retire(gpu);
     }
 
     /// The maps group (set 2) for `set` (null: a neutral map), and an imported part's alpha
