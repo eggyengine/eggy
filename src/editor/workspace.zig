@@ -157,6 +157,25 @@ const status_height: f32 = 24;
 /// Title bar ids, kept below `dock.first_id`.
 const titlebar_first: u32 = 0x5400_0000;
 
+/// A close about to take Scene panels away, as `Workspace.close_guard` is told of it.
+pub const Closing = struct {
+    /// The Scene copies going.
+    scenes: [panels.max_copies]bool,
+    /// The Scene copy shown once they have gone, if any is left.
+    live_after: ?u8,
+    /// What to close once the editor allows it (`Workspace.closeAnyway`).
+    target: Target,
+
+    pub const Target = union(enum) { tab: usize, panel: u32 };
+};
+
+/// The editor's say over a `Closing`: `mayClose` returns whether it may go ahead now. When it
+/// says no, the editor calls `Workspace.closeAnyway` with `target` once the person has answered.
+pub const CloseGuard = struct {
+    context: *anyopaque,
+    mayClose: *const fn (context: *anyopaque, closing: Closing) bool,
+};
+
 pub const Workspace = struct {
     dock: dock.DockSpace,
     /// The layouts side by side in the main window, each a tree of `dock`.
@@ -208,6 +227,9 @@ pub const Workspace = struct {
     scene_name: ?[]const u8 = null,
     /// Whether the world has changes the open scene doesn't: the status bar marks it with `*`.
     scene_unsaved: bool = false,
+    /// Asked before a close takes Scene panels away, so the editor can offer to save their
+    /// scenes first; null closes without asking.
+    close_guard: ?CloseGuard = null,
     /// A short note in the window's bottom-right corner (say, "Saved"), until `toast_until_ms`.
     toast_buffer: [96]u8 = undefined,
     toast_len: usize = 0,
@@ -824,7 +846,9 @@ pub const Workspace = struct {
                             self.closeTab(action.show);
                             return .handled;
                         };
-                        return if (self.dock.closeTab(id)) .handled else .ignored;
+                        const panel = dock.DockSpace.tabPanel(id) orelse return .ignored;
+                        self.closePanel(panel);
+                        return .handled;
                     },
                     .right => {
                         if (tab_action) |action| if (action == .show) {
@@ -870,6 +894,11 @@ pub const Workspace = struct {
                     live.* = copy.copy;
                     return .handled;
                 };
+                if (self.dock.menuCloses(id)) |panel| {
+                    _ = self.dock.dismissMenu();
+                    self.closePanel(panel);
+                    return .handled;
+                }
                 if (self.dock.press(id, down.position.x, down.position.y)) return .handled;
                 return if (self.dock.dismissMenu()) .handled else .ignored;
             },
@@ -1104,11 +1133,63 @@ pub const Workspace = struct {
         return error.TooManyCopies;
     }
 
-    /// Close tab `index` and the panels in it, unless it is pinned. Edit > Undo brings it back.
+    /// Close tab `index` and the panels in it, unless it is pinned or `close_guard` holds it
+    /// back to ask about a scene first. Edit > Undo brings it back.
     pub fn closeTab(self: *Workspace, index: usize) void {
         const tab = self.tabs.list[index] orelse return;
         if (tab.pinned) return self.toast("Unpin the tab to close it");
+        var buffer: [64 * 16]u32 = undefined;
+        const going = self.tabs.panelsOf(&self.dock, index, &buffer);
+        // Showing the nearest tab is how closing the shown one ends, so its Scene comes next.
+        const next = if (self.tabs.isShown(index)) self.tabs.nearestInMain(&self.dock, index) else null;
+        if (!self.mayClose(going, next, .{ .tab = index })) return;
         self.tabs.close(&self.dock, index);
+    }
+
+    /// Close one panel, unless `close_guard` holds it back to ask about its scene first.
+    fn closePanel(self: *Workspace, panel: u32) void {
+        if (!self.mayClose(&.{panel}, null, .{ .panel = panel })) return;
+        self.dock.remove(panel);
+    }
+
+    /// Close `target` without asking: the editor's answer has dealt with its scenes.
+    pub fn closeAnyway(self: *Workspace, target: Closing.Target) void {
+        const guard = self.close_guard;
+        self.close_guard = null;
+        defer self.close_guard = guard;
+        switch (target) {
+            .tab => |index| self.closeTab(index),
+            .panel => |panel| self.closePanel(panel),
+        }
+    }
+
+    /// Whether closing panels `going` may go ahead: yes unless Scene copies are among them and
+    /// `close_guard` says no. `next` is the tab shown after, when closing shows another.
+    fn mayClose(self: *Workspace, going: []const u32, next: ?usize, target: Closing.Target) bool {
+        const guard = self.close_guard orelse return true;
+        var scenes: [panels.max_copies]bool = @splat(false);
+        for (going) |id| if (panels.copyOf(id)) |found| if (found.panel == .scene) {
+            scenes[found.copy] = true;
+        };
+        if (std.mem.indexOfScalar(bool, &scenes, true) == null) return true;
+        return guard.mayClose(guard.context, .{ .scenes = scenes, .live_after = self.sceneAfter(scenes, next), .target = target });
+    }
+
+    /// The Scene copy live once `going` has closed, as `followShownTab` will pick it: the
+    /// `next` tab's own, else the live one if it stays, else the first left open.
+    fn sceneAfter(self: *const Workspace, going: [panels.max_copies]bool, next: ?usize) ?u8 {
+        if (next) |tab| {
+            var buffer: [64 * 16]u32 = undefined;
+            for (self.tabs.panelsOf(&self.dock, tab, &buffer)) |id| if (panels.copyOf(id)) |found| {
+                if (found.panel == .scene and !going[found.copy]) return found.copy;
+            };
+        }
+        const live = self.live.scene;
+        if (!going[live] and self.dock.nodeOf(panels.copyId(.scene, live)) != null) return live;
+        for (0..panels.max_copies) |copy| {
+            if (!going[copy] and self.dock.nodeOf(panels.copyId(.scene, @intCast(copy))) != null) return @intCast(copy);
+        }
+        return null;
     }
 
     /// Pop tab `index` out into an OS window, or bring it back when it is out.
@@ -1304,7 +1385,7 @@ pub const Workspace = struct {
     /// Window > a panel: close it when open; else open it, a Scene, 2D Scene or the UI Designer's
     /// in a new tab of its own.
     fn togglePanel(self: *Workspace, panel: u32) void {
-        if (self.dock.nodeOf(panel) != null) return self.dock.remove(panel);
+        if (self.dock.nodeOf(panel) != null) return self.closePanel(panel);
         switch (std.enums.fromInt(Panel, panel) orelse .inspector) {
             .ui_designer, .ui_tree, .ui_properties => return self.openTab(.ui),
             .scene_2d => return self.openTab(.scene_2d),
@@ -1482,6 +1563,43 @@ test "closing every tab leaves the main window empty, and a new tab fills it" {
     try workspace.build(viewport, @splat(null), &font);
     try std.testing.expectEqual(@as(usize, 1), workspace.tabs.count());
     try std.testing.expect(workspace.placed.scene != null);
+}
+
+test "closing a Scene asks the close guard first, which can hold it until closeAnyway" {
+    var workspace = try testWorkspace();
+    defer workspace.deinit();
+    _ = workspace.run(.{ .command = .new_tab_3d });
+    workspace.followShownTab();
+    try std.testing.expectEqual(@as(u8, 1), workspace.live.scene);
+
+    const Guard = struct {
+        asked: ?Closing = null,
+        fn refuse(context: *anyopaque, closing: Closing) bool {
+            const self: *@This() = @ptrCast(@alignCast(context));
+            self.asked = closing;
+            return false;
+        }
+    };
+    var guard = Guard{};
+    workspace.close_guard = .{ .context = &guard, .mayClose = Guard.refuse };
+
+    // Closing the shown tab takes Scene copy 1, and shows the first tab's copy 0 next.
+    workspace.closeTab(1);
+    const asked = guard.asked.?;
+    try std.testing.expect(asked.scenes[1] and !asked.scenes[0]);
+    try std.testing.expectEqual(@as(?u8, 0), asked.live_after);
+    try std.testing.expectEqual(@as(usize, 2), workspace.tabs.count());
+    workspace.closeAnyway(asked.target);
+    try std.testing.expectEqual(@as(usize, 1), workspace.tabs.count());
+    try std.testing.expect(workspace.close_guard != null);
+
+    // Panels without a Scene close without asking; the last Scene leaves none to show.
+    guard.asked = null;
+    workspace.togglePanel(@backingInt(Panel.console));
+    try std.testing.expect(guard.asked == null);
+    workspace.togglePanel(@backingInt(Panel.scene));
+    try std.testing.expectEqual(@as(?u8, null), guard.asked.?.live_after);
+    try std.testing.expect(workspace.dock.nodeOf(@backingInt(Panel.scene)) != null);
 }
 
 test "a pinned tab can't be closed until it is unpinned" {

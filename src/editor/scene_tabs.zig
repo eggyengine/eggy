@@ -4,11 +4,13 @@
 const std = @import("std");
 const panels = @import("panels.zig");
 
-/// A scene put aside: the world's text as its tab left it, and the hash it was saved with.
+/// A scene put aside: the world's text as its tab left it, the hash it was saved with, and
+/// whether that text has changes the file doesn't.
 pub const Kept = struct {
     path: []u8,
     text: []u8,
     saved_hash: ?u64,
+    unsaved: bool,
 
     pub fn deinit(self: Kept, gpa: std.mem.Allocator) void {
         gpa.free(self.path);
@@ -73,8 +75,24 @@ pub const SceneTabs = struct {
         return live != self.applied and self.waiting[live] != null;
     }
 
-    /// Forget the scenes of copies `open` says are closed, as their tabs are.
-    // ponytail: a closed tab's unsaved world is dropped without asking; ask with the save prompt if that loses work.
+    /// The Scene copies among `closing` whose unsaved changes closing them throws away: a kept
+    /// world's, and the open world's (`open_unsaved`) when its copy closes and `live_after`, the
+    /// copy shown next, has a scene of its own to show instead. The editor asks before those go.
+    pub fn lostByClosing(self: *const SceneTabs, closing: [panels.max_copies]bool, live_after: ?u8, open_unsaved: bool) [panels.max_copies]bool {
+        var lost: [panels.max_copies]bool = @splat(false);
+        for (closing, self.waiting, &lost) |goes, entry, *gone| {
+            if (goes) if (entry) |found| if (found == .kept) {
+                gone.* = found.kept.unsaved;
+            };
+        }
+        // Another tab sharing the open scene shows it on, so only a scene of its own replaces it.
+        const replaced = if (live_after) |next| next != self.applied and self.waiting[next] != null else false;
+        if (closing[self.applied] and open_unsaved and replaced) lost[self.applied] = true;
+        return lost;
+    }
+
+    /// Forget the scenes of copies `open` says are closed, as their tabs are. The editor has
+    /// asked about any unsaved ones first (`lostByClosing`).
     pub fn forgetClosed(self: *SceneTabs, gpa: std.mem.Allocator, open: [panels.max_copies]bool) void {
         for (&self.waiting, open) |*entry, still| if (!still) if (entry.*) |found| {
             found.deinit(gpa);
@@ -91,7 +109,7 @@ test "a tab's scene waits for it to be shown, and the scene it replaces waits on
     try std.testing.expect(tabs.changing(1));
 
     // Showing tab 1 opens the garden, keeping what tab 0 had open.
-    const leaving = Kept{ .path = try gpa.dupe(u8, "resources/scene/main.scene.zon"), .text = try gpa.dupe(u8, ".{}"), .saved_hash = 7 };
+    const leaving = Kept{ .path = try gpa.dupe(u8, "resources/scene/main.scene.zon"), .text = try gpa.dupe(u8, ".{}"), .saved_hash = 7, .unsaved = false };
     const shown = tabs.follow(gpa, 1, leaving).?;
     defer shown.deinit(gpa);
     try std.testing.expectEqualStrings("resources/scene/garden.scene.zon", shown.file);
@@ -107,4 +125,29 @@ test "a tab's scene waits for it to be shown, and the scene it replaces waits on
     try std.testing.expect(!tabs.changing(2));
     try std.testing.expect(tabs.follow(gpa, 2, null) == null);
     try std.testing.expectEqual(@as(u8, 2), tabs.applied);
+}
+
+test "closing loses a kept world's changes, and the open one's only when another scene replaces it" {
+    const gpa = std.testing.allocator;
+    var tabs = SceneTabs{};
+    defer tabs.deinit(gpa);
+    // Copy 1 waits with unsaved changes, copy 2 with a saved world, copy 3 for its file.
+    tabs.waiting[1] = .{ .kept = .{ .path = try gpa.dupe(u8, "a.scene.zon"), .text = try gpa.dupe(u8, ".{}"), .saved_hash = 1, .unsaved = true } };
+    tabs.waiting[2] = .{ .kept = .{ .path = try gpa.dupe(u8, "b.scene.zon"), .text = try gpa.dupe(u8, ".{}"), .saved_hash = 2, .unsaved = false } };
+    try tabs.assign(gpa, 3, "c.scene.zon");
+    const only = struct {
+        fn of(copies: []const u8) [panels.max_copies]bool {
+            var set: [panels.max_copies]bool = @splat(false);
+            for (copies) |copy| set[copy] = true;
+            return set;
+        }
+    }.of;
+
+    try std.testing.expectEqual(only(&.{1}), tabs.lostByClosing(only(&.{ 1, 2 }), 0, true));
+    // The open world (copy 0) is lost when copy 3's scene opens in its place...
+    try std.testing.expectEqual(only(&.{0}), tabs.lostByClosing(only(&.{0}), 3, true));
+    // ...but not when the copy shown next shares it, none is left, or nothing changed.
+    try std.testing.expectEqual(only(&.{}), tabs.lostByClosing(only(&.{0}), 4, true));
+    try std.testing.expectEqual(only(&.{}), tabs.lostByClosing(only(&.{0}), null, true));
+    try std.testing.expectEqual(only(&.{}), tabs.lostByClosing(only(&.{0}), 3, false));
 }

@@ -139,6 +139,9 @@ pub fn Editor(comptime project: type) type {
         activity: Activity = .{},
         leaving: Leaving = .quit,
         leave_approved: bool = false,
+        /// The close "Save changes?" is asking about instead of leaving, and the scenes it
+        /// would lose (see `mayCloseScenes`).
+        closing: ?struct { close: workspace_zig.Closing, lost: [panels.max_copies]bool } = null,
         /// The Play mode warning's text (see `playWarning`).
         play_warning_buffer: [192]u8 = undefined,
         /// When the open scene last saved itself (see `autosave`).
@@ -470,6 +473,7 @@ pub fn Editor(comptime project: type) type {
             errdefer if (input_settings) |settings| settings.close();
             if (game) |*loaded| loaded.start(&app, plugin_switches.off(), .discard);
             self.* = .{ .gpa = gpa, .game = game, .game_modified = modifiedAt(library_path), .app = app, .ui = context, .mono = mono, .console_ui = console_ui, .hierarchy_ui = hierarchy_ui, .assets_ui = assets_ui, .assets_panel = .init(gpa), .animation_ui = animation_ui, .ui_designer_ui = ui_designer_ui, .ui_tree_ui = ui_tree_ui, .ui_properties_ui = ui_properties_ui, .asset_preview_ui = asset_preview_ui, .asset_preview = .init(gpa, mono), .scene_2d_ui = scene_2d_ui, .asset_icons = asset_icons, .entity_editor = .init(gpa), .console = console, .plugin_pages = plugin_pages, .workspace = workspace, .frame = frame, .scene = scene, .camera_preview = camera_preview, .drawables = drawables, .drawables_2d = drawables_2d, .overlay = overlay, .project = opened_project, .editor_modified = if (opened_project) |opened| editorModified(gpa, opened) else null, .upgrades = upgrades, .preference_folders = preference_folders, .open_scene = open_scene, .history = .{ .gpa = gpa }, .plugin_switches = plugin_switches, .project_assets = project_assets };
+            self.workspace.close_guard = .{ .context = self, .mayClose = mayCloseScenes };
             self.input_settings = input_settings;
             self.entity_editor.assets = project_assets;
             // Each tab's Scene camera and 2D view as this project last had them.
@@ -1029,6 +1033,11 @@ pub fn Editor(comptime project: type) type {
         fn answerSavePrompt(self: *Self, answer: save_prompt_zig.Answer) !bool {
             if (self.save_prompt) |prompt| prompt.close(&self.app.graphics);
             self.save_prompt = null;
+            if (self.closing) |closing| {
+                self.closing = null;
+                self.answerClosing(answer, closing.close, closing.lost);
+                return false;
+            }
             switch (answer) {
                 .cancel => return false,
                 .save => {
@@ -1053,6 +1062,59 @@ pub fn Editor(comptime project: type) type {
             }
             self.leave_approved = false;
             return false;
+        }
+
+        /// `Workspace.close_guard`: a close may go ahead unless it throws away a scene's unsaved
+        /// changes (`SceneTabs.lostByClosing`). Then it asks "Save changes?" and says no; the
+        /// answer finishes the close (`answerClosing`).
+        fn mayCloseScenes(context: *anyopaque, close: workspace_zig.Closing) bool {
+            const self: *Self = @ptrCast(@alignCast(context));
+            if (self.save_prompt != null) return false;
+            const applied = self.scene_tabs.applied;
+            // The open world only matters when another scene would replace it. Then what a play
+            // did isn't the scene: stop, and compare the scene as it was before.
+            const replaced = self.scene_tabs.lostByClosing(close.scenes, close.live_after, true)[applied];
+            if (replaced) self.stopPlaying();
+            const lost = self.scene_tabs.lostByClosing(close.scenes, close.live_after, replaced and self.sceneUnsaved());
+            const first = std.mem.indexOfScalar(bool, &lost, true) orelse return true;
+            const name = if (first == applied)
+                if (self.open_scene) |*scene| scene.name() else null
+            else
+                std.fs.path.basename(self.scene_tabs.waiting[first].?.kept.path);
+            const doing = if (close.target == .tab) "closing the tab" else "closing the Scene";
+            self.save_prompt = save_prompt_zig.SavePrompt.open(self.gpa, &self.app.graphics, self.ui.font, self.app.window.window, name, doing) catch |err| {
+                // Without the prompt, keep the changes rather than lose them.
+                std.log.err("cannot ask about unsaved changes ({t}): save first", .{err});
+                self.workspace.toast("Save the scene, then close it");
+                return false;
+            };
+            self.closing = .{ .close = close, .lost = lost };
+            return false;
+        }
+
+        /// Carry out the answer to "Save changes?" about closing `close`: save the scenes it
+        /// would lose (`lost`) or let them go, then close; Cancel, or a save that fails, keeps it.
+        fn answerClosing(self: *Self, answer: save_prompt_zig.Answer, close: workspace_zig.Closing, lost: [panels.max_copies]bool) void {
+            switch (answer) {
+                .cancel => return,
+                .discard => {},
+                .save => for (lost, 0..) |gone, copy| if (gone) {
+                    if (copy == self.scene_tabs.applied) {
+                        self.saveScene();
+                        if (self.sceneUnsaved()) return; // the save failed: keep the tab
+                        continue;
+                    }
+                    const kept = &self.scene_tabs.waiting[copy].?.kept;
+                    const scene = if (self.open_scene) |*open| open else return;
+                    scene.saveText(kept.path, kept.text) catch |err| {
+                        std.log.err("cannot save {s}: {t}", .{ kept.path, err });
+                        return self.workspace.toast("Couldn't save the scene: see the Console");
+                    };
+                    kept.unsaved = false;
+                    self.activity.saves += 1;
+                },
+            }
+            self.workspace.closeAnyway(close.target);
         }
 
         /// Whether the world has changes its scene file doesn't (or, with no scene open, has any
@@ -3748,7 +3810,8 @@ pub fn Editor(comptime project: type) type {
                     self.gpa.free(text);
                     break :blk null;
                 };
-                break :blk .{ .path = kept_path, .text = text, .saved_hash = scene.saved_hash };
+                const unsaved = scene.unsavedHash(std.hash.Wyhash.hash(0, text), &self.app.world);
+                break :blk .{ .path = kept_path, .text = text, .saved_hash = scene.saved_hash, .unsaved = unsaved };
             } else null else null else null;
             const next = self.scene_tabs.follow(self.gpa, live, leaving) orelse return;
             defer next.deinit(self.gpa);

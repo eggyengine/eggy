@@ -258,7 +258,7 @@ pub const Tabs = struct {
     }
 
     /// The tab nearest `index` (not itself) that is in the main window rather than popped out.
-    fn nearestInMain(self: *const Tabs, layout: *const dock.DockSpace, index: usize) ?usize {
+    pub fn nearestInMain(self: *const Tabs, layout: *const dock.DockSpace, index: usize) ?usize {
         var before = index;
         while (before > 0) {
             before -= 1;

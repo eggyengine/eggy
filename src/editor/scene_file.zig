@@ -134,15 +134,24 @@ pub const OpenScene = struct {
         var text: std.Io.Writer.Allocating = .init(self.gpa);
         defer text.deinit();
         try scene.write(&text.writer);
+        try self.saveText(path, text.written());
+        self.saved_hash = std.hash.Wyhash.hash(0, text.written());
+        log.info("saved {d} entities to {s}", .{ scene.entities.len, path });
+    }
 
+    /// Write `text`, a scene as `save` writes one, to `path` in the project: how a world kept
+    /// aside for another tab (`scene_tabs.Kept`) is saved without opening it. I/O errors propagate.
+    ///
+    /// ```zig
+    /// try open_scene.saveText(kept.path, kept.text);
+    /// ```
+    pub fn saveText(self: *const OpenScene, path: []const u8, text: []const u8) !void {
         var threaded: std.Io.Threaded = .init_single_threaded;
         const io = threaded.io();
         var project = try std.Io.Dir.cwd().openDir(io, self.project_dir, .{});
         defer project.close(io);
         if (std.fs.path.dirname(path)) |parent| try project.createDirPath(io, parent);
-        try project.writeFile(io, .{ .sub_path = path, .data = text.written() });
-        self.saved_hash = std.hash.Wyhash.hash(0, text.written());
-        log.info("saved {d} entities to {s}", .{ scene.entities.len, path });
+        try project.writeFile(io, .{ .sub_path = path, .data = text });
     }
 
     /// Start a new, empty scene in `folder` (relative to the project; "" for the project
