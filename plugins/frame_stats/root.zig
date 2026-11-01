@@ -1,5 +1,5 @@
 //! Frame stats: frames per second, the average frame time and the slowest frame of the last
-//! second, in a corner of the game. F3 shows and hides them.
+//! second, and the GPU memory in use, in a corner of the game. F3 shows and hides them.
 const std = @import("std");
 const eggy = @import("eggy");
 const ui = eggy.ui;
@@ -50,16 +50,25 @@ pub const Plugin = struct {
         const arena = context.builder().allocator;
         const b = context.builder();
         const size = context.theme.small_text_size;
-        const lines = [_][]const u8{
+        var lines_buffer: [4][]const u8 = .{
             try std.fmt.allocPrint(arena, "{d:.0} fps", .{stats.fps}),
             try std.fmt.allocPrint(arena, "{d:.1} ms average", .{stats.average_ms}),
             try std.fmt.allocPrint(arena, "{d:.1} ms slowest", .{stats.slowest_ms}),
+            "",
         };
-        var children: [lines.len]*ui.Layout.Element = undefined;
-        for (&children, lines) |*child, line| child.* = try b.node(0, .{}, .{ .text = .{ .value = line, .size = size } }, &.{});
-        const width: f32 = 132;
+        var line_count: usize = 3;
+        // Not every backend can tell (WebGPU can't).
+        if (app.graphics.device.memoryBudget()) |memory| {
+            lines_buffer[3] = try formatMemory(arena, memory.device_local);
+            line_count = 4;
+        }
+        const lines = lines_buffer[0..line_count];
+        var children_buffer: [4]*ui.Layout.Element = undefined;
+        const children = children_buffer[0..line_count];
+        for (children, lines) |*child, line| child.* = try b.node(0, .{}, .{ .text = .{ .value = line, .size = size } }, &.{});
+        const width: f32 = 168;
         const height = @as(f32, @floatFromInt(lines.len)) * size * 1.5 + 16;
-        const card = try b.node(0, .{ .width = width, .gap = 2, .padding = .{ .left = 10, .right = 10, .top = 8, .bottom = 8 }, .z_index = 400 }, .{ .surface = .card }, &children);
+        const card = try b.node(0, .{ .width = width, .gap = 2, .padding = .{ .left = 10, .right = 10, .top = 8, .bottom = 8 }, .z_index = 400 }, .{ .surface = .card }, children);
         const view = context.viewport;
         const corner = app.preferences(Preferences).corner;
         const left = corner == .top_left or corner == .bottom_left;
@@ -69,6 +78,12 @@ pub const Plugin = struct {
             if (top) view.y + margin else view.y + view.h - height - margin,
         ) };
         context.element(card);
+    }
+
+    /// GPU memory in use against what the system allows, in megabytes.
+    fn formatMemory(arena: std.mem.Allocator, heap: eggy.vit.MemoryBudget.Heap) ![]const u8 {
+        const mb = 1024 * 1024;
+        return std.fmt.allocPrint(arena, "{d} / {d} MB GPU memory", .{ heap.usage_bytes / mb, heap.budget_bytes / mb });
     }
 
     fn record(self: *Plugin, delta_s: f32) void {
@@ -105,6 +120,13 @@ test "the stats cover the last second of frames" {
     const stats = plugin.summarize();
     try std.testing.expectApproxEqAbs(@as(f32, 60), stats.slowest_ms, 0.01);
     try std.testing.expect(stats.fps > 23 and stats.fps < 25);
+}
+
+test "GPU memory reads in megabytes of the budget" {
+    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena.deinit();
+    const line = try Plugin.formatMemory(arena.allocator(), .{ .usage_bytes = 1536 << 20, .budget_bytes = 8 << 30 });
+    try std.testing.expectEqualStrings("1536 / 8192 MB GPU memory", line);
 }
 
 test "the plugin compiles" {
