@@ -28,6 +28,8 @@ pub const Gpu = struct {
 pub const ShaderCache = struct {
     gpa: std.mem.Allocator,
     device: vit.Device,
+    /// Where forgotten shaders wait for the GPU to finish with them.
+    graveyard: *vit.Graveyard,
     shaderSource: *const fn ([]const u8, []const u8) vit.ShaderModule,
     /// Where shaders come from; none (every custom shader is left out) until set.
     loader: ?Loader = null,
@@ -36,18 +38,18 @@ pub const ShaderCache = struct {
     /// Changes whenever shaders are forgotten, so renderers remake the pipelines they made.
     revision: u64 = 0,
 
-    /// Free every shader. The GPU must be done with them.
+    /// Free every shader once the GPU finishes with them.
     pub fn deinit(self: *ShaderCache) void {
         self.forgetAll();
         self.entries.deinit(self.gpa);
     }
 
     /// Forget every shader, so each loads again when next used: its file may have changed.
-    /// The GPU must be done with them; pipelines made from them must be remade (`revision`).
+    /// Each is freed once the GPU finishes with it; pipelines made from them are remade (`revision`).
     pub fn forgetAll(self: *ShaderCache) void {
         var it = self.entries.iterator();
         while (it.next()) |entry| {
-            if (entry.value_ptr.*) |loaded| loaded.fragment.deinit();
+            if (entry.value_ptr.*) |loaded| self.graveyard.retire(loaded.fragment);
             self.gpa.free(entry.key_ptr.*);
         }
         self.entries.clearRetainingCapacity();

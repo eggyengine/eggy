@@ -153,9 +153,9 @@ pub const Renderer = struct {
             defer self.gpa.free(pixels);
             for (font.pixels, 0..) |coverage, index| pixels[index * 4 ..][0..4].* = .{ 255, 255, 255, coverage };
             const paint = try textures.make(.{ .width = ui.atlas_width, .height = ui.atlas_height, .pixels = pixels }, "world glyph atlas");
-            errdefer paint.deinit();
-            try textures.queue.waitIdle();
-            if (self.font_texture) |old| old.deinit();
+            errdefer textures.release(paint);
+            // Frames in flight may still sample the old atlas.
+            if (self.font_texture) |old| textures.release(old);
             self.font_texture = paint;
             self.font_revision = font.version();
         };
@@ -164,8 +164,7 @@ pub const Renderer = struct {
         if (self.capacities[self.slot] < bytes.len) {
             const buffer = try vit.Buffer.init(self.device, .{ .size = bytes.len, .usage = .{ .vertex = true }, .memory = .upload });
             errdefer buffer.deinit();
-            try textures.queue.waitIdle();
-            if (self.buffers[self.slot]) |old| old.deinit();
+            if (self.buffers[self.slot]) |old| textures.graveyard.retire(old);
             self.buffers[self.slot] = buffer;
             self.capacities[self.slot] = bytes.len;
         }

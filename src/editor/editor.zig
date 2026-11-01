@@ -2223,7 +2223,7 @@ pub fn Editor(comptime project: type) type {
             }
             overlay.draw(frame.cmd, frame.extent, from, drawn.vertices.len - from);
             frame.cmd.endRenderPass();
-            try surface.endFrame(self.app.graphics.queue, frame);
+            try surface.endFrame(&self.app.graphics, frame);
         }
 
         /// Render the model the Asset Preview panel shows, if any, alone under the default

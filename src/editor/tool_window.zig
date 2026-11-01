@@ -124,6 +124,6 @@ pub const ToolWindow = struct {
         }} });
         self.popout.overlay.draw(frame.cmd, frame.extent, 0, vertices.len);
         frame.cmd.endRenderPass();
-        try self.popout.surface.endFrame(graphics.queue, frame);
+        try self.popout.surface.endFrame(graphics, frame);
     }
 };

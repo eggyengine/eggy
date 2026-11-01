@@ -16,6 +16,7 @@ const scene = @import("scene.zig");
 const Overlay = @import("game_ui/game_ui.zig").Overlay;
 const render = @import("render_settings.zig");
 const graphics_control = @import("graphics_control.zig");
+const compiled_shader_cache = @import("compiled_shader_cache.zig");
 const GraphicsSettingsUi = @import("game_ui/graphics_settings.zig").GraphicsSettingsUi;
 const DevConsole = @import("dev_console/dev_console.zig").DevConsole;
 const ui_scenes = @import("ui_scenes/ui_scenes.zig");
@@ -112,6 +113,9 @@ pub const App = struct {
             all_flags.audio = true;
         } else |_| std.log.warn("no audio, so the game plays silently: {s}", .{sdl3.c.SDL_GetError()});
         errdefer if (all_flags.audio) sdl3.quit(.{ .audio = true });
+        // Before the renderers make their shaders.
+        compiled_shader_cache.open(process_init.io, if (config != null and config.?.scope == .editor) .editor else .game);
+        errdefer compiled_shader_cache.close();
         var options = if (config) |value|
             try graphics_control.State.init(gpa, process_init.io, value.project_name, value.scope, value.defaults)
         else
@@ -203,6 +207,7 @@ pub const App = struct {
         if (self.input_backend) |backend| backend.deinit();
         self.preference_values.deinit();
         self.graphics.deinit();
+        compiled_shader_cache.close();
         self.graphics_options.deinit();
         self.mobile_state.deinit();
         self.window.deinit();
