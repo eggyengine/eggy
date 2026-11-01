@@ -143,6 +143,9 @@ fn reportError(stage: []const u8, err: anyerror) void {
     var message_buffer: [1280]u8 = undefined;
     const message = if (err == error.SdlError)
         std.fmt.bufPrint(&message_buffer, "SdlError: {s}", .{sdl3.errors.get() orelse ""}) catch "SdlError"
+    else if (err == error.DeviceLost)
+        // ponytail: a lost GPU ends the run; recover in place once Graphics can be rebuilt live.
+        "DeviceLost: the graphics driver stopped responding, was reset or updated, or the GPU was removed. Restarting usually fixes it; if it keeps happening, update the graphics driver."
     else
         @errorName(err);
     const trace: log.crash_report.Trace = if (@errorReturnTrace()) |error_trace| .{ .error_return = error_trace } else .none;
