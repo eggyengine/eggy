@@ -318,7 +318,8 @@ pub fn Editor(comptime project: type) type {
             eggy.log.start(process_init.io, .editor, project.name ++ "_editor", args);
             const gpa = process_init.gpa;
             var app: eggy.App = undefined;
-            try app.initForProject(process_init, title, project.name, .editor, .{});
+            // The editor is a desktop window, which orientation doesn't turn.
+            try app.initForProject(process_init, title, project.name, .editor, .{}, .landscape);
             errdefer app.deinit();
             app.storage = try eggy.storage.Storage.init(gpa, process_init.io, project.name);
             // The dev console's lines show among the Console panel's messages.

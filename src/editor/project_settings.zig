@@ -1,5 +1,5 @@
 //! The Preferences window's Project section: the open project's `eggy.zon`: its title, version
-//! and icon (shown, and as the editor's badged egg), the scene the built game starts in (the default scene, which exports start in unless
+//! and icon (shown, and as the editor's badged egg), which way up phones show the game, the scene the built game starts in (the default scene, which exports start in unless
 //! told otherwise), and what the game's executable says about itself (company, description,
 //! copyright and any more of the project's own, by name), and the graphics the game starts with
 //! (which players can change in the game). Every change is written as it is made, and handed back
@@ -23,6 +23,8 @@ const preview_px: f32 = 56;
 const LongEdit = ui.TextEdit(256);
 /// The most entries of the project's own it holds.
 const max_extra = 32;
+/// The Orientation choices, in `eggy.project.Orientation`'s order.
+const orientations = [_][]const u8{ "Landscape", "Portrait", "Either way" };
 
 /// `eggy.zon` changed from `before` to `after` (both its text, owned by `gpa`).
 pub const Change = struct { before: []u8, after: []u8 };
@@ -63,6 +65,8 @@ pub const ProjectSettings = struct {
     saved_graphics: render_settings.Settings = .{},
     /// Whether the dev console can show over the game.
     dev_console: bool = true,
+    /// Which of `orientations` phones and tablets show the game in, by its place there.
+    orientation: usize = 0,
     /// What this machine offers, with the game's window and frame limit choices always shown:
     /// they are for the built game, not the editor's own window.
     caps: render_settings.Capabilities,
@@ -129,6 +133,7 @@ pub const ProjectSettings = struct {
         self.graphics.load(config.graphics);
         self.saved_graphics = config.graphics;
         self.dev_console = config.dev_console;
+        self.orientation = @backingInt(config.orientation);
         self.gpa.free(self.written);
         self.written = try self.gpa.dupe(u8, text);
 
@@ -195,6 +200,9 @@ pub const ProjectSettings = struct {
         _ = context.select("##icon", self.icons, &self.icon);
         general.end(context);
         if (self.icon != 0) self.iconPreviews(context);
+        general.begin(context, "Orientation", "Which way up phones and tablets show the game. Desktop windows aren't affected.");
+        _ = context.select("##orientation", &orientations, &self.orientation);
+        general.end(context);
         general.begin(context, "Dev console", "Opens a console over the game with `, in Play and the built game.");
         _ = context.toggle("##dev console", &self.dev_console);
         general.end(context);
@@ -319,6 +327,7 @@ pub const ProjectSettings = struct {
             .default_scene = if (self.scene == 0) null else self.scenes[self.scene],
             .icon = if (self.icon == 0) null else self.icons[self.icon],
             .dev_console = self.dev_console,
+            .orientation = @fromBackingInt(@intCast(self.orientation)),
             .graphics = graphics,
             .metadata = .{ .company = self.company.text(), .description = self.description.text(), .copyright = self.copyright.text(), .extra = extra.items },
         };

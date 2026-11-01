@@ -40,6 +40,8 @@ pub const Config = struct {
     icon: ?[]const u8 = null,
     /// What the built game says about itself, in its executable.
     metadata: Metadata = .{},
+    /// Which way up phones and tablets show the game. Desktop windows aren't affected.
+    orientation: Orientation = .landscape,
     /// Whether the dev console shows over the game when its key is pressed, in the built game
     /// and in editor Play (`eggy.dev_console`). The editor's Console panel keeps its own.
     dev_console: bool = true,
@@ -50,6 +52,16 @@ pub const Config = struct {
     plugins: []const plugin_manifest.Installed = &.{},
     /// What this package says about itself when it is a plugin too (see `plugin_manifest`).
     plugin: ?plugin_manifest.Manifest = null,
+};
+
+/// Which ways up a phone or tablet shows a game.
+pub const Orientation = enum {
+    /// Wider than tall, either way round, as the player's rotation lock allows.
+    landscape,
+    /// Taller than wide, either way up.
+    portrait,
+    /// Whichever way the device is held.
+    any,
 };
 
 /// What a game's executable says about itself: on Windows, its version information (in the
@@ -78,6 +90,7 @@ pub fn write(writer: *std.Io.Writer, config: Config) std.Io.Writer.Error!void {
     try writer.print("    .name = \"{f}\",\n    .title = \"{f}\",\n    .version = \"{f}\",\n", .{ std.zig.fmtString(config.name), std.zig.fmtString(config.title), std.zig.fmtString(config.version) });
     if (config.default_scene) |scene| try writer.print("    // The scene the built game starts in.\n    .default_scene = \"{f}\",\n", .{std.zig.fmtString(scene)});
     if (config.icon) |icon| try writer.print("    // The project's icon.\n    .icon = \"{f}\",\n", .{std.zig.fmtString(icon)});
+    if (config.orientation != .landscape) try writer.print("    // Which way up phones and tablets show the game.\n    .orientation = .{t},\n", .{config.orientation});
     if (!config.dev_console) try writer.writeAll("    // Players can't open the dev console.\n    .dev_console = false,\n");
     try writer.writeAll("    .graphics = ");
     try std.zon.stringify.serialize(config.graphics, .{}, writer);
@@ -191,6 +204,8 @@ test "eggy.zon gives the project's title and version" {
     );
     try std.testing.expectEqualStrings("space_game", config.name);
     try std.testing.expectEqualStrings("Space Game", config.title);
+    // Phones show it in landscape unless the file says otherwise.
+    try std.testing.expectEqual(Orientation.landscape, config.orientation);
     try std.testing.expectEqualStrings("1.2.0", config.version);
     try std.testing.expectError(error.ParseZon, parse(arena.allocator(), ".{ .title = \"No name\" }"));
 }
@@ -203,6 +218,7 @@ test "eggy.zon written reads back the same, its metadata included" {
         .title = "Space \"Game\"",
         .default_scene = "resources/scene/start.scene.zon",
         .icon = "resources/icon.png",
+        .orientation = .portrait,
         .metadata = .{ .company = "Rat Co", .extra = &.{.{ .name = "Website", .value = "rats.example" }} },
         .graphics = .{ .anti_aliasing = .fxaa, .mipmaps = false, .frame_limit = 120 },
         .plugins = &.{ .{ .module = "eggy_git", .version = "0.1.0", .dev = true }, .{ .module = "stats", .dependency = "stat_pack", .version = "1.0.0", .repository = "https://github.com/rat/stat_pack", .fingerprint = 0x1234 } },
@@ -214,6 +230,7 @@ test "eggy.zon written reads back the same, its metadata included" {
     try std.testing.expectEqualStrings(config.title, read.title);
     try std.testing.expectEqualStrings(config.default_scene.?, read.default_scene.?);
     try std.testing.expectEqualStrings(config.icon.?, read.icon.?);
+    try std.testing.expectEqual(Orientation.portrait, read.orientation);
     try std.testing.expectEqualStrings("Rat Co", read.metadata.company);
     try std.testing.expectEqualStrings("rats.example", read.metadata.extra[0].value);
     try std.testing.expectEqual(@as(usize, 0), read.metadata.copyright.len);

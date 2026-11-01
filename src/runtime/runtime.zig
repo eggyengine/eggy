@@ -69,7 +69,8 @@ pub fn Runtime(comptime project: type) type {
             else
                 eggy.render_settings.Settings{};
             var app: eggy.App = undefined;
-            try app.initForProject(process_init, project.name, project.name, .runtime, graphics_defaults);
+            const orientation: eggy.project.Orientation = if (@hasDecl(project, "orientation")) project.orientation else .landscape;
+            try app.initForProject(process_init, project.name, project.name, .runtime, graphics_defaults, orientation);
             errdefer app.deinit();
             app.storage = try eggy.storage.Storage.init(gpa, process_init.io, project.name);
             if (@hasDecl(project, "dev_console")) app.dev_console.setEnabled(project.dev_console);

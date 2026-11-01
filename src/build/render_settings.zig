@@ -1,5 +1,5 @@
-//! Bake a project's shipped graphics defaults, and whether its dev console opens, into its
-//! runtime module.
+//! Bake a project's shipped graphics defaults, whether its dev console opens, and which way up
+//! phones show it, into its runtime module.
 const std = @import("std");
 const package_root = @import("package_root.zig");
 const project = @import("../core/project.zig");
@@ -8,6 +8,7 @@ const Settings = @import("../core/render_settings.zig").Settings;
 pub fn appendDefaults(b: *std.Build, source: *std.ArrayList(u8), own: bool) void {
     const config: ?project.Config = if (own) null else readConfig(b);
     if (config) |read| if (!read.dev_console) source.appendSlice(b.allocator, "pub const dev_console = false;\n") catch @panic("OOM");
+    if (config) |read| if (read.orientation != .landscape) source.print(b.allocator, "pub const orientation = .{t};\n", .{read.orientation}) catch @panic("OOM");
     const defaults: Settings = if (config) |read| read.graphics else .{};
     var zon: std.Io.Writer.Allocating = .init(b.allocator);
     std.zon.stringify.serialize(defaults, .{}, &zon.writer) catch @panic("cannot serialize graphics defaults");

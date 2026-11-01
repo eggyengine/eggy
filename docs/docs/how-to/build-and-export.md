@@ -121,6 +121,10 @@ Android 13 (API 33) to Android 16 (API 36), Android 15 (API 35) unless you set a
 Edit > Preferences under Android. The number after `android.` in `-Dtarget` is the same API
 level. Pick ARM64 for phones and tablets, or x86-64 for emulators.
 
+Android games show in landscape, either way round. To show yours upright instead, or whichever
+way the device is held, set **Orientation** in File > Project Settings (`.orientation =
+.portrait` or `.any` in `eggy.zon`).
+
 Android export currently requires a Linux x86-64 or macOS host, `sh`, and `patch`.
 It installs missing Android command-line tools, the platform for the API level chosen,
 build-tools 36.0.0, an NDK (27.1.12297006, or 30.0.16248370 for API 36) and, if no JDK is

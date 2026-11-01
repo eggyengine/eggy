@@ -25,6 +25,7 @@ const audio_zig = @import("audio/audio.zig");
 const web = builtin.os.tag == .emscripten;
 const android = builtin.abi.isAndroid();
 const mobile_zig = @import("mobile/mobile.zig");
+const project_zig = @import("project.zig");
 const width = 900;
 const height = 675;
 
@@ -95,11 +96,11 @@ pub const App = struct {
     }
 
     /// `init`, loading persistent graphics choices before creating this project's window and device.
-    pub fn initForProject(self: *App, process_init: *const std.process.Init, title: [:0]const u8, project_name: []const u8, scope: render.Scope, defaults: render.Settings) !void {
-        return self.initConfigured(process_init, title, .{ .project_name = project_name, .scope = scope, .defaults = defaults });
+    pub fn initForProject(self: *App, process_init: *const std.process.Init, title: [:0]const u8, project_name: []const u8, scope: render.Scope, defaults: render.Settings, orientation: project_zig.Orientation) !void {
+        return self.initConfigured(process_init, title, .{ .project_name = project_name, .scope = scope, .defaults = defaults, .orientation = orientation });
     }
 
-    const GraphicsConfig = struct { project_name: []const u8, scope: render.Scope, defaults: render.Settings };
+    const GraphicsConfig = struct { project_name: []const u8, scope: render.Scope, defaults: render.Settings, orientation: project_zig.Orientation = .landscape };
 
     fn initConfigured(self: *App, process_init: *const std.process.Init, title: [:0]const u8, config: ?GraphicsConfig) !void {
         const gpa = process_init.gpa;
@@ -122,10 +123,15 @@ pub const App = struct {
             graphics_control.State{};
         errdefer options.deinit();
 
-        // Android games start in landscape (either way round, as the user's rotation lock allows)
-        // and fill the screen, the status and navigation bars hidden until swiped in.
-        // ponytail: landscape only; add a project setting when a game wants portrait.
-        if (android) try sdl3.hints.set(.orientations, "LandscapeLeft LandscapeRight");
+        // Phones and tablets turn the game the ways the project's `.orientation` allows, as the
+        // player's rotation lock lets them; Android games fill the screen, the status and
+        // navigation bars hidden until swiped in.
+        const orientation: project_zig.Orientation = if (config) |value| value.orientation else .landscape;
+        if (mobile_zig.is_mobile) try sdl3.hints.set(.orientations, switch (orientation) {
+            .landscape => "LandscapeLeft LandscapeRight",
+            .portrait => "Portrait PortraitUpsideDown",
+            .any => "LandscapeLeft LandscapeRight Portrait PortraitUpsideDown",
+        });
 
         // On Windows the window stays hidden until the renderer is ready.
         var window: sdl_adapter.Sdl3Window = .init(try sdl3.video.Window.init(title, options.requested.width, options.requested.height, .{
