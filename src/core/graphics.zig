@@ -121,7 +121,7 @@ pub const Graphics = struct {
             else => return err,
         } else try vit.Adapter.init(instance, .{ .label = "vitellus adapter" });
         errdefer adapter.deinit();
-        const device = try vit.Device.init(adapter, .{ .label = "vitellus device", .required_features = .{ .anisotropic_filtering = adapter.capabilities().features.anisotropic_filtering } });
+        const device = try vit.Device.init(adapter, .{ .label = "vitellus device", .pipeline_cache = @import("compiled_shader_cache.zig").get(), .required_features = .{ .anisotropic_filtering = adapter.capabilities().features.anisotropic_filtering } });
         errdefer device.deinit();
         const queue = try vit.Queue.init(device, .{ .label = "graphics queue", .kind = .graphics });
         errdefer queue.deinit();
