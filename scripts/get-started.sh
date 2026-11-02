@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Create a project from Eggy's template.
+# Install Eggy: Zig 0.17 if it is missing, then the launcher, from GitHub Releases.
 #
 #   curl -fsSL https://raw.githubusercontent.com/eggyengine/eggy/main/scripts/get-started.sh | bash
 #
@@ -7,9 +7,11 @@
 #
 #   irm https://raw.githubusercontent.com/eggyengine/eggy/main/scripts/get-started.ps1 | iex
 #
+# It asks for the latest release or the nightly, and whether to install just for you
+# (~/.local/share/eggy/launcher, linked as ~/.local/bin/eggy) or for everyone (/opt/eggy, linked
+# as /usr/local/bin/eggy, through sudo). Running it again replaces the installed launcher.
 # Prompts are read from the terminal, so this still works when the script arrives on stdin.
-# EGGY_SOURCE overrides where the template is downloaded from (a raw checkout URL).
-# EGGY_GIT overrides the Eggy package `zig fetch` saves.
+# EGGY_REPO overrides the GitHub repository the launcher is downloaded from (owner/name).
 # EGGY_GET_STARTED_TEST=1 loads the functions and returns, for the script's own check.
 if [ -z "${BASH_VERSION:-}" ]; then
     echo "get-started needs bash." >&2
@@ -17,19 +19,8 @@ if [ -z "${BASH_VERSION:-}" ]; then
 fi
 set -euo pipefail
 
-SOURCE="${EGGY_SOURCE:-https://raw.githubusercontent.com/eggyengine/eggy/main}"
-EGGY_GIT="${EGGY_GIT:-git+https://github.com/eggyengine/eggy}"
+EGGY_REPO="${EGGY_REPO:-eggyengine/eggy}"
 ZIG_RELEASE="0.17.0"
-TEMPLATE_FINGERPRINT="0x76cd980c5eed1e55"
-files=(
-    .gitignore
-    build.zig
-    build.zig.zon
-    controls.zon
-    eggy.zon
-    src/main.zig
-    src/root.zig
-)
 
 case "$(uname -s 2>/dev/null || true)" in
     MINGW* | MSYS* | CYGWIN*)
@@ -42,7 +33,7 @@ esac
 # Stop before any prompt when a tool or the terminal is missing. Zig is offered next.
 require_tools() {
     local missing=() tool
-    for tool in curl mkdir cat rm mktemp dirname basename tr touch; do
+    for tool in curl tar mkdir rm mv ln tee id mktemp uname touch; do
         command -v "$tool" >/dev/null 2>&1 || missing+=("$tool")
     done
     # Permission bits are not enough: with no controlling terminal, open fails.
@@ -197,23 +188,6 @@ ensure_zig() {
     esac
 }
 
-# Every template file, before the directory is created. One missing file is a failure.
-fetch_template() {
-    local file dest missing=()
-    stage=$(mktemp -d)
-    for file in "${files[@]}"; do
-        mkdir -p -- "$stage/$(dirname "$file")"
-        if ! curl -fsSL "${SOURCE}/resources/template/${file}" -o "$stage/$file" || [[ ! -s "$stage/$file" ]]; then
-            missing+=("${SOURCE}/resources/template/${file}")
-        fi
-    done
-    if [[ ${#missing[@]} -eq 0 ]]; then
-        return 0
-    fi
-    echo "Could not download the template:" >&2
-    printf '  %s\n' "${missing[@]}" >&2
-    exit 1
-}
 
 ask() {
     local prompt=$1
@@ -232,115 +206,6 @@ ask() {
             echo "Please enter a value." >/dev/tty
         done
     fi
-}
-
-is_keyword() {
-    case "$1" in
-        addrspace | align | allowzero | and | anyframe | anytype | asm | break | callconv | catch | comptime | const | continue | defer | else | enum | errdefer | error | export | extern | fn | for | if | inline | noalias | noinline | nosuspend | opaque | or | orelse | packed | pub | resume | return | linksection | struct | suspend | switch | test | threadlocal | try | union | unreachable | var | volatile | while)
-            return 0
-            ;;
-        *)
-            return 1
-            ;;
-    esac
-}
-
-# A Zig package name: a plain identifier, at most 32 bytes, not `_` and not a keyword.
-valid_name() {
-    local name=$1
-    [[ "$name" != "_" && ${#name} -ge 1 && ${#name} -le 32 && "$name" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || return 1
-    is_keyword "$name" && return 1
-    return 0
-}
-
-# The same derivation the editor uses: lower case, words joined by `_`, `game_` when needed.
-derive_name() {
-    local title=$1
-    local result="" gap=0 char lower i
-    for ((i = 0; i < ${#title}; i++)); do
-        char=${title:i:1}
-        if [[ "$char" =~ [A-Za-z0-9] ]]; then
-            lower=$(printf '%s' "$char" | tr '[:upper:]' '[:lower:]')
-            if [[ -z "$result" && "$lower" =~ [0-9] ]]; then
-                result="game_"
-            elif [[ $gap -eq 1 && -n "$result" && ${#result} -lt 32 ]]; then
-                result="${result}_"
-            fi
-            gap=0
-            [[ ${#result} -eq 32 ]] && break
-            result="${result}${lower}"
-        else
-            gap=1
-        fi
-    done
-    if [[ -n "$result" ]] && ! valid_name "$result" && [[ $((${#result} + 5)) -le 32 ]]; then
-        result="game_${result}"
-    fi
-    printf '%s' "$result"
-}
-
-# Escape `text` so it can sit inside a Zig string literal.
-escape_zon() {
-    local text=$1
-    text=${text//\\/\\\\}
-    text=${text//\"/\\\"}
-    text=${text//$'\n'/ }
-    printf '%s' "$text"
-}
-
-# Swap placeholders without dropping a trailing newline (`$(cat)` would).
-fill_file() {
-    local file=$1 fingerprint=$2 name=$3 title=$4
-    local data
-    data=$(cat "$file"; printf x)
-    data=${data%x}
-    data=${data//${TEMPLATE_FINGERPRINT}/"${fingerprint}"}
-    data=${data//eggy_template_name/"${name}"}
-    data=${data//eggy_template_title/"${title}"}
-    printf '%s' "$data" >"$file"
-}
-
-fingerprint_for() {
-    local name=$1 work
-    work=$(mktemp -d)
-    cat >"$work/fingerprint.zig" <<'EOF'
-const std = @import("std");
-
-pub fn main(init: std.process.Init) !void {
-    var args = try init.minimal.args.iterateAllocator(init.arena.allocator());
-    _ = args.next();
-    const name = args.next() orelse return error.MissingName;
-    var random: [4]u8 = undefined;
-    init.io.random(&random);
-    var id = std.mem.readInt(u32, &random, .little);
-    if (id == 0 or id == 0xffffffff) id = 1;
-    const fingerprint = @as(u64, std.hash.Crc32.hash(name)) << 32 | id;
-    var buffer: [32]u8 = undefined;
-    var stdout = std.Io.File.stdout().writer(init.io, &buffer);
-    try stdout.interface.print("0x{x:0>16}\n", .{fingerprint});
-    try stdout.interface.flush();
-}
-EOF
-    zig run "$work/fingerprint.zig" -- "$name"
-    rm -rf -- "$work"
-}
-
-resolve_dir() {
-    local path=$1 parent base
-    if [[ "$path" != /* ]]; then
-        path="${start_dir}/${path}"
-    fi
-    if [[ -d "$path" ]]; then
-        (cd "$path" && pwd)
-        return
-    fi
-    parent=$(dirname "$path")
-    base=$(basename "$path")
-    if [[ ! -d "$parent" ]]; then
-        echo "That folder's parent does not exist: $parent" >&2
-        return 1
-    fi
-    printf '%s/%s\n' "$(cd "$parent" && pwd)" "$base"
 }
 
 # Eggy's logo, darker toward the shell's shadow.
@@ -365,119 +230,150 @@ print_egg() {
 EOF
 }
 
-dir_is_empty() {
-    local path=$1 entries
-    [[ -d "$path" ]] || return 0
-    shopt -s nullglob dotglob
-    entries=("$path"/*)
-    shopt -u nullglob dotglob
-    [[ ${#entries[@]} -eq 0 ]]
+# The release asset built for this computer, as the nightly workflow names it.
+platform_name() {
+    local os arch
+    os=$(uname -s)
+    arch=$(uname -m)
+    case "$os/$arch" in
+        Linux/x86_64 | Linux/amd64) echo linux-x86_64 ;;
+        Darwin/arm64 | Darwin/aarch64) echo macos-aarch64 ;;
+        *)
+            echo "Eggy has no launcher build for $os on $arch yet. Build it from source: https://github.com/${EGGY_REPO}" >&2
+            return 1
+            ;;
+    esac
+}
+
+# Where a channel's asset downloads from. `latest` skips prereleases, so it never serves the nightly.
+asset_url() {
+    local channel=$1 platform=$2
+    case "$channel" in
+        release) echo "https://github.com/${EGGY_REPO}/releases/latest/download/eggy-${platform}.tar.gz" ;;
+        nightly) echo "https://github.com/${EGGY_REPO}/releases/download/nightly/eggy-${platform}.tar.gz" ;;
+    esac
+}
+
+# Download `channel`'s launcher into `archive`; a failure returns, so the caller can offer another channel.
+download() {
+    local channel=$1 platform=$2 archive=$3
+    echo "Downloading the ${channel} launcher." >/dev/tty
+    curl -fL --progress-bar "$(asset_url "$channel" "$platform")" -o "$archive" 2>/dev/tty
+}
+
+# Unpack `archive` beside `dest` and swap it in, so a failed download or unpack leaves the old
+# launcher working. `run` is empty, or `sudo` for a system-wide install.
+install_launcher() {
+    local archive=$1 dest=$2 run=$3
+    local fresh="${dest}.new" old="${dest}.old"
+    $run rm -rf -- "$fresh" "$old"
+    $run mkdir -p -- "$fresh"
+    $run tar -xzf "$archive" -C "$fresh" --no-same-owner
+    if [[ ! -x "$fresh/bin/eggy_editor" ]]; then
+        $run rm -rf -- "$fresh"
+        echo "The download has no bin/eggy_editor." >&2
+        return 1
+    fi
+    if [[ -e "$dest" ]]; then
+        $run mv -- "$dest" "$old"
+    fi
+    $run mv -- "$fresh" "$dest"
+    $run rm -rf -- "$old"
+}
+
+# A menu entry for desktops that read freedesktop.org entries (Linux).
+write_desktop_entry() {
+    local file=$1 exe=$2 run=$3
+    [[ "$(uname -s)" == Linux ]] || return 0
+    $run mkdir -p -- "$(dirname "$file")"
+    printf '[Desktop Entry]\nType=Application\nName=Eggy\nComment=Make games with Eggy\nExec=%s\nTerminal=false\nCategories=Development;Game;\n' "$exe" | $run tee "$file" >/dev/null
 }
 
 main() {
-    local title suggested name reply title_zon fingerprint file
-    start_dir=$PWD
+    local platform reply channel scope dest bin_dir desktop run archive exe
     stage=""
-    directory=""
-    wipe_on_fail=0
     trap '[[ -n "${stage}" ]] && rm -rf -- "$stage"' EXIT
-    trap '[[ "$wipe_on_fail" == 1 ]] && rm -rf -- "$directory"' ERR
 
     require_tools
+    platform=$(platform_name)
     ensure_zig
     check_zig
-    fetch_template
 
     print_egg
-    echo "Create an Eggy project. Zig ${zig_version}." >/dev/tty
+    echo "Install Eggy. Zig ${zig_version}." >/dev/tty
 
-    title=$(ask "Project title")
-    suggested=$(derive_name "$title")
     while true; do
-        if [[ -n "$suggested" ]]; then
-            name=$(ask "Package name" "$suggested")
-        else
-            name=$(ask "Package name")
-        fi
-        if valid_name "$name"; then
-            break
-        fi
-        echo "Package names are Zig identifiers of at most 32 characters, not keywords." >/dev/tty
-        suggested=""
+        channel=$(ask "Which build: release or nightly" "release")
+        case "${channel,,}" in
+            release | r) channel=release; break ;;
+            nightly | n) channel=nightly; break ;;
+        esac
+        echo "Type release or nightly." >/dev/tty
+    done
+    while true; do
+        scope=$(ask "Install for: me or everyone (admin)" "me")
+        case "${scope,,}" in
+            me | m | user) scope=user; break ;;
+            everyone | e | admin | all) scope=system; break ;;
+        esac
+        echo "Type me or everyone." >/dev/tty
     done
 
-    directory=$(ask "Directory" "$name")
-    directory=$(resolve_dir "$directory")
-    if ! dir_is_empty "$directory"; then
-        echo "$directory exists and is not empty. Nothing was written." >&2
-        exit 1
+    if [[ "$scope" == user ]]; then
+        dest="${XDG_DATA_HOME:-$HOME/.local/share}/eggy/launcher"
+        bin_dir="$HOME/.local/bin"
+        desktop="${XDG_DATA_HOME:-$HOME/.local/share}/applications/eggy.desktop"
+        run=""
+    else
+        dest="/opt/eggy"
+        bin_dir="/usr/local/bin"
+        desktop="/usr/share/applications/eggy.desktop"
+        run=""
+        if [[ $(id -u) -ne 0 ]]; then
+            if ! command -v sudo >/dev/null 2>&1; then
+                echo "Installing for everyone needs root or sudo." >&2
+                exit 1
+            fi
+            run="sudo"
+        fi
     fi
 
-    printf 'Title:     %s\nPackage:   %s\nDirectory: %s\n' "$title" "$name" "$directory" >/dev/tty
-    reply=$(ask "Create this project?" "Y")
-    case "${reply,,}" in
-        y | yes) ;;
-        *)
-            echo "Cancelled." >/dev/tty
-            exit 0
-            ;;
-    esac
-
-    mkdir -p -- "$directory/src"
-    wipe_on_fail=1
-
-    for file in "${files[@]}"; do
-        mkdir -p -- "$directory/$(dirname "$file")"
-        cat "$stage/$file" >"$directory/$file"
-    done
-
-    title_zon=$(escape_zon "$title")
-    fingerprint=$(fingerprint_for "$name")
-    fingerprint=${fingerprint//$'\r'/}
-    fingerprint=${fingerprint//$'\n'/}
-    for file in "${files[@]}"; do
-        fill_file "$directory/$file" "$fingerprint" "$name" "$title_zon"
-    done
-
-    # Drop the placeholder path: `zig fetch --save` would overwrite only its string and skip the hash.
-    local zon data needle
-    zon="$directory/build.zig.zon"
-    data=$(cat "$zon"; printf x)
-    data=${data%x}
-    needle='.eggy = .{ .path = "eggy_template_engine" },'
-    if [[ "$data" != *"$needle"* ]]; then
-        echo "The template no longer has the engine placeholder this script removes." >&2
-        exit 1
+    stage=$(mktemp -d)
+    archive="$stage/eggy-${platform}.tar.gz"
+    if ! download "$channel" "$platform" "$archive"; then
+        if [[ "$channel" == nightly ]]; then
+            echo "Could not download the nightly from https://github.com/${EGGY_REPO}/releases." >&2
+            exit 1
+        fi
+        reply=$(ask "There is no release for ${platform} yet. Install the nightly instead?" "Y")
+        case "${reply,,}" in
+            y | yes) ;;
+            *) exit 1 ;;
+        esac
+        channel=nightly
+        download "$channel" "$platform" "$archive"
     fi
-    data=${data//"$needle"/}
-    printf '%s' "$data" >"$zon"
 
-    # Required packages only. Optional build tools stay lazy until a build asks for them.
-    echo "Fetching Eggy and its required packages." >/dev/tty
-    (
-        trap - ERR
-        cd "$directory"
-        zig fetch --save=eggy "$EGGY_GIT"
-        zig build --fetch
-    )
+    install_launcher "$archive" "$dest" "$run"
+    exe="$dest/bin/eggy_editor"
+    $run mkdir -p -- "$bin_dir"
+    $run ln -sfn -- "$exe" "$bin_dir/eggy"
+    write_desktop_entry "$desktop" "$exe" "$run"
 
-    wipe_on_fail=0
-    trap - ERR
-
-    printf '\nCreated %s\n' "$directory" >/dev/tty
-    reply=$(ask "Open the editor now? The project compiles first" "Y")
-    case "${reply,,}" in
-        y | yes) ;;
-        *)
-            printf 'Open it later with:\n  cd %s\n  zig build run\n' "$directory" >/dev/tty
-            return
-            ;;
+    printf '\nInstalled the %s launcher in %s\n' "$channel" "$dest" >/dev/tty
+    case ":$PATH:" in
+        *":$bin_dir:"*) echo "Open it any time with: eggy" >/dev/tty ;;
+        *) echo "Add $bin_dir to PATH to open it with: eggy" >/dev/tty ;;
     esac
 
-    # Read input from the terminal: when piped from curl, stdin is the script.
-    echo "Sit back and make yourself a coffee, as it'll take a while to compile." >/dev/tty
-    cd "$directory"
-    zig build run </dev/tty
+    reply=$(ask "Open Eggy now?" "Y")
+    case "${reply,,}" in
+        y | yes) ;;
+        *) return ;;
+    esac
+    # Detached, so closing this terminal leaves Eggy open.
+    nohup "$exe" </dev/null >/dev/null 2>&1 &
+    disown
 }
 
 if [[ "${EGGY_GET_STARTED_TEST:-}" == 1 ]]; then

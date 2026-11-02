@@ -102,7 +102,36 @@ pub const Stage = enum {
             .failed => "Failed",
         };
     }
+
+    /// The stage's label once it has finished, in the past tense.
+    ///
+    /// ```zig
+    /// const caption = Stage.building.doneLabel(); // "Built the editor"
+    /// ```
+    pub fn doneLabel(stage: Stage) []const u8 {
+        return switch (stage) {
+            .reading_project => "Read the project",
+            .unpacking_engine => "Unpacked Eggy",
+            .upgrading => "Upgraded Eggy",
+            .linking => "Linked Eggy",
+            .writing_files => "Wrote the project",
+            .building => "Built the editor",
+            .exporting => "Exported the game",
+            .done, .failed => stage.label(),
+        };
+    }
 };
+
+/// A stage the job went through, and when, in milliseconds since SDL started.
+pub const StageTime = struct {
+    stage: Stage,
+    started_ms: u64,
+    /// Null while it is under way.
+    ended_ms: ?u64 = null,
+};
+
+/// The most stages a job goes through.
+const max_stages = 8;
 
 /// A copy of the job's progress, for drawing.
 pub const Status = struct {
@@ -116,6 +145,14 @@ pub const Status = struct {
     log: []const u8,
     /// Every step the build has shown, in the order they started; in the `status` arena.
     steps: []const build_steps.Step = &.{},
+    /// The stages so far, oldest first, the last one under way until the job ends; in the arena.
+    stages: []const StageTime = &.{},
+    /// The build's step under way and how many of its steps are done, once it reports them.
+    build_step: []const u8 = "",
+    steps_done: u32 = 0,
+    steps_total: u32 = 0,
+    /// When the status was taken, on the stages' clock.
+    now_ms: u64 = 0,
 };
 
 pub const Job = struct {
@@ -139,6 +176,13 @@ pub const Job = struct {
     /// The build's own progress, 0 to 1.
     build_fraction: f32 = 0,
     steps: build_steps.Steps = .{},
+    /// The stages so far, as `Status.stages`.
+    stages: [max_stages]StageTime = undefined,
+    stage_count: usize = 0,
+    /// The build's step under way, and its counts, as `Status` hands them out.
+    build_step: std.ArrayList(u8) = .empty,
+    steps_done: u32 = 0,
+    steps_total: u32 = 0,
     detail: std.ArrayList(u8) = .empty,
     /// Only grows (up to `max_output`), so `shown` catches up by copying what is new.
     output: std.ArrayList(u8) = .empty,
@@ -218,6 +262,7 @@ pub const Job = struct {
         self.threaded.deinit();
         self.freeText();
         self.detail.deinit(gpa);
+        self.build_step.deinit(gpa);
         self.output.deinit(gpa);
         self.shown.deinit(gpa);
         gpa.destroy(self);
@@ -276,6 +321,11 @@ pub const Job = struct {
             .detail = try arena.dupe(u8, self.detail.items),
             .log = self.shown.items,
             .steps = try arena.dupe(build_steps.Step, self.steps.items()),
+            .stages = try arena.dupe(StageTime, self.stages[0..self.stage_count]),
+            .build_step = try arena.dupe(u8, self.build_step.items),
+            .steps_done = self.steps_done,
+            .steps_total = self.steps_total,
+            .now_ms = nowMs(),
         };
     }
 
@@ -308,9 +358,24 @@ pub const Job = struct {
     fn setStage(self: *Job, stage: Stage, detail: []const u8) void {
         self.mutex.lockUncancelable(self.io());
         defer self.mutex.unlock(self.io());
+        self.recordStage(stage);
         self.stage = stage;
         self.detail.clearRetainingCapacity();
         self.detail.appendSlice(self.gpa, detail) catch {};
+    }
+
+    /// Note that `stage` began, ending the one before; `done` and `failed` only end it, so the
+    /// stage that failed stays last. Call with `mutex` held.
+    fn recordStage(self: *Job, stage: Stage) void {
+        const now = nowMs();
+        if (self.stage_count > 0) {
+            const last = &self.stages[self.stage_count - 1];
+            if (last.stage == stage and last.ended_ms == null) return;
+            if (last.ended_ms == null) last.ended_ms = now;
+        }
+        if (stage == .done or stage == .failed or self.stage_count == max_stages) return;
+        self.stages[self.stage_count] = .{ .stage = stage, .started_ms = now };
+        self.stage_count += 1;
     }
 
     /// Add a line to the job's output, beside the build's own.
@@ -327,6 +392,7 @@ pub const Job = struct {
             log.err("cannot prepare {s}: {t}", .{ self.dir, err });
             self.mutex.lockUncancelable(self.io());
             defer self.mutex.unlock(self.io());
+            self.recordStage(.failed);
             self.stage = .failed;
             self.steps.end(false);
             self.detail.clearRetainingCapacity();
@@ -691,11 +757,20 @@ pub const Job = struct {
             self.build_fraction = @max(self.build_fraction, summary.fraction);
             self.detail.clearRetainingCapacity();
             self.detail.print(self.gpa, "{s} ({d}/{d})", .{ summary.step, summary.done, summary.total }) catch {};
+            self.build_step.clearRetainingCapacity();
+            self.build_step.appendSlice(self.gpa, summary.step) catch {};
+            self.steps_done = summary.done;
+            self.steps_total = summary.total;
         }
     }
 };
 
 const ProgressNode = build_steps.ProgressNode;
+
+/// The stages' clock: milliseconds since SDL started, which any thread may read.
+fn nowMs() u64 {
+    return eggy.sdl_adapter.sdl.timer.getMillisecondsSinceInit();
+}
 
 const Summary = struct { fraction: f32, step: []const u8, done: u32, total: u32 };
 
@@ -820,4 +895,17 @@ test "a build nested in a step counts as that step's progress" {
 
 test "the job compiles" {
     std.testing.refAllDecls(Job);
+}
+
+test "each stage is timed once, and the one that failed stays last" {
+    var job: Job = undefined;
+    job.stage_count = 0;
+    job.recordStage(.unpacking_engine);
+    job.recordStage(.reading_project);
+    job.recordStage(.reading_project); // the same stage with new detail
+    job.recordStage(.failed);
+    try std.testing.expectEqual(@as(usize, 2), job.stage_count);
+    try std.testing.expect(job.stages[0].ended_ms != null);
+    try std.testing.expectEqual(Stage.reading_project, job.stages[1].stage);
+    try std.testing.expect(job.stages[1].ended_ms != null);
 }

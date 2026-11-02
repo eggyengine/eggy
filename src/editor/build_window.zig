@@ -1,6 +1,6 @@
-//! The Build progress window: while the open project's editor is rebuilt (on refocus, or to
-//! upgrade or link its Eggy), what is being built and its progress (`build_progress.zig`, as the
-//! loading screen shows it), over the editor, which is frozen until it closes.
+//! The Build window: while the open project's editor is rebuilt (on refocus for hot reload, or to
+//! upgrade or link its Eggy), the build as the loading screen shows it (`build_progress.zig`),
+//! over the editor, which is frozen until it closes.
 const std = @import("std");
 const eggy = @import("eggy");
 const sdl3 = eggy.sdl_adapter.sdl;
@@ -8,36 +8,33 @@ const ui = eggy.ui;
 const weeoui_sdl3 = @import("weeoui_sdl3");
 const ToolWindow = @import("tool_window.zig").ToolWindow;
 const Status = @import("projects/job.zig").Status;
-const terminal_view = @import("terminal_view.zig");
-const BuildProgress = @import("build_progress.zig").BuildProgress;
+const build_progress = @import("build_progress.zig");
+const BuildProgress = build_progress.BuildProgress;
+const project_tile = @import("projects/project_tile.zig");
 
-/// What the window's buttons asked for this frame.
-pub const Action = enum { none, cancel, close, reload };
+/// What the window's buttons asked for this frame; the host carries it out.
+pub const Action = build_progress.Action;
 
 pub const BuildWindow = struct {
     gpa: std.mem.Allocator,
     window: ToolWindow,
     progress: BuildProgress,
-    /// "Building <project>", kept here since the page reads it after `open` returns.
-    heading_buffer: [96]u8 = undefined,
-    heading_len: usize = 0,
 
-    /// Open the window over `parent`, modal to it, for project `title`. On the heap, as the
-    /// output view keeps a pointer to itself.
-    /// The fonts and graphics must outlive it; `title` is copied into a fixed heading buffer.
-    /// Allocation/window errors propagate; unsupported modal/parent requests are ignored.
+    /// Open the window over `parent`, modal to it, for the project titled `title` in `dir`
+    /// (copied). On the heap, as the output view keeps a pointer to itself. The fonts and
+    /// graphics must outlive it. Allocation/window errors propagate; unsupported modal/parent
+    /// requests are ignored.
     ///
     /// ```zig
-    /// // Editor host: parent is its SDL window; fonts are shared.
-    /// const progress = try BuildWindow.open(gpa, graphics, font, mono, parent, "Space");
-    /// defer progress.close(graphics);
+    /// const window = try BuildWindow.open(gpa, graphics, font, mono, parent, "Space", "/home/me/space");
+    /// defer window.close(graphics);
     /// ```
-    pub fn open(gpa: std.mem.Allocator, graphics: *const eggy.Graphics, font: *ui.Font, mono: *const ui.Font, parent: sdl3.video.Window, title: []const u8) !*BuildWindow {
+    pub fn open(gpa: std.mem.Allocator, graphics: *const eggy.Graphics, font: *ui.Font, mono: *const ui.Font, parent: sdl3.video.Window, title: []const u8, dir: []const u8) !*BuildWindow {
         const self = try gpa.create(BuildWindow);
         errdefer gpa.destroy(self);
-        self.* = .{ .gpa = gpa, .window = try ToolWindow.open(gpa, graphics, font, "Build progress", .{ 640, 480 }, .{ .resizable = true }), .progress = .init(gpa, mono) };
-        const heading = std.fmt.bufPrint(&self.heading_buffer, "Building {s}", .{title}) catch "Building";
-        self.heading_len = heading.len;
+        var progress = try BuildProgress.init(gpa, mono, .{ .verb = .build, .title = title, .dir = dir, .logo = project_tile.projectLogo(gpa, font, dir) });
+        errdefer progress.deinit();
+        self.* = .{ .gpa = gpa, .window = try ToolWindow.open(gpa, graphics, font, "Build", .{ 560, 520 }, .{ .resizable = true }), .progress = progress };
         // Modal, so the window manager keeps it over the editor and the editor out of reach.
         const window = self.window.popout.window.window;
         window.setParent(parent) catch {};
@@ -50,7 +47,7 @@ pub const BuildWindow = struct {
     ///
     /// ```zig
     /// // After the host finishes/cancels its job:
-    /// progress.close(graphics);
+    /// window.close(graphics);
     /// ```
     pub fn close(self: *BuildWindow, graphics: *eggy.Graphics) void {
         self.progress.deinit();
@@ -60,11 +57,10 @@ pub const BuildWindow = struct {
 
     /// Handle `curr_event` if it is for this window; returns whether it was. The output view
     /// sees input first, so it can select and copy.
-    /// No ownership of `curr_event` is retained.
     ///
     /// ```zig
     /// // Editor event loop, before routing events to the frozen main window:
-    /// if (progress.handle(event)) return;
+    /// if (window.handle(event)) return;
     /// ```
     pub fn handle(self: *BuildWindow, curr_event: sdl3.events.Event) bool {
         if (!self.window.owns(curr_event)) return false;
@@ -73,58 +69,33 @@ pub const BuildWindow = struct {
         return true;
     }
 
-    /// Draw a frame for the build's `status`; `changed` is whether a finished build made a new
-    /// editor. Returns what the buttons asked for.
+    /// Draw a frame for the build's `status` with `options` (whether a finished build made a new
+    /// editor, which code editor opens an error) and return what the buttons asked for. On
+    /// `.retry` the host starts the build again; the view has already started over.
     /// `status` and `style` are borrowed during the call; rendering errors propagate.
-    /// The host carries out `.cancel`, `.close`, or `.reload`, rather than this window.
     ///
     /// ```zig
-    /// // status is the host's current job snapshot; changed compares output stamps.
-    /// const action = try progress.update(graphics, style, status, changed);
+    /// const action = try window.update(graphics, style, status, .{ .done = .rebuilt });
     /// if (action == .cancel) host.cancelBuild(); // Host owns/destroys the job.
     /// ```
-    pub fn update(self: *BuildWindow, graphics: *eggy.Graphics, style: *const ui.Context, status: Status, changed: bool) !Action {
+    pub fn update(self: *BuildWindow, graphics: *eggy.Graphics, style: *const ui.Context, status: Status, options: build_progress.Options) !Action {
         const Page = struct {
-            window: *BuildWindow,
+            progress: *BuildProgress,
             status: Status,
-            changed: bool,
+            options: build_progress.Options,
             action: Action = .none,
-            /// Internal `ToolWindow.present` adapter; build into its active frame and
-            /// store the user's action on this stack-owned page.
+            /// Internal `ToolWindow.present` adapter: build into its frame and keep the action.
             ///
             /// ```zig
-            /// // Inside update, after constructing page:
             /// try self.window.present(graphics, style, &page);
-            /// // present invokes page.build(&self.window.ui).
             /// ```
             pub fn build(page: *@This(), context: *ui.Context) void {
-                page.action = page.window.build(context, page.status, page.changed);
+                page.action = page.progress.add(context, page.status, page.options);
             }
         };
-        var page = Page{ .window = self, .status = status, .changed = changed };
+        var page = Page{ .progress = &self.progress, .status = status, .options = options };
         try self.window.present(graphics, style, &page);
+        if (page.action == .retry) self.progress.restart();
         return page.action;
-    }
-
-    fn build(self: *BuildWindow, context: *ui.Context, status: Status, changed: bool) Action {
-        context.heading(3, self.heading_buffer[0..self.heading_len]);
-
-        // The output takes the window's height less the heading, status lines and buttons.
-        self.progress.add(context, status, .{
-            .failed = "The build failed",
-            .done = if (changed) "Built. Reload the editor to use it." else "Built: nothing changed.",
-        }, @max(120, context.viewport.h - 200));
-
-        context.begin(.row);
-        defer context.end();
-        if (context.buttonVariant("Copy all", .ghost)) terminal_view.copyToClipboard(status.log);
-        return switch (status.stage) {
-            .failed => if (context.button("Close")) .close else .none,
-            .done => blk: {
-                if (context.buttonVariant("Later", .outline)) break :blk .close;
-                break :blk if (changed and context.button("Reload")) .reload else .none;
-            },
-            else => if (context.buttonVariant("Cancel", .outline)) .cancel else .none,
-        };
     }
 };

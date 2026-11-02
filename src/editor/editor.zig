@@ -36,7 +36,11 @@ const panels = @import("panels.zig");
 /// allocation failure behavior, and a usage example.
 pub const logFn = @import("console_log.zig").logFn;
 pub const cli = @import("cli/cli.zig");
+/// Eggy's own editor without a project: the launcher and New/Open Project (`launcher_main.zig`).
+pub const LauncherApp = @import("launcher_app.zig").LauncherApp;
 const ProjectFlow = @import("projects/flow.zig").ProjectFlow;
+const recent_projects = @import("projects/recent.zig");
+const PickedPaths = @import("picked_paths.zig").PickedPaths;
 const HotGame = @import("hot_reload/hot_reload.zig").HotGame;
 const preferences = @import("preferences/preferences.zig");
 const entities = @import("entities/entities.zig");
@@ -83,8 +87,8 @@ const Scene2d = Scene2dPanel.Scene2d;
 const ScenePanel = enum { scene, flat };
 const tab_views = @import("tab_views.zig");
 const scene_tabs = @import("scene_tabs.zig");
-/// The Preferences section File > Project Settings opens.
-const project_section = "Project";
+/// The Settings page File > Project Settings opens.
+const project_section = "General";
 
 /// The editor for `project`, which declares `name` and `game_library` (the game library's
 /// `file_name`, beside the editor). The game and its plugins run as they do in the runtime,
@@ -158,7 +162,7 @@ pub fn Editor(comptime project: type) type {
         open_scene: ?scene_file.OpenScene = null,
         /// Where the user's and the project's preferences are (their values are in `app`).
         preference_folders: preferences.Folders,
-        /// Edit > Preferences, while open.
+        /// Edit > Settings, while open.
         preferences_window: ?*preferences.PreferencesWindow = null,
         /// File > Export, while open.
         export_window: ?*ExportWindow = null,
@@ -173,7 +177,7 @@ pub fn Editor(comptime project: type) type {
         /// Shift+Play's "Play from which camera?", while open.
         play_camera_prompt: ?*PlayCameraPrompt = null,
         /// File > Project Settings, while open.
-        /// The Preferences window's Project section, while that window is open on a project.
+        /// The Settings window's General page, while that window is open on a project.
         project_settings: ?*ProjectSettings = null,
         /// The Inspector's UI (the game's and plugins' `editorUi`), and the font every page shares.
         ui: ui.Context,
@@ -240,13 +244,11 @@ pub fn Editor(comptime project: type) type {
         popouts: [ui.dock.max_windows]?PopOut = @splat(null),
         /// File > New Project or Open Project, while its window is open.
         project_flow: ?*ProjectFlow = null,
-        /// A folder File > Open Project's picker chose; it may call back from another thread,
-        /// so the next frame takes it from here.
-        picked_project: std.atomic.Value(?[*:0]u8) = .init(null),
-        /// Assets' Import file...: the folder files go into (owned), and the files picked, one
-        /// per line, as the dialog's callback hands them over (any thread).
+        /// The folder File > Open Project's picker chose, for the next frame.
+        picked_project: PickedPaths = .{},
+        /// Assets' Import file...: the folder files go into (owned), and the files picked.
         import_folder: ?[]u8 = null,
-        picked_imports: std.atomic.Value(?[*:0]u8) = .init(null),
+        picked_imports: PickedPaths = .{},
         /// Whether that picker is for Open Project with Developer Eggy, which links the project.
         picking_to_link: bool = false,
         /// Whether the editor's windows are hidden, as they are while a new project is created.
@@ -349,21 +351,10 @@ pub fn Editor(comptime project: type) type {
             if (window_placement.fromArgs(args)) |placement| placement.apply(app.window.window) else app.window.window.maximize() catch |err| std.log.warn("cannot maximize the editor: {t}", .{err});
             if (opened_project) |opened| useProjectIcon(gpa, opened.dir);
             icon.apply(app.window.window);
-            var context = try ui.Context.init(gpa);
-            // The editor's pages and windows are a tool's: compact, with small text.
-            context.density = .compact;
-            errdefer context.deinit();
-            context.srgb_target = weeoui_vitellus.isSrgb(app.graphics.color_format);
-            context.theme = weeoui_sdl3.systemTheme();
-            const mono = try gpa.create(ui.Font);
-            errdefer gpa.destroy(mono);
-            mono.* = try ui.Font.initCompanion(gpa, @embedFile("mono_font"), context.font, &.{ 10, 11, 12, 13, 14, 15, 16, 18, 20, 24 });
-            errdefer mono.deinit();
-            // Nerd Font icons for the characters the faces lack in private-use areas, in both.
-            try context.font.setSymbolsFont(@embedFile("symbols_font"));
-            try mono.setSymbolsFont(@embedFile("symbols_font"));
-            // Colour emoji from the system's font, where one is installed; '?' otherwise.
-            _ = context.font.loadSystemEmoji(process_init.io);
+            var style = try @import("editor_style.zig").Style.init(gpa, process_init.io, app.graphics.color_format);
+            errdefer style.deinit(gpa);
+            const context = style.context;
+            const mono = style.mono;
             var console_ui = ui.Context.initWithFont(gpa, context.font);
             errdefer console_ui.deinit();
             var hierarchy_ui = ui.Context.initWithFont(gpa, context.font);
@@ -492,6 +483,8 @@ pub fn Editor(comptime project: type) type {
                 const choice = preferences.editor(&self.app.preference_values).code_editor;
                 slang_search_path.provide(gpa, self.app.process_init.io, opened.dir, choice == .vscode or choice == .vscodium or choice == .cursor);
             }
+            // The project goes to the top of the list Eggy's launcher shows.
+            if (opened_project) |opened| recent_projects.remember(gpa, threaded.io(), preference_folders.global, opened.dir, std.Io.Clock.real.now(threaded.io()).toSeconds());
             self.built_sources = self.sourcesNow();
             // ponytail: the commit at start stands for the one built from, so an editor opened long after its build misses commits made between; bake the commit in at build time if that bites.
             self.built_eggy_head = self.linkedEggyHead();
@@ -544,8 +537,8 @@ pub fn Editor(comptime project: type) type {
             if (self.layout_step) |text| self.gpa.free(text);
             self.plugin_switches.deinit();
             if (self.rebuild) |job| job.deinit();
-            if (self.picked_project.swap(null, .acq_rel)) |path| std.heap.c_allocator.free(std.mem.span(path));
-            if (self.picked_imports.swap(null, .acq_rel)) |paths| std.heap.c_allocator.free(std.mem.span(paths));
+            self.picked_project.deinit();
+            self.picked_imports.deinit();
             if (self.import_folder) |folder| self.gpa.free(folder);
             if (self.project) |opened| freeProject(self.gpa, opened);
             if (self.project_assets) |loaders| {
@@ -815,9 +808,8 @@ pub fn Editor(comptime project: type) type {
             self.syncTextInput();
             // A folder chosen in File > Open Project's picker: open it, linking it first for Open
             // Project with Developer Eggy once that is confirmed.
-            if (self.picked_project.swap(null, .acq_rel)) |path| {
-                defer std.heap.c_allocator.free(std.mem.span(path));
-                const dir = std.mem.span(path);
+            if (self.picked_project.take()) |dir| {
+                defer PickedPaths.free(dir);
                 const action: job_zig.Action = if (self.picking_to_link) .{ .link = self.upgrades.developer_dir orelse "" } else .open;
                 const confirmed = action == .open or self.upgrades.confirmLink(self.app.window.window, std.fs.path.basename(dir));
                 // The layout first, for the editor the project opens in, and this project's views.
@@ -828,9 +820,9 @@ pub fn Editor(comptime project: type) type {
                 if (self.project_flow == null and confirmed) self.project_flow = try ProjectFlow.open(self.gpa, &self.app.graphics, self.ui.font, self.mono, dir, action);
             }
             // Files picked in Assets' Import file..., brought into its folder.
-            if (self.picked_imports.swap(null, .acq_rel)) |paths| {
-                defer std.heap.c_allocator.free(std.mem.span(paths));
-                var lines = std.mem.splitScalar(u8, std.mem.span(paths), '\n');
+            if (self.picked_imports.take()) |paths| {
+                defer PickedPaths.free(paths);
+                var lines = std.mem.splitScalar(u8, paths, '\n');
                 while (lines.next()) |path| self.importInto(path, self.import_folder orelse "");
             }
             // File > New/Open Project's window, if open.
@@ -850,10 +842,17 @@ pub fn Editor(comptime project: type) type {
             // Shift+Play's camera choice, if asking.
             if (self.play_camera_prompt) |prompt| if (try prompt.update(&self.app.graphics, &self.ui)) |answer| self.answerPlayCamera(answer);
             self.autosave();
-            // Edit > Preferences, if open.
+            // Edit > Settings, if open.
             if (self.preferences_window) |window| {
-                const flipped = try window.update(&self.app.graphics, &self.ui, try self.preferenceSections(frame_arena.allocator()), &self.app.preference_values, self.preference_folders, &self.history);
-                if (flipped) |plugin| self.flipPlugin(plugin);
+                switch (try window.update(&self.app.graphics, &self.ui, try self.preferenceSections(frame_arena.allocator()), &self.app.preference_values, self.preference_folders, &self.history)) {
+                    .none => {},
+                    .flip => |plugin| self.flipPlugin(plugin),
+                    .open => |opening| switch (opening) {
+                        .plugins => _ = self.showPlugins(),
+                        .export_game => self.showExport(),
+                    },
+                    .restart => if (try self.forceReload()) return .success,
+                }
                 // Its Project section writes eggy.zon as it changes: a step to undo.
                 if (self.project_settings) |settings| if (settings.save() catch |err| blk: {
                     std.log.err("cannot write {s}: {t}", .{ eggy.project.file_name, err });
@@ -881,7 +880,7 @@ pub fn Editor(comptime project: type) type {
                 }
             }
             // Edit > Plugins, if open: an install or uninstall is a step to undo, and a rebuild; a
-            // switch is as Preferences > Plugins makes it.
+            // switch is as Settings > Plugins makes it.
             if (self.plugins_window) |window| {
                 const outcome = try window.update(&self.app.graphics, &self.ui, self.plugin_switches.off());
                 if (outcome.change) |change| {
@@ -930,47 +929,19 @@ pub fn Editor(comptime project: type) type {
         /// Draw File > New/Open Project's window and move it on: drop it once closed, and quit once
         /// the new project's editor is up.
         fn updateProjectFlow(self: *Self, flow: *ProjectFlow) !sdl3.AppResult {
+            flow.code_editor = preferences.editor(&self.app.preference_values).code_editor;
             switch (try flow.update(&self.app.graphics, &self.ui)) {
                 .running => {},
-                .closed => {
-                    flow.close(&self.app.graphics);
-                    self.project_flow = null;
-                },
+                .closed => self.closeProjectFlow(flow),
                 .launched => return .success,
             }
             return .run;
         }
 
-        /// SDL folder-dialog callback used only by this host; may execute off the main thread.
-        /// Copies the first borrowed path into a C-allocator atomic handoff for the next frame,
-        /// replacing/freeing any older choice. Ignores failed/empty results and allocation
-        /// failure; the filter index is unused. A successful choice requires non-null `self`
-        /// kept alive until dialog completion; no UI/GPU work runs on the callback thread.
-        ///
-        /// ```zig
-        /// // Editor main thread registers the callback; SDL invokes pickedProject:
-        /// sdl3.dialog.showOpenFolder(Self, Self.pickedProject, host, host.app.window.window, null, false);
-        /// // Keep host alive; host.iterate() later consumes the copied selection.
-        /// ```
-        pub fn pickedProject(self: ?*Self, files: ?[]const [*:0]const u8, _: ?usize, failed: bool) void {
-            const chosen = files orelse return;
-            if (failed or chosen.len == 0) return;
-            const copy = std.heap.c_allocator.dupeSentinel(u8, std.mem.span(chosen[0]), 0) catch return;
-            if (self.?.picked_project.swap(copy.ptr, .acq_rel)) |old| std.heap.c_allocator.free(std.mem.span(old));
-        }
-
-        /// SDL's file dialog callback for Assets' Import file...: hand the files picked, one per
-        /// line, to the main thread. Runs on whatever thread SDL calls it from.
-        pub fn pickedImports(self: ?*Self, files: ?[]const [*:0]const u8, _: ?usize, failed: bool) void {
-            const chosen = files orelse return;
-            if (failed or chosen.len == 0) return;
-            var joined: std.ArrayList(u8) = .empty;
-            for (chosen, 0..) |file, i| {
-                if (i > 0) joined.append(std.heap.c_allocator, '\n') catch return joined.deinit(std.heap.c_allocator);
-                joined.appendSlice(std.heap.c_allocator, std.mem.span(file)) catch return joined.deinit(std.heap.c_allocator);
-            }
-            const owned = joined.toOwnedSliceSentinel(std.heap.c_allocator, 0) catch return joined.deinit(std.heap.c_allocator);
-            if (self.?.picked_imports.swap(owned.ptr, .acq_rel)) |old| std.heap.c_allocator.free(std.mem.span(old));
+        /// Drop File > New/Open Project's window.
+        fn closeProjectFlow(self: *Self, flow: *ProjectFlow) void {
+            flow.close(&self.app.graphics);
+            self.project_flow = null;
         }
 
         /// Open the editor `job` rebuilt in place of this one, where this one's window is. Returns
@@ -1058,7 +1029,7 @@ pub fn Editor(comptime project: type) type {
                 .new_project => self.project_flow = try ProjectFlow.create(self.gpa, &self.app.graphics, self.ui.font, self.mono),
                 .open_project, .open_project_linked => {
                     self.picking_to_link = self.leaving == .open_project_linked;
-                    sdl3.dialog.showOpenFolder(Self, pickedProject, self, self.app.window.window, null, false);
+                    self.picked_project.showFolder(self.app.window.window, null);
                 },
             }
             self.leave_approved = false;
@@ -1405,7 +1376,7 @@ pub fn Editor(comptime project: type) type {
             defer self.gpa.free(file);
             const choice = preferences.editor(&self.app.preference_values).code_editor;
             code_editor.openAt(self.gpa, choice, opened.dir, file, source.line, source.column) catch |err| {
-                std.log.err("cannot open {s}:{d}:{d} in {t}: {t}. Pick another code editor in Edit > Preferences.", .{ source.path, source.line, source.column, choice, err });
+                std.log.err("cannot open {s}:{d}:{d} in {t}: {t}. Pick another code editor in Edit > Settings.", .{ source.path, source.line, source.column, choice, err });
                 self.workspace.toast("Couldn't open the source: see the Console");
             };
         }
@@ -1434,7 +1405,7 @@ pub fn Editor(comptime project: type) type {
                     defer self.gpa.free(file);
                     const choice = preferences.editor(&self.app.preference_values).code_editor;
                     code_editor.open(self.gpa, choice, opened.dir, file) catch |err| {
-                        std.log.err("cannot open {s} in {t}: {t}. Pick another code editor in Edit > Preferences.", .{ path, choice, err });
+                        std.log.err("cannot open {s} in {t}: {t}. Pick another code editor in Edit > Settings.", .{ path, choice, err });
                         self.workspace.toast("Couldn't open it: see the Console");
                     };
                 },
@@ -1448,7 +1419,7 @@ pub fn Editor(comptime project: type) type {
                     const owned = self.gpa.dupe(u8, folder) catch return;
                     if (self.import_folder) |old| self.gpa.free(old);
                     self.import_folder = owned;
-                    sdl3.dialog.showOpenFile(Self, pickedImports, self, self.app.window.window, null, null, true);
+                    self.picked_imports.showFiles(self.app.window.window);
                 },
                 .preview => |path| self.workspace.openAsset(path, .window) catch |err| {
                     std.log.err("cannot preview {s} in a window: {t}", .{ path, err });
@@ -2095,7 +2066,7 @@ pub fn Editor(comptime project: type) type {
             window.show(try self.preferenceSections(arena.allocator()), project_section);
         }
 
-        /// Open Edit > Preferences, with the open project's `eggy.zon` for its Project section.
+        /// Open Edit > Settings, with the open project's `eggy.zon` for its Project section.
         fn openPreferences(self: *Self) void {
             if (self.preferences_window != null) return;
             self.preferences_window = preferences.PreferencesWindow.open(self.gpa, &self.app.graphics, self.ui.font) catch |err| {
@@ -2125,28 +2096,49 @@ pub fn Editor(comptime project: type) type {
             self.project_settings = null;
         }
 
-        /// The Preferences window's sections: the editor's, then (with a project) its eggy.zon,
-        /// each plugin's that has any, the game's titled after the project. In `arena`.
+        /// Settings' pages: this computer's (the editor's preferences, graphics), then with a
+        /// project its own (General, Export, the game's preferences), then its plugins (their
+        /// switches, and each one's preferences). In `arena`.
         fn preferenceSections(self: *Self, arena: std.mem.Allocator) ![]const preferences.Section {
             var sections: std.ArrayList(preferences.Section) = .empty;
-            try sections.append(arena, .{ .title = "Editor", .subtitle = "How the editor looks and behaves.", .content = .{ .preferences = preferences.editor_manifest } });
-            try sections.append(arena, .{ .title = "Graphics", .subtitle = "How the editor draws its view.", .content = .{ .graphics = &self.app } });
+            const computer = "This computer";
+            try sections.append(arena, .{ .title = "Editor", .group = computer, .content = .{ .preferences = preferences.editor_manifest } });
+            try sections.append(arena, .{ .title = "Graphics", .group = computer, .content = .{ .graphics = .{ .app = &self.app, .shipped = self.project_settings } } });
             // Plugins' switches and preferences are the project's: without one, there is nowhere to
             // keep them.
-            if (self.project == null) return sections.items;
-            if (self.project_settings) |settings| try sections.append(arena, .{ .title = project_section, .subtitle = "This project's title, version and how its game starts.", .content = .{ .project = settings } });
+            const opened = self.project orelse return sections.items;
+            if (self.project_settings) |settings| try sections.append(arena, .{ .title = project_section, .group = opened.title, .content = .{ .project = settings } });
+            try sections.append(arena, .{ .title = "Export", .group = opened.title, .content = .{ .link = .export_game } });
             const game = if (self.game) |*loaded| loaded else return sections.items;
-            // Every plugin but the game, which can't be turned off.
+            for (game.preference_manifests) |manifest| if (std.mem.eql(u8, manifest.key, "game")) {
+                try sections.append(arena, .{ .title = "Game settings", .group = opened.title, .content = .{ .preferences = manifest } });
+            };
+
+            // Every plugin but the game, which can't be turned off, with what its manifest says.
+            const installed: []const eggy.plugin_manifest.Installed = if (self.project_settings) |settings| settings.plugins else &.{};
             const plugins = try arena.alloc(preferences.Plugin, game.plugin_keys.len -| 1);
-            for (plugins, game.plugin_keys[@min(1, game.plugin_keys.len)..]) |*plugin, key| plugin.* = .{ .key = key, .title = try preferences.displayName(arena, key), .on = self.plugin_switches.isOn(key) };
-            try sections.append(arena, .{ .title = "Plugins", .subtitle = "Turn this project's plugins on or off.", .content = .{ .plugins = plugins } });
-            for (game.preference_manifests) |manifest| {
-                if (std.mem.eql(u8, manifest.key, "game")) {
-                    try sections.append(arena, .{ .title = if (self.project) |opened| opened.title else "Game", .subtitle = "Your game's own preferences.", .content = .{ .preferences = manifest } });
-                } else {
-                    try sections.append(arena, .{ .title = try preferences.displayName(arena, manifest.key), .subtitle = try std.fmt.allocPrint(arena, "From the {s} plugin.", .{manifest.key}), .content = .{ .preferences = manifest } });
-                }
+            for (plugins, game.plugin_keys[@min(1, game.plugin_keys.len)..]) |*plugin, key| {
+                // ponytail: parses each built-in manifest every frame Settings is open; cache them if Settings ever shows in the frame time.
+                const manifest = plugin_manager.builtinManifest(arena, key);
+                const entry = for (installed) |candidate| {
+                    if (std.mem.eql(u8, candidate.module, key)) break candidate;
+                } else null;
+                plugin.* = .{
+                    .key = key,
+                    .title = if (manifest) |found| found.title else try preferences.displayName(arena, key),
+                    .on = self.plugin_switches.isOn(key),
+                    .version = if (entry) |found| found.version else if (manifest) |found| found.version else "",
+                    .description = if (manifest) |found| found.description else "",
+                    .dev = if (entry) |found| found.dev else if (manifest) |found| found.dev else false,
+                };
+                for (game.preference_manifests) |preference| if (std.mem.eql(u8, preference.key, key)) {
+                    plugin.settings = plugin.title;
+                };
             }
+            try sections.append(arena, .{ .title = "Installed", .group = "Plugins", .content = .{ .plugins = plugins } });
+            for (plugins) |plugin| if (plugin.settings) |plugin_title| for (game.preference_manifests) |manifest| if (std.mem.eql(u8, manifest.key, plugin.key)) {
+                try sections.append(arena, .{ .title = plugin_title, .group = "Plugins", .content = .{ .preferences = manifest } });
+            };
             return sections.items;
         }
 
@@ -2449,8 +2441,7 @@ pub fn Editor(comptime project: type) type {
             // File > New/Open Project's window takes its own events; closing it, or Escape, cancels.
             if (self.project_flow) |flow| {
                 if (flow.closeRequested(curr_event)) {
-                    flow.close(&self.app.graphics);
-                    self.project_flow = null;
+                    self.closeProjectFlow(flow);
                     return .run;
                 }
                 if (flow.handle(curr_event)) return self.toolWindowTook(curr_event);
@@ -2466,7 +2457,7 @@ pub fn Editor(comptime project: type) type {
                 if (window.handle(curr_event)) return self.toolWindowTook(curr_event);
                 if (weeoui_sdl3.translate(curr_event) != null) return .run;
             }
-            // Edit > Preferences' window takes its own events; closing it, or Escape, closes it.
+            // Edit > Settings' window takes its own events; closing it, or Escape, closes it.
             if (self.preferences_window) |window| {
                 if (window.closeRequested(curr_event)) {
                     self.closePreferences();
@@ -2632,7 +2623,7 @@ pub fn Editor(comptime project: type) type {
                         self.upgrades.logUnavailable(.link);
                     } else {
                         self.picking_to_link = tag == .open_project_linked;
-                        sdl3.dialog.showOpenFolder(Self, pickedProject, self, self.app.window.window, null, false);
+                        self.picked_project.showFolder(self.app.window.window, null);
                     }
                 },
                 .open_in_file_manager => if (self.project) |opened| file_manager.showFolder(self.gpa, opened.dir) catch |err| {
@@ -2641,7 +2632,7 @@ pub fn Editor(comptime project: type) type {
                 .open_in_ide => if (self.project) |opened| {
                     const choice = preferences.editor(&self.app.preference_values).code_editor;
                     code_editor.openFolder(self.gpa, choice, opened.dir) catch |err| {
-                        std.log.err("cannot open {s} in {t}: {t}. Pick another code editor in Edit > Preferences.", .{ opened.dir, choice, err });
+                        std.log.err("cannot open {s} in {t}: {t}. Pick another code editor in Edit > Settings.", .{ opened.dir, choice, err });
                         self.workspace.toast("Couldn't open the IDE: see the Console");
                     };
                 },
@@ -2654,15 +2645,10 @@ pub fn Editor(comptime project: type) type {
                     };
                 },
                 .save => self.saveScene(),
-                // Project Settings are the Preferences window's Project section.
+                // Project Settings are Settings' General page.
                 .project_settings => try self.showProjectSettings(),
                 .plugins => _ = self.showPlugins(),
-                .export_game => if (self.export_window == null) if (self.project) |opened| {
-                    self.export_window = ExportWindow.open(self.gpa, &self.app.graphics, self.ui.font, self.mono, opened.dir) catch |err| blk: {
-                        std.log.err("cannot open Export: {t}", .{err});
-                        break :blk null;
-                    };
-                },
+                .export_game => self.showExport(),
                 .undo => self.undoOrRedo(.undo),
                 .redo => self.undoOrRedo(.redo),
                 .preferences => self.openPreferences(),
@@ -2896,7 +2882,7 @@ pub fn Editor(comptime project: type) type {
             const job = try Job.start(self.gpa, .{ .dir = opened.dir, .resources_dir = folders.resources_dir, .engines_dir = folders.engines_dir, .action = action });
             errdefer job.deinit();
             self.built_sources = sources;
-            if (self.build_window == null) self.build_window = try BuildWindow.open(self.gpa, &self.app.graphics, self.ui.font, self.mono, self.app.window.window, opened.title);
+            if (self.build_window == null) self.build_window = try BuildWindow.open(self.gpa, &self.app.graphics, self.ui.font, self.mono, self.app.window.window, opened.title, opened.dir);
             self.rebuild = job;
             self.activity.builds += 1;
         }
@@ -3006,12 +2992,20 @@ pub fn Editor(comptime project: type) type {
             }
             // Reload asked for the editor as soon as it is built.
             if (self.reload_when_built and status.stage == .done) return try self.launchRebuilt(job);
-            switch (try window.update(&self.app.graphics, &self.ui, status, self.workspace.build_state == .ready)) {
+            const options: @import("build_progress.zig").Options = .{
+                .done = if (self.workspace.build_state == .ready) .rebuilt else .unchanged,
+                .code_editor = preferences.editor(&self.app.preference_values).code_editor,
+            };
+            switch (try window.update(&self.app.graphics, &self.ui, status, options)) {
                 .none => {},
                 .close => self.closeBuildWindow(),
                 .cancel => {
                     self.cancelBuild();
                     self.closeBuildWindow();
+                },
+                .retry => {
+                    self.cancelBuild();
+                    try self.startBuild(.rebuild);
                 },
                 .reload => return try self.launchRebuilt(job),
             }
@@ -3327,6 +3321,16 @@ pub fn Editor(comptime project: type) type {
             };
             window.fetchFrom(path);
             return true;
+        }
+
+        /// File > Export, opened if it isn't and a project is.
+        fn showExport(self: *Self) void {
+            if (self.export_window != null) return;
+            const opened = self.project orelse return;
+            self.export_window = ExportWindow.open(self.gpa, &self.app.graphics, self.ui.font, self.mono, opened.dir) catch |err| blk: {
+                std.log.err("cannot open Export: {t}", .{err});
+                break :blk null;
+            };
         }
 
         /// Edit > Plugins, opened if it isn't; null without a project, or if it can't open.
@@ -3733,7 +3737,7 @@ pub fn Editor(comptime project: type) type {
                 var editor_context = extensions.context(self);
                 game.editorUi(&editor_context, &self.ui);
             } else self.ui.muted("The game's library didn't load: see the Console.");
-            self.ui.muted("Select an entity in the Hierarchy to see its components.");
+            self.ui.muted("Select an entity.");
         }
 
         /// A plugin's own Inspector for one of the selected entity's components.
@@ -3949,6 +3953,12 @@ test {
     _ = @import("projects/build_steps.zig");
     _ = @import("terminal_steps.zig");
     _ = @import("projects/discovery.zig");
+    _ = @import("projects/recent.zig");
+    _ = @import("projects/launcher.zig");
+    _ = @import("projects/logo.zig");
+    _ = @import("projects/project_tile.zig");
+    _ = @import("build_progress.zig");
+    _ = @import("picked_paths.zig");
     _ = @import("projects/wizard.zig");
     _ = @import("projects/flow.zig");
     _ = @import("projects/engine.zig");

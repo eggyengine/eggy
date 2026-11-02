@@ -173,6 +173,34 @@ pub fn dependencyPath(arena: std.mem.Allocator, io: std.Io, project: std.Io.Dir)
     return parseDependencyPath(arena, try readManifest(arena, io, project));
 }
 
+/// The version of Eggy the project in `project_dir` (absolute) builds against: a path
+/// dependency's own `build.zig.zon` says it, a fetched one's hash (`eggy-0.1.0-...`) carries it.
+/// Null when neither does, or that Eggy's folder is gone. Text lives in `arena`; the project's
+/// own manifest failing to read or parse propagates.
+///
+/// ```zig
+/// const version = try projectVersion(arena, io, "/home/you/space_game"); // "0.1.0"
+/// ```
+pub fn projectVersion(arena: std.mem.Allocator, io: std.Io, project_dir: []const u8) !?[]const u8 {
+    var project = try std.Io.Dir.cwd().openDir(io, project_dir, .{});
+    defer project.close(io);
+    const dependency = try parseDependency(arena, try readManifest(arena, io, project));
+    const path = dependency.path orelse return versionFromHash(dependency.hash orelse return null);
+    var engine = std.Io.Dir.cwd().openDir(io, try std.fs.path.resolve(arena, &.{ project_dir, path }), .{}) catch return null;
+    defer engine.close(io);
+    const manifest = readManifest(arena, io, engine) catch return null;
+    const Package = struct { version: ?[]const u8 = null };
+    return (zon_file.parse(Package, arena, manifest, .{ .ignore_unknown_fields = true }) catch return null).version;
+}
+
+/// The version in a package hash, `<name>-<version>-<44-character digest>`.
+fn versionFromHash(hash: []const u8) ?[]const u8 {
+    const digest_len = 44;
+    const name_end = std.mem.indexOfScalar(u8, hash, '-') orelse return null;
+    if (hash.len < name_end + 2 + digest_len + 1) return null;
+    return hash[name_end + 1 .. hash.len - digest_len - 1];
+}
+
 /// Point `project`'s (in `project_dir`, absolute) eggy dependency at `engine_dir` (absolute),
 /// rewriting only that path in its `build.zig.zon`.
 /// Editor-only: requires an existing path dependency (otherwise EngineNotAPath). Computes a
@@ -200,9 +228,16 @@ fn readManifest(arena: std.mem.Allocator, io: std.Io, project: std.Io.Dir) ![:0]
 }
 
 fn parseDependencyPath(arena: std.mem.Allocator, manifest: [:0]const u8) !?[]const u8 {
-    const Manifest = struct { dependencies: struct { eggy: struct { path: ?[]const u8 = null } = .{} } = .{} };
+    return (try parseDependency(arena, manifest)).path;
+}
+
+/// `build.zig.zon`'s eggy dependency: a path, or a URL's hash.
+const Dependency = struct { path: ?[]const u8 = null, hash: ?[]const u8 = null };
+
+fn parseDependency(arena: std.mem.Allocator, manifest: [:0]const u8) !Dependency {
+    const Manifest = struct { dependencies: struct { eggy: Dependency = .{} } = .{} };
     const parsed = zon_file.parse(Manifest, arena, manifest, .{ .ignore_unknown_fields = true }) catch return error.UnreadableManifest;
-    return parsed.dependencies.eggy.path;
+    return parsed.dependencies.eggy;
 }
 
 test "a manifest's eggy path is found, and none when eggy is fetched by URL" {
@@ -214,6 +249,26 @@ test "a manifest's eggy path is found, and none when eggy is fetched by URL" {
     try std.testing.expect(try parseDependencyPath(arena.allocator(),
         \\.{ .name = .game, .dependencies = .{ .eggy = .{ .url = "git+https://example.com/eggy", .hash = "x" } } }
     ) == null);
+}
+
+test "a fetched Eggy's version comes from its package hash" {
+    try std.testing.expectEqualStrings("0.1.0", versionFromHash("eggy-0.1.0-3fi9DKKOawD5LqxsW5WSfLOVw2qUbwt2tBECa3m8439w").?);
+    try std.testing.expectEqualStrings("0.2.0-dev.4", versionFromHash("eggy-0.2.0-dev.4-3fi9DKKOawD5LqxsW5WSfLOVw2qUbwt2tBECa3m8439w").?);
+    try std.testing.expect(versionFromHash("1220abcdef") == null);
+}
+
+test "a project's Eggy version is read from the Eggy its path points at" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const io = std.testing.io;
+    try tmp.dir.createDirPath(io, "eggy");
+    try tmp.dir.createDirPath(io, "game");
+    try tmp.dir.writeFile(io, .{ .sub_path = "eggy/build.zig.zon", .data = ".{ .name = .eggy, .version = \"0.3.1\", .paths = .{\"\"} }" });
+    try tmp.dir.writeFile(io, .{ .sub_path = "game/build.zig.zon", .data = ".{ .name = .game, .dependencies = .{ .eggy = .{ .path = \"../eggy\" } } }" });
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const game = try tmp.dir.realPathFileAlloc(io, "game", arena.allocator());
+    try std.testing.expectEqualStrings("0.3.1", (try projectVersion(arena.allocator(), io, game)).?);
 }
 
 test "only a packaged engine upgrades, and only to a different one" {

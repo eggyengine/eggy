@@ -17,7 +17,7 @@ directory first on `PATH`.
 The commands below use `eggy_editor`. Replace that with the path to your installed
 executable when it is not on `PATH`.
 
-To create a project without an editor yet, run this from the folder that should contain it:
+To install the editor, run:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/eggyengine/eggy/main/scripts/get-started.sh | bash
@@ -29,12 +29,17 @@ On Windows, from PowerShell:
 irm https://raw.githubusercontent.com/eggyengine/eggy/main/scripts/get-started.ps1 | iex
 ```
 
-The script asks for a title, a package name, and a directory, then writes the
-template and fetches Eggy. If Zig 0.17 is missing, it asks before installing zvm
-(when zvm is not already installed) and Zig. It stops if Zig's standard library,
-a template file, or a required package is missing. The directory must be absent
-or empty. At the end it offers to compile the project and open its editor; the
-first compile takes a while. Otherwise, open it later with `zig build run`.
+The script installs Zig 0.17 if it is missing, asking before it installs zvm (when zvm is
+not already installed) and Zig. It then asks whether you want the latest release or the
+nightly build, and whether to install just for you or for everyone on the computer.
+
+Just for you, Eggy goes in `~/.local/share/eggy/launcher` with an `eggy` command in
+`~/.local/bin`, or in `%LOCALAPPDATA%\Programs\Eggy` on Windows. For everyone, it goes in
+`/opt/eggy` with `eggy` in `/usr/local/bin` (the script uses `sudo`), or in
+`%ProgramFiles%\Eggy` on Windows, run from an administrator PowerShell. On Windows the
+`bin` folder joins `PATH` and Eggy appears in the Start menu; on Linux it appears in the
+applications menu. Run the script again to update Eggy. At the end it offers to open
+Eggy, where **New Project** makes a project from the template.
 
 ## Steps
 
@@ -83,8 +88,10 @@ eggy_editor new --title "Space Game" --name space_game --directory ./space_game 
 Creation unpacks the bundled engine and template and builds the project's editor.
 It finishes in the terminal unless you add `--open`.
 
-The GUI alternative is to launch `eggy_editor` without arguments and choose
-File > New Project. File > Open Project opens an existing project.
+The GUI alternative is to launch `eggy_editor` without arguments. It lists the
+projects you opened lately, newest first, with each one's Eggy version and a link
+symbol when it builds against an Eggy checkout. Choose New Project to make one, Open
+Project... for an existing folder, or a listed project to open it.
 
 ### Open the project's editor
 

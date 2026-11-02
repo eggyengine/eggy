@@ -87,7 +87,7 @@ While the camera is selected, the Scene shows what it sees in the corner:
 
 Save the scene. Press Play at the top of the window. You should see the orange cube
 and green floor through the camera. Press Play again, or press Escape once, to
-stop. The same shortcut stops Simulate. Change **Stop play key** in Edit > Preferences
+stop. The same shortcut stops Simulate. Change **Stop play key** in Edit > Settings
 to use another key. Play and Simulate start with no entity selected; selecting one
 while they run keeps it selected. The cube does not move yet.
 

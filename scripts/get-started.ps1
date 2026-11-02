@@ -1,35 +1,19 @@
-# Create a project from Eggy's template on Windows.
+# Install Eggy on Windows: Zig 0.17 if it is missing, then the launcher, from GitHub Releases.
 #
 #   irm https://raw.githubusercontent.com/eggyengine/eggy/main/scripts/get-started.ps1 | iex
 #
-# Asks in the current PowerShell session. If Zig 0.17 is missing, a yes installs
-# zvm (when it is not already installed) and then Zig.
-# EGGY_SOURCE overrides where the template is downloaded from.
-# EGGY_GIT overrides the Eggy package `zig fetch` saves.
+# Asks in the current PowerShell session. If Zig 0.17 is missing, a yes installs zvm (when it is
+# not already installed) and then Zig. Then it asks for the latest release or the nightly, and
+# whether to install just for you (%LOCALAPPDATA%\Programs\Eggy) or for everyone
+# (%ProgramFiles%\Eggy, from an administrator PowerShell), adds its bin folder to PATH and the
+# Start menu, and replaces the launcher installed there before.
+# EGGY_REPO overrides the GitHub repository the launcher is downloaded from (owner/name).
 # EGGY_GET_STARTED_TEST=1 defines the functions and returns, for this script's own check.
 # Do not call exit: this file is invoked inside the caller's session.
 
-$EggySource = if ($env:EGGY_SOURCE) { $env:EGGY_SOURCE } else { 'https://raw.githubusercontent.com/eggyengine/eggy/main' }
-$EggyGit = if ($env:EGGY_GIT) { $env:EGGY_GIT } else { 'git+https://github.com/eggyengine/eggy' }
+$EggyRepo = if ($env:EGGY_REPO) { $env:EGGY_REPO } else { 'eggyengine/eggy' }
 $ZigRelease = '0.17.0'
-$TemplateFingerprint = '0x76cd980c5eed1e55'
-$TemplateFiles = @(
-    '.gitignore'
-    'build.zig'
-    'build.zig.zon'
-    'controls.zon'
-    'eggy.zon'
-    'src/main.zig'
-    'src/root.zig'
-)
-$ZigKeywords = @(
-    'addrspace', 'align', 'allowzero', 'and', 'anyframe', 'anytype', 'asm', 'break', 'callconv',
-    'catch', 'comptime', 'const', 'continue', 'defer', 'else', 'enum', 'errdefer', 'error',
-    'export', 'extern', 'fn', 'for', 'if', 'inline', 'noalias', 'noinline', 'nosuspend',
-    'opaque', 'or', 'orelse', 'packed', 'pub', 'resume', 'return', 'linksection', 'struct',
-    'suspend', 'switch', 'test', 'threadlocal', 'try', 'union', 'unreachable', 'var',
-    'volatile', 'while'
-)
+$Platform = 'windows-x86_64'
 
 function Test-Yes([string]$Reply) {
     return $Reply -match '^(?i)(y|yes)$'
@@ -48,44 +32,6 @@ function Read-Answer([string]$Prompt, [string]$Default) {
     }
 }
 
-function Test-PackageName([string]$Name) {
-    if ($Name -eq '_' -or $Name.Length -lt 1 -or $Name.Length -gt 32) { return $false }
-    if ($Name -notmatch '^[A-Za-z_][A-Za-z0-9_]*$') { return $false }
-    if ($ZigKeywords -ccontains $Name) { return $false }
-    return $true
-}
-
-# The same derivation the editor uses: lower case, words joined by `_`, `game_` when needed.
-function Get-PackageName([string]$Title) {
-    $result = ''
-    $gap = $false
-    foreach ($char in $Title.ToCharArray()) {
-        $text = [string]$char
-        if ($text -match '[A-Za-z0-9]') {
-            $lower = $text.ToLowerInvariant()
-            if ($result.Length -eq 0 -and $lower -match '[0-9]') {
-                $result = 'game_'
-            }
-            elseif ($gap -and $result.Length -gt 0 -and $result.Length -lt 32) {
-                $result += '_'
-            }
-            $gap = $false
-            if ($result.Length -eq 32) { break }
-            $result += $lower
-        }
-        else {
-            $gap = $true
-        }
-    }
-    if ($result -and -not (Test-PackageName $result) -and ($result.Length + 5) -le 32) {
-        $result = "game_$result"
-    }
-    return $result
-}
-
-function ConvertTo-ZonString([string]$Text) {
-    return $Text.Replace('\', '\\').Replace('"', '\"').Replace("`r", '').Replace("`n", ' ')
-}
 
 # PowerShell remembers the first `zig` it found, so a zvm switch in this session
 # has to call the shim in ~/.zvm/bin by path.
@@ -205,48 +151,6 @@ function Test-ZigInstall {
     Remove-Item -LiteralPath $probe -Force
 }
 
-# Every template file, before the project directory is created.
-function Get-Template {
-    $stage = Join-Path ([IO.Path]::GetTempPath()) ('eggy-template-' + [guid]::NewGuid().ToString('n'))
-    New-Item -ItemType Directory -Path $stage | Out-Null
-    $missing = @()
-    foreach ($file in $TemplateFiles) {
-        $dest = Join-Path $stage ($file -replace '/', [IO.Path]::DirectorySeparatorChar)
-        $parent = Split-Path -Parent $dest
-        if (-not (Test-Path -LiteralPath $parent)) {
-            New-Item -ItemType Directory -Path $parent | Out-Null
-        }
-        $url = "$EggySource/resources/template/$file"
-        try {
-            Invoke-WebRequest -UseBasicParsing -Uri $url -OutFile $dest
-            if (-not (Test-Path -LiteralPath $dest) -or (Get-Item -LiteralPath $dest).Length -eq 0) {
-                throw 'empty'
-            }
-        }
-        catch {
-            $missing += $url
-        }
-    }
-    if ($missing.Count -gt 0) {
-        Remove-Item -LiteralPath $stage -Recurse -Force -ErrorAction SilentlyContinue
-        Write-Host 'Could not download the template:'
-        foreach ($url in $missing) { Write-Host "  $url" }
-        return $null
-    }
-    return $stage
-}
-
-function Resolve-ProjectDirectory([string]$Path) {
-    if (-not [IO.Path]::IsPathRooted($Path)) {
-        $Path = Join-Path (Get-Location) $Path
-    }
-    $full = [IO.Path]::GetFullPath($Path)
-    $parent = Split-Path -Parent $full
-    if (-not $parent -or -not (Test-Path -LiteralPath $parent)) {
-        throw "That folder's parent does not exist: $parent"
-    }
-    return $full
-}
 
 # Eggy's logo, darker toward the shell's shadow.
 function Write-Egg {
@@ -270,164 +174,149 @@ function Write-Egg {
 '@
 }
 
-function Test-DirectoryEmpty([string]$Path) {
-    if (-not (Test-Path -LiteralPath $Path)) { return $true }
-    return @(Get-ChildItem -Force -LiteralPath $Path).Count -eq 0
+# Where a channel's asset downloads from. `latest` skips prereleases, so it never serves the nightly.
+function Get-AssetUrl([string]$Channel) {
+    if ($Channel -eq 'nightly') {
+        return "https://github.com/$EggyRepo/releases/download/nightly/eggy-$Platform.tar.gz"
+    }
+    return "https://github.com/$EggyRepo/releases/latest/download/eggy-$Platform.tar.gz"
 }
 
-function Get-Fingerprint([string]$Name) {
-    $work = Join-Path ([IO.Path]::GetTempPath()) ('eggy-fingerprint-' + [guid]::NewGuid().ToString('n'))
-    New-Item -ItemType Directory -Path $work | Out-Null
-    $source = Join-Path $work 'fingerprint.zig'
-    $utf8 = New-Object System.Text.UTF8Encoding $false
-    $program = @'
-const std = @import("std");
-
-pub fn main(init: std.process.Init) !void {
-    var args = try init.minimal.args.iterateAllocator(init.arena.allocator());
-    _ = args.next();
-    const name = args.next() orelse return error.MissingName;
-    var random: [4]u8 = undefined;
-    init.io.random(&random);
-    var id = std.mem.readInt(u32, &random, .little);
-    if (id == 0 or id == 0xffffffff) id = 1;
-    const fingerprint = @as(u64, std.hash.Crc32.hash(name)) << 32 | id;
-    var buffer: [32]u8 = undefined;
-    var stdout = std.Io.File.stdout().writer(init.io, &buffer);
-    try stdout.interface.print("0x{x:0>16}\n", .{fingerprint});
-    try stdout.interface.flush();
-}
-'@
+# Download `Channel`'s launcher to `Archive`. $false when it is not there, so the caller can offer another.
+function Get-Launcher([string]$Channel, [string]$Archive) {
+    Write-Host "Downloading the $Channel launcher."
     try {
-        [IO.File]::WriteAllText($source, $program, $utf8)
-        $printed = (& (Get-ZigExe) run $source -- $Name | Out-String)
-        if ($LASTEXITCODE -ne 0) { throw "zig run failed ($LASTEXITCODE)." }
-        return ($printed -replace "`r", '').Trim()
+        Invoke-WebRequest -UseBasicParsing -Uri (Get-AssetUrl $Channel) -OutFile $Archive
+        return $true
     }
-    finally {
-        Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction SilentlyContinue
+    catch {
+        return $false
     }
 }
 
-function Write-FilledFile([string]$Path, [string]$Fingerprint, [string]$Name, [string]$Title) {
-    $utf8 = New-Object System.Text.UTF8Encoding $false
-    $data = [IO.File]::ReadAllText($Path)
-    $data = $data.Replace($TemplateFingerprint, $Fingerprint)
-    $data = $data.Replace('eggy_template_name', $Name)
-    $data = $data.Replace('eggy_template_title', $Title)
-    [IO.File]::WriteAllText($Path, $data, $utf8)
+function Test-Administrator {
+    $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+    return ([Security.Principal.WindowsPrincipal]$identity).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 }
 
-function Start-EggyProject {
+# Unpack `Archive` beside `Destination` and swap it in, so a failed unpack leaves the old launcher working.
+function Install-Launcher([string]$Archive, [string]$Destination) {
+    $fresh = "$Destination.new"
+    $old = "$Destination.old"
+    foreach ($path in @($fresh, $old)) {
+        if (Test-Path -LiteralPath $path) { Remove-Item -LiteralPath $path -Recurse -Force }
+    }
+    New-Item -ItemType Directory -Force -Path $fresh | Out-Null
+    # tar.exe ships with Windows 10 and later.
+    & tar.exe -xzf $Archive -C $fresh
+    if ($LASTEXITCODE -ne 0) { throw "tar failed ($LASTEXITCODE)." }
+    if (-not (Test-Path -LiteralPath (Join-Path $fresh 'bin\eggy_editor.exe'))) {
+        Remove-Item -LiteralPath $fresh -Recurse -Force
+        throw 'The download has no bin\eggy_editor.exe.'
+    }
+    if (Test-Path -LiteralPath $Destination) { Move-Item -LiteralPath $Destination -Destination $old }
+    Move-Item -LiteralPath $fresh -Destination $Destination
+    if (Test-Path -LiteralPath $old) { Remove-Item -LiteralPath $old -Recurse -Force }
+}
+
+# Add `Folder` to the user's or the machine's PATH, once, and to this session's.
+function Add-ToPath([string]$Folder, [EnvironmentVariableTarget]$Target) {
+    $current = [Environment]::GetEnvironmentVariable('Path', $Target)
+    $entries = @($current -split ';' | Where-Object { $_ })
+    if ($entries -notcontains $Folder) {
+        [Environment]::SetEnvironmentVariable('Path', (@($entries) + $Folder) -join ';', $Target)
+    }
+    if (@($env:PATH -split ';') -notcontains $Folder) { $env:PATH = "$env:PATH;$Folder" }
+}
+
+function New-StartMenuShortcut([string]$Programs, [string]$Exe) {
+    $shell = New-Object -ComObject WScript.Shell
+    $shortcut = $shell.CreateShortcut((Join-Path $Programs 'Eggy.lnk'))
+    $shortcut.TargetPath = $Exe
+    $shortcut.WorkingDirectory = Split-Path -Parent $Exe
+    $shortcut.Description = 'Make games with Eggy'
+    $shortcut.Save()
+}
+
+function Install-Eggy {
     $ErrorActionPreference = 'Stop'
     $ProgressPreference = 'SilentlyContinue'
     if (-not [Environment]::UserInteractive) {
         Write-Error 'get-started needs a terminal so it can ask a few questions.'
         return
     }
+    if ($env:PROCESSOR_ARCHITECTURE -ne 'AMD64') {
+        Write-Error "Eggy has no launcher build for $env:PROCESSOR_ARCHITECTURE Windows yet. Build it from source: https://github.com/$EggyRepo"
+        return
+    }
     if (-not (Install-ZigIfNeeded)) { return }
     Test-ZigInstall
-    $stage = Get-Template
-    if (-not $stage) { return }
-    $directory = $null
-    $wipe = $false
-    try {
-        Write-Egg
-        Write-Host "Create an Eggy project. Zig $($script:ZigVersion)."
-        $title = Read-Answer 'Project title'
-        $suggested = Get-PackageName $title
-        while ($true) {
-            if ($suggested) {
-                $name = Read-Answer 'Package name' $suggested
-            }
-            else {
-                $name = Read-Answer 'Package name'
-            }
-            if (Test-PackageName $name) { break }
-            Write-Host 'Package names are Zig identifiers of at most 32 characters, not keywords.'
-            $suggested = ''
-        }
-        $directory = Resolve-ProjectDirectory (Read-Answer 'Directory' $name)
-        if (-not (Test-DirectoryEmpty $directory)) {
-            Write-Error "$directory exists and is not empty. Nothing was written."
-            return
-        }
-        Write-Host "Title:     $title"
-        Write-Host "Package:   $name"
-        Write-Host "Directory: $directory"
-        if (-not (Test-Yes (Read-Answer 'Create this project?' 'Y'))) {
-            Write-Host 'Cancelled.'
-            return
-        }
 
-        New-Item -ItemType Directory -Force -Path (Join-Path $directory 'src') | Out-Null
-        $wipe = $true
-        foreach ($file in $TemplateFiles) {
-            $relative = $file -replace '/', [IO.Path]::DirectorySeparatorChar
-            $from = Join-Path $stage $relative
-            $to = Join-Path $directory $relative
-            $parent = Split-Path -Parent $to
-            if (-not (Test-Path -LiteralPath $parent)) {
-                New-Item -ItemType Directory -Path $parent | Out-Null
-            }
-            Copy-Item -LiteralPath $from -Destination $to
-        }
-        $titleZon = ConvertTo-ZonString $title
-        $fingerprint = Get-Fingerprint $name
-        foreach ($file in $TemplateFiles) {
-            $relative = $file -replace '/', [IO.Path]::DirectorySeparatorChar
-            Write-FilledFile (Join-Path $directory $relative) $fingerprint $name $titleZon
-        }
-
-        # Drop the placeholder path: `zig fetch --save` would overwrite only its string and skip the hash.
-        $zonPath = Join-Path $directory 'build.zig.zon'
-        $utf8 = New-Object System.Text.UTF8Encoding $false
-        $zon = [IO.File]::ReadAllText($zonPath)
-        $needle = '.eggy = .{ .path = "eggy_template_engine" },'
-        if ($zon.IndexOf($needle) -lt 0) {
-            throw "The template no longer has the engine placeholder this script removes."
-        }
-        [IO.File]::WriteAllText($zonPath, $zon.Replace($needle, ''), $utf8)
-
-        Write-Host 'Fetching Eggy and its required packages.'
-        Push-Location $directory
-        try {
-            & (Get-ZigExe) fetch --save=eggy $EggyGit
-            if ($LASTEXITCODE -ne 0) { throw "zig fetch failed ($LASTEXITCODE)." }
-            & (Get-ZigExe) build --fetch
-            if ($LASTEXITCODE -ne 0) { throw "zig build --fetch failed ($LASTEXITCODE)." }
-        }
-        finally {
-            Pop-Location
-        }
-        $wipe = $false
-        Write-Host ""
-        Write-Host "Created $directory"
-        if (-not (Test-Yes (Read-Answer 'Open the editor now? The project compiles first' 'Y'))) {
-            Write-Host 'Open it later with:'
-            Write-Host "  cd $directory"
-            Write-Host '  zig build run'
-            return
-        }
-        Write-Host "Sit back and make yourself a coffee, as it'll take a while to compile."
-        Set-Location $directory
-        & (Get-ZigExe) build run
-        if ($LASTEXITCODE -ne 0) { throw "zig build run failed ($LASTEXITCODE)." }
+    Write-Egg
+    Write-Host "Install Eggy. Zig $($script:ZigVersion)."
+    while ($true) {
+        $channel = (Read-Answer 'Which build: release or nightly' 'release').ToLowerInvariant()
+        if ($channel -in @('release', 'r')) { $channel = 'release'; break }
+        if ($channel -in @('nightly', 'n')) { $channel = 'nightly'; break }
+        Write-Host 'Type release or nightly.'
     }
-    catch {
-        if ($wipe -and $directory -and (Test-Path -LiteralPath $directory)) {
-            Remove-Item -LiteralPath $directory -Recurse -Force -ErrorAction SilentlyContinue
+    while ($true) {
+        $scope = (Read-Answer 'Install for: me or everyone (admin)' 'me').ToLowerInvariant()
+        if ($scope -in @('me', 'm', 'user')) { $everyone = $false; break }
+        if ($scope -in @('everyone', 'e', 'admin', 'all')) { $everyone = $true; break }
+        Write-Host 'Type me or everyone.'
+    }
+    if ($everyone) {
+        if (-not (Test-Administrator)) {
+            Write-Error 'Installing for everyone needs an administrator PowerShell. Open one and run this again.'
+            return
         }
-        throw
+        $destination = Join-Path $env:ProgramFiles 'Eggy'
+        $programs = Join-Path $env:ProgramData 'Microsoft\Windows\Start Menu\Programs'
+        $target = [EnvironmentVariableTarget]::Machine
+    }
+    else {
+        $destination = Join-Path $env:LOCALAPPDATA 'Programs\Eggy'
+        $programs = Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs'
+        $target = [EnvironmentVariableTarget]::User
+    }
+
+    $stage = Join-Path ([IO.Path]::GetTempPath()) ('eggy-launcher-' + [guid]::NewGuid().ToString('n'))
+    New-Item -ItemType Directory -Force -Path $stage | Out-Null
+    try {
+        $archive = Join-Path $stage "eggy-$Platform.tar.gz"
+        if (-not (Get-Launcher $channel $archive)) {
+            if ($channel -eq 'nightly') {
+                Write-Error "Could not download the nightly from https://github.com/$EggyRepo/releases."
+                return
+            }
+            $reply = Read-Answer "There is no release for $Platform yet. Install the nightly instead?" 'Y'
+            if (-not (Test-Yes $reply)) { return }
+            $channel = 'nightly'
+            if (-not (Get-Launcher $channel $archive)) {
+                Write-Error "Could not download the nightly from https://github.com/$EggyRepo/releases."
+                return
+            }
+        }
+        Install-Launcher $archive $destination
     }
     finally {
-        if ($stage -and (Test-Path -LiteralPath $stage)) {
-            Remove-Item -LiteralPath $stage -Recurse -Force -ErrorAction SilentlyContinue
-        }
+        Remove-Item -LiteralPath $stage -Recurse -Force -ErrorAction SilentlyContinue
     }
+
+    $bin = Join-Path $destination 'bin'
+    $exe = Join-Path $bin 'eggy_editor.exe'
+    Add-ToPath $bin $target
+    New-StartMenuShortcut $programs $exe
+    Write-Host ''
+    Write-Host "Installed the $channel launcher in $destination"
+    Write-Host 'Open it from the Start menu, or with eggy_editor in a new terminal.'
+
+    $reply = Read-Answer 'Open Eggy now?' 'Y'
+    if (Test-Yes $reply) { Start-Process -FilePath $exe -WorkingDirectory $bin }
 }
 
 if ($env:EGGY_GET_STARTED_TEST -eq '1') {
     return
 }
-Start-EggyProject
+Install-Eggy

@@ -1,13 +1,17 @@
-# Builds the editor and runtime for Linux, Windows and macOS each night that the default branch
-# gained a commit since the last nightly that built, and keeps them as workflow artifacts (on the
-# run's page, for `retention-days`): nothing goes to GitHub Releases. Run it by hand from the
-# Actions tab to build regardless.
+# Builds Eggy's editor, the launcher (`zig build editor`: the executable with the libraries and
+# the project template and engine it unpacks for new projects), for Linux, Windows and macOS, and
+# publishes them as GitHub Release assets named `eggy-<platform>.tar.gz`, which
+# `scripts/get-started.sh` and `get-started.ps1` install. Each night that the default branch gained
+# a commit, the `nightly` prerelease is replaced with that commit's build; pushing a `v*` tag makes
+# that tag's release. Run it by hand from the Actions tab to rebuild the nightly regardless.
 name: Nightly
 
 on:
   schedule:
     - cron: '0 14 * * *' # 00:00 or 01:00 in Sydney, depending on daylight saving
   workflow_dispatch:
+  push:
+    tags: ['v*']
 
 permissions:
   contents: read
@@ -31,11 +35,11 @@ jobs:
         run: |
           set -euo pipefail
           echo "date=$(date -u +%Y-%m-%d)" >> "$GITHUB_OUTPUT"
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+          if [ "${{ github.event_name }}" != "schedule" ]; then
             echo "build=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          last=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow nightly.yml --status success --limit 1 --json headSha --jq '.[0].headSha // ""')
+          last=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow nightly.yml --event schedule --status success --limit 1 --json headSha --jq '.[0].headSha // ""')
           # A successful run that skipped building still counts: it saw that commit, unchanged.
           if [ "$last" = "$GITHUB_SHA" ]; then
             echo "No commits since the last nightly ($last)."
@@ -76,7 +80,7 @@ jobs:
           log=$(mktemp)
           for attempt in 1 2 3; do
             set +e
-            zig build all -Doptimize=safe --prefix nightly 2>&1 | tee "$log"
+            zig build editor -Doptimize=safe --prefix nightly 2>&1 | tee "$log"
             status=${PIPESTATUS[0]}
             set -e
             if [ "$status" -eq 0 ]; then exit 0; fi
@@ -90,10 +94,35 @@ jobs:
       # Artifacts drop file permissions, so the executables travel inside a tarball.
       - name: Pack
         shell: bash
-        run: tar -czf eggy-nightly-${{ matrix.platform }}.tar.gz -C nightly .
+        run: tar -czf eggy-${{ matrix.platform }}.tar.gz -C nightly .
       - uses: actions/upload-artifact@v4
         with:
-          name: eggy-nightly-${{ needs.changed.outputs.date }}-${{ matrix.platform }}-${{ github.sha }}
-          path: eggy-nightly-${{ matrix.platform }}.tar.gz
+          name: eggy-${{ matrix.platform }}
+          path: eggy-${{ matrix.platform }}.tar.gz
           if-no-files-found: error
-          retention-days: 14
+          retention-days: 3
+
+  # Releases serve their assets without a login, unlike workflow artifacts. The nightly is deleted
+  # and made again so its tag moves to the commit just built.
+  publish:
+    needs: [changed, build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if [ "$GITHUB_REF_TYPE" = "tag" ]; then
+            gh release create "$GITHUB_REF_NAME" dist/*.tar.gz --repo "$GITHUB_REPOSITORY" --verify-tag --title "Eggy $GITHUB_REF_NAME" --generate-notes
+            exit 0
+          fi
+          gh release delete nightly --repo "$GITHUB_REPOSITORY" --cleanup-tag --yes || true
+          gh release create nightly dist/*.tar.gz --repo "$GITHUB_REPOSITORY" --prerelease --target "$GITHUB_SHA" \
+            --title "Nightly ${{ needs.changed.outputs.date }}" \
+            --notes "Eggy's launcher built from $GITHUB_SHA. Install it with scripts/get-started.sh or get-started.ps1."

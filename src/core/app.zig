@@ -223,7 +223,7 @@ pub const App = struct {
 
     /// The values of `T`, a plugin's `Preferences` struct (see `eggy.preferences`): its defaults,
     /// overridden by what the user and the project set. Cheap enough to call every frame, which
-    /// follows changes made in the Preferences window as they happen.
+    /// follows changes made in the Settings window as they happen.
     /// The manifest must contain supported scalar fields with defaults. The returned value
     /// is an independent copy and does not require freeing.
     ///

@@ -5,6 +5,7 @@ const eggy = @import("eggy");
 const sdl3 = eggy.sdl_adapter.sdl;
 const ui = eggy.ui;
 const template = @import("template.zig");
+const PickedPaths = @import("../picked_paths.zig").PickedPaths;
 
 pub const Step = enum { name, location, review };
 
@@ -30,7 +31,7 @@ pub const Wizard = struct {
     problem: ?[]const u8 = null,
     /// A folder the system's picker chose; it may call back from another thread, so the next
     /// frame takes it from here.
-    picked: std.atomic.Value(?[*:0]u8) = .init(null),
+    picked: PickedPaths = .{},
     /// The project's folder, built when the wizard leaves the location step.
     dir_buffer: [1100]u8 = undefined,
     dir: []const u8 = "",
@@ -61,7 +62,7 @@ pub const Wizard = struct {
     /// wizard.deinit(); // Existing Wizard after picker callbacks have finished.
     /// ```
     pub fn deinit(self: *Wizard) void {
-        if (self.picked.swap(null, .acq_rel)) |path| std.heap.c_allocator.free(std.mem.span(path));
+        self.picked.deinit();
     }
 
     /// Draw the current step into `context`; `window` parents the folder picker.
@@ -76,10 +77,9 @@ pub const Wizard = struct {
     /// ```
     pub fn build(self: *Wizard, context: *ui.Context, window: sdl3.video.Window) Action {
         self.followTitle();
-        if (self.picked.swap(null, .acq_rel)) |path| {
-            const chosen = std.mem.span(path);
+        if (self.picked.take()) |chosen| {
+            defer PickedPaths.free(chosen);
             self.location.set(chosen[0..@min(chosen.len, 1024)]) catch {};
-            std.heap.c_allocator.free(chosen);
         }
 
         context.heading(2, "New Project");
@@ -93,16 +93,15 @@ pub const Wizard = struct {
             .name => {
                 context.label("Title", .{});
                 _ = context.textInput("Title", &self.title, "My Game");
-                context.muted("What players and the editor call it. Any text.");
                 context.label("Package name", .{});
                 _ = context.textInput("Package name", &self.name, "my_game");
-                context.muted("The Zig package and executable name: lower case, digits and _.");
+                context.muted("Lower case, digits and _.");
             },
             .location => {
                 context.label("Location", .{});
                 _ = context.textInput("Location", &self.location, "/home/you/EggyProjects");
                 if (context.button("Browse...")) {
-                    sdl3.dialog.showOpenFolder(Wizard, pickedFolder, self, window, null, false);
+                    self.picked.showFolder(window, null);
                 }
                 context.label("The project goes in {s}{c}{s}", .{ self.location.text(), std.fs.path.sep, self.name.text() });
             },
@@ -110,8 +109,6 @@ pub const Wizard = struct {
                 context.label("Title: {s}", .{self.title.text()});
                 context.label("Package: {s}", .{self.name.text()});
                 context.label("Folder: {s}", .{self.dir});
-                context.label("Eggy: the version bundled with this editor", .{});
-                context.muted("The first build compiles Eggy and fetches its dependencies, which takes a few minutes. Later projects reuse that build.");
             },
         }
         if (self.problem) |problem| context.alert("Can't continue", problem, true);
@@ -165,13 +162,6 @@ pub const Wizard = struct {
         const derived = template.packageName(&self.derived, self.title.text());
         self.derived_len = derived.len;
         self.name.set(derived) catch {};
-    }
-
-    fn pickedFolder(self: ?*Wizard, files: ?[]const [*:0]const u8, _: ?usize, failed: bool) void {
-        const chosen = files orelse return;
-        if (failed or chosen.len == 0) return;
-        const copy = std.heap.c_allocator.dupeSentinel(u8, std.mem.span(chosen[0]), 0) catch return;
-        if (self.?.picked.swap(copy.ptr, .acq_rel)) |old| std.heap.c_allocator.free(std.mem.span(old));
     }
 };
 
