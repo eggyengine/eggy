@@ -96,13 +96,13 @@ pub fn title(platform: Platform) []const u8 {
 /// A line on what a platform's export is and what it needs.
 pub fn note(platform: Platform) []const u8 {
     return switch (platform) {
-        .windows => "A folder with the game's .exe, and a ZIP of it. Zig carries what Windows needs.",
+        .windows => "A folder with the game's .exe.",
         .macos => if (builtin.os.tag == .macos)
-            "A folder with the game, and a ZIP of it, built with this Mac's SDK."
+            "A folder with the game."
         else
-            "A folder with the game, and a ZIP of it. Building from another system needs a macOS SDK.",
-        .linux => "A folder with the game, and a ZIP of it, for Linux on the architecture and C library chosen.",
-        .web => "A page and its files for a web server. Sets up emsdk if needed, or uses $EMSDK or ~/emsdk.",
+            "A folder with the game. Needs a macOS SDK from another system.",
+        .linux => "A folder with the game.",
+        .web => "A page and its files for a web server.",
     };
 }
 

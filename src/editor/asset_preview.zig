@@ -120,8 +120,6 @@ pub const AssetPreview = struct {
                         self.path.appendSlice(self.gpa, path) catch {};
                         self.images.forgetAll();
                     }
-                    context.muted("Drag it onto a folder in Assets to save it as a PNG you can edit.");
-                    page_style.smallText(context, 12);
                     self.image(context, request, arena.dupe(u8, reference.key()) catch return, height);
                 },
                 else => {},

@@ -103,8 +103,6 @@ pub const EggyUpdatePrompt = struct {
         context.end();
 
         var answer: ?Answer = null;
-        context.muted("Skipping keeps this editor for the rest of the session: it stops rebuilding on its own. Reload asks again.");
-        page_style.smallText(context, 12);
         context.begin(.row);
         if (context.buttonVariant("Skip this session", .outline)) answer = .skip;
         context.element(context.builder().node(0, .{ .grow = 1 }, .none, &.{}) catch return answer);

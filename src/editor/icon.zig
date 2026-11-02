@@ -116,7 +116,7 @@ fn blend(pixel: *[4]u8, color: [4]u8, coverage: f32) void {
 }
 
 /// How much of the pixel at `x`, `y` a `side` square with corners rounded by `radius` covers.
-fn roundedCoverage(x: f32, y: f32, side: f32, radius: f32) f32 {
+pub fn roundedCoverage(x: f32, y: f32, side: f32, radius: f32) f32 {
     const cx = std.math.clamp(x + 0.5, radius, side - radius);
     const cy = std.math.clamp(y + 0.5, radius, side - radius);
     const distance = @sqrt((x + 0.5 - cx) * (x + 0.5 - cx) + (y + 0.5 - cy) * (y + 0.5 - cy));

@@ -129,7 +129,7 @@ pub const Dock = struct {
         const entity = env.selected orelse return context.muted("Select an entity with an Animator to animate it.");
         if (!self.posed) self.readClipKeys(env, entity);
         if (self.authored_len == 0 and self.imported_len == 0) {
-            context.muted("This entity has no Animator clip. Add an Animator in the Inspector, then drop a clip on it.");
+            context.muted("No Animator clip. Drop a clip on its Animator.");
             return;
         }
 
@@ -177,12 +177,9 @@ pub const Dock = struct {
         }
         context.muted(std.fmt.allocPrint(arena, "{d:.2} / {d:.2} s", .{ self.time_s, duration }) catch "");
 
-        if (!editable) {
-            context.muted("Imported clips are read-only: scrub and play them here.");
-            return;
-        }
+        if (!editable) return;
         const editing = clip orelse {
-            context.muted("This clip can't be read; fix the file in the code editor.");
+            context.muted("This clip can't be read.");
             return;
         };
         self.buildEditor(context, env, entity, editing, key, path);

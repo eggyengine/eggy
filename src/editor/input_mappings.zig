@@ -104,11 +104,7 @@ pub const View = struct {
     /// ```
     pub fn build(self: *View, context: *ui.Context, state: *State) !void {
         const arena = context.builder().allocator;
-        if (self.source == .registered) {
-            context.heading(2, "Input mappings");
-            context.muted("Code reads named controls. Project edits are baked into shipped games.");
-            if (state.persistence == null) context.muted("No project is open: edits here are session-only.");
-        }
+        if (self.source == .registered and state.persistence == null) context.muted("No project is open: edits aren't saved.");
         if (self.last_error) |err| context.alert("Could not apply edit", @errorName(err), true);
         if (self.capture != null) context.alert("Press the input to bind", "Escape cancels.", false);
         // Dropdown text remains in the previous-frame tree when a map is replaced.
@@ -116,7 +112,7 @@ pub const View = struct {
         var maps = state.owners.valueIterator();
         for (map_labels) |*label| label.* = try arena.dupe(u8, maps.next().?.key);
         if (map_labels.len == 0) {
-            context.muted("No maps registered. Declare input_maps on your game or plugin.");
+            context.muted("No input maps. Declare input_maps on your game or a plugin.");
             return;
         }
 
@@ -184,7 +180,6 @@ pub const View = struct {
         _ = context.checkbox("Enabled at startup", &self.map_enabled);
         _ = context.textInput("Map priority", &self.priority, "Higher maps own shared inputs");
         endRow(context);
-        context.muted("Runtime switching is temporary; these defaults ship with the game.");
         context.begin(.row);
         if (context.buttonVariant(if (self.source == .asset) "Apply map settings" else "Save map defaults", .secondary)) {
             if (std.fmt.parseInt(i32, self.priority.text(), 10)) |priority| {
@@ -459,7 +454,7 @@ test "the mapping editor captures keys/controllers and lays out a scrollable vec
     defer context.deinit();
     context.density = .compact;
     context.newFrame(.{ .x = 0, .y = 0, .w = 700, .h = 700 });
-    context.beginScroll(&view.scroll, 676);
+    context.beginScroll(&view.scroll, 400);
     try view.build(&context, &state);
     context.end();
     try std.testing.expect((try context.render()).len > 0);

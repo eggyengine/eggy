@@ -174,8 +174,6 @@ pub const ModelPreview = struct {
         const side = @max(160, request.height * 0.55);
         context.element(context.builder().node(0, .{ .width = width, .height = side }, .{ .custom = .{ .context = &self.area, .draw = recordArea } }, &.{}) catch return);
         self.shown = true;
-        context.muted("Drag to turn it, scroll to zoom, double-click to look again from the start.");
-        page_style.smallText(context, 11);
 
         self.playback(context, summary, duration_s, request.time_ms);
         _ = context.tabs(&.{ std.fmt.allocPrint(context.builder().allocator, "Materials ({d})##model tab", .{summary.materials.len}) catch "Materials##model tab", "Mesh##model tab" }, &self.tab);

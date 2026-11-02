@@ -7,6 +7,7 @@
 //! project's `zig-out/export/`.
 const std = @import("std");
 const eggy = @import("eggy");
+const PickedPaths = @import("../picked_paths.zig").PickedPaths;
 const sdl3 = eggy.sdl_adapter.sdl;
 const ui = eggy.ui;
 const weeoui_sdl3 = @import("weeoui_sdl3");
@@ -50,7 +51,7 @@ pub const Result = struct {
     change: ?project_settings.Change,
     /// Whether the window stays open.
     open: bool,
-    /// Project Settings was pressed: show Preferences on its Project section.
+    /// Project Settings was pressed: show Settings on its General page.
     project_settings: bool,
 };
 
@@ -92,9 +93,8 @@ pub const ExportWindow = struct {
     /// The platforms and the one shown scroll apart.
     sidebar_scroll: ui.Layout.ScrollState = .{},
     platform_scroll: ui.Layout.ScrollState = .{},
-    /// The SDK folder chosen in the system's picker, set from its thread and taken on the
-    /// next frame (C allocator).
-    picked_sdk: std.atomic.Value(?[*:0]u8) = .init(null),
+    /// The SDK folder chosen in the system's picker, for the next frame.
+    picked_sdk: PickedPaths = .{},
 
     /// Open the window for the project in `project_dir`. On the heap, as the output view keeps a
     /// pointer to itself.
@@ -141,7 +141,7 @@ pub const ExportWindow = struct {
             self.gpa.free(change.after);
         }
         if (self.selected == .plugin) self.gpa.free(self.selected.plugin);
-        if (self.picked_sdk.swap(null, .acq_rel)) |path| std.heap.c_allocator.free(std.mem.span(path));
+        self.picked_sdk.deinit();
         self.icons.deinit();
         self.scenes_arena.deinit();
         self.terminal.deinit();
@@ -237,11 +237,10 @@ pub const ExportWindow = struct {
     fn chooseScene(self: *ExportWindow, context: *ui.Context) void {
         context.heading(3, "Which scene starts first?");
         if (self.scenes.len == 0) {
-            context.muted("The project has no scenes. Make one in the Assets panel, then export.");
+            context.muted("The project has no scenes yet.");
             if (context.buttonVariant("Close", .outline)) self.closing = true;
             return;
         }
-        context.muted("The game opens in this scene on launch. It is kept as the project's default scene, which you can change here or in Project Settings.");
         _ = context.select("Starts in", self.scene_labels, &self.scene);
         context.begin(.row);
         defer page_style.endRow(context);
@@ -256,7 +255,7 @@ pub const ExportWindow = struct {
     fn buildStartScene(self: *ExportWindow, context: *ui.Context) void {
         var rows = SettingRows{};
         setting_rows.beginGroup(context);
-        rows.begin(context, "Starts in", "The scene the game opens in: the project's default scene.");
+        rows.begin(context, "Starts in", "Kept as the project's default scene.");
         if (context.select("##start scene", self.scene_labels, &self.scene)) self.keepDefaultScene();
         rows.end(context);
         setting_rows.endGroup(context);
@@ -330,7 +329,7 @@ pub const ExportWindow = struct {
             const platform = self.selected.builtin;
             const choices = platforms.architectures(platform);
             if (choices.len > 1) {
-                rows.begin(context, "Architecture", "The processor the game runs on.");
+                rows.begin(context, "Architecture", "");
                 const labels = arena.alloc([]const u8, choices.len) catch return;
                 var index: usize = 0;
                 for (labels, choices, 0..) |*label, choice, i| {
@@ -341,7 +340,7 @@ pub const ExportWindow = struct {
                 rows.end(context);
             }
             if (platform == .linux) {
-                rows.begin(context, "C library", "glibc for most desktop Linux; musl for Alpine and other small systems.");
+                rows.begin(context, "C library", "musl for Alpine; glibc for the rest.");
                 var libc: usize = @backingInt(settings.libc);
                 if (context.select("##libc", &platforms.Libc.labels, &libc)) settings.libc = @fromBackingInt(@intCast(libc));
                 if (platforms.libcNote(settings.libc)) |why| {
@@ -351,35 +350,35 @@ pub const ExportWindow = struct {
                 rows.end(context);
             }
         } else {
-            rows.begin(context, "Target", "The Zig target the plugin builds it for, unless its settings pick another.");
+            rows.begin(context, "Target", "");
             context.text(shown.target);
             rows.end(context);
         }
 
-        rows.begin(context, "Optimize for", "Speed suits a release. Debugging keeps debug info and safety checks, and runs slower.");
+        rows.begin(context, "Optimize for", "");
         var optimize: usize = @backingInt(settings.optimize);
         if (context.select("##optimize", &platforms.Optimize.labels, &optimize)) settings.optimize = @fromBackingInt(@intCast(optimize));
         rows.end(context);
 
         if (self.selected == .builtin and platforms.buildsForThisCpu(self.selected.builtin, settings.*)) {
-            rows.begin(context, "Tune for this computer", "Faster here, but the game may not start on older processors of its kind.");
+            rows.begin(context, "Tune for this computer", "The game may not start on older processors.");
             _ = context.toggle("##this cpu", &settings.this_cpu);
             rows.end(context);
         }
         if (if (self.selected == .plugin) shown.zips else platforms.zips(self.selected.builtin)) {
-            rows.begin(context, "ZIP archive", "Also pack the game's folder into a ZIP, to hand out.");
+            rows.begin(context, "ZIP archive", "");
             _ = context.toggle("##zip", &settings.zip);
             rows.end(context);
         }
         if (self.selected == .builtin and self.selected.builtin == .macos and platforms.needs_macos_sdk) {
-            rows.begin(context, "macOS SDK", "The MacOSX.sdk folder to build with, from Xcode. On a Mac, Eggy uses its own.");
+            rows.begin(context, "macOS SDK", "From Xcode.");
             const default = platforms.defaultMacSdk(arena) orelse "";
             context.begin(.row);
             _ = context.textInput("##macos sdk", &settings.sdk, default);
             restyle(context, .{ .grow = 1 });
             if (self.folderButton(context, "Choose the macOS SDK folder")) {
                 const start_in = arena.dupeSentinel(u8, self.macSdk(arena) orelse default, 0) catch null;
-                sdl3.dialog.showOpenFolder(ExportWindow, pickedSdk, self, self.window.popout.window.window, start_in, false);
+                self.picked_sdk.showFolder(self.window.popout.window.window, start_in);
             }
             page_style.endRow(context);
             if (!self.sdkExists(self.macSdk(arena))) {
@@ -615,19 +614,10 @@ pub const ExportWindow = struct {
         return context.activated(id);
     }
 
-    /// Called on the picker's thread: keep the folder chosen for the next frame.
-    fn pickedSdk(self: ?*ExportWindow, files: ?[]const [*:0]const u8, _: ?usize, failed: bool) void {
-        const chosen = files orelse return;
-        if (failed or chosen.len == 0) return;
-        const copy = std.heap.c_allocator.dupeSentinel(u8, std.mem.span(chosen[0]), 0) catch return;
-        if (self.?.picked_sdk.swap(copy.ptr, .acq_rel)) |old| std.heap.c_allocator.free(std.mem.span(old));
-    }
-
     /// Put a folder chosen in the picker into the macOS SDK field.
     fn takePickedSdk(self: *ExportWindow) void {
-        const path = self.picked_sdk.swap(null, .acq_rel) orelse return;
-        const chosen = std.mem.span(path);
-        defer std.heap.c_allocator.free(chosen);
+        const chosen = self.picked_sdk.take() orelse return;
+        defer PickedPaths.free(chosen);
         self.settings[@backingInt(platforms.Platform.macos)].sdk.set(chosen[0..@min(chosen.len, 512)]) catch {};
         self.rememberSdk();
     }

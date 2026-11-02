@@ -292,7 +292,7 @@ pub const HotGame = struct {
     /// game.editorUi(&editor_context, context); // Existing HotGame and building UI context.
     /// ```
     pub fn editorUi(self: *HotGame, editor: *eggy.editor.Context, context: *eggy.ui.Context) void {
-        const state = self.state orelse return context.muted("The game isn't running: see the Console. It starts again when its code is rebuilt.");
+        const state = self.state orelse return context.muted("The game isn't running: see the Console.");
         self.game.editor_ui(state, editor, context);
     }
 

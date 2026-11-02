@@ -52,7 +52,7 @@ pub const Plugin = struct {
         .key = "android",
         .title = "Android",
         .target = "aarch64-linux-android.35",
-        .note = "A test-signed APK for the Android version chosen and later, on devices with Vulkan 1.3. Sets up the Android SDK, NDK and JDK if needed. Not for store release.",
+        .note = "A test-signed APK for devices with Vulkan 1.3. Not for store release.",
         .icon_png = @embedFile("icon.png"),
         .zips = false,
     }};

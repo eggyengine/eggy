@@ -1,11 +1,34 @@
-//! Opening a project's code in the code editor people chose (Edit > Preferences, Code editor):
+//! Opening a project's code in the code editor people chose (Edit > Settings, Code editor):
 //! the file and optional source position, with the project's folder as the workspace.
 const builtin = @import("builtin");
 const std = @import("std");
 const file_manager = @import("file_manager.zig");
 
 /// The code editors Eggy knows how to start, or the system's default app for the file.
-pub const Choice = enum { vscode, vscodium, cursor, zed, sublime_text, system };
+pub const Choice = enum {
+    vscode,
+    vscodium,
+    cursor,
+    zed,
+    sublime_text,
+    system,
+
+    /// The editor's name as people know it; the system's default is "your code editor".
+    ///
+    /// ```zig
+    /// const name = Choice.vscode.label(); // "VS Code"
+    /// ```
+    pub fn label(choice: Choice) []const u8 {
+        return switch (choice) {
+            .vscode => "VS Code",
+            .vscodium => "VSCodium",
+            .cursor => "Cursor",
+            .zed => "Zed",
+            .sublime_text => "Sublime Text",
+            .system => "your code editor",
+        };
+    }
+};
 
 const Position = struct { line: u32, column: u32 };
 

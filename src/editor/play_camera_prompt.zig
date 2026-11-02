@@ -90,9 +90,6 @@ pub const PlayCameraPrompt = struct {
         var answer: ?Answer = null;
         const arena = context.builder().allocator;
         context.heading(3, "Play from which camera?");
-        context.muted("The camera picked is the only one active until you press Stop.");
-        page_style.smallText(context, 12);
-        if (context.last_added) |text| text.paint_kind.text.wrap = true;
         for (self.choices, 0..) |choice, index| {
             const shown = if (self.current == index) std.fmt.allocPrint(arena, "{s} (the game's camera)##camera {d}", .{ choice.name, index }) else std.fmt.allocPrint(arena, "{s}##camera {d}", .{ choice.name, index });
             _ = context.radio(shown catch continue, &self.picked, index);

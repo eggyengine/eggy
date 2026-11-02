@@ -207,7 +207,7 @@ pub const Game = extern struct {
     export_platform_count: usize,
     export_ui: *const fn (state: *anyopaque, platform: usize, target_ptr: [*]const u8, target_len: usize, editor: *anyopaque, context: *anyopaque) callconv(.c) void,
     export_args: *const fn (state: *anyopaque, platform: usize, target_ptr: [*]const u8, target_len: usize, args: *anyopaque) callconv(.c) bool,
-    /// Each plugin's preferences, for the Preferences window.
+    /// Each plugin's preferences, for the Settings window.
     preferences: [*]const Preferences,
     preference_count: usize,
     /// The component types the game and plugins list, for the Hierarchy and Inspector, and what

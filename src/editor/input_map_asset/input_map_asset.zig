@@ -7,7 +7,6 @@ const MappingsView = @import("../input_mappings.zig").View;
 const history_zig = @import("../history.zig");
 const page_style = @import("../page_style.zig");
 const restyle = page_style.restyle;
-const beginSection = page_style.beginSection;
 const endSection = page_style.endSection;
 const endRow = page_style.endRow;
 pub const Document = @import("document.zig").Document;
@@ -45,12 +44,8 @@ pub const View = struct {
     pub fn build(self: *View, context: *ui.Context, document: *Document, path: []const u8) !Action {
         // The file: its path and state, and saving it.
         context.begin(.row);
-        context.begin(.column);
-        context.heading(3, "Input Map");
-        context.muted(try context.builder().allocator.dupe(u8, path));
-        page_style.smallText(context, 12);
-        context.end();
-        restyle(context, .{ .grow = 1, .gap = 2 });
+        context.text(try context.builder().allocator.dupe(u8, path));
+        restyle(context, .{ .grow = 1 });
         if (document.modified()) context.badge("Unsaved", .outline);
         var action: Action = .none;
         if (!self.confirm_close) {
@@ -71,15 +66,13 @@ pub const View = struct {
         }
         if (action != .none) return action;
 
-        beginSection(context, "Map");
+        context.begin(.card);
         var consume = document.state.owners.get(1).?.consume;
         if (context.checkbox("Consume overlapping lower-priority input", &consume)) document.setConsume(consume);
-        context.muted("Saved defaults load on the next Play or game reload.");
-        page_style.smallText(context, 12);
         endSection(context);
 
         // Controls: add one, then rename, retype or remove the selected one.
-        beginSection(context, "Controls");
+        context.begin(.card);
         context.begin(.row);
         _ = context.textInput("New control name", &self.new_name, "jump, move, look...");
         restyle(context, .{ .grow = 1 });
@@ -87,7 +80,7 @@ pub const View = struct {
         const add = context.buttonVariant("Add control", .outline);
         endRow(context);
         if (add) self.addControl(document);
-        if (document.state.controls.count() != 0) try self.editSelected(context, document) else context.muted("Add a control, then assign its bindings below.");
+        if (document.state.controls.count() != 0) try self.editSelected(context, document);
         endSection(context);
         try self.mappings.build(context, &document.state);
         return .none;
@@ -115,7 +108,7 @@ pub const View = struct {
         }
         context.separator();
         context.begin(.row);
-        _ = context.textInput("Selected control name", &self.control_name, "Keep the FileMap enum in step with these names");
+        _ = context.textInput("Selected control name", &self.control_name, "Name");
         restyle(context, .{ .grow = 1 });
         const rename = context.buttonVariant("Rename", .outline);
         endRow(context);
@@ -125,8 +118,6 @@ pub const View = struct {
         const retype = context.buttonVariant("Change type", .outline);
         const remove = context.buttonVariant("Remove", .destructive);
         endRow(context);
-        context.muted("Changing the type clears the control's bindings and trigger.");
-        page_style.smallText(context, 12);
         const edited = if (rename)
             document.renameControl(index, self.control_name.text())
         else if (retype)

@@ -66,7 +66,6 @@ pub const Panel = struct {
             try std.fmt.allocPrint(arena, "worked on {s}", .{input.title});
         context.muted(worked_on);
         context.element(try clutch.element(b, summary.days, work.today, width));
-        context.muted(try std.fmt.allocPrint(arena, "The last {d} weeks, a dot for each day: the bigger the dot, the longer the day.", .{clutch.weeksIn(width)}));
 
         try space(context);
         try row(context, "You", try total(arena, work.mine.worked_ms));

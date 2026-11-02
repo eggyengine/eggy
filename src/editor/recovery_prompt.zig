@@ -78,9 +78,6 @@ pub const RecoveryPrompt = struct {
         var answer: ?Answer = null;
         context.text(self.question_buffer[0..self.question_len]);
         if (context.last_added) |text| text.paint_kind.text.wrap = true;
-        context.muted("Restoring replaces the scene in the editor; Undo takes it back. Nothing is saved until you save.");
-        page_style.smallText(context, 12);
-        if (context.last_added) |text| text.paint_kind.text.wrap = true;
         context.begin(.row);
         if (context.buttonVariant("Discard", .outline)) answer = .discard;
         context.element(context.builder().node(0, .{ .grow = 1 }, .none, &.{}) catch return answer);

@@ -145,7 +145,7 @@ pub const Designer = struct {
         }
 
         const document = if (self.document) |*open_one| open_one else {
-            context.muted("Double-click a UI scene in Assets, or make one with New > UI Scene. Show it over the game with a UiScreen component, or in the world with a UiBillboard.");
+            context.muted("Double-click a UI scene in Assets to open it.");
             if (context.last_added) |text| text.paint_kind.text.wrap = true;
             return;
         };
@@ -177,7 +177,7 @@ pub const Designer = struct {
     /// The UI Properties panel; `dragging` is what is being dragged from another panel.
     pub fn buildProperties(self: *Designer, context: *ui.Context, env: Env, dragging: ?Dragged) void {
         const document = if (self.document) |*open_one| open_one else {
-            context.muted("Open a UI scene to see its nodes' properties.");
+            context.muted("No UI scene is open.");
             page_style.smallText(context, 13);
             return;
         };
