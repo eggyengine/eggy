@@ -158,6 +158,30 @@ pub fn parse(gpa: std.mem.Allocator, output: []const u8, messages: *std.ArrayLis
     }
 }
 
+/// The build's errors and warnings with their notes and traces, one blank line between each,
+/// for pasting elsewhere; every message `parse` keeps when there is none. Owned by `gpa`.
+///
+/// ```zig
+/// const text = try problems(gpa, output);
+/// defer gpa.free(text);
+/// ```
+pub fn problems(gpa: std.mem.Allocator, output: []const u8) ![]u8 {
+    var messages: std.ArrayList(Message) = .empty;
+    defer messages.deinit(gpa);
+    try parse(gpa, output, &messages);
+    var any_problem = false;
+    for (messages.items) |message| any_problem = any_problem or message.level == .err or message.level == .warn;
+
+    var text: std.ArrayList(u8) = .empty;
+    errdefer text.deinit(gpa);
+    for (messages.items) |message| {
+        if (any_problem and message.level != .err and message.level != .warn) continue;
+        if (text.items.len != 0) try text.appendSlice(gpa, if (any_problem) "\n\n" else "\n");
+        try text.appendSlice(gpa, std.mem.trimEnd(u8, output[message.start..message.end], "\r\n"));
+    }
+    return text.toOwnedSlice(gpa);
+}
+
 /// Log a completed build. If it failed without a recognised error, retain its full output
 /// under one error instead of filtering away the only explanation.
 /// Editor-only: borrows output/project path, emits Console log entries and adds hook-signature
@@ -281,6 +305,31 @@ test "compiler context belongs to one error without build commands or summaries"
     try std.testing.expect(std.mem.endsWith(u8, text, "to see all references"));
     try std.testing.expect(std.mem.indexOf(u8, text, "note: function declared here") != null);
     try std.testing.expect(std.mem.indexOf(u8, text, "Build Summary:") == null);
+}
+
+test "problems keep errors and their context, not the runner's steps or failed command" {
+    const output =
+        \\$ zig build editor --summary none
+        \\editor
+        \\+- compile exe game debug native 2 errors
+        \\src/a.zig:1:2: error: first
+        \\    broken();
+        \\referenced by:
+        \\    init: src/main.zig:3:4
+        \\src/b.zig:5:6: error: second
+        \\error: the following command failed with 2 compilation errors:
+        \\/opt/zig/zig build-exe -ODebug -Mroot=src/main.zig --cache-dir .zig-cache
+    ;
+    const text = try problems(std.testing.allocator, output);
+    defer std.testing.allocator.free(text);
+    try std.testing.expectEqualStrings(
+        \\src/a.zig:1:2: error: first
+        \\    broken();
+        \\referenced by:
+        \\    init: src/main.zig:3:4
+        \\
+        \\src/b.zig:5:6: error: second
+    , text);
 }
 
 test "multiple errors, warnings and unknown output remain separate" {
