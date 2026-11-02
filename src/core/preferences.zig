@@ -1,5 +1,5 @@
 //! Preferences: settings a plugin (or the editor) declares as a struct of defaults, which people
-//! change in the editor's Preferences window and which are kept as ZON. Values come in layers,
+//! change in the editor's Settings window and which are kept as ZON. Values come in layers,
 //! each overriding the one below: the struct's defaults, the user's global preferences (the
 //! editor's own only), then the project's (`.eggy/`). A plugin's are the project's, which the
 //! runtime gets baked in when the game is built.
@@ -8,8 +8,10 @@
 //!         volume: f32 = 0.8,
 //!         show_gizmos: bool = true,
 //!         difficulty: enum { easy, normal, hard } = .normal,
-//!         // Optional: a line under each field in the Preferences window.
+//!         // Optional: a line under each field in the Settings window.
 //!         pub const descriptions = .{ .volume = "How loud the game is, 0 to 1." };
+//!         // Optional: which fields share a card there, in order; unlisted ones come last.
+//!         pub const groups = .{ .{ "volume", "difficulty" }, .{"show_gizmos"} };
 //!     };
 //!
 //!     const prefs = app.preferences(Preferences);
@@ -18,10 +20,10 @@
 const std = @import("std");
 const zon_file = @import("eggy_assets").zon;
 
-/// A field's kind, as the Preferences window edits it.
+/// A field's kind, as the Settings window edits it.
 pub const Kind = enum(u8) { bool, int, float, @"enum" };
 
-/// What the Preferences window needs to show and edit one field.
+/// What the Settings window needs to show and edit one field.
 pub const Field = struct {
     name: [:0]const u8,
     kind: Kind,
@@ -30,6 +32,8 @@ pub const Field = struct {
     /// An enum's values, in order; empty otherwise.
     options: []const [:0]const u8 = &.{},
     description: [:0]const u8 = "",
+    /// Which card it shares in the Settings window: its index in the struct's `groups`.
+    group: u8 = 0,
 };
 
 /// The preferences a plugin declares: its key and fields. The key names whose they are, and their
@@ -85,9 +89,20 @@ fn fieldsOf(comptime T: type) []const Field {
         if (@hasDecl(T, "descriptions") and @hasField(@TypeOf(T.descriptions), name)) {
             field.description = @field(T.descriptions, name);
         }
+        field.group = groupOf(T, name);
     }
     const frozen = fields;
     return &frozen;
+}
+
+/// The index of the group in `T.groups` that lists `name`; one past the last for a field none
+/// lists, and 0 when `T` declares no groups.
+fn groupOf(comptime T: type, comptime name: []const u8) u8 {
+    if (!@hasDecl(T, "groups")) return 0;
+    inline for (T.groups, 0..) |group, index| {
+        inline for (group) |member| if (comptime std.mem.eql(u8, member, name)) return index;
+    }
+    return T.groups.len;
 }
 
 /// One file's values: field name to its ZON literal.
@@ -287,6 +302,20 @@ test "a manifest lists each field with its kind, default and description" {
     try std.testing.expectEqualStrings("How loud.", m.fields[0].description);
     try std.testing.expectEqualStrings(".normal", m.fields[2].default);
     try std.testing.expectEqualStrings("hard", m.fields[2].options[2]);
+}
+
+test "fields are grouped as the struct's groups list them, unlisted ones last" {
+    const Grouped = struct {
+        volume: f32 = 0.8,
+        muted: bool = false,
+        difficulty: enum { easy, hard } = .easy,
+        pub const groups = .{ .{"difficulty"}, .{ "volume", "muted" } };
+    };
+    const m = manifest(Grouped, "grouped");
+    try std.testing.expectEqual(@as(u8, 1), m.fields[0].group);
+    try std.testing.expectEqual(@as(u8, 1), m.fields[1].group);
+    try std.testing.expectEqual(@as(u8, 0), m.fields[2].group);
+    try std.testing.expectEqual(@as(u8, 0), manifest(Example, "example").fields[0].group);
 }
 
 test "project values override global ones, which override defaults, and bad ones are skipped" {

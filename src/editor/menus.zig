@@ -172,7 +172,7 @@ pub const Menubar = struct {
             .{ .id = @backingInt(Command.undo), .label = "Undo", .shortcut = "Ctrl+Z" },
             .{ .id = @backingInt(Command.redo), .label = "Redo", .shortcut = "Ctrl+Shift+Z" },
             .{ .kind = .separator },
-            .{ .id = @backingInt(Command.preferences), .label = "Preferences..." },
+            .{ .id = @backingInt(Command.preferences), .label = "Settings..." },
             .{ .id = @backingInt(Command.plugins), .label = "Plugins...", .disabled = !project.open },
         };
         const help_items = [_]widgets.MenuItem{

@@ -118,7 +118,7 @@ file from a page opened straight from disk. The host must serve it over HTTPS (o
 
 For Android, pick the **Android version**: the oldest Android the game runs on, from
 Android 13 (API 33) to Android 16 (API 36), Android 15 (API 35) unless you set another in
-Edit > Preferences under Android. The number after `android.` in `-Dtarget` is the same API
+Edit > Settings under Android. The number after `android.` in `-Dtarget` is the same API
 level. Pick ARM64 for phones and tablets, or x86-64 for emulators.
 
 Android games show in landscape, either way round. To show yours upright instead, or whichever

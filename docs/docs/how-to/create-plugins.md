@@ -109,8 +109,10 @@ pub const Plugin = struct {
         show_gizmos: bool = true,
         difficulty: enum { easy, normal, hard } = .normal,
 
-        // Optional: a line under each field in the Preferences window.
+        // Optional: a line under each field in the Settings window.
         pub const descriptions = .{ .volume = "How loud the game is, 0 to 1." };
+        // Optional: which fields share a card; fields no group lists come last.
+        pub const groups = .{ .{ "volume", "difficulty" }, .{"show_gizmos"} };
     };
 
     pub fn update(self: *Plugin, app: *eggy.App) !void {
@@ -121,7 +123,9 @@ pub const Plugin = struct {
 ```
 
 Replace `{ ... }` with your implementation and mark unused hook parameters with `_`.
-Fields may be bools, integers, floats, or enums. Edit > Preferences shows the controls.
+Fields may be bools, integers, floats, or enums. Edit > Settings shows the controls: a
+switch, a number field (a name ending in `_seconds` or `_ms` shows that unit), and for an
+enum, its choices side by side when there are four or fewer.
 Read settings where you use them to follow changes; values cached in `init` are refreshed
 only when the instance restarts.
 
@@ -256,7 +260,7 @@ build each installed plugin's module from it.
 ## Verify
 
 Build and open the project's editor with `zig build run`. Check that the plugin appears
-in Preferences > Plugins and that its declared components and settings appear in the
+in Settings > Plugins and that its declared components and settings appear in the
 Inspector and Preferences. Press Play to run gameplay initialization and systems;
 entities spawned by `init` are gameplay entities, not saved scene content.
 

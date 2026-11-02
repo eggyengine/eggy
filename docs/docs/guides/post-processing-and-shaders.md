@@ -67,7 +67,7 @@ sees the scene's real light values.
 
 :::tip Code editors
 When the editor opens your project it writes Eggy's shader library to `.eggy/shaders/eggy.slang`.
-With VS Code, VSCodium or Cursor as your code editor (Edit > Preferences), it also adds that
+With VS Code, VSCodium or Cursor as your code editor (Edit > Settings), it also adds that
 folder to `.vscode/settings.json`, so the Slang extension finds `#include "eggy.slang"` and
 completes `PostInput` and the rest. In another editor, add `.eggy/shaders` (as an absolute
 path) to its Slang language server's include paths.

@@ -74,7 +74,7 @@ control. In editor Play, Eggy confines captured movement to the Scene's rendered
 updates its bounds as the layout changes, and keeps it out of the editor's controls.
 Relative movement continues even at the viewport's edge; it does not hover game UI.
 Stopping Play, losing focus, or hiding the viewport releases capture. Escape stops
-Play or Simulate immediately by default; change **Stop play key** in Edit > Preferences
+Play or Simulate immediately by default; change **Stop play key** in Edit > Settings
 if the game needs Escape itself.
 
 ## Visibility and drag capture

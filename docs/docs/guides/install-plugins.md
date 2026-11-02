@@ -47,12 +47,12 @@ Edit > Undo takes an update back.
 
 Plugins installed from a folder on your computer are never updated for you: that folder is
 yours to change. Plugins made by Eggy update when you upgrade Eggy (File > Upgrade Editor).
-To stop the checks, turn off **Update plugins** in Edit > Preferences.
+To stop the checks, turn off **Update plugins** in Edit > Settings.
 
 ## Turn it off, or uninstall it
 
 **Disable** turns an installed plugin off without removing anything: the game runs
-without it until you press **Enable**. Preferences > Plugins has the same switch.
+without it until you press **Enable**. Settings > Plugins has the same switch.
 
 Once a plugin is off, **Uninstall** appears beside it. Uninstalling takes the plugin out of
 your `eggy.zon` and its package out of your `build.zig.zon`, then rebuilds the game. When

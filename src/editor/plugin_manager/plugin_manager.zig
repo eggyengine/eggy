@@ -2,7 +2,7 @@
 //! other fetched by its `eggy.zon`'s address or path (or dropped on the editor). Opening one shows
 //! its read-me, then Install (or Update) adds it to the project's `eggy.zon`, which `addGame`
 //! builds the game with. An installed plugin can be turned off and on (its switch, as in
-//! Preferences > Plugins), and once off, uninstalled: taken out of `eggy.zon`, with its package
+//! Settings > Plugins), and once off, uninstalled: taken out of `eggy.zon`, with its package
 //! out of `build.zig.zon` unless another installed plugin comes from it. Each is a step to undo.
 const std = @import("std");
 const eggy = @import("eggy");
@@ -255,17 +255,10 @@ pub const PluginsWindow = struct {
         context.element(row);
     }
 
-    fn header(context: *ui.Context, title: []const u8, subtitle: []const u8) void {
-        context.heading(3, title);
-        context.muted(subtitle);
-        smallText(context, 12);
-    }
-
     fn buildInstalled(self: *PluginsWindow, context: *ui.Context) void {
-        header(context, "Installed", "The plugins this project installed here, which its game is built with. Plugins its build.zig adds aren't listed. Turn one off to uninstall it.");
         if (self.problem.items.len > 0) context.alert("Couldn't uninstall the plugin", self.problem.items, true);
         if (self.installed.len == 0) {
-            context.muted("None yet. Find one in Made by Eggy, or fetch one From an Address.");
+            context.muted("No plugins installed yet.");
             return;
         }
         const arena = context.builder().allocator;
@@ -287,7 +280,6 @@ pub const PluginsWindow = struct {
     }
 
     fn buildBuiltins(self: *PluginsWindow, context: *ui.Context) void {
-        header(context, "Made by Eggy", "Plugins that ship inside Eggy. None is on until you install it.");
         const arena = context.builder().allocator;
         for (self.builtins) |fetched| {
             const manifest = fetched.manifest;
@@ -300,7 +292,8 @@ pub const PluginsWindow = struct {
     }
 
     fn buildAddress(self: *PluginsWindow, context: *ui.Context) void {
-        header(context, "From an Address", "Fetch a plugin by its eggy.zon: an address (a GitHub page of its folder works too) or a path. You can also drop a plugin's eggy.zon on the editor.");
+        context.muted("A plugin's eggy.zon, by address or path. You can also drop one on the editor.");
+        smallText(context, 12);
         context.begin(.row);
         _ = context.textInput("##location", &self.location, "https://raw.githubusercontent.com/me/plugins/main/stats/eggy.zon");
         restyle(context, .{ .grow = 1 });
@@ -587,6 +580,20 @@ pub const PluginsWindow = struct {
         self.builtins = &.{};
     }
 };
+
+/// The manifest of the plugin inside Eggy published as `module`, read into `arena`; null when
+/// none is (a plugin from elsewhere) or its manifest is broken.
+///
+/// ```zig
+/// const manifest = plugin_manager.builtinManifest(arena, "eggy_git"); // .title "Git", ...
+/// ```
+pub fn builtinManifest(arena: std.mem.Allocator, module: []const u8) ?Manifest {
+    for (@import("eggy_builtin_plugins").all) |plugin| {
+        const manifest = eggy.plugin_manifest.parse(arena, plugin.manifest) catch continue;
+        if (std.mem.eql(u8, manifest.module, module)) return manifest;
+    }
+    return null;
+}
 
 /// A small badge, as wide as its text.
 fn badge(context: *ui.Context, text: []const u8, variant: anytype) void {

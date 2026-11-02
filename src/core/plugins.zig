@@ -52,7 +52,7 @@
 //!     pub const console_commands = [_]eggy.dev_console.Command{.{ .name = "god", .help = "Never take damage" }};
 //!     pub fn consoleCommand(self: *Self, command: usize, app: *eggy.App, call: *eggy.dev_console.Call) !void
 //!
-//! A plugin can declare preferences, which people set in the editor's Preferences window, kept in
+//! A plugin can declare preferences, which people set in the editor's Settings window, kept in
 //! the project's `.eggy/` folder and baked into the runtime (see `preferences.zig`):
 //!
 //!     pub const Preferences = struct { volume: f32 = 0.8, show_gizmos: bool = true };
@@ -845,7 +845,7 @@ pub fn Set(comptime types: anytype, comptime keys: []const [:0]const u8) type {
             inline for (list, 0..) |T, i| if (@hasDecl(T, "editor_panels")) {
                 const count = T.editor_panels.len;
                 if (panel >= first and panel < first + count) {
-                    if (!self.enabled[i]) return context.muted("This plugin is turned off, in Preferences > Plugins.");
+                    if (!self.enabled[i]) return context.muted("This plugin is turned off, in Settings > Plugins.");
                     if (@hasDecl(T, "editorPanelUi")) try self.instances[i].editorPanelUi(panel - first, editor, context);
                     return;
                 }
@@ -1044,7 +1044,7 @@ pub fn Set(comptime types: anytype, comptime keys: []const [:0]const u8) type {
                 const count = if (@hasDecl(T, "export_platforms")) T.export_platforms.len else 0;
                 const seen = exportTarget(platform, first, count, target);
                 if (!self.enabled[i]) {
-                    if (seen.own != null) context.muted("This plugin is turned off, in Preferences > Plugins.");
+                    if (seen.own != null) context.muted("This plugin is turned off, in Settings > Plugins.");
                 } else if (@hasDecl(T, "exportUi")) try self.instances[i].exportUi(seen, editor, context);
                 first += count;
             }

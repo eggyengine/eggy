@@ -9,7 +9,7 @@ filtering and shadows. There are three places to set them, and each is saved on 
 | Where | Who | Saved in |
 | --- | --- | --- |
 | **File > Project Settings > Graphics** | You, as the game's shipped defaults | `eggy.zon`, under `.graphics` |
-| **Edit > Preferences...**, Graphics section | You, for the editor's own Scene view | Your Eggy data folder |
+| **Edit > Settings...**, Graphics section | You, for the editor's own Scene view | Your Eggy data folder |
 | The in-game **Graphics** menu | Your players | The game's user-data folder |
 
 A player's saved choices win over the shipped defaults. Nothing else touches them, so
@@ -70,7 +70,7 @@ Settings you leave out keep their defaults.
 
 ## Change the editor's own settings
 
-The **Graphics** section of **Edit > Preferences...** has the same options for the editor, kept in your Eggy
+The **Graphics** section of **Edit > Settings...** has the same options for the editor, kept in your Eggy
 data folder and separate from every project. **Apply** saves and uses them, **Restore
 defaults** loads the project's shipped values into the form, and **Revert** drops edits you
 haven't applied. If a saved choice can't be used when the editor starts, a message says so.

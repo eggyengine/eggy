@@ -2,7 +2,7 @@
 //! folder) and a project's `.eggy/` folder, which overrides it, as `preferences.zon`. Each
 //! plugin's are the project's only, in `.eggy/plugins/<key>.zon`; `.eggy/plugins.zon`, which the
 //! editor keeps up to date, lists the plugins the project has and the preferences each declares.
-//! `window.zig` is the Preferences window that edits them.
+//! `window.zig` is the Settings window that edits them.
 const std = @import("std");
 const eggy = @import("eggy");
 const prefs = eggy.preferences;
@@ -13,30 +13,39 @@ pub const PreferencesWindow = @import("window.zig").PreferencesWindow;
 pub const Section = @import("window.zig").Section;
 pub const Plugin = @import("window.zig").Plugin;
 pub const Switch = @import("window.zig").Switch;
+pub const Action = @import("window.zig").Action;
+pub const Opening = @import("window.zig").Opening;
 
 /// The editor's own preferences.
 pub const Editor = struct {
     theme: enum { system, light, dark } = .system,
-    rebuild_on_focus: bool = true,
-    show_debug_logs: bool = false,
     assets_view: enum { list, grid } = .list,
-    autosave_seconds: u32 = 60,
     code_editor: @import("../code_editor.zig").Choice = .vscode,
+    autosave_seconds: u32 = 60,
+    rebuild_on_focus: bool = true,
+    update_plugins: bool = true,
     stop_play_key: eggy.Key = .escape,
     /// In `std.log.Level`'s order.
     log_level: enum { err, warn, info, debug } = .info,
-    update_plugins: bool = true,
+    show_debug_logs: bool = false,
+
+    /// The Settings window's cards: how it looks, how it works, Play, and logging.
+    pub const groups = .{
+        .{ "theme", "assets_view", "code_editor" },
+        .{ "autosave_seconds", "rebuild_on_focus", "update_plugins" },
+        .{"stop_play_key"},
+        .{ "log_level", "show_debug_logs" },
+    };
 
     pub const descriptions = .{
-        .code_editor = "What double-clicking a code or text file in Assets opens it in. System uses the app your desktop opens it with.",
-        .autosave_seconds = "How often the open scene saves itself while it has changes, in seconds. 0 turns it off.",
-        .assets_view = "Whether the Assets panel shows files as a tree or as a grid of icons. Its buttons set it too.",
-        .theme = "The editor's colours. System follows the desktop's light or dark setting.",
-        .rebuild_on_focus = "Rebuild the project when you come back to the editor after changing its code.",
-        .update_plugins = "Check for newer versions of the project's plugins when it opens and every hour, and ask before installing each. Each update can be undone. Plugins inside Eggy update with Eggy.",
-        .show_debug_logs = "Show debug messages in the Console when the editor starts.",
-        .log_level = "The quietest messages printed to the terminal and written to the log file, in Eggy's data folder under logs. The Console keeps every message. --log-level=<level> overrides it.",
-        .stop_play_key = "Press this key once to stop Play or Simulate and release the mouse. Click the binding to choose another key.",
+        .code_editor = "What opens code files from Assets.",
+        .autosave_seconds = "0 turns it off.",
+        .theme = "System follows your desktop.",
+        .rebuild_on_focus = "When you come back after changing the project's code.",
+        .update_plugins = "Asks before installing each update.",
+        .show_debug_logs = "In the Console, from the start.",
+        .log_level = "For the terminal and log file. The Console keeps every message.",
+        .stop_play_key = "Stops Play or Simulate and frees the mouse.",
     };
 };
 
@@ -208,7 +217,7 @@ pub fn writeRegistry(gpa: std.mem.Allocator, folders: Folders, keys: []const [:0
 }
 
 fn formatRegistry(writer: *std.Io.Writer, keys: []const [:0]const u8, manifests: []const prefs.Manifest, off: []const []const u8) !void {
-    try writer.writeAll("// Kept up to date by the Eggy editor: the plugins this project has, whether each is on\n// (Preferences > Plugins), and the preferences each declares (set them in plugins/<plugin>.zon,\n// or in the editor). The game is built with the plugins that are off left out.\n.{\n    .plugins = .{\n");
+    try writer.writeAll("// Kept up to date by the Eggy editor: the plugins this project has, whether each is on\n// (Settings > Plugins), and the preferences each declares (set them in plugins/<plugin>.zon,\n// or in the editor). The game is built with the plugins that are off left out.\n.{\n    .plugins = .{\n");
     for (keys) |key| {
         const on = for (off) |off_key| {
             if (std.mem.eql(u8, off_key, key)) break false;
@@ -247,9 +256,11 @@ test "the registry lists each plugin, whether it is on, and its preferences" {
 test "the editor's preferences have a manifest" {
     try std.testing.expectEqual(@as(usize, 9), editor_manifest.fields.len);
     try std.testing.expectEqualStrings("system", editor_manifest.fields[0].options[0]);
-    try std.testing.expectEqualStrings("vscode", editor_manifest.fields[5].default[1..]);
+    try std.testing.expectEqualStrings("vscode", editor_manifest.fields[2].default[1..]);
     try std.testing.expectEqualStrings(".escape", editor_manifest.fields[6].default);
     try std.testing.expectEqualStrings(".info", editor_manifest.fields[7].default);
+    // The struct's groups put them in cards: logging last.
+    try std.testing.expectEqual(@as(u8, 3), editor_manifest.fields[8].group);
 }
 
 test "the stop key defaults to Escape and follows preference scopes" {

@@ -50,7 +50,7 @@ See [Create reusable plugins](../how-to/create-plugins.md#using-plugins).
 | `plugins` | Empty | Plugins installed from Edit > Plugins, which the game is built with |
 | `plugin` | `null` | This folder's plugin, for others to install; see [Share the plugin](../how-to/create-plugins.md#share-the-plugin) |
 
-File > Project Settings opens the Project section of Edit > Preferences and edits
+File > Project Settings opens the General page of Edit > Settings and edits
 this file, including the startup scene, the icon and the graphics defaults.
 
 ### Installed plugins

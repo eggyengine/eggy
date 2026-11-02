@@ -1,42 +1,39 @@
-//! The Preferences window's Project section: the open project's `eggy.zon`: its title, version
-//! and icon (shown, and as the editor's badged egg), which way up phones show the game, the scene the built game starts in (the default scene, which exports start in unless
-//! told otherwise), and what the game's executable says about itself (company, description,
-//! copyright and any more of the project's own, by name), and the graphics the game starts with
-//! (which players can change in the game). Every change is written as it is made, and handed back
-//! to the editor as a step to undo.
+//! Settings' pages for the open project's `eggy.zon`: General (its title, icon, version, package
+//! name, first scene, which way up phones show the game, the dev console, and what the game's
+//! executable says about itself) and the graphics the game ships with, which players can change
+//! in the game. Every change is written as it is made, and handed back to the editor as a step
+//! to undo.
 const std = @import("std");
 const eggy = @import("eggy");
 const ui = eggy.ui;
 const listing = @import("assets/listing.zig");
-const icon = @import("icon.zig");
 const page_style = @import("page_style.zig");
 const restyle = page_style.restyle;
-const smallText = page_style.smallText;
 const setting_rows = eggy.setting_rows;
 const SettingRows = setting_rows.SettingRows;
 
 const render_settings = eggy.render_settings;
 const ShortEdit = ui.TextEdit(64);
-const ImageFrame = @typeInfo(@FieldType(ui.Image, "frames")).pointer.child;
-/// How big the icon previews are drawn.
-const preview_px: f32 = 56;
+/// How big the icon's preview is drawn beside its choice.
+const icon_px: f32 = 32;
 const LongEdit = ui.TextEdit(256);
 /// The most entries of the project's own it holds.
 const max_extra = 32;
 /// The Orientation choices, in `eggy.project.Orientation`'s order.
-const orientations = [_][]const u8{ "Landscape", "Portrait", "Either way" };
+const orientations = [_][]const u8{ "Landscape", "Portrait", "Any" };
 
 /// `eggy.zon` changed from `before` to `after` (both its text, owned by `gpa`).
 pub const Change = struct { before: []u8, after: []u8 };
 
-/// The form for one project's `eggy.zon`. On the heap while the Preferences window shows it, as
+/// The form for one project's `eggy.zon`. On the heap while the Settings window shows it, as
 /// its fields' text lives here.
 pub const ProjectSettings = struct {
     gpa: std.mem.Allocator,
     /// The project's folder, owned.
     project_dir: []u8,
-    /// What doesn't change here: the package name (in `name_arena`).
+    /// What doesn't change here: the package name and the installed plugins (in `name_arena`).
     name: []const u8 = "",
+    plugins: []const eggy.plugin_manifest.Installed = &.{},
     name_arena: std.heap.ArenaAllocator,
     /// `eggy.zon` as last written or read, owned.
     written: []u8 = &.{},
@@ -53,12 +50,10 @@ pub const ProjectSettings = struct {
     /// The project's images, "None" first (in `scenes_arena`), and which is the icon.
     icons: []const []const u8 = &.{},
     icon: usize = 0,
-    /// The chosen icon and the editor's egg badged with it, as last loaded (for `preview_for`,
-    /// an index into `icons`) into the window's font; null where it didn't load.
+    /// The chosen icon, as last loaded (for `preview_for`, an index into `icons`) into the
+    /// window's font; null where it didn't load.
     preview_for: ?usize = null,
     preview: ?ui.Image = null,
-    badge_frame: [1]ImageFrame = undefined,
-    badge_preview: ?ui.Image = null,
     /// The graphics the game starts with, as the form edits them; `saved_graphics` is what the
     /// file has (the last valid choice, while a number field is half typed).
     graphics: eggy.graphics_settings.Form = .{},
@@ -130,6 +125,7 @@ pub const ProjectSettings = struct {
         const text = try project.readFileAllocOptions(io, eggy.project.file_name, arena, .limited(1 << 20), .of(u8), 0);
         const config = try eggy.project.parse(arena, text);
         self.name = config.name;
+        self.plugins = config.plugins;
         self.graphics.load(config.graphics);
         self.saved_graphics = config.graphics;
         self.dev_console = config.dev_console;
@@ -174,119 +170,135 @@ pub const ProjectSettings = struct {
         self.preview_for = null;
     }
 
-    /// The section's settings, in groups of rows (`eggy.setting_rows`): the game, its starting
-    /// graphics, and its executable.
+    /// The General page: what the game is called and how it starts, how phones show it, and
+    /// what its executable says about itself, in cards of rows (`eggy.setting_rows`). Rows
+    /// whose words don't have `query` in them are left out.
     /// Builds in an active editor UI frame, mutating draft fields only; call `save` afterward
     /// to persist and obtain undo text. Frame elements borrow the form through rendering.
     ///
     /// ```zig
-    /// settings.build(context);
+    /// settings.build(context, "");
     /// if (try settings.save()) |change|
     ///     history.recordProjectSettings(change.before, change.after, now_ms);
     /// ```
-    pub fn build(self: *ProjectSettings, context: *ui.Context) void {
-        var general = SettingRows{};
-        setting_rows.beginGroup(context);
-        general.begin(context, "Title", "What players see in the window's title, and the executable's name for itself.");
-        _ = context.textInput("##title", &self.title, "My Game");
-        general.end(context);
-        general.begin(context, "Version", "The game's version, shown in its executable.");
-        _ = context.textInput("##version", &self.version, "0.0.1");
-        general.end(context);
-        general.begin(context, "Default scene", "Where the built game starts, and exports unless you pick another.");
-        _ = context.select("##default scene", self.scenes, &self.scene);
-        general.end(context);
-        general.begin(context, "Icon", "An image of the project's. The editor's egg wears it in its corner.");
-        _ = context.select("##icon", self.icons, &self.icon);
-        general.end(context);
-        if (self.icon != 0) self.iconPreviews(context);
-        general.begin(context, "Orientation", "Which way up phones and tablets show the game. Desktop windows aren't affected.");
-        _ = context.select("##orientation", &orientations, &self.orientation);
-        general.end(context);
-        general.begin(context, "Dev console", "Opens a console over the game with `, in Play and the built game.");
-        _ = context.toggle("##dev console", &self.dev_console);
-        general.end(context);
-        setting_rows.endGroup(context);
+    pub fn build(self: *ProjectSettings, context: *ui.Context, query: []const u8) void {
+        var cards = Cards{ .context = context, .query = query };
+        if (cards.row(0, texts.icon)) {
+            context.begin(.row);
+            if (self.icon != 0) {
+                if (self.preview_for != self.icon) self.loadPreview(context.font);
+                if (self.preview) |*image| context.image(image, icon_px);
+            }
+            _ = context.select("##icon", self.icons, &self.icon);
+            restyle(context, .{ .grow = 1 });
+            context.end();
+            restyle(context, .{ .direction = .row, .gap = 10, .align_items = .center, .width = SettingRows.control_width });
+            cards.end();
+        }
+        if (cards.row(0, texts.title)) {
+            _ = context.textInput("##title", &self.title, "My Game");
+            cards.end();
+        }
+        if (cards.row(0, texts.package)) {
+            context.muted(self.name);
+            cards.end();
+        }
+        if (cards.row(0, texts.version)) {
+            _ = context.textInput("##version", &self.version, "0.0.1");
+            cards.end();
+        }
+        if (cards.row(0, texts.scene)) {
+            _ = context.select("##default scene", self.scenes, &self.scene);
+            cards.end();
+        }
 
-        groupHeading(context, "Graphics", "What the game starts with. Players can change these in the game.");
-        setting_rows.beginGroup(context);
-        _ = self.graphics.build(context, .{ .caps = &self.caps, .adapter = false });
-        setting_rows.endGroup(context);
-        self.graphics.notice(context);
+        if (cards.row(1, texts.orientation)) {
+            _ = context.tabs(&orientations, &self.orientation);
+            cards.end();
+        }
+        if (cards.row(1, texts.dev_console)) {
+            _ = context.toggle("##dev console", &self.dev_console);
+            cards.end();
+        }
 
-        groupHeading(context, "Executable", "What the game's executable says about itself: on Windows, in its Properties.");
-        var executable = SettingRows{};
-        setting_rows.beginGroup(context);
-        executable.begin(context, "Company", "");
-        _ = context.textInput("##company", &self.company, "");
-        executable.end(context);
-        executable.begin(context, "Description", "");
-        _ = context.textInput("##description", &self.description, "");
-        executable.end(context);
-        executable.begin(context, "Copyright", "");
-        _ = context.textInput("##copyright", &self.copyright, "");
-        executable.end(context);
+        if (cards.row(2, texts.company)) {
+            _ = context.textInput("##company", &self.company, "Your studio's name");
+            cards.end();
+        }
+        if (cards.row(2, texts.description)) {
+            _ = context.textInput("##description", &self.description, "");
+            cards.end();
+        }
+        if (cards.row(2, texts.copyright)) {
+            _ = context.textInput("##copyright", &self.copyright, "");
+            cards.end();
+        }
+        if (cards.row(2, texts.details)) {
+            if (self.extra.items.len < max_extra and context.buttonVariant("Add detail", .outline)) {
+                self.extra.append(self.gpa, .{ .name = ShortEdit.init("") catch unreachable, .value = LongEdit.init("") catch unreachable }) catch {};
+            }
+            cards.end();
+            self.detailRows(context, &cards.rows);
+        }
+        cards.finish();
+    }
 
-        // The project's own, a row each: name, value, and a button taking it away.
+    /// The project's own details, a line each under More details: name, value, and a button
+    /// taking it away.
+    fn detailRows(self: *ProjectSettings, context: *ui.Context, rows: *SettingRows) void {
         var removed: ?usize = null;
         const arena = context.builder().allocator;
         for (self.extra.items, 0..) |*entry, i| {
             const name_id = std.fmt.allocPrint(arena, "##extra name {d}", .{i}) catch continue;
             const value_id = std.fmt.allocPrint(arena, "##extra value {d}", .{i}) catch continue;
-            const remove_label = std.fmt.allocPrint(arena, "Remove##extra {d}", .{i}) catch continue;
-            executable.divide(context);
+            const remove_label = std.fmt.allocPrint(arena, "\u{f00d}##extra {d}", .{i}) catch continue;
+            rows.divide(context);
             context.begin(.row);
-            _ = context.textInput(name_id, &entry.name, "Name");
-            restyle(context, .{ .width = 160 });
+            _ = context.textInput(name_id, &entry.name, "Name, like website");
+            restyle(context, .{ .width = 180 });
             _ = context.textInput(value_id, &entry.value, "Value");
             restyle(context, .{ .grow = 1 });
             if (context.buttonVariant(remove_label, .ghost)) removed = i;
+            if (context.last_added) |button| button.accessibility.label = "Remove this detail";
             context.end();
             restyle(context, .{ .direction = .row, .gap = 8, .align_items = .center, .padding = .{ .top = 8, .bottom = 8 } });
         }
-        setting_rows.endGroup(context);
         if (removed) |i| _ = self.extra.orderedRemove(i);
-        if (self.extra.items.len < max_extra and context.buttonVariant("Add an entry", .outline)) {
-            self.extra.append(self.gpa, .{ .name = ShortEdit.init("") catch unreachable, .value = LongEdit.init("") catch unreachable }) catch {};
-        }
     }
 
-    /// The chosen icon beside the editor's egg wearing it, loaded again when the choice changed.
-    fn iconPreviews(self: *ProjectSettings, context: *ui.Context) void {
-        if (self.preview_for != self.icon) self.loadPreviews(context.font);
-        context.begin(.row);
-        previewTile(context, if (self.preview) |*image| image else null, "Icon");
-        previewTile(context, if (self.badge_preview) |*image| image else null, "Editor");
-        context.end();
-        restyle(context, .{ .direction = .row, .gap = 16, .padding = .{ .top = 4, .bottom = 8 } });
+    /// The graphics the game ships with, which players can change in the game: rows marked
+    /// where they differ from Eggy's defaults, in cards, filtered by `query`.
+    ///
+    /// ```zig
+    /// settings.buildGraphics(context, "");
+    /// ```
+    pub fn buildGraphics(self: *ProjectSettings, context: *ui.Context, query: []const u8) void {
+        _ = self.graphics.build(context, .{ .caps = &self.caps, .adapter = false, .baseline = .{}, .baseline_label = "Default is", .query = query, .cards = true });
+        self.graphics.notice(context);
     }
 
-    /// Decode the chosen icon and the badged egg into `font`'s color atlas; a file that won't
-    /// decode leaves its preview empty, which the tile says.
-    fn loadPreviews(self: *ProjectSettings, font: *ui.Font) void {
+    /// Whether any row of the General page has `query` in its words.
+    ///
+    /// ```zig
+    /// const listed = ProjectSettings.matches("copyright"); // true
+    /// ```
+    pub fn matches(query: []const u8) bool {
+        for (all_texts) |text| if (setting_rows.matches(query, text.title, text.note)) return true;
+        return false;
+    }
+
+    /// Decode the chosen icon into `font`'s color atlas; a file that won't decode shows none.
+    fn loadPreview(self: *ProjectSettings, font: *ui.Font) void {
         if (self.preview) |*image| image.deinit(self.gpa);
         self.preview = null;
-        self.badge_preview = null;
         self.preview_for = self.icon;
-        const path = self.icons[self.icon];
-
         var threaded: std.Io.Threaded = .init_single_threaded;
         const io = threaded.io();
-        if (std.Io.Dir.cwd().openDir(io, self.project_dir, .{})) |dir| {
-            var project = dir;
-            defer project.close(io);
-            if (project.readFileAlloc(io, path, self.gpa, .limited(32 << 20))) |bytes| {
-                defer self.gpa.free(bytes);
-                self.preview = ui.Image.load(self.gpa, font, bytes) catch null;
-            } else |_| {}
-        } else |_| {}
-
-        const badged = self.gpa.create(icon.Badged) catch return;
-        defer self.gpa.destroy(badged);
-        icon.decodeBadge(self.gpa, self.project_dir, path, badged) catch return;
-        const sprite = font.addSprite(badged, icon.badged_size, icon.badged_size) catch return;
-        self.badge_frame = .{.{ .sprite = sprite, .delay_ms = 0 }};
-        self.badge_preview = .{ .width = icon.badged_size, .height = icon.badged_size, .frames = &self.badge_frame, .duration_ms = 0 };
+        var project = std.Io.Dir.cwd().openDir(io, self.project_dir, .{}) catch return;
+        defer project.close(io);
+        const bytes = project.readFileAlloc(io, self.icons[self.icon], self.gpa, .limited(32 << 20)) catch return;
+        defer self.gpa.free(bytes);
+        self.preview = ui.Image.load(self.gpa, font, bytes) catch null;
     }
 
     /// Write `eggy.zon` from the fields if they changed it; what changed, caller-owned.
@@ -384,28 +396,52 @@ pub fn loadApplied(gpa: std.mem.Allocator, project_dir: []const u8) !Applied {
     return .of(try eggy.project.load(arena_state.allocator(), io, project));
 }
 
-/// One icon preview with its caption under it, or a note where it didn't load.
-fn previewTile(context: *ui.Context, image: ?*const ui.Image, caption: []const u8) void {
-    context.begin(.column);
-    if (image) |shown| context.image(shown, preview_px) else {
-        context.muted("Can't read this image");
-        smallText(context, 12);
-    }
-    context.muted(caption);
-    smallText(context, 12);
-    context.end();
-    restyle(context, .{ .gap = 4, .align_items = .center });
-}
+/// The General page's cards: each row is opened in its card, which opens with its first row
+/// shown, so a search leaves no empty cards.
+const Cards = struct {
+    context: *ui.Context,
+    query: []const u8,
+    rows: SettingRows = .{},
+    card: ?u8 = null,
 
-/// A heading over a group of rows, with a line on what the group is.
-fn groupHeading(context: *ui.Context, title: []const u8, note: []const u8) void {
-    context.begin(.column);
-    context.heading(4, title);
-    context.muted(note);
-    smallText(context, 12);
-    context.end();
-    restyle(context, .{ .gap = 2, .padding = .{ .top = 8 } });
-}
+    /// Open the row for `text` in card `card`, unless the search leaves it out. Close it with `end`.
+    fn row(self: *Cards, card: u8, text: RowText) bool {
+        if (!setting_rows.matches(self.query, text.title, text.note)) return false;
+        if (self.card != card) {
+            if (self.card != null) setting_rows.endGroup(self.context);
+            setting_rows.beginGroup(self.context);
+            self.card = card;
+            self.rows.count = 0;
+        }
+        self.rows.begin(self.context, text.title, text.note);
+        return true;
+    }
+
+    fn end(self: *Cards) void {
+        self.rows.end(self.context);
+    }
+
+    fn finish(self: *Cards) void {
+        if (self.card != null) setting_rows.endGroup(self.context);
+    }
+};
+
+const RowText = struct { title: []const u8, note: []const u8 };
+/// The General page's rows, which a search looks through.
+const texts = struct {
+    const icon = RowText{ .title = "Icon", .note = "" };
+    const title = RowText{ .title = "Title", .note = "" };
+    const package = RowText{ .title = "Package name", .note = "Zig builds the game under this name, so it can't change here." };
+    const version = RowText{ .title = "Version", .note = "" };
+    const scene = RowText{ .title = "First scene", .note = "" };
+    const orientation = RowText{ .title = "Phone orientation", .note = "" };
+    const dev_console = RowText{ .title = "Dev console", .note = "Opens with ` in Play and the built game." };
+    const company = RowText{ .title = "Company", .note = "" };
+    const description = RowText{ .title = "Description", .note = "" };
+    const copyright = RowText{ .title = "Copyright", .note = "" };
+    const details = RowText{ .title = "More details", .note = "" };
+};
+const all_texts = [_]RowText{ texts.icon, texts.title, texts.package, texts.version, texts.scene, texts.orientation, texts.dev_console, texts.company, texts.description, texts.copyright, texts.details };
 
 /// Make `scene` the default scene in the `eggy.zon` of the project in `project_dir`; what changed
 /// (caller-owned), or null when it already was.
@@ -465,8 +501,11 @@ test "the Project section lays out every eggy.zon field in cards and writes a ch
     defer context.deinit();
     context.density = .compact;
     context.newFrame(.{ .x = 0, .y = 0, .w = 440, .h = 600 });
-    settings.build(&context);
+    settings.build(&context, "");
+    settings.buildGraphics(&context, "");
     try std.testing.expect((try context.render()).len > 0);
+    try std.testing.expect(ProjectSettings.matches("copyright"));
+    try std.testing.expect(!ProjectSettings.matches("anisotropic"));
     try settings.title.set("Sewer Rats");
     const change = (try settings.save()).?;
     defer gpa.free(change.before);

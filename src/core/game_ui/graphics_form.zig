@@ -4,7 +4,8 @@
 const std = @import("std");
 const ui = @import("weeoui");
 const render_settings = @import("../render_settings.zig");
-const SettingRows = @import("setting_rows.zig").SettingRows;
+const setting_rows = @import("setting_rows.zig");
+const SettingRows = setting_rows.SettingRows;
 
 const Settings = render_settings.Settings;
 const Capabilities = render_settings.Capabilities;
@@ -35,7 +36,51 @@ pub const Options = struct {
     /// (an index means a different GPU there), so the card stays Automatic until a restart.
     /// Null skips the check.
     adapters_backend: ?render_settings.Backend = null,
+    /// What each row is compared with. A row that differs gets a dot, `baseline_label` and the
+    /// baseline's value under its control, and a button setting it back. Null leaves rows
+    /// unmarked, as the player's menu has them.
+    baseline: ?Settings = null,
+    /// The words before the baseline's value: "Game ships", "Default is".
+    baseline_label: []const u8 = "Default is",
+    /// Only rows whose title or note has this in them are shown; empty shows all.
+    query: []const u8 = "",
+    /// Put the rows in cards of their own (display, detail, shadows) rather than leaving the
+    /// caller to put them in one.
+    cards: bool = false,
 };
+
+/// Each row's title and note, which a search looks through.
+const row_texts = struct {
+    const backend = RowText{ .title = "Graphics API", .note = "" };
+    const adapter_elsewhere = RowText{ .title = "Graphics card", .note = "Restart with this graphics API to choose one." };
+    const adapter = RowText{ .title = "Graphics card", .note = "" };
+    const window_mode = RowText{ .title = "Window mode", .note = "Borderless fills the screen at its own resolution." };
+    const width = RowText{ .title = "Window size", .note = "" };
+    const present_mode = RowText{ .title = "Vertical sync", .note = "No tearing, but a little more delay." };
+    const frame_limit = RowText{ .title = "Frame rate limit", .note = "0 is unlimited." };
+    const render_scale = RowText{ .title = "Render scale", .note = "Below 1 is faster, above 1 sharper. The interface stays sharp." };
+    const anti_aliasing = RowText{ .title = "Antialiasing", .note = "MSAA is sharper; FXAA is cheaper." };
+    const mipmaps = RowText{ .title = "Mipmapping", .note = "Less shimmer on distant surfaces." };
+    const texture_filter = RowText{ .title = "Texture filtering", .note = "Nearest keeps pixel art crisp." };
+    const anisotropy = RowText{ .title = "Anisotropic filtering", .note = "Keeps textures sharp at a slant." };
+    const shadow_quality = RowText{ .title = "Shadow quality", .note = "" };
+    const shadow_distance_m = RowText{ .title = "Shadow distance", .note = "Shorter looks sharper." };
+    const shadow_bias = RowText{ .title = "Shadow bias", .note = "Raise it if surfaces speckle, lower it if shadows float." };
+};
+const RowText = struct { title: []const u8, note: []const u8 };
+const all_row_texts = [_]RowText{ row_texts.backend, row_texts.adapter_elsewhere, row_texts.adapter, row_texts.window_mode, row_texts.width, row_texts.present_mode, row_texts.frame_limit, row_texts.render_scale, row_texts.anti_aliasing, row_texts.mipmaps, row_texts.texture_filter, row_texts.anisotropy, row_texts.shadow_quality, row_texts.shadow_distance_m, row_texts.shadow_bias };
+
+/// Whether any graphics row's title or note has `query` in it, as `Options.query` filters them.
+///
+/// ```zig
+/// const listed = graphics_form.anyRowMatches("shadow"); // true
+/// ```
+pub fn anyRowMatches(query: []const u8) bool {
+    for (all_row_texts) |text| {
+        if (setting_rows.matches(query, text.title, text.note)) return true;
+    }
+    return false;
+}
 
 /// A draft of the graphics settings and the text behind its number fields. Keep it where it
 /// lives as long as its UI is open: the fields' text is edited in place.
@@ -61,6 +106,14 @@ pub const Form = struct {
         setNumber(&self.height, settings.height);
         setNumber(&self.frame_limit, settings.frame_limit);
         self.message_kind = .none;
+    }
+
+    /// Set the settings named in `fields` back to `baseline`'s, with their number fields.
+    fn reset(self: *Form, comptime fields: anytype, baseline: Settings) void {
+        inline for (fields) |field| @field(self.draft, field) = @field(baseline, field);
+        setNumber(&self.width, self.draft.width);
+        setNumber(&self.height, self.draft.height);
+        setNumber(&self.frame_limit, self.draft.frame_limit);
     }
 
     /// The draft, with the number fields' text read in: a field that isn't a whole number
@@ -110,35 +163,39 @@ pub const Form = struct {
         const caps = options.caps;
         const draft = &self.draft;
         const arena = context.builder().allocator;
-        var rows = SettingRows{};
+        var row = RowBuilder{ .form = self, .rows = .{ .query = options.query }, .context = context, .options = options };
+        defer row.finish();
 
-        rows.begin(context, "Graphics API", "What draws the game. Takes effect after the game restarts.");
-        // A GPU chosen for the old backend means nothing on the new one.
-        if (pick(context, "##graphics api", render_settings.Backend, &draft.backend, &backend_labels, caps.backends)) draft.adapter_index = null;
-        rows.end(context);
+        if (row.open(.{"backend"}, row_texts.backend, true)) {
+            // A GPU chosen for the old backend means nothing on the new one.
+            if (pick(context, "##graphics api", render_settings.Backend, &draft.backend, &backend_labels, caps.backends)) draft.adapter_index = null;
+            row.close(.{"backend"}, "graphics api");
+        }
 
         const adapters_listed = adaptersFit(options, draft.backend);
         if (options.adapter and caps.adapter_count > 0 and !adapters_listed) {
-            rows.begin(context, "Graphics card", "Cards are listed for the graphics API in use. Restart with this API to choose one.");
-            context.muted(if (draft.adapter_index == null) "Automatic" else "Chosen earlier, for the next start");
-            rows.end(context);
+            if (row.open(.{"adapter_index"}, row_texts.adapter_elsewhere, true)) {
+                context.muted(if (draft.adapter_index == null) "Automatic" else "Chosen earlier, for the next start");
+                row.close(.{"adapter_index"}, "graphics card");
+            }
         } else if (options.adapter and caps.adapter_count > 0) {
-            rows.begin(context, "Graphics card", "Which GPU draws the game. Takes effect after the game restarts.");
-            // Names live in the frame's arena: the caller's capabilities may not outlive it.
-            const names = arena.alloc([]const u8, caps.adapter_count + 1) catch return false;
-            names[0] = "Automatic";
-            for (caps.adapters[0..caps.adapter_count], names[1..]) |*adapter, *name| name.* = arena.dupe(u8, adapter.nameSlice()) catch return false;
-            var selected: usize = if (draft.adapter_index) |index| @min(@as(usize, index) + 1, caps.adapter_count) else 0;
-            if (context.select("##graphics card", names, &selected)) draft.adapter_index = if (selected == 0) null else @intCast(selected - 1);
-            rows.end(context);
+            if (row.open(.{"adapter_index"}, row_texts.adapter, true)) {
+                // Names live in the frame's arena: the caller's capabilities may not outlive it.
+                const names = arena.alloc([]const u8, caps.adapter_count + 1) catch return false;
+                names[0] = "Automatic";
+                for (caps.adapters[0..caps.adapter_count], names[1..]) |*adapter, *name| name.* = arena.dupe(u8, adapter.nameSlice()) catch return false;
+                var selected: usize = if (draft.adapter_index) |index| @min(@as(usize, index) + 1, caps.adapter_count) else 0;
+                if (context.select("##graphics card", names, &selected)) draft.adapter_index = if (selected == 0) null else @intCast(selected - 1);
+                row.close(.{"adapter_index"}, "graphics card");
+            }
         }
 
         if (caps.window_settings) {
-            rows.begin(context, "Window mode", "Borderless fullscreen fills the screen without changing its resolution.");
-            _ = pick(context, "##window mode", render_settings.WindowMode, &draft.window_mode, &window_mode_labels, .full);
-            rows.end(context);
-            if (draft.window_mode == .windowed) {
-                rows.begin(context, "Window size", "How big the window opens, in pixels.");
+            if (row.open(.{"window_mode"}, row_texts.window_mode, false)) {
+                _ = pick(context, "##window mode", render_settings.WindowMode, &draft.window_mode, &window_mode_labels, .full);
+                row.close(.{"window_mode"}, "window mode");
+            }
+            if (draft.window_mode == .windowed) if (row.open(.{ "width", "height" }, row_texts.width, false)) {
                 // Both numbers on one line, each just wide enough for a resolution.
                 context.begin(.row);
                 _ = context.textInput("##window width", &self.width, "900");
@@ -147,64 +204,74 @@ pub const Form = struct {
                 _ = context.textInput("##window height", &self.height, "675");
                 if (context.last_added) |element| element.style.width = 96;
                 context.end();
-                if (context.last_added) |element| element.style.wrap = false;
-                rows.end(context);
-            }
+                if (context.last_added) |element| {
+                    element.style.wrap = false;
+                    element.style.align_items = .center;
+                    element.style.gap = 6;
+                }
+                row.close(.{ "width", "height" }, "window size");
+            };
         }
 
-        rows.begin(context, "Vertical sync", "Waits for the screen to refresh: no tearing, but more delay. Takes effect after the game restarts.");
-        _ = pick(context, "##present mode", render_settings.PresentMode, &draft.present_mode, &present_mode_labels, caps.present_modes);
-        rows.end(context);
+        if (row.open(.{"present_mode"}, row_texts.present_mode, true)) {
+            _ = pick(context, "##present mode", render_settings.PresentMode, &draft.present_mode, &present_mode_labels, caps.present_modes);
+            row.close(.{"present_mode"}, "present mode");
+        }
 
-        if (caps.frame_limit) {
-            rows.begin(context, "Frame rate limit", "Frames per second, up to 1000. 0 is unlimited.");
+        if (caps.frame_limit) if (row.open(.{"frame_limit"}, row_texts.frame_limit, false)) {
             _ = context.textInput("##frame limit", &self.frame_limit, "0");
-            rows.end(context);
+            row.close(.{"frame_limit"}, "frame limit");
+        };
+
+        if (row.open(.{"render_scale"}, row_texts.render_scale, false)) {
+            var scale = draft.render_scale;
+            if (context.slider("##render scale", &scale, 0.25, 2)) draft.render_scale = @round(scale / render_scale_step) * render_scale_step;
+            context.muted(std.fmt.allocPrint(arena, "{d:.2}×", .{draft.render_scale}) catch "");
+            row.close(.{"render_scale"}, "render scale");
         }
 
-        rows.begin(context, "Render scale", "How many pixels the 3D scene is drawn at, from 0.25x to 2x. Below 1 is faster, above 1 is crisper. The interface stays sharp.");
-        var scale = draft.render_scale;
-        if (context.slider("##render scale", &scale, 0.25, 2)) draft.render_scale = @round(scale / render_scale_step) * render_scale_step;
-        context.muted(std.fmt.allocPrint(arena, "{d:.2}×", .{draft.render_scale}) catch "");
-        rows.end(context);
-
-        rows.begin(context, "Antialiasing", "Smooths jagged edges. MSAA is sharper; FXAA is cheaper and softens textures a little.");
-        _ = pick(context, "##anti aliasing", render_settings.AntiAliasing, &draft.anti_aliasing, &anti_aliasing_labels, caps.anti_aliasing);
-        rows.end(context);
-
-        rows.begin(context, "Mipmapping", "Smaller copies of each texture for distant surfaces: less shimmer, a little more memory.");
-        _ = context.toggle("##mipmaps", &draft.mipmaps);
-        rows.end(context);
-
-        rows.begin(context, "Texture filtering", "How textures are smoothed up close. Linear with mipmapping is trilinear.");
-        if (pick(context, "##texture filter", render_settings.TextureFilter, &draft.texture_filter, &texture_filter_labels, .full)) {
-            // Anisotropic filtering works only on smoothed textures.
-            if (draft.texture_filter == .nearest) draft.anisotropy = 1;
+        if (row.open(.{"anti_aliasing"}, row_texts.anti_aliasing, false)) {
+            _ = pick(context, "##anti aliasing", render_settings.AntiAliasing, &draft.anti_aliasing, &anti_aliasing_labels, caps.anti_aliasing);
+            row.close(.{"anti_aliasing"}, "anti aliasing");
         }
-        rows.end(context);
 
-        if (caps.max_anisotropy > 1 and draft.texture_filter == .linear) {
-            rows.begin(context, "Anisotropic filtering", "Keeps textures sharp at a slant, such as a road stretching away.");
+        if (row.open(.{"mipmaps"}, row_texts.mipmaps, false)) {
+            _ = context.toggle("##mipmaps", &draft.mipmaps);
+            row.close(.{"mipmaps"}, "mipmaps");
+        }
+
+        if (row.open(.{"texture_filter"}, row_texts.texture_filter, false)) {
+            if (pick(context, "##texture filter", render_settings.TextureFilter, &draft.texture_filter, &texture_filter_labels, .full)) {
+                // Anisotropic filtering works only on smoothed textures.
+                if (draft.texture_filter == .nearest) draft.anisotropy = 1;
+            }
+            row.close(.{"texture_filter"}, "texture filter");
+        }
+
+        if (caps.max_anisotropy > 1 and draft.texture_filter == .linear) if (row.open(.{"anisotropy"}, row_texts.anisotropy, false)) {
             pickAnisotropy(context, &draft.anisotropy, caps.max_anisotropy);
-            rows.end(context);
-        }
+            row.close(.{"anisotropy"}, "anisotropy");
+        };
 
-        rows.begin(context, "Shadow quality", "How sharp light and shadow edges are. Higher costs more GPU time and memory.");
-        _ = pick(context, "##shadow quality", render_settings.ShadowQuality, &draft.shadow_quality, &shadow_quality_labels, shadowQualities(caps));
-        rows.end(context);
+        if (row.open(.{"shadow_quality"}, row_texts.shadow_quality, false)) {
+            _ = pick(context, "##shadow quality", render_settings.ShadowQuality, &draft.shadow_quality, &shadow_quality_labels, shadowQualities(caps));
+            row.close(.{"shadow_quality"}, "shadow quality");
+        }
 
         if (draft.shadow_quality != .off) {
-            rows.begin(context, "Shadow distance", "How far from the camera shadows are drawn, in metres. Shorter distances look sharper.");
-            var distance = draft.shadow_distance_m;
-            if (context.slider("##shadow distance", &distance, 1, shadow_distance_slider_max)) draft.shadow_distance_m = @round(distance);
-            context.muted(std.fmt.allocPrint(arena, "{d:.0} m", .{draft.shadow_distance_m}) catch "");
-            rows.end(context);
+            if (row.open(.{"shadow_distance_m"}, row_texts.shadow_distance_m, false)) {
+                var distance = draft.shadow_distance_m;
+                if (context.slider("##shadow distance", &distance, 1, shadow_distance_slider_max)) draft.shadow_distance_m = @round(distance);
+                context.muted(std.fmt.allocPrint(arena, "{d:.0} m", .{draft.shadow_distance_m}) catch "");
+                row.close(.{"shadow_distance_m"}, "shadow distance");
+            }
 
-            rows.begin(context, "Shadow bias", "Moves shadows off the surface that casts them. Raise it if surfaces speckle, lower it if shadows float.");
-            var bias = draft.shadow_bias;
-            if (context.slider("##shadow bias", &bias, 0, 0.1)) draft.shadow_bias = @round(bias / shadow_bias_step) * shadow_bias_step;
-            context.muted(std.fmt.allocPrint(arena, "{d:.4}", .{draft.shadow_bias}) catch "");
-            rows.end(context);
+            if (row.open(.{"shadow_bias"}, row_texts.shadow_bias, false)) {
+                var bias = draft.shadow_bias;
+                if (context.slider("##shadow bias", &bias, 0, 0.1)) draft.shadow_bias = @round(bias / shadow_bias_step) * shadow_bias_step;
+                context.muted(std.fmt.allocPrint(arena, "{d:.4}", .{draft.shadow_bias}) catch "");
+                row.close(.{"shadow_bias"}, "shadow bias");
+            }
         }
 
         // The number fields count only while they are whole numbers; `settings` says otherwise.
@@ -246,6 +313,104 @@ pub const Form = struct {
         return action;
     }
 };
+
+/// How many of the rows showing `settings` differ from `baseline` (the window's size is one).
+///
+/// ```zig
+/// const changed = graphics_form.changedRows(app.graphics_options.requested, app.graphics_options.defaults);
+/// ```
+pub fn changedRows(settings: Settings, baseline: Settings) usize {
+    var count: usize = 0;
+    inline for (row_fields) |fields| {
+        if (differs(fields, settings, baseline)) count += 1;
+    }
+    return count;
+}
+
+/// The settings each row shows, for counting the rows that changed.
+const row_fields = .{ .{"backend"}, .{"adapter_index"}, .{"present_mode"}, .{"frame_limit"}, .{"window_mode"}, .{ "width", "height" }, .{"render_scale"}, .{"anti_aliasing"}, .{"mipmaps"}, .{"texture_filter"}, .{"anisotropy"}, .{"shadow_quality"}, .{"shadow_distance_m"}, .{"shadow_bias"} };
+
+/// Builds one form's rows: plain, or marked against `Options.baseline`, and with
+/// `Options.cards` in cards of their own.
+const RowBuilder = struct {
+    form: *Form,
+    rows: SettingRows,
+    context: *ui.Context,
+    options: Options,
+    /// The card open, with `Options.cards`.
+    card: ?Card = null,
+
+    /// Open the row for the settings named in `fields`, unless the search leaves it out.
+    fn open(self: *RowBuilder, comptime fields: anytype, text: RowText, restart: bool) bool {
+        if (!self.rows.shows(text.title, text.note)) return false;
+        // A card opens with its first row shown, so a search leaves no empty ones.
+        if (self.options.cards and self.card != comptime cardOf(fields[0])) {
+            if (self.card != null) setting_rows.endGroup(self.context);
+            setting_rows.beginGroup(self.context);
+            self.card = comptime cardOf(fields[0]);
+            self.rows.count = 0;
+        }
+        const changed = if (self.options.baseline) |baseline| differs(fields, self.form.draft, baseline) else false;
+        self.rows.beginMarked(self.context, text.title, text.note, .{ .changed = changed, .restart = restart });
+        return true;
+    }
+
+    /// Close the row `open` opened: with the baseline's value and a reset when it differs.
+    fn close(self: *RowBuilder, comptime fields: anytype, id: []const u8) void {
+        const baseline = self.options.baseline orelse return self.rows.end(self.context);
+        const changed = differs(fields, self.form.draft, baseline);
+        const arena = self.context.builder().allocator;
+        const note = if (changed) std.fmt.allocPrint(arena, "{s} {s}", .{ self.options.baseline_label, valueText(arena, fields[0], baseline, self.options.caps) }) catch "" else "";
+        if (self.rows.endResettable(self.context, note, changed, id)) self.form.reset(fields, baseline);
+    }
+
+    /// Close the last card, if one is open.
+    fn finish(self: *RowBuilder) void {
+        if (self.card != null) setting_rows.endGroup(self.context);
+        self.card = null;
+    }
+};
+
+/// The cards `Options.cards` puts rows in.
+const Card = enum { display, detail, shadows };
+
+/// The card the row for `field` goes in.
+fn cardOf(comptime field: []const u8) Card {
+    const detail = [_][]const u8{ "render_scale", "anti_aliasing", "mipmaps", "texture_filter", "anisotropy" };
+    inline for (detail) |name| if (comptime std.mem.eql(u8, name, field)) return .detail;
+    return if (comptime std.mem.startsWith(u8, field, "shadow_")) .shadows else .display;
+}
+
+/// Whether any of the settings named in `fields` differ between `a` and `b`.
+fn differs(comptime fields: anytype, a: Settings, b: Settings) bool {
+    inline for (fields) |field| {
+        if (!std.meta.eql(@field(a, field), @field(b, field))) return true;
+    }
+    return false;
+}
+
+/// `field` of `settings` as its row shows it, in `arena`.
+fn valueText(arena: std.mem.Allocator, comptime field: []const u8, settings: Settings, caps: *const Capabilities) []const u8 {
+    const value = @field(settings, field);
+    if (comptime std.mem.eql(u8, field, "backend")) return backend_labels[@backingInt(value)];
+    if (comptime std.mem.eql(u8, field, "present_mode")) return present_mode_labels[@backingInt(value)];
+    if (comptime std.mem.eql(u8, field, "anti_aliasing")) return anti_aliasing_labels[@backingInt(value)];
+    if (comptime std.mem.eql(u8, field, "texture_filter")) return texture_filter_labels[@backingInt(value)];
+    if (comptime std.mem.eql(u8, field, "shadow_quality")) return shadow_quality_labels[@backingInt(value)];
+    if (comptime std.mem.eql(u8, field, "window_mode")) return window_mode_labels[@backingInt(value)];
+    if (comptime std.mem.eql(u8, field, "adapter_index")) {
+        const index = value orelse return "Automatic";
+        return if (index < caps.adapter_count) arena.dupe(u8, caps.adapters[index].nameSlice()) catch "" else "another card";
+    }
+    if (comptime std.mem.eql(u8, field, "width")) return std.fmt.allocPrint(arena, "{d} × {d}", .{ settings.width, settings.height }) catch "";
+    if (comptime std.mem.eql(u8, field, "frame_limit")) return if (value == 0) "no limit" else std.fmt.allocPrint(arena, "{d} fps", .{value}) catch "";
+    if (comptime std.mem.eql(u8, field, "render_scale")) return std.fmt.allocPrint(arena, "{d:.2}×", .{value}) catch "";
+    if (comptime std.mem.eql(u8, field, "mipmaps")) return if (value) "On" else "Off";
+    if (comptime std.mem.eql(u8, field, "anisotropy")) return if (value <= 1) "Off" else std.fmt.allocPrint(arena, "{d}x", .{value}) catch "";
+    if (comptime std.mem.eql(u8, field, "shadow_distance_m")) return std.fmt.allocPrint(arena, "{d:.0} m", .{value}) catch "";
+    if (comptime std.mem.eql(u8, field, "shadow_bias")) return std.fmt.allocPrint(arena, "{d:.4}", .{value}) catch "";
+    @compileError("no text for graphics setting " ++ field);
+}
 
 /// A message for an apply failure that a player or developer can act on.
 fn describe(err: anyerror) []const u8 {
@@ -352,6 +517,40 @@ test "the form lays out every option the machine offers and renders" {
     try std.testing.expect(!form.build(&context, .{ .caps = &caps }));
     _ = form.buttons(&context, "Cancel");
     try std.testing.expect((try context.render()).len > 0);
+}
+
+test "rows that differ from the baseline are counted, and reset sets them back" {
+    var form = Form{};
+    form.load(.{ .anti_aliasing = .msaa_4x, .width = 1280, .height = 720 });
+    const baseline = Settings{ .anti_aliasing = .fxaa };
+    try std.testing.expectEqual(@as(usize, 2), changedRows(form.draft, baseline));
+    form.reset(.{ "width", "height" }, baseline);
+    try std.testing.expectEqual(@as(usize, 1), changedRows(form.draft, baseline));
+    try std.testing.expectEqual(baseline.width, (try form.read()).width);
+}
+
+test "a marked form renders, and a search leaves out the rows it doesn't match" {
+    const gpa = std.testing.allocator;
+    var context = try ui.Context.init(gpa);
+    defer context.deinit();
+    var form = Form{};
+    form.load(.{ .anti_aliasing = .msaa_4x });
+    const caps = testCapabilities();
+    context.newFrame(.{ .x = 0, .y = 0, .w = 720, .h = 2400 });
+    setting_rows.beginGroup(&context);
+    _ = form.build(&context, .{ .caps = &caps, .baseline = .{}, .query = "shadow" });
+    setting_rows.endGroup(&context);
+    // Shadow quality, distance and bias, with hairlines between.
+    try std.testing.expectEqual(@as(usize, 5), context.last_added.?.children.len);
+    try std.testing.expect((try context.render()).len > 0);
+}
+
+test "rows go in cards by kind, and a search finds rows by their words" {
+    try std.testing.expectEqual(Card.detail, cardOf("mipmaps"));
+    try std.testing.expectEqual(Card.shadows, cardOf("shadow_bias"));
+    try std.testing.expectEqual(Card.display, cardOf("backend"));
+    try std.testing.expect(anyRowMatches("SHIMMER"));
+    try std.testing.expect(!anyRowMatches("autosave"));
 }
 
 test "the form reads its number fields back, and refuses text that is not a number" {

@@ -26,7 +26,7 @@ failed-command lines, and redundant summaries. Open the Build window when you
 need the raw build output.
 
 Follow a source link to open its line and column in the editor configured under
-Edit > Preferences > Code editor. If an Eggy compiler error includes a project
+Edit > Settings > Editor > Code editor. If an Eggy compiler error includes a project
 declaration, the source link prefers that declaration. The system-default editor
 may open the file without jumping to the location.
 

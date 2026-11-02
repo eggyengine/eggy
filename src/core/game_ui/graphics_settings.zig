@@ -11,6 +11,8 @@ const graphics_form = @import("graphics_form.zig");
 const render_settings = @import("../render_settings.zig");
 
 pub const Form = graphics_form.Form;
+pub const anyRowMatches = graphics_form.anyRowMatches;
+pub const changedRows = graphics_form.changedRows;
 
 const dialog_title = "Graphics##graphics menu";
 
@@ -133,8 +135,8 @@ pub const GraphicsSettingsUi = struct {
 /// graphics_settings.buildOptions(&form, context, app);
 /// ```
 pub fn buildOptions(form: *Form, context: *ui.Context, app: *App) void {
-    if (app.graphics_options.warning) context.alert("Saved settings not used", "The graphics settings saved earlier could not be applied, so the defaults are in use.", true);
-    if (app.graphics_options.requested.requiresRestart(app.graphics.render_settings)) context.muted("A new graphics API, card or vertical sync setting is waiting for the next start.");
+    if (app.graphics_options.warning) context.alert("Saved settings not used", "They couldn't be applied, so the defaults are in use.", true);
+    if (app.graphics_options.requested.requiresRestart(app.graphics.render_settings)) context.muted("Some changes wait for the next start.");
     const caps = app.graphics.capabilities();
     _ = form.build(context, .{ .caps = &caps, .adapters_backend = app.graphics.render_settings.backend });
 }

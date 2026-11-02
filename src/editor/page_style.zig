@@ -1,4 +1,4 @@
-//! Small layout touches for pages built with `ui.Context` (Preferences, the Inspector, the
+//! Small layout touches for pages built with `ui.Context` (Settings, the Inspector, the
 //! Hierarchy): restyling the element just added, since `Context`'s widgets and containers take
 //! no style of their own.
 const std = @import("std");
@@ -149,7 +149,7 @@ pub fn beginSection(context: *ui.Context, title: []const u8) void {
     context.heading(4, title);
 }
 
-/// Close the card `beginSection` opened, padded like the Preferences window's.
+/// Close the card `beginSection` opened, padded like the Settings window's.
 /// Requires that card to be the active container; changes its frame-local style.
 ///
 /// ```zig
@@ -173,6 +173,29 @@ pub fn endSection(context: *ui.Context) void {
 pub fn endRow(context: *ui.Context) void {
     context.end();
     restyle(context, .{ .direction = .row, .gap = 8, .align_items = .center });
+}
+
+/// Paint the element `context` added last as a side rail: the card colour out to the window's
+/// top, left and bottom edges (the page's padding past its own), with a line down its right.
+///
+/// ```zig
+/// context.begin(.column);
+/// context.text("Projects");
+/// context.end();
+/// page_style.railBackdrop(context);
+/// ```
+pub fn railBackdrop(context: *ui.Context) void {
+    const rail = context.last_added orelse return;
+    const inset = context.builder().allocator.create(f32) catch return;
+    inset.* = context.pagePadding();
+    rail.paint_kind = .{ .custom = .{ .context = inset, .draw = drawRail } };
+}
+
+fn drawRail(context: *const anyopaque, c: *ui.Canvas, r: ui.Rect) anyerror!void {
+    const inset: f32 = @as(*const f32, @ptrCast(@alignCast(context))).*;
+    const panel = ui.Rect{ .x = r.x - inset, .y = r.y - inset, .w = r.w + inset, .h = r.h + 2 * inset };
+    try c.rect(panel, c.theme.card);
+    try c.rect(.{ .x = panel.x + panel.w - 1, .y = panel.y, .w = 1, .h = panel.h }, c.theme.border);
 }
 
 /// The height inside the page's padding, which panes filling a tool window share out. Panes
