@@ -141,7 +141,7 @@ pub fn processRequest(host: anytype, request: workspace.Outcome) !bool {
         },
         .open_project => if (host.mayLeave(.open_project)) {
             host.picking_to_link = false;
-            sdl.dialog.showOpenFolder(@TypeOf(host.*), @TypeOf(host.*).pickedProject, host, host.app.window.window, null, false);
+            host.picked_project.showFolder(host.app.window.window, null);
         },
         else => return error.InvalidEditorRequest,
     }
@@ -163,7 +163,9 @@ pub fn context(editor: anytype) api.Context {
         fn request(raw: *anyopaque, input: *const api.Request, output: *api.Response) callconv(.c) api.Status {
             const host: @TypeOf(editor) = @ptrCast(@alignCast(raw));
             apply(host, input.*, output) catch |err| {
-                std.log.err("editor extension {t} failed: {t}", .{ input.operation, err });
+                // A text that grew between a read's two calls is asked for again (`readText`),
+                // so a buffer too small is part of reading, not a failure.
+                if (err != error.BufferTooSmall) std.log.err("editor extension {t} failed: {t}", .{ input.operation, err });
                 return switch (err) {
                     error.OutOfMemory => .out_of_memory,
                     error.InvalidEntity => .invalid_entity,
