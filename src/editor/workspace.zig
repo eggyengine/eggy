@@ -75,13 +75,13 @@ pub const Outcome = union(enum) {
     toggle_devtools,
     /// Help > About Eggy.
     about,
-    /// Edit > Preferences: open the Preferences window.
+    /// Edit > Settings: open the Settings window.
     preferences,
     /// File > Save (Ctrl+S): save the scene.
     save,
     /// File > Export: open the Export window.
     export_game,
-    /// File > Project Settings: open Preferences on its Project section.
+    /// File > Project Settings: open Settings on its General page.
     project_settings,
     /// Edit > Plugins: open the Plugins window.
     plugins,
@@ -362,7 +362,7 @@ pub const Workspace = struct {
                 const present = for (shown, 0..) |panel, index| {
                     if (panels.pluginId(panel, index) == id) break true;
                 } else false;
-                if (!present) self.dock.remove(id);
+                if (!present) self.dock.close(id);
             }
         }
         self.plugin_panels = shown;
@@ -1005,26 +1005,26 @@ pub const Workspace = struct {
     }
 
     /// Open the plugin panel whose key is `<plugin>/<key>` and bring its tab forward, docking it
-    /// again if it was closed. Fails with `error.NoSuchPanel` when no plugin declares one.
+    /// again where it was if it was closed (beside the Inspector if it was never shown). Fails with `error.NoSuchPanel` when no plugin declares one.
     pub fn showPluginPanel(self: *Workspace, key: []const u8) !void {
         for (self.plugin_panels, 0..) |panel, i| {
             const slash = std.mem.indexOfScalar(u8, panel.key, '/') orelse continue;
             if (!std.mem.eql(u8, panel.key[slash + 1 ..], key)) continue;
             const id = panels.pluginId(panel, i);
-            if (self.dock.nodeOf(id) == null) try self.dock.add(id, null, .center);
+            if (self.dock.nodeOf(id) == null) try self.dock.restore(id, panels.copyId(.inspector, self.live.inspector), .center);
             _ = self.dock.activate(ui.dock.first_id + id);
             return;
         }
         return error.NoSuchPanel;
     }
 
-    /// Open built-in `panel` and bring its tab forward, docking it beside the Scene if it was
-    /// closed.
+    /// Open built-in `panel` and bring its tab forward, docking it where it was if it was closed
+    /// (with the Scene if it was never shown).
     pub fn showPanel(self: *Workspace, panel: Panel) !void {
         const id = if (self.live.of(panel)) |live| panels.copyId(panel, live.*) else @backingInt(panel);
         if (self.tabs.ofPanel(&self.dock, id)) |tab| if (self.tabs.windowOf(&self.dock, tab) == null) self.tabs.show(&self.dock, tab);
         const scene = panels.copyId(.scene, self.live.scene);
-        if (self.dock.nodeOf(id) == null) try self.dock.add(id, if (self.dock.nodeOf(scene) != null) scene else null, .center);
+        if (self.dock.nodeOf(id) == null) try self.dock.restore(id, scene, .center);
         _ = self.dock.activate(ui.dock.first_id + id);
     }
 
@@ -1149,7 +1149,8 @@ pub const Workspace = struct {
     /// Close one panel, unless `close_guard` holds it back to ask about its scene first.
     fn closePanel(self: *Workspace, panel: u32) void {
         if (!self.mayClose(&.{panel}, null, .{ .panel = panel })) return;
-        self.dock.remove(panel);
+        // Remembered, so it reopens where it was.
+        self.dock.close(panel);
     }
 
     /// Close `target` without asking: the editor's answer has dealt with its scenes.
@@ -1392,7 +1393,9 @@ pub const Workspace = struct {
             .scene => return self.openTab(.scene_3d),
             else => {},
         }
-        self.dock.add(panel, null, .center) catch |err| std.log.warn("cannot reopen panel {d}: {t}", .{ panel, err });
+        // Where it was last closed; a plugin's panel never shown docks beside the Inspector.
+        const inspector = panels.copyId(.inspector, self.live.inspector);
+        self.dock.restore(panel, if (panel >= panels.plugin_first) inspector else null, .center) catch |err| std.log.warn("cannot reopen panel {d}: {t}", .{ panel, err });
     }
 
     /// Whether one of the workspace's controls (a menu, a tab, the Scene's toolbar) is under (x, y)
@@ -1658,6 +1661,27 @@ test "the Window menu closes and reopens a panel" {
     try std.testing.expect(workspace.dock.nodeOf(console) == null);
     _ = workspace.run(.{ .toggle_panel = console });
     try std.testing.expect(workspace.dock.nodeOf(console) != null);
+}
+
+test "a panel reopens where it was closed, not in the Scene's stack" {
+    var workspace = try Workspace.init(std.testing.allocator, titlebar.Layout.default(.linux), &.{});
+    defer workspace.deinit();
+    workspace.dock.layout(.{ .x = 0, .y = 0, .w = 1280, .h = 800 });
+    const stats = panels.plugin_first;
+    workspace.setPluginPanels(&test_plugin_panels);
+    const inspector = @backingInt(Panel.inspector);
+    const console = @backingInt(Panel.console);
+    const scene = @backingInt(Panel.scene);
+    try std.testing.expectEqual(workspace.dock.nodeOf(inspector), workspace.dock.nodeOf(stats));
+
+    // The Window menu closes them, and opens them again where they were.
+    for ([_]u32{ stats, console }) |panel| {
+        _ = workspace.run(.{ .toggle_panel = panel });
+        _ = workspace.run(.{ .toggle_panel = panel });
+        try std.testing.expect(workspace.dock.nodeOf(panel).? != workspace.dock.nodeOf(scene).?);
+    }
+    try std.testing.expectEqual(workspace.dock.nodeOf(inspector), workspace.dock.nodeOf(stats));
+    try std.testing.expectEqual(workspace.dock.nodeOf(@backingInt(Panel.assets)), workspace.dock.nodeOf(console));
 }
 
 test "File > Quit asks the editor to quit" {
