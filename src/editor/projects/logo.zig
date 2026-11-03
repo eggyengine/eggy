@@ -45,7 +45,7 @@ pub fn thumbnail(image: []const u8, width: u32, height: u32, out: *Pixels) !void
         const count: u32 = @intCast((x1 - x0) * (y1 - y0));
         const pixel = out[(y * side + x) * 4 ..][0..4];
         for (pixel, sum) |*channel, total| channel.* = @intCast(total / count);
-        const coverage = icon.roundedCoverage(@floatFromInt(x), @floatFromInt(y), side, radius);
+        const coverage = icon.roundedCoverage(@floatFromInt(x), @floatFromInt(y), side, side, radius);
         pixel[3] = @intFromFloat(@round(@as(f32, @floatFromInt(pixel[3])) * coverage));
     };
 }

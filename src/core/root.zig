@@ -15,6 +15,7 @@ pub const Surface = @import("graphics.zig").Surface;
 pub const SceneTexture = @import("scene_texture.zig").SceneTexture;
 pub const Notice = @import("notice.zig").Notice;
 pub const entry = @import("entry.zig");
+pub const fatal_dialog = @import("fatal_dialog.zig");
 pub const log = @import("log/log.zig");
 pub const plugins = @import("plugins.zig");
 pub const project = @import("project.zig");

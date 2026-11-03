@@ -38,6 +38,9 @@ pub const ProjectAssets = struct {
     /// Counts how often the files changed under `expanded`, so a model imported while they did
     /// is not remembered under what is now the wrong path.
     generation: u32 = 0,
+    /// Told the path of each file the providers start loading, on the provider's thread, while
+    /// set: the splash screen shows them as the editor's first frame loads the scene.
+    loading: ?*const fn (path: []const u8) void = null,
 
     /// Open the catalog of the project in `project_dir` and bring it up to date with its files
     /// (an unreadable catalog is an error, never replaced). `project_dir` must outlive the result.
@@ -383,6 +386,7 @@ pub const ProjectAssets = struct {
         const found = try self.fileOf(gpa, try assets.id.parse(key)) orelse return error.FileNotFound;
         defer gpa.free(found.path);
         if (found.kind != .shader) return error.WrongAssetKind;
+        if (self.loading) |tell| tell(found.path);
         const source = try readAsset(context, gpa, key);
         defer gpa.free(source);
         const whole = try eggy.shader_compose.compose(gpa, source, std.fs.path.basename(found.path));
@@ -490,6 +494,7 @@ pub const ProjectAssets = struct {
     }
 
     fn importModel(self: *ProjectAssets, gpa: std.mem.Allocator, source: Source) !assets.Model {
+        if (self.loading) |tell| tell(source.path);
         const full_path = try std.fs.path.joinZ(gpa, &.{ self.project_dir, source.path });
         defer gpa.free(full_path);
         return model_import.import(gpa, full_path, source.settings) catch |err| {
@@ -504,6 +509,7 @@ pub const ProjectAssets = struct {
         const found = (try self.fileOf(gpa, id)) orelse return self.modelTexture(gpa, id);
         defer gpa.free(found.path);
         if (assets.package.Conversion.of(found.path) != .texture) return error.UnsupportedImageFormat;
+        if (self.loading) |tell| tell(found.path);
         const full_path = try std.fs.path.joinZ(gpa, &.{ self.project_dir, found.path });
         defer gpa.free(full_path);
         return model_import.decodeImage(gpa, full_path) catch |err| {

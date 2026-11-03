@@ -24,13 +24,23 @@ pub fn report(stage: []const u8, message: []const u8, crash_report: ?[]const u8)
     show(stage, shown);
 }
 
-/// Show a bounded fatal message in SDL's message box, borrowing both slices during the call.
-/// Works before `SDL_Init`. May block until dismissed; logs failures and does not exit.
+/// Shows a fatal error in place of SDL's message box and returns once it has been dismissed;
+/// false when it couldn't, so the message box shows instead.
+pub const Presenter = *const fn (stage: []const u8, message: []const u8) bool;
+
+/// What shows fatal errors while it is set, instead of SDL's message box: the editor's splash
+/// screen, while the editor starts. Set and cleared on the main thread.
+pub var presenter: ?Presenter = null;
+
+/// Show a bounded fatal message in SDL's message box (or `presenter`), borrowing both slices
+/// during the call. Works before `SDL_Init`. May block until dismissed; logs failures and does
+/// not exit.
 ///
 /// ```zig
 /// fatal_dialog.show("panic", "A required renderer resource is missing.");
 /// ```
 pub fn show(stage: []const u8, message: []const u8) void {
+    if (presenter) |present| if (present(stage, message)) return;
     var buffer: [2048]u8 = undefined;
     const description = formatMessage(&buffer, stage, message);
     sdl3.message_box.showSimple(.{ .error_dialog = true }, "Eggy - Fatal Error", description, null) catch |err|

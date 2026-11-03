@@ -37,6 +37,7 @@ const panels = @import("panels.zig");
 pub const logFn = @import("console_log.zig").logFn;
 pub const cli = @import("cli/cli.zig");
 pub const process_environ = @import("process_environ.zig");
+pub const splash = @import("splash/splash.zig");
 /// Eggy's own editor without a project: the launcher and New/Open Project (`launcher_main.zig`).
 pub const LauncherApp = @import("launcher_app.zig").LauncherApp;
 const ProjectFlow = @import("projects/flow.zig").ProjectFlow;
@@ -259,6 +260,8 @@ pub fn Editor(comptime project: type) type {
         project: ?workspace_zig.Project = null,
         /// The open project's model and image files, imported for the scene's caches.
         project_assets: ?*ProjectAssets = null,
+        /// Whether the splash screen is still up, until the first frame is drawn.
+        splash_shown: bool = true,
         /// The build started when the window regains focus, while it runs or once it made a new
         /// editor (see `rebuildState`).
         rebuild: ?*Job = null,
@@ -321,6 +324,8 @@ pub fn Editor(comptime project: type) type {
         pub fn init(self: *Self, process_init: *const std.process.Init, args: []const [*:0]const u8) !void {
             eggy.log.start(process_init.io, .editor, project.name ++ "_editor", args);
             const gpa = process_init.gpa;
+            splash.open(process_init.io, process_init.environ_map, project.name);
+            splash.step(.graphics);
             var app: eggy.App = undefined;
             // The editor is a desktop window, which orientation doesn't turn.
             try app.initForProject(process_init, title, project.name, .editor, .{}, .landscape);
@@ -328,6 +333,7 @@ pub fn Editor(comptime project: type) type {
             app.storage = try eggy.storage.Storage.init(gpa, process_init.io, project.name);
             // The dev console's lines show among the Console panel's messages.
             app.dev_console.log_output = true;
+            splash.step(.project);
             const opened_project = try openProject(gpa, app.window.window, args);
             errdefer if (opened_project) |opened| freeProject(gpa, opened);
             // The project's graphics defaults, before anything is drawn, and its dev console setting.
@@ -422,6 +428,8 @@ pub fn Editor(comptime project: type) type {
             errdefer if (open_scene) |*remembered| remembered.deinit();
             const library_path = try libraryPath(gpa);
             defer gpa.free(library_path);
+            splash.step(.game);
+            splash.detail(std.fs.path.basename(library_path));
             var game: ?HotGame = HotGame.load(gpa, library_path) catch |err| blk: {
                 std.log.err("cannot load the game from {s}: {t}", .{ library_path, err });
                 break :blk null;
@@ -455,6 +463,7 @@ pub fn Editor(comptime project: type) type {
                 legacy_refs.normalizeOnOpen(gpa, process_init.io, opened_project.?.dir, loaders, loaded.sceneAccess().types());
             };
             // The project's scene first, so the game's plugins start among its entities.
+            splash.step(.scene);
             if (game) |*loaded| {
                 if (opened_project) |opened| {
                     open_scene = .{ .gpa = gpa, .project_dir = opened.dir };
@@ -465,7 +474,11 @@ pub fn Editor(comptime project: type) type {
             const upgrades = Upgrades.init(gpa, if (opened_project) |opened| opened.dir else null, @import("build_options").source_dir);
             const input_settings = if (opened_project) |opened| try InputSettings.open(gpa, &app.input_backend.?.state, opened.dir) else null;
             errdefer if (input_settings) |settings| settings.close();
+            splash.step(.plugins);
             if (game) |*loaded| loaded.start(&app, plugin_switches.off(), .discard);
+            // What the scene shows loads as the first frame draws it.
+            splash.step(.assets);
+            if (project_assets) |loaders| loaders.loading = splash.detail;
             self.* = .{ .gpa = gpa, .game = game, .game_modified = modifiedAt(library_path), .app = app, .ui = context, .mono = mono, .console_ui = console_ui, .hierarchy_ui = hierarchy_ui, .assets_ui = assets_ui, .assets_panel = .init(gpa), .animation_ui = animation_ui, .ui_designer_ui = ui_designer_ui, .ui_tree_ui = ui_tree_ui, .ui_properties_ui = ui_properties_ui, .asset_preview_ui = asset_preview_ui, .asset_preview = .init(gpa, mono), .scene_2d_ui = scene_2d_ui, .asset_icons = asset_icons, .entity_editor = .init(gpa), .console = console, .plugin_pages = plugin_pages, .workspace = workspace, .frame = frame, .scene = scene, .camera_preview = camera_preview, .drawables = drawables, .drawables_2d = drawables_2d, .overlay = overlay, .project = opened_project, .editor_modified = if (opened_project) |opened| editorModified(gpa, opened) else null, .upgrades = upgrades, .preference_folders = preference_folders, .open_scene = open_scene, .history = .{ .gpa = gpa }, .plugin_switches = plugin_switches, .project_assets = project_assets };
             self.workspace.close_guard = .{ .context = self, .mayClose = mayCloseScenes };
             self.input_settings = input_settings;
@@ -502,6 +515,8 @@ pub fn Editor(comptime project: type) type {
         /// defer host.deinit(); // Once after SDL stops delivering callbacks.
         /// ```
         pub fn deinit(self: *Self) void {
+            if (self.splash_shown) self.closeSplash();
+            splash.wait();
             icon.waitForProjectIcon();
             self.releaseViewportMouse();
             self.game_input.deinit(self.gpa);
@@ -616,7 +631,15 @@ pub fn Editor(comptime project: type) type {
                 return err;
             };
             try self.app.finishDiagnosticsFrame();
+            if (self.splash_shown) self.closeSplash();
             return result;
+        }
+
+        /// The editor's first frame is up: the splash screen can go.
+        fn closeSplash(self: *Self) void {
+            self.splash_shown = false;
+            if (self.project_assets) |loaders| loaders.loading = null;
+            splash.finish();
         }
 
         fn iterateFrame(self: *Self) !sdl3.AppResult {
@@ -3954,6 +3977,7 @@ pub fn Editor(comptime project: type) type {
 
 test {
     _ = cli;
+    _ = splash;
     _ = @import("input_mappings.zig");
     _ = @import("input_map_asset/input_map_asset.zig");
     _ = @import("animation_dock/animation_dock.zig");

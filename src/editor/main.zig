@@ -63,6 +63,11 @@ const callbacks = eggy.entry.Callbacks(State);
 /// // Only dispatch iterate/event when result == .run and state is non-null.
 /// ```
 pub fn init(init_data: sdl3.Init) !struct { ?State, sdl3.AppResult } {
+    // The splash screen the editor starts beside itself, in a process of its own.
+    if (editor.splash.isCommand(init_data.args)) {
+        editor.splash.run(try eggy.entry.processInit(init_data), init_data.args);
+        return .{ null, .success };
+    }
     if (editor.cli.isCommand(init_data.args)) {
         const process = try eggy.entry.processInit(init_data);
         editor.cli.run(process) catch |err| {

@@ -182,7 +182,7 @@ pub fn badge(image: []const u8, width: u32, height: u32, out: *Badged) !void {
     const plate_at = badged_size - plate;
     const radius: f32 = @floatFromInt(plate / 5);
     for (plate_at..badged_size) |y| for (plate_at..badged_size) |x| {
-        const coverage = roundedCoverage(@floatFromInt(x - plate_at), @floatFromInt(y - plate_at), @floatFromInt(plate), radius);
+        const coverage = roundedCoverage(@floatFromInt(x - plate_at), @floatFromInt(y - plate_at), @floatFromInt(plate), @floatFromInt(plate), radius);
         blend(out[(y * badged_size + x) * 4 ..][0..4], .{ 28, 25, 21, 255 }, coverage);
     };
     const inset = badged_size / 32;
@@ -209,12 +209,26 @@ fn blend(pixel: *[4]u8, color: [4]u8, coverage: f32) void {
     pixel[3] = @max(pixel[3], @as(u8, @intFromFloat(@round(coverage * 255))));
 }
 
-/// How much of the pixel at `x`, `y` a `side` square with corners rounded by `radius` covers.
-pub fn roundedCoverage(x: f32, y: f32, side: f32, radius: f32) f32 {
-    const cx = std.math.clamp(x + 0.5, radius, side - radius);
-    const cy = std.math.clamp(y + 0.5, radius, side - radius);
-    const distance = @sqrt((x + 0.5 - cx) * (x + 0.5 - cx) + (y + 0.5 - cy) * (y + 0.5 - cy));
-    return std.math.clamp(radius - distance + 0.5, 0, 1);
+/// How much of the pixel at `x`, `y` a `width` by `height` rectangle with corners rounded by
+/// `radius` covers.
+pub fn roundedCoverage(x: f32, y: f32, width: f32, height: f32, radius: f32) f32 {
+    return std.math.clamp(0.5 - roundedDistance(x, y, width, height, radius), 0, 1);
+}
+
+/// How far the middle of the pixel at `x`, `y` is outside the edge of a `width` by `height`
+/// rectangle with corners rounded by `radius`, in pixels; negative inside it.
+pub fn roundedDistance(x: f32, y: f32, width: f32, height: f32, radius: f32) f32 {
+    const qx = @abs(x + 0.5 - width / 2) - (width / 2 - radius);
+    const qy = @abs(y + 0.5 - height / 2) - (height / 2 - radius);
+    const outside = @sqrt(@max(qx, 0) * @max(qx, 0) + @max(qy, 0) * @max(qy, 0));
+    return outside + @min(@max(qx, qy), 0) - radius;
+}
+
+test "a rounded rectangle covers its middle, not its corner, and edges by half" {
+    try std.testing.expectEqual(@as(f32, 1), roundedCoverage(40, 10, 80, 20, 6));
+    try std.testing.expectEqual(@as(f32, 0), roundedCoverage(0, 0, 80, 20, 6));
+    try std.testing.expectApproxEqAbs(@as(f32, 0.5), roundedCoverage(40, -0.5, 80, 20, 6), 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 2), roundedDistance(40, -2.5, 80, 20, 6), 0.001);
 }
 
 fn set(window: sdl3.video.Window) !void {
