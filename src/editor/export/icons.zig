@@ -54,6 +54,11 @@ pub const Icons = struct {
         return paintTinted(self.builtins[@backingInt(platform)], theme);
     }
 
+    /// A strip of film, drawn in the theme's text colour, as layout paint.
+    pub fn film(_: *const Icons) ui.Layout.Paint {
+        return .{ .custom = .{ .context = &film_strip, .draw = drawFilm } };
+    }
+
     /// A folder, tinted for `theme`, as layout paint.
     pub fn folder(self: *const Icons, theme: ui.Theme) ui.Layout.Paint {
         return paintTinted(self.folder_icon, theme);
@@ -103,5 +108,21 @@ test "every platform icon loads" {
     for (icons.builtins ++ [_]Tinted{ icons.package, icons.folder_icon }) |tinted| {
         try std.testing.expect(tinted.on_dark != null);
         try std.testing.expect(tinted.on_light != null);
+    }
+}
+
+const film_strip: u8 = 0;
+
+/// A frame of film: an outline with sprocket holes down both sides.
+fn drawFilm(_: *const anyopaque, c: *ui.Canvas, r: ui.Rect) anyerror!void {
+    const inset = r.w * 0.1;
+    const body = ui.Rect{ .x = r.x + inset, .y = r.y + r.h * 0.18, .w = r.w - 2 * inset, .h = r.h * 0.64 };
+    try c.roundRectStroke(body, c.theme.foreground, body.h * 0.12, @max(1, r.w / 20));
+    const hole = body.h * 0.12;
+    var index: u32 = 0;
+    while (index < 4) : (index += 1) {
+        const x = body.x + body.w * (0.14 + 0.24 * @as(f32, @floatFromInt(index)));
+        try c.rect(.{ .x = x, .y = body.y + hole, .w = hole, .h = hole }, c.theme.foreground);
+        try c.rect(.{ .x = x, .y = body.y + body.h - 2 * hole, .w = hole, .h = hole }, c.theme.foreground);
     }
 }
