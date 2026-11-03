@@ -624,18 +624,13 @@ fn locationLength(text: []const u8) ?usize {
     return if (end > found + extension.len) end else null;
 }
 
-/// Put `text` on the clipboard.
-/// Editor-host helper requiring SDL clipboard support. Copies borrowed bytes into a
-/// temporary C-allocator sentinel string, freed before return; allocation failure is ignored
-/// and SDL clipboard failure logs a warning.
+/// Put `text` (borrowed) on the clipboard; a failure logs a warning.
 ///
 /// ```zig
 /// terminal_view.copyToClipboard(terminal.selectedText() orelse terminal.content());
 /// ```
 pub fn copyToClipboard(text: []const u8) void {
-    var buffer = std.heap.c_allocator.dupeSentinel(u8, text, 0) catch return;
-    defer std.heap.c_allocator.free(buffer);
-    sdl3.clipboard.setText(buffer[0..text.len :0]) catch |err| std.log.warn("cannot copy: {t}", .{err});
+    eggy.clipboard.setText(text) catch |err| std.log.warn("cannot copy: {t}", .{err});
 }
 
 /// The offset `columns` characters on from `start`, stopping at `end`.

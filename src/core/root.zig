@@ -53,6 +53,7 @@ pub const refs = @import("refs.zig");
 pub const EntityRef = refs.EntityRef;
 pub const AssetRef = refs.AssetRef;
 pub const ui = @import("weeoui");
+pub const clipboard = @import("clipboard.zig");
 pub const Event = sdl_adapter.sdl.events.Event;
 pub const input = @import("input/input.zig");
 pub const input_backend = @import("input/backend.zig");

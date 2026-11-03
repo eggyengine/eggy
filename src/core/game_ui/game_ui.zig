@@ -5,6 +5,7 @@ const ui = @import("weeoui");
 const adapter = @import("weeoui_sdl3");
 const renderer = @import("weeoui_vitellus");
 const sdl = @import("vitellus_sdl3").sdl;
+const clipboard = @import("../clipboard.zig");
 const hit_test = @import("../ui_hit_test.zig");
 const input_types = @import("../input/types.zig");
 const input_state = @import("../input/state.zig");
@@ -305,9 +306,7 @@ pub const Overlay = struct {
     /// ```
     pub fn syncClipboard(self: *Overlay) !void {
         if (self.context.copied) |text| {
-            const copy = try self.gpa.dupeSentinel(u8, text, 0);
-            defer self.gpa.free(copy);
-            try sdl.clipboard.setText(copy);
+            try clipboard.setText(text);
         }
         if (self.context.paste_requested) {
             self.context.paste_requested = false;
