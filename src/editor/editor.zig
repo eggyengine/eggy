@@ -36,6 +36,7 @@ const panels = @import("panels.zig");
 /// allocation failure behavior, and a usage example.
 pub const logFn = @import("console_log.zig").logFn;
 pub const cli = @import("cli/cli.zig");
+pub const process_environ = @import("process_environ.zig");
 /// Eggy's own editor without a project: the launcher and New/Open Project (`launcher_main.zig`).
 pub const LauncherApp = @import("launcher_app.zig").LauncherApp;
 const ProjectFlow = @import("projects/flow.zig").ProjectFlow;
@@ -3927,6 +3928,7 @@ test {
     _ = @import("animation_dock/animation_dock.zig");
     _ = @import("ui_designer/ui_designer.zig");
     _ = @import("asset_preview.zig");
+    _ = @import("process_environ.zig");
     _ = @import("model_preview.zig");
     _ = @import("sound_preview.zig");
     _ = @import("scene_tabs.zig");

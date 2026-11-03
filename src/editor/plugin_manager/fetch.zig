@@ -1,7 +1,7 @@
 //! Reading a plugin's `eggy.zon` and read-me from where it is, an address or a path, in the
 //! background, so the Plugins window keeps drawing meanwhile.
 const std = @import("std");
-const builtin = @import("builtin");
+const process_environ = @import("../process_environ.zig");
 const eggy = @import("eggy");
 const source = @import("source.zig");
 const Manifest = eggy.plugin_manifest.Manifest;
@@ -69,7 +69,7 @@ pub const Fetch = struct {
     pub fn start(gpa: std.mem.Allocator, typed: []const u8, cwd: []const u8) !*Fetch {
         const self = try gpa.create(Fetch);
         errdefer gpa.destroy(self);
-        self.* = .{ .gpa = gpa, .threaded = .init(gpa, .{ .environ = processEnviron() }), .origin_arena = .init(gpa), .origin = undefined };
+        self.* = .{ .gpa = gpa, .threaded = .init(gpa, .{ .environ = process_environ.current() }), .origin_arena = .init(gpa), .origin = undefined };
         errdefer self.threaded.deinit();
         errdefer self.origin_arena.deinit();
         self.origin = try source.locate(self.origin_arena.allocator(), typed, cwd);
@@ -163,13 +163,6 @@ fn describe(err: anyerror) []const u8 {
         error.FileTooBig => "The file is too big to be a plugin's eggy.zon or read-me.",
         error.UnknownHostName, error.ConnectionRefused, error.NetworkUnreachable, error.TlsInitializationFailed => "Couldn't reach the server. Check the address and your connection.",
         else => "Couldn't read the plugin: see the Console.",
-    };
-}
-
-fn processEnviron() std.process.Environ {
-    return switch (builtin.os.tag) {
-        .windows => .{ .block = .global },
-        else => .{ .block = .{ .slice = std.mem.sliceTo(std.c.environ, null) } },
     };
 }
 

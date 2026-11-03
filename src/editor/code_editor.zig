@@ -1,6 +1,7 @@
 //! Opening a project's code in the code editor people chose (Edit > Settings, Code editor):
 //! the file and optional source position, with the project's folder as the workspace.
 const builtin = @import("builtin");
+const process_environ = @import("process_environ.zig");
 const std = @import("std");
 const file_manager = @import("file_manager.zig");
 
@@ -94,7 +95,7 @@ fn arguments(arena: std.mem.Allocator, choice: Choice, project_dir: []const u8, 
 /// Start the code editor from the project's folder, inheriting the editor's environment.
 fn start(gpa: std.mem.Allocator, project_dir: []const u8, argv: []const []const u8) !void {
     // The editor's own environment, so the command is looked up on its PATH.
-    var threaded: std.Io.Threaded = .init(gpa, .{ .environ = processEnviron() });
+    var threaded: std.Io.Threaded = .init(gpa, .{ .environ = process_environ.current() });
     defer threaded.deinit();
     // ponytail: the child isn't waited for, so a launcher that exits (`code` does) lingers as a zombie until the editor quits; reap it if that ever piles up.
     _ = try std.process.spawn(threaded.io(), .{
@@ -102,13 +103,6 @@ fn start(gpa: std.mem.Allocator, project_dir: []const u8, argv: []const []const 
         .cwd = .{ .path = project_dir },
         .stdin = .ignore,
     });
-}
-
-fn processEnviron() std.process.Environ {
-    return switch (builtin.os.tag) {
-        .windows => .{ .block = .global },
-        else => .{ .block = .{ .slice = std.mem.sliceTo(std.c.environ, null) } },
-    };
 }
 
 /// The command that starts `choice`; null for the system's default app.

@@ -5,6 +5,7 @@
 //! built, for `launchEditor`; or, to export it, the game is built to ship (`zig build export`).
 //! `status` reports how far it is.
 const builtin = @import("builtin");
+const process_environ = @import("../process_environ.zig");
 const std = @import("std");
 const eggy = @import("eggy");
 const template = @import("template.zig");
@@ -210,7 +211,7 @@ pub const Job = struct {
     pub fn start(gpa: std.mem.Allocator, options: Options) !*Job {
         const self = try gpa.create(Job);
         errdefer gpa.destroy(self);
-        self.* = .{ .gpa = gpa, .threaded = .init(gpa, .{ .environ = processEnviron() }), .dir = try gpa.dupe(u8, options.dir), .action = .open, .worker = undefined };
+        self.* = .{ .gpa = gpa, .threaded = .init(gpa, .{ .environ = process_environ.current() }), .dir = try gpa.dupe(u8, options.dir), .action = .open, .worker = undefined };
         errdefer self.freeText();
         errdefer self.threaded.deinit();
         self.resources_dir = try gpa.dupe(u8, options.resources_dir);
@@ -841,13 +842,6 @@ fn nearestCounter(nodes: []const ProgressNode, parents: []const u8) ?usize {
 const depthOf = build_steps.depthOf;
 
 /// The editor's own environment, for the job's I/O and the build it runs.
-fn processEnviron() std.process.Environ {
-    return switch (builtin.os.tag) {
-        .windows => .{ .block = .global },
-        else => .{ .block = .{ .slice = std.mem.sliceTo(std.c.environ, null) } },
-    };
-}
-
 /// What to tell someone when `err` stops the job.
 fn describe(err: anyerror) []const u8 {
     return switch (err) {

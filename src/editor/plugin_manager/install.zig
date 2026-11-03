@@ -5,6 +5,7 @@
 const std = @import("std");
 const zon_file = @import("eggy").assets.zon;
 const builtin = @import("builtin");
+const process_environ = @import("../process_environ.zig");
 const package_removal = @import("package_removal.zig");
 
 pub const Request = struct {
@@ -46,7 +47,7 @@ pub const Install = struct {
     pub fn start(gpa: std.mem.Allocator, request: Request) !*Install {
         const self = try gpa.create(Install);
         errdefer gpa.destroy(self);
-        self.* = .{ .gpa = gpa, .threaded = .init(gpa, .{ .environ = processEnviron() }), .arena = .init(gpa), .request = undefined };
+        self.* = .{ .gpa = gpa, .threaded = .init(gpa, .{ .environ = process_environ.current() }), .arena = .init(gpa), .request = undefined };
         errdefer self.threaded.deinit();
         errdefer self.arena.deinit();
         const a = self.arena.allocator();
@@ -230,13 +231,6 @@ fn describe(err: anyerror) []const u8 {
     return switch (err) {
         error.ZigNotFound => "Zig 0.16 isn't on your PATH. Install it, then try again.",
         else => "Couldn't fetch the plugin's package: see the Console.",
-    };
-}
-
-fn processEnviron() std.process.Environ {
-    return switch (builtin.os.tag) {
-        .windows => .{ .block = .global },
-        else => .{ .block = .{ .slice = std.mem.sliceTo(std.c.environ, null) } },
     };
 }
 

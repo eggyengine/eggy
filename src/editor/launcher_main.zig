@@ -57,6 +57,8 @@ pub fn init(init_data: sdl3.Init) !struct { ?State, sdl3.AppResult } {
         };
         return .{ null, .success };
     }
+    // Opened from the desktop, PATH may lack the zig every build runs.
+    editor.process_environ.adoptShellPath(init_data.gpa);
     const state, const result = try callbacks.init(init_data);
     return .{ state, result };
 }
