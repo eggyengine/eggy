@@ -1,6 +1,7 @@
-//! The Asset Preview panel's sound player: the sound selected in Assets drawn as its waveform,
-//! the part played lit, to click or drag on to play from there (or, once clicked, Left and Right
-//! to seek and Home and End to jump), with the time, Play and Pause, Stop and Loop under it.
+//! The Asset Preview panel's sound player: the sound selected in Assets drawn as its waveform
+//! across the stage, the part played lit, to click or drag on to play from there (or, once
+//! clicked, Left and Right to seek and Home and End to jump), with the time, Play and Pause, Stop,
+//! Loop and the preview's volume under it.
 const std = @import("std");
 const eggy = @import("eggy");
 const ui = eggy.ui;
@@ -8,7 +9,9 @@ const page_style = @import("page_style.zig");
 
 /// How many stretches of the sound its waveform is read in; drawn bars take the loudest of theirs.
 const peak_count = 256;
-const waveform_height: f32 = 72;
+/// The rows under the waveform: the times, then the controls.
+const times_height: f32 = 16;
+const controls_height: f32 = 36;
 /// How far Left and Right seek, in seconds.
 const seek_step_s: f32 = 5;
 
@@ -19,6 +22,8 @@ pub const Request = struct {
     /// The Asset Preview's file `version`: a new one is another file (or the file changed).
     version: u64,
     app: *eggy.App,
+    /// The stage's height, which the waveform and the rows under it share.
+    height: f32 = 0,
 };
 
 /// What a sound file holds, as decoding it found.
@@ -37,6 +42,8 @@ pub const SoundPreview = struct {
     voice: ?eggy.audio.Voice = null,
     paused: bool = false,
     looping: bool = false,
+    /// How loud the preview plays, 0 to 1; the sound's own level is 1.
+    gain: f32 = 1,
     /// Where play starts from while nothing plays, in seconds.
     cursor_s: f32 = 0,
 
@@ -91,21 +98,22 @@ pub const SoundPreview = struct {
         const now_s = if (self.voice) |voice| audio.position(voice) orelse self.cursor_s else self.cursor_s;
         const shown_s = dragged_s orelse now_s;
         const progress = if (info.duration_s > 0) std.math.clamp(shown_s / info.duration_s, 0, 1) else 0;
-        self.waveform(context, id, progress, self.voice != null or shown_s > 0);
+        self.waveform(context, id, progress, self.voice != null or shown_s > 0, @max(48, request.height - times_height - controls_height - 2 * 8));
 
         // The time played and the whole length, at the waveform's two ends.
         const arena = context.builder().allocator;
         context.begin(.row);
-        context.muted(clockText(arena, shown_s));
-        page_style.smallText(context, 12);
-        page_style.restyle(context, .{ .grow = 1 });
+        context.text(clockText(arena, shown_s));
+        page_style.smallText(context, 11);
+        page_style.spacer(context);
         context.muted(clockText(arena, info.duration_s));
-        page_style.smallText(context, 12);
+        page_style.smallText(context, 11);
         page_style.endRow(context);
+        page_style.restyle(context, .{ .height = times_height });
 
         context.begin(.row);
         const playing = self.voice != null and !self.paused;
-        if (context.buttonVariant(if (playing) "Pause##sound play" else "Play##sound play", if (playing) .outline else .default)) {
+        if (page_style.iconButton(context, if (playing) "\u{f04c}" else "\u{f04b}", if (playing) "Pause" else "Play", playing)) {
             if (playing) {
                 audio.pause(self.voice.?) catch {};
                 self.paused = true;
@@ -114,11 +122,19 @@ pub const SoundPreview = struct {
                 self.paused = false;
             } else self.playFrom(request, self.cursor_s);
         }
-        if (context.buttonVariant("Stop##sound stop", .outline)) self.stop(request.app);
-        if (context.toggle("Loop##sound loop", &self.looping)) if (self.voice) |voice| {
-            audio.setRepeat(voice, if (self.looping) .loop else .once) catch {};
+        if (page_style.iconButton(context, "\u{f04d}", "Stop", false)) self.stop(request.app);
+        if (page_style.iconButton(context, "\u{f01e}", "Loop", self.looping)) {
+            self.looping = !self.looping;
+            if (self.voice) |voice| audio.setRepeat(voice, if (self.looping) .loop else .once) catch {};
+        }
+        page_style.spacer(context);
+        context.muted("\u{f028}");
+        if (context.slider("Preview volume", &self.gain, 0, 1)) if (self.voice) |voice| {
+            audio.setGain(voice, self.gain) catch {};
         };
+        page_style.restyle(context, .{ .width = 96 });
         page_style.endRow(context);
+        page_style.restyle(context, .{ .height = controls_height });
     }
 
     /// End what plays and go back to the start.
@@ -146,7 +162,7 @@ pub const SoundPreview = struct {
         self.paused = false;
         self.cursor_s = start_s;
         const file = eggy.AssetRef(.audio).parse(request.key) catch return;
-        const options: eggy.audio.PlayOptions = .{ .bus = .master, .repeat = if (self.looping) .loop else .once, .start_s = start_s };
+        const options: eggy.audio.PlayOptions = .{ .gain = self.gain, .bus = .master, .repeat = if (self.looping) .loop else .once, .start_s = start_s };
         self.voice = audio.play(file, options) catch |err| return std.log.err("cannot play the sound: {t}", .{err});
     }
 
@@ -166,11 +182,12 @@ pub const SoundPreview = struct {
         };
     }
 
-    /// The waveform across the panel, lit up to `progress` (0 to 1), with a line there when `head`.
-    fn waveform(self: *const SoundPreview, context: *ui.Context, id: u32, progress: f32, head: bool) void {
+    /// The waveform across the panel, `height` points tall, lit up to `progress` (0 to 1), with a
+    /// line there when `head`.
+    fn waveform(self: *const SoundPreview, context: *ui.Context, id: u32, progress: f32, head: bool, height: f32) void {
         const shown = context.builder().allocator.create(Waveform) catch return;
         shown.* = .{ .peaks = &self.peaks, .progress = progress, .head = head };
-        const element = context.builder().node(id, .{ .width = context.contentWidth(), .height = waveform_height }, .{ .custom = .{ .context = shown, .draw = drawWaveform } }, &.{}) catch return;
+        const element = context.builder().node(id, .{ .width = context.contentWidth(), .height = height }, .{ .custom = .{ .context = shown, .draw = drawWaveform } }, &.{}) catch return;
         element.cursor = .pointer;
         element.accessibility = .{ .role = .slider, .label = "Position", .numeric_value = progress };
         context.element(element);

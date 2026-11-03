@@ -22,7 +22,7 @@ pub const Request = struct {
     /// Where the material swatches' textures are loaded.
     images: *ui_scenes.cache.Images,
     time_ms: u64,
-    /// The height left in the panel.
+    /// The stage's height, which the viewport, its controls and the tabs share.
     height: f32,
 };
 
@@ -95,6 +95,8 @@ pub const ModelPreview = struct {
     /// The clip `Request.clip` last asked for, so choosing another in the list sticks.
     asked_clip: std.ArrayList(u8) = .empty,
     tab: usize = @backingInt(Tab.materials),
+    /// The tab's list, scrolled within what the stage leaves it.
+    list_scroll: ui.Layout.ScrollState = .{},
     animator: eggy.animation.Animator = .{},
     drawable: eggy.mesh.Drawable = undefined,
     view: eggy.camera.View = .default,
@@ -111,6 +113,12 @@ pub const ModelPreview = struct {
         self.asked_clip.deinit(self.gpa);
     }
 
+    /// How many triangles and clips the model shown has; null before it is read.
+    pub fn counts(self: *const ModelPreview) ?struct { triangles: usize, clips: usize } {
+        const summary = self.summary orelse return null;
+        return .{ .triangles = summary.triangles, .clips = summary.clips.len };
+    }
+
     /// What the editor renders this frame; null when no model is shown.
     pub fn shot(self: *ModelPreview) ?Shot {
         if (!self.shown or self.area.w < 1 or self.area.h < 1) return null;
@@ -124,11 +132,7 @@ pub const ModelPreview = struct {
         switch (event) {
             .pointer_down => |down| {
                 if (down.button != .left or !self.area.contains(down.position.x, down.position.y)) return false;
-                if (down.clicks >= 2) {
-                    self.yaw_deg = 35;
-                    self.pitch_deg = -20;
-                    self.zoom = 1;
-                }
+                if (down.clicks >= 2) self.frame();
                 self.turning = down.position;
                 return true;
             },
@@ -169,33 +173,37 @@ pub const ModelPreview = struct {
         const duration_s = self.clipDuration(request, summary, key);
         self.place(bounds, summary, duration_s, request.time_ms);
 
-        // The viewport fills most of the panel; the editor draws the model into it.
+        // The viewport takes most of the stage; the editor draws the model into it.
         const width = context.contentWidth();
-        const side = @max(160, request.height * 0.55);
+        const side = @max(160, request.height * 0.6);
         context.element(context.builder().node(0, .{ .width = width, .height = side }, .{ .custom = .{ .context = &self.area, .draw = recordArea } }, &.{}) catch return);
         self.shown = true;
 
         self.playback(context, summary, duration_s, request.time_ms);
-        _ = context.tabs(&.{ std.fmt.allocPrint(context.builder().allocator, "Materials ({d})##model tab", .{summary.materials.len}) catch "Materials##model tab", "Mesh##model tab" }, &self.tab);
+        _ = context.tabs(&.{ std.fmt.allocPrint(context.builder().allocator, "Materials {d}##model tab", .{summary.materials.len}) catch "Materials##model tab", "Mesh##model tab" }, &self.tab);
+        // What the viewport, its row and the tabs leave of the stage, so the status bar stays put.
+        context.beginScroll(&self.list_scroll, @max(60, request.height - side - 30 - 34 - 3 * 8));
         switch (@as(Tab, @fromBackingInt(@intCast(self.tab)))) {
             .materials => materialList(context, request, summary),
             .mesh => meshTable(context, summary, bounds),
         }
+        context.end();
     }
 
-    /// Play and pause, the clip to play, where it is, and a bar to scrub through it. Nothing for
-    /// a model without animations.
+    /// One row under the viewport: Frame the model; with animations, play and pause, the clip
+    /// to play, a bar to scrub through it and where it is.
     fn playback(self: *ModelPreview, context: *ui.Context, summary: Summary, duration_s: f32, time_ms: u64) void {
-        if (summary.clips.len == 0) return;
         const arena = context.builder().allocator;
-        const now_s = self.timeAt(time_ms);
         context.begin(.row);
-        if (context.buttonVariant(if (self.playing) "Pause##model play" else "Play##model play", if (self.playing) .outline else .default)) {
+        if (page_style.iconButton(context, "\u{f065}", "Frame the model", false)) self.frame();
+        if (summary.clips.len == 0) return page_style.endRow(context);
+        const now_s = self.timeAt(time_ms);
+        if (page_style.iconButton(context, if (self.playing) "\u{f04c}" else "\u{f04b}", if (self.playing) "Pause the animation" else "Play the animation", self.playing)) {
             self.offset_s = now_s;
             self.started_ms = time_ms;
             self.playing = !self.playing;
         }
-        const names = arena.alloc([]const u8, summary.clips.len) catch return context.end();
+        const names = arena.alloc([]const u8, summary.clips.len) catch return page_style.endRow(context);
         for (names, summary.clips) |*name, clip| name.* = clip.name;
         var chosen = self.clip;
         if (context.select("##model clip", names, &chosen)) {
@@ -203,18 +211,24 @@ pub const ModelPreview = struct {
             self.offset_s = 0;
             self.started_ms = time_ms;
         }
-        page_style.restyle(context, .{ .grow = 1 });
-        const shown_s = if (duration_s > 0) @mod(now_s, duration_s) else now_s;
-        context.muted(std.fmt.allocPrint(arena, "{d:.2} / {d:.2} s", .{ shown_s, duration_s }) catch "");
-        page_style.smallText(context, 12);
-        page_style.endRow(context);
-
         // Dragging the bar holds the clip at that moment.
+        const shown_s = if (duration_s > 0) @mod(now_s, duration_s) else now_s;
         var scrub = shown_s;
         if (duration_s > 0 and context.slider("##model scrub", &scrub, 0, duration_s)) {
             self.playing = false;
             self.offset_s = scrub;
         }
+        page_style.restyle(context, .{ .grow = 1 });
+        context.muted(std.fmt.allocPrint(arena, "{d:.2} / {d:.2} s", .{ shown_s, duration_s }) catch "");
+        page_style.smallText(context, 11);
+        page_style.endRow(context);
+    }
+
+    /// Look at the model again from the start: turned as it first was, fitted in view.
+    fn frame(self: *ModelPreview) void {
+        self.yaw_deg = 35;
+        self.pitch_deg = -20;
+        self.zoom = 1;
     }
 
     /// Where the chosen clip is at `time_ms`, in seconds from its start.
@@ -257,9 +271,7 @@ pub const ModelPreview = struct {
             std.log.err("cannot preview {s}: {t}", .{ request.path, err });
             break :blk null;
         };
-        self.yaw_deg = 35;
-        self.pitch_deg = -20;
-        self.zoom = 1;
+        self.frame();
         self.clip = 0;
         self.playing = false;
         self.offset_s = 0;

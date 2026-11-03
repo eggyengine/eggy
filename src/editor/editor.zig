@@ -82,6 +82,7 @@ const animation_dock = @import("animation_dock/animation_dock.zig");
 const ui_designer = @import("ui_designer/ui_designer.zig");
 const AssetPreview = @import("asset_preview.zig").AssetPreview;
 const AssetPreviewRequest = @import("asset_preview.zig").Request;
+const AssetPreviewAction = @import("asset_preview.zig").Action;
 const Scene2dPanel = @import("scene_2d/scene_2d.zig");
 const Scene2d = Scene2dPanel.Scene2d;
 /// The 3D Scene panel or the flat 2D one.
@@ -777,13 +778,17 @@ pub fn Editor(comptime project: type) type {
                     panels.ui_designer_page => if (self.uiDesignerEnv()) |env| self.ui_designer.buildPreview(page_ui, env) else page_ui.muted("Open a project to design UI."),
                     panels.ui_tree_page => if (self.uiDesignerEnv()) |env| self.ui_designer.buildTree(page_ui, env) else page_ui.muted("Open a project to design UI."),
                     panels.asset_preview_page => if (self.project) |opened| if (self.project_assets) |project_assets| {
-                        self.asset_preview.build(page_ui, .{
+                        const kept_copy = self.workspace.live.asset_preview;
+                        const asked = self.asset_preview.build(page_ui, .{
                             .selection = self.previewed(),
+                            .kept = kept_copy > 0 and self.workspace.tabs.previews[kept_copy] != null,
                             .assets = project_assets,
+                            .icons = &self.asset_icons,
                             .project_dir = opened.dir,
                             .app = &self.app,
                             .time_ms = page_ui.time_ms,
                         });
+                        if (asked) |action| self.applyPreviewAction(action);
                     } else page_ui.muted("Open a project to preview its files.") else page_ui.muted("Open a project to preview its files."),
                     panels.ui_properties_page => if (self.uiDesignerEnv()) |env| self.ui_designer.buildProperties(page_ui, env, self.dragging(page_ui.builder().allocator)) else page_ui.muted("Open a project to design UI."),
                     panels.scene_2d_page => self.scene_2d.build(page_ui, if (self.tileBrushEnv() != null) &self.app else null, self.gpa),
@@ -1434,6 +1439,22 @@ pub fn Editor(comptime project: type) type {
                     std.log.err("cannot change the files: {t}", .{err});
                     self.workspace.toast("Couldn't do that: see the Console");
                 },
+            }
+        }
+
+        /// Do what the Asset Preview's header asked: keep its file in a tab, find it in Assets, or
+        /// edit it in the code editor.
+        fn applyPreviewAction(self: *Self, action: AssetPreviewAction) void {
+            switch (action) {
+                .keep_in_tab => |path| self.workspace.openAsset(path, .tab) catch |err| {
+                    std.log.err("cannot keep {s} in a tab: {t}", .{ path, err });
+                    self.workspace.toast("Couldn't open another tab: close one first");
+                },
+                .show_in_assets => |found| {
+                    self.assets_panel.reveal(found.path, found.virtual);
+                    self.workspace.showPanel(.assets) catch |err| std.log.err("cannot show Assets: {t}", .{err});
+                },
+                .edit => |path| self.applyAssetAction(.{ .open_code = path }),
             }
         }
 

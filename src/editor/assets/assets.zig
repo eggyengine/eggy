@@ -607,7 +607,7 @@ pub const AssetsPanel = struct {
             b.node(0, .{ .grow = 1 }, .{ .text = .{ .value = name, .size = 12, .tone = if (self.isDragged(item.entry.path)) .muted else .foreground } }, &.{}) catch return,
             b.node(0, .{}, .{ .text = .{ .value = note_text, .size = 11, .tone = .muted } }, &.{}) catch return,
         };
-        const element = b.node(id, .{ .height = row_height, .direction = .row, .align_items = .center, .gap = 6, .padding = .{ .left = left + 4, .right = 6 } }, highlight(arena, id, self.isSelected(item.entry.path), self.isDropInto(item.entry.path)), &children) catch return;
+        const element = b.node(id, .{ .height = row_height, .direction = .row, .align_items = .center, .gap = 6, .padding = .{ .left = left + 4, .right = 6 } }, page_style.highlight(arena, id, self.isSelected(item.entry.path), self.isDropInto(item.entry.path)), &children) catch return;
         element.cursor = .pointer;
         element.accessibility = .{ .role = .menu_item, .label = item.entry.name };
         context.element(element);
@@ -619,7 +619,7 @@ pub const AssetsPanel = struct {
         const id = view_id_base + @backingInt(view);
         if (context.activated(id)) self.view = view;
         const icon: Icon = if (view == .list) .list else .grid;
-        const element = b.node(id, .{ .width = 24, .height = 24, .padding = .{ .left = 4, .right = 4, .top = 4, .bottom = 4 } }, highlight(b.allocator, id, self.view == view, false), &.{
+        const element = b.node(id, .{ .width = 24, .height = 24, .padding = .{ .left = 4, .right = 4, .top = 4, .bottom = 4 } }, page_style.highlight(b.allocator, id, self.view == view, false), &.{
             b.node(0, .{ .width = 16, .height = 16 }, icons.paint(icon, context.theme), &.{}) catch return,
         }) catch return;
         element.cursor = .pointer;
@@ -632,7 +632,7 @@ pub const AssetsPanel = struct {
     fn ideButton(self: *AssetsPanel, context: *ui.Context, icons: *const Icons) ?[]const u8 {
         const b = context.builder();
         const id = ide_button_id;
-        const element = b.node(id, .{ .width = 24, .height = 24, .padding = .{ .left = 4, .right = 4, .top = 4, .bottom = 4 } }, highlight(b.allocator, id, false, false), &.{
+        const element = b.node(id, .{ .width = 24, .height = 24, .padding = .{ .left = 4, .right = 4, .top = 4, .bottom = 4 } }, page_style.highlight(b.allocator, id, false, false), &.{
             b.node(0, .{ .width = 16, .height = 16 }, icons.paint(.code, context.theme), &.{}) catch return null,
         }) catch return null;
         element.cursor = .pointer;
@@ -651,7 +651,7 @@ pub const AssetsPanel = struct {
         // Renamed in a field of its own: a tile is too narrow to type in.
         if (self.renamingThis(item.entry.path)) return self.renameField(context, icons.paint(Icon.of(item.entry.kind), context.theme), 0);
         const name = page_style.fitText(arena, context.font, item.entry.name, 11, tile_width - 12);
-        const element = b.node(id, .{ .width = tile_width, .height = tile_height, .align_items = .center, .gap = 6, .padding = .{ .top = 10, .left = 6, .right = 6 } }, highlight(arena, id, self.isSelected(item.entry.path) or is_open, self.isDropInto(item.entry.path)), &.{
+        const element = b.node(id, .{ .width = tile_width, .height = tile_height, .align_items = .center, .gap = 6, .padding = .{ .top = 10, .left = 6, .right = 6 } }, page_style.highlight(arena, id, self.isSelected(item.entry.path) or is_open, self.isDropInto(item.entry.path)), &.{
             b.node(0, .{ .width = 40, .height = 40 }, icons.paint(Icon.of(item.entry.kind), context.theme), &.{}) catch return,
             b.node(0, .{}, .{ .text = .{ .value = name, .size = 11, .alignment = .center, .tone = if (self.isDragged(item.entry.path)) .muted else .foreground } }, &.{}) catch return,
         }) catch return;
@@ -980,6 +980,25 @@ pub const AssetsPanel = struct {
         return .{ .path = self.selected.items, .virtual = self.selected_virtual };
     }
 
+    /// Select `path` (inside a model when `virtual`) with every folder above it open in the
+    /// list and its folder shown in the grid, clearing the filter so it is listed.
+    ///
+    /// ```zig
+    /// panel.reveal("resources/sprites/hero.png", false);
+    /// ```
+    pub fn reveal(self: *AssetsPanel, path: []const u8, virtual: bool) void {
+        self.filter = FilterEdit.init("") catch unreachable;
+        var parent = std.fs.path.dirname(path);
+        if (parent) |folder| self.enter(folder) else self.enter("");
+        while (parent) |folder| : (parent = std.fs.path.dirname(folder)) {
+            if (self.expanded.contains(folder)) continue;
+            const owned = self.gpa.dupe(u8, folder) catch return;
+            self.expanded.put(self.gpa, owned, {}) catch self.gpa.free(owned);
+        }
+        // `path` may be the selection itself, which selecting again would copy onto itself.
+        if (!self.isSelected(path)) self.select(path, virtual);
+    }
+
     /// Open or close folder (or model) `path` in the list.
     fn toggle(self: *AssetsPanel, path: []const u8) void {
         if (self.expanded.fetchRemove(path)) |removed| return self.gpa.free(removed.key);
@@ -1059,26 +1078,6 @@ const Target = union(enum) {
 
 /// A row's or tile's background: lit when selected, lighter under the pointer, outlined as a
 /// drag's target (as the Hierarchy's rows are).
-fn highlight(arena: std.mem.Allocator, id: u32, selected: bool, drop_into: bool) L.Paint {
-    const look = arena.create(Highlight) catch return .none;
-    look.* = .{ .id = id, .selected = selected, .drop_into = drop_into };
-    return .{ .custom = .{ .context = look, .draw = Highlight.draw } };
-}
-
-const Highlight = struct {
-    id: u32,
-    selected: bool,
-    drop_into: bool,
-
-    fn draw(context: *const anyopaque, c: *ui.Canvas, r: ui.Rect) anyerror!void {
-        const self: *const Highlight = @ptrCast(@alignCast(context));
-        if (self.selected) {
-            try c.roundRect(r, c.theme.accent, c.theme.radiusSm());
-        } else if (c.hot_id == self.id) try c.roundRectAlpha(r, c.theme.accent, c.theme.radiusSm(), 0.5);
-        if (self.drop_into) try c.roundRectStroke(r, c.theme.primary, c.theme.radiusSm(), 1.5);
-    }
-};
-
 const ui_checks = @import("../ui_checks.zig");
 
 /// The tallest the New menu grows before it scrolls: about ten rows.
@@ -1430,4 +1429,18 @@ test "a rename selects the name before its extensions" {
     try edit.set(".gitignore");
     AssetsPanel.selectStem(edit);
     try std.testing.expectEqual(@as(usize, 10), edit.selection().?.end);
+}
+
+test "revealing a file selects it with its folders open and shown, even when it is the selection" {
+    var panel = AssetsPanel.init(std.testing.allocator);
+    defer panel.deinit();
+    panel.filter = FilterEdit.init("hero") catch unreachable;
+    panel.reveal("resources/sprites/hero.png", false);
+    try std.testing.expectEqualStrings("resources/sprites/hero.png", panel.selection().?.path);
+    try std.testing.expectEqualStrings("resources/sprites", panel.folder.items);
+    try std.testing.expect(panel.expanded.contains("resources"));
+    try std.testing.expect(panel.expanded.contains("resources/sprites"));
+    try std.testing.expectEqualStrings("", panel.filter.text());
+    panel.reveal(panel.selection().?.path, false);
+    try std.testing.expectEqualStrings("resources/sprites/hero.png", panel.selection().?.path);
 }

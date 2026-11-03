@@ -207,3 +207,62 @@ fn drawRail(context: *const anyopaque, c: *ui.Canvas, r: ui.Rect) anyerror!void 
 pub fn pageHeight(context: *const ui.Context) f32 {
     return @max(1, context.viewport.h - 2 * context.pagePadding());
 }
+
+/// A highlight for a hand-built row, tile or button with `id`: lit while `selected`, faint
+/// while hovered, ringed while something dragged would drop into it. Allocates in `arena`.
+///
+/// ```zig
+/// const row = b.node(id, .{ .height = 24 }, page_style.highlight(arena, id, selected, false), &.{});
+/// ```
+pub fn highlight(arena: std.mem.Allocator, id: u32, selected: bool, drop_into: bool) ui.Layout.Paint {
+    const look = arena.create(Highlight) catch return .none;
+    look.* = .{ .id = id, .selected = selected, .drop_into = drop_into };
+    return .{ .custom = .{ .context = look, .draw = Highlight.draw } };
+}
+
+const Highlight = struct {
+    id: u32,
+    selected: bool,
+    drop_into: bool,
+
+    fn draw(context: *const anyopaque, c: *ui.Canvas, r: ui.Rect) anyerror!void {
+        const self: *const Highlight = @ptrCast(@alignCast(context));
+        if (self.selected) {
+            try c.roundRect(r, c.theme.accent, c.theme.radiusSm());
+        } else if (c.hot_id == self.id) try c.roundRectAlpha(r, c.theme.accent, c.theme.radiusSm(), 0.5);
+        if (self.drop_into) try c.roundRectStroke(r, c.theme.primary, c.theme.radiusSm(), 1.5);
+    }
+};
+
+/// A square toolbar button showing `glyph` (a Nerd Font symbol), lit while `lit`. `label` names
+/// it for screen readers and its tooltip, and keys its id, so it must be unique on the page.
+/// Returns whether it was pressed this frame.
+///
+/// ```zig
+/// if (page_style.iconButton(context, "\u{f04b}", "Play", false)) play();
+/// ```
+pub fn iconButton(context: *ui.Context, glyph: []const u8, label: []const u8, lit: bool) bool {
+    const b = context.builder();
+    const id = context.idFor(label);
+    const button = b.node(id, .{ .width = 26, .height = 26, .align_items = .center, .justify = .center }, highlight(b.allocator, id, lit, false), &.{
+        b.node(0, .{}, .{ .text = .{ .value = glyph, .size = 14, .tone = if (lit) .foreground else .muted } }, &.{}) catch return false,
+    }) catch return false;
+    button.cursor = .pointer;
+    button.accessibility = .{ .role = .button, .label = label };
+    context.element(button);
+    context.tooltip(label);
+    return context.activated(id);
+}
+
+/// An empty element that takes the rest of a row, pushing what follows to its end.
+///
+/// ```zig
+/// context.begin(.row);
+/// context.text("Left");
+/// page_style.spacer(context);
+/// context.text("Right");
+/// page_style.endRow(context);
+/// ```
+pub fn spacer(context: *ui.Context) void {
+    context.element(context.builder().node(0, .{ .grow = 1 }, .none, &.{}) catch return);
+}
