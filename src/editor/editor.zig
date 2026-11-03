@@ -502,6 +502,7 @@ pub fn Editor(comptime project: type) type {
         /// defer host.deinit(); // Once after SDL stops delivering callbacks.
         /// ```
         pub fn deinit(self: *Self) void {
+            icon.waitForProjectIcon();
             self.releaseViewportMouse();
             self.game_input.deinit(self.gpa);
             self.extension_state.deinit(self.gpa);
@@ -604,6 +605,7 @@ pub fn Editor(comptime project: type) type {
         /// ```
         pub fn iterate(self: *Self) !sdl3.AppResult {
             self.followInstances();
+            if (icon.loadedProjectIcon()) self.applyIcon();
             // Graphics choices queued since last frame take effect before anything is drawn.
             try self.app.applyGraphicsSettings();
             self.app.beginDiagnosticsFrame();
@@ -2069,13 +2071,20 @@ pub fn Editor(comptime project: type) type {
             self.workspace.scene_unsaved = false;
         }
 
-        /// Put the project's icon (as `eggy.zon` now has it) on the editor's main window and
-        /// Preferences, the window it is chosen in; others take it as they next open.
+        /// Load the project's icon (as `eggy.zon` now has it) for the editor's windows, which
+        /// take it when it is ready (see `applyIcon`).
         fn refreshProjectIcon(self: *Self) void {
             const opened = self.project orelse return;
             useProjectIcon(self.gpa, opened.dir);
+            self.applyIcon();
+        }
+
+        /// Put the icon `icon.apply` gives now on the editor's main window, Preferences and the
+        /// panels popped out of the dock; other windows take it as they open.
+        fn applyIcon(self: *Self) void {
             icon.apply(self.app.window.window);
             if (self.preferences_window) |window| icon.apply(window.window.popout.window.window);
+            for (self.popouts) |popout| if (popout) |open| icon.apply(open.window.window);
         }
 
         /// File > Project Settings (and Export's button): Preferences on its Project section.
@@ -2345,7 +2354,8 @@ pub fn Editor(comptime project: type) type {
             return rect;
         }
 
-        /// Badge the editor's icon with the icon `eggy.zon` in `project_dir` names, if any.
+        /// Start badging the editor's icon with the icon `eggy.zon` in `project_dir` names, if
+        /// any; `icon.loadedProjectIcon` says when it is ready.
         fn useProjectIcon(gpa: std.mem.Allocator, project_dir: []const u8) void {
             var threaded: std.Io.Threaded = .init_single_threaded;
             const io = threaded.io();
@@ -2354,7 +2364,7 @@ pub fn Editor(comptime project: type) type {
             var dir = std.Io.Dir.cwd().openDir(io, project_dir, .{}) catch return icon.useBadge(null);
             defer dir.close(io);
             const config = eggy.project.load(arena.allocator(), io, dir) catch return icon.useBadge(null);
-            icon.useProjectIcon(gpa, project_dir, config.icon);
+            icon.loadProjectIcon(gpa, project_dir, config.icon);
         }
 
         fn pixelSize(rect: ui.Rect) eggy.vit.Extent2D {

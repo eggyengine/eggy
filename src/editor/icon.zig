@@ -53,6 +53,100 @@ pub fn useProjectIcon(gpa: std.mem.Allocator, project_dir: []const u8, icon_path
     useBadge(badged);
 }
 
+/// A project icon being badged on a thread of its own, as `loadProjectIcon` started it.
+const Loading = struct {
+    gpa: std.mem.Allocator,
+    thread: std.Thread,
+    project_dir: []u8,
+    path: []u8,
+    badged: *Badged,
+    failure: ?anyerror = null,
+    done: std.atomic.Value(bool) = .init(false),
+
+    fn run(self: *Loading) void {
+        decodeBadge(self.gpa, self.project_dir, self.path, self.badged) catch |err| {
+            self.failure = err;
+        };
+        self.done.store(true, .release);
+    }
+
+    /// Wait for the thread, use what it made, and free it all.
+    fn finish(self: *Loading) void {
+        self.thread.join();
+        if (self.failure) |err| {
+            std.log.warn("cannot use {s} as the project's icon: {t}", .{ self.path, err });
+            useBadge(null);
+        } else useBadge(self.badged);
+        self.gpa.free(self.project_dir);
+        self.gpa.free(self.path);
+        self.gpa.destroy(self.badged);
+        self.gpa.destroy(self);
+    }
+};
+
+// ponytail: one load at a time, process-wide like the badge; a second waits for the first.
+var loading: ?*Loading = null;
+
+/// Like `useProjectIcon`, but decoding on a thread, since a large image takes seconds: windows
+/// keep the icon they have until `loadedProjectIcon` says the new one is ready. Without a
+/// thread it decodes here instead.
+///
+/// ```zig
+/// icon.loadProjectIcon(gpa, opened.dir, config.icon);
+/// // Each frame:
+/// if (icon.loadedProjectIcon()) icon.apply(app.window.window);
+/// ```
+pub fn loadProjectIcon(gpa: std.mem.Allocator, project_dir: []const u8, icon_path: ?[]const u8) void {
+    waitForProjectIcon();
+    const path = icon_path orelse return useBadge(null);
+    start(gpa, project_dir, path) catch |err| {
+        std.log.debug("decoding the project's icon without a thread: {t}", .{err});
+        useProjectIcon(gpa, project_dir, path);
+    };
+}
+
+fn start(gpa: std.mem.Allocator, project_dir: []const u8, path: []const u8) !void {
+    const job = try gpa.create(Loading);
+    errdefer gpa.destroy(job);
+    const badged = try gpa.create(Badged);
+    errdefer gpa.destroy(badged);
+    const dir_copy = try gpa.dupe(u8, project_dir);
+    errdefer gpa.free(dir_copy);
+    const path_copy = try gpa.dupe(u8, path);
+    errdefer gpa.free(path_copy);
+    job.* = .{ .gpa = gpa, .thread = undefined, .project_dir = dir_copy, .path = path_copy, .badged = badged };
+    job.thread = try std.Thread.spawn(.{}, Loading.run, .{job});
+    loading = job;
+}
+
+/// Whether the icon `loadProjectIcon` started is now the one `apply` gives, for the first time:
+/// apply it to the windows already open. Call from the thread that started it.
+pub fn loadedProjectIcon() bool {
+    const job = loading orelse return false;
+    if (!job.done.load(.acquire)) return false;
+    loading = null;
+    job.finish();
+    return true;
+}
+
+/// Block until a load `loadProjectIcon` started is done, then use it; before freeing what the
+/// editor gave it, or starting another.
+pub fn waitForProjectIcon() void {
+    const job = loading orelse return;
+    loading = null;
+    job.finish();
+}
+
+test "a project icon loads on its thread and is used once taken" {
+    const gpa = std.testing.allocator;
+    useBadge(null);
+    loadProjectIcon(gpa, "/nonexistent-eggy-project", "icon.png");
+    // A file that isn't there falls back to the plain egg, said once the thread is done.
+    while (!loadedProjectIcon()) try std.Thread.yield();
+    try std.testing.expect(!has_badge);
+    try std.testing.expect(!loadedProjectIcon());
+}
+
 /// The egg badged with the image file at `path` in `project_dir`, into `out`.
 /// Decoding and allocation errors propagate.
 pub fn decodeBadge(gpa: std.mem.Allocator, project_dir: []const u8, path: []const u8, out: *Badged) !void {
