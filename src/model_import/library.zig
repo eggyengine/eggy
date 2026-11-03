@@ -75,7 +75,7 @@ export fn eggy_decode_image(path: [*:0]const u8, out: *Bytes) bool {
     var width: c_int = 0;
     var height: c_int = 0;
     var channels: c_int = 0;
-    const pixels = c.stbi_load(path, &width, &height, &channels, 4) orelse return fail(c.stbi_failure_reason());
+    const pixels = c.stbi_load(path, &width, &height, &channels, 4) orelse return failStb();
     defer c.stbi_image_free(pixels);
     const size: usize = @intCast(width * height * 4);
     return serialize(assets.texture.write, assets.Texture{ .width = @intCast(width), .height = @intCast(height), .pixels = pixels[0..size] }, out);
@@ -86,7 +86,7 @@ fn decodeHdr(path: [*:0]const u8, out: *Bytes) bool {
     var width: c_int = 0;
     var height: c_int = 0;
     var channels: c_int = 0;
-    const pixels = c.stbi_loadf(path, &width, &height, &channels, 4) orelse return fail(c.stbi_failure_reason());
+    const pixels = c.stbi_loadf(path, &width, &height, &channels, 4) orelse return failStb();
     defer c.stbi_image_free(pixels);
     return serializeFloat(pixels, width, height, out);
 }
@@ -146,7 +146,7 @@ fn decodeGif(path: [*:0]const u8, out: *Bytes) ?bool {
     var height: c_int = 0;
     var frames: c_int = 0;
     var channels: c_int = 0;
-    const pixels = c.stbi_load_gif_from_memory(bytes.ptr, @intCast(bytes.len), &delays, &width, &height, &frames, &channels, 4) orelse return fail(c.stbi_failure_reason());
+    const pixels = c.stbi_load_gif_from_memory(bytes.ptr, @intCast(bytes.len), &delays, &width, &height, &frames, &channels, 4) orelse return failStb();
     defer c.stbi_image_free(pixels);
     defer if (delays != null) c.stbi_image_free(delays);
     const count: usize = @intCast(@max(frames, 1));
@@ -190,6 +190,12 @@ threadlocal var failure: ?[*:0]const u8 = null;
 fn fail(why: [*:0]const u8) bool {
     failure = why;
     return false;
+}
+
+/// Fail with stb_image's reason, which it doesn't always give (a missing file on a new thread).
+fn failStb() bool {
+    const why = c.stbi_failure_reason();
+    return fail(if (why != null) why else "it isn't an image stb_image reads");
 }
 
 /// `value` written by `write` into new bytes in `out`.
