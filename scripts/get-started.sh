@@ -33,7 +33,7 @@ esac
 # Stop before any prompt when a tool or the terminal is missing. Zig is offered next.
 require_tools() {
     local missing=() tool
-    for tool in curl tar mkdir rm mv ln tee id mktemp uname touch; do
+    for tool in curl grep tar mkdir rm mv ln tee id mktemp uname touch; do
         command -v "$tool" >/dev/null 2>&1 || missing+=("$tool")
     done
     # Permission bits are not enough: with no controlling terminal, open fails.
@@ -245,20 +245,28 @@ platform_name() {
     esac
 }
 
-# Where a channel's asset downloads from. `latest` skips prereleases, so it never serves the nightly.
+# Where a channel's asset downloads from. `latest` skips prereleases, so it never serves the nightly;
+# nightlies are tagged by day (`nightly-<yyyy-mm-dd>`), and GitHub lists the newest first.
 asset_url() {
-    local channel=$1 platform=$2
+    local channel=$1 platform=$2 tag
     case "$channel" in
         release) echo "https://github.com/${EGGY_REPO}/releases/latest/download/eggy-${platform}.tar.gz" ;;
-        nightly) echo "https://github.com/${EGGY_REPO}/releases/download/nightly/eggy-${platform}.tar.gz" ;;
+        nightly)
+            local releases
+            releases=$(curl -fsSL "https://api.github.com/repos/${EGGY_REPO}/releases?per_page=30") || return 1
+            tag=$(grep -o -m1 '"tag_name": *"nightly-[0-9-]*"' <<<"$releases" | grep -o 'nightly-[0-9-]*') || return 1
+            echo "https://github.com/${EGGY_REPO}/releases/download/${tag}/eggy-${platform}.tar.gz"
+            ;;
     esac
 }
 
 # Download `channel`'s launcher into `archive`; a failure returns, so the caller can offer another channel.
 download() {
     local channel=$1 platform=$2 archive=$3
+    local url
     echo "Downloading the ${channel} launcher." >/dev/tty
-    curl -fL --progress-bar "$(asset_url "$channel" "$platform")" -o "$archive" 2>/dev/tty
+    url=$(asset_url "$channel" "$platform") || return 1
+    curl -fL --progress-bar "$url" -o "$archive" 2>/dev/tty
 }
 
 # Unpack `archive` beside `dest` and swap it in, so a failed download or unpack leaves the old

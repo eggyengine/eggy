@@ -174,10 +174,14 @@ function Write-Egg {
 '@
 }
 
-# Where a channel's asset downloads from. `latest` skips prereleases, so it never serves the nightly.
+# Where a channel's asset downloads from. `latest` skips prereleases, so it never serves the nightly;
+# nightlies are tagged by day (`nightly-<yyyy-mm-dd>`), and GitHub lists the newest first.
 function Get-AssetUrl([string]$Channel) {
     if ($Channel -eq 'nightly') {
-        return "https://github.com/$EggyRepo/releases/download/nightly/eggy-$Platform.tar.gz"
+        $releases = Invoke-RestMethod -UseBasicParsing -Uri "https://api.github.com/repos/$EggyRepo/releases?per_page=30"
+        $tag = ($releases | Where-Object { $_.tag_name -like 'nightly-*' } | Select-Object -First 1).tag_name
+        if (-not $tag) { throw 'No nightly release found.' }
+        return "https://github.com/$EggyRepo/releases/download/$tag/eggy-$Platform.tar.gz"
     }
     return "https://github.com/$EggyRepo/releases/latest/download/eggy-$Platform.tar.gz"
 }

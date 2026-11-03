@@ -2,8 +2,9 @@
 # the project template and engine it unpacks for new projects), for Linux, Windows and macOS, and
 # publishes them as GitHub Release assets named `eggy-<platform>.tar.gz`, which
 # `scripts/get-started.sh` and `get-started.ps1` install. Each night that the default branch gained
-# a commit, the `nightly` prerelease is replaced with that commit's build; pushing a `v*` tag makes
-# that tag's release. Run it by hand from the Actions tab to rebuild the nightly regardless.
+# a commit makes that day's `nightly-<yyyy-mm-dd>` prerelease (Sydney's day, like the schedule); a
+# later build the same day replaces it. Pushing a `v*` tag makes that tag's release. Run it by hand
+# from the Actions tab to rebuild today's nightly regardless.
 name: Nightly
 
 on:
@@ -34,7 +35,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          echo "date=$(date -u +%Y-%m-%d)" >> "$GITHUB_OUTPUT"
+          echo "date=$(TZ=Australia/Sydney date +%Y-%m-%d)" >> "$GITHUB_OUTPUT"
           if [ "${{ github.event_name }}" != "schedule" ]; then
             echo "build=true" >> "$GITHUB_OUTPUT"
             exit 0
@@ -107,8 +108,8 @@ jobs:
           if-no-files-found: error
           retention-days: 3
 
-  # Releases serve their assets without a login, unlike workflow artifacts. The nightly is deleted
-  # and made again so its tag moves to the commit just built.
+  # Releases serve their assets without a login, unlike workflow artifacts. Today's nightly is
+  # deleted and made again, so its tag moves to the commit just built; earlier days' stay.
   publish:
     needs: [changed, build]
     runs-on: ubuntu-latest
@@ -127,7 +128,8 @@ jobs:
             gh release create "$GITHUB_REF_NAME" dist/*.tar.gz --repo "$GITHUB_REPOSITORY" --verify-tag --title "Eggy $GITHUB_REF_NAME" --generate-notes
             exit 0
           fi
-          gh release delete nightly --repo "$GITHUB_REPOSITORY" --cleanup-tag --yes || true
-          gh release create nightly dist/*.tar.gz --repo "$GITHUB_REPOSITORY" --prerelease --target "$GITHUB_SHA" \
+          tag="nightly-${{ needs.changed.outputs.date }}"
+          gh release delete "$tag" --repo "$GITHUB_REPOSITORY" --cleanup-tag --yes || true
+          gh release create "$tag" dist/*.tar.gz --repo "$GITHUB_REPOSITORY" --prerelease --target "$GITHUB_SHA" \
             --title "Nightly ${{ needs.changed.outputs.date }}" \
             --notes "Eggy's launcher built from $GITHUB_SHA. Install it with scripts/get-started.sh or get-started.ps1."
