@@ -63,6 +63,11 @@ test "the game's library loads, runs, swaps for a fresh copy, and unloads cleanl
     app.ui_scenes = .{ .gpa = gpa };
     defer app.ui_scenes.deinit();
     defer app.draw2d.deinit();
+    app.cutscene = .{};
+    app.animation_events = .empty;
+    app.animation_sounds = .empty;
+    defer app.animation_events.deinit(gpa);
+    defer app.animation_sounds.deinit(gpa);
     app.profiling = .{};
     var resource_context: u8 = 0;
     app.resource_provider = eggy.resources.Resources.from(&resource_context, Source.read, Source.model, Source.image);
@@ -192,6 +197,11 @@ test "typed actions and game UI cross the real ABI and undo after library replac
     app.ui_scenes = .{ .gpa = gpa };
     defer app.ui_scenes.deinit();
     defer app.draw2d.deinit();
+    app.cutscene = .{};
+    app.animation_events = .empty;
+    app.animation_sounds = .empty;
+    defer app.animation_events.deinit(gpa);
+    defer app.animation_sounds.deinit(gpa);
     app.profiling = .{};
     var resource_context: u8 = 0;
     app.resource_provider = eggy.resources.Resources.from(&resource_context, Source.read, Source.model, Source.image);
@@ -266,8 +276,12 @@ test "typed actions and game UI cross the real ABI and undo after library replac
         try std.testing.expect(!game.showAnimationPreview(&app, authored, imported, 1));
         const targets = try game.animationTargets(gpa, &app, actor);
         defer gpa.free(targets);
-        try std.testing.expectEqual(@as(usize, 0), targets.len);
+        // No children: only other entities, from the top of the scene.
+        var lines = std.mem.tokenizeScalar(u8, targets, '\n');
+        while (lines.next()) |line| try std.testing.expect(std.mem.startsWith(u8, line, "/"));
         try std.testing.expectEqual(@as(?[9]f32, null), game.animationTransform(&app, actor, ""));
+        var target: [64]u8 = undefined;
+        try std.testing.expectEqualStrings("", game.animationTargetFor(&app, actor, actor, &target).?);
         var model: [64]u8 = undefined;
         try std.testing.expectEqual(@as(?[]const u8, null), game.animationModel(&app, actor, &model));
     }

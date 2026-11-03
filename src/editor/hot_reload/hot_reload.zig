@@ -822,16 +822,17 @@ pub const HotGame = struct {
         clip_z[clip.len] = 0;
         @memcpy(model_z[0..model_clip.len], model_clip);
         model_z[model_clip.len] = 0;
-        return self.game.animation_preview_show(state, &app.world, &app.graphics.clips, &clip_z, &model_z, time_s);
+        return self.game.animation_preview_show(state, app, &clip_z, &model_z, time_s);
     }
 
     /// Put the previewed entity back as it was; does nothing without a preview.
     pub fn endAnimationPreview(self: *const HotGame, app: *eggy.App) void {
         const state = self.state orelse return;
-        self.game.animation_preview_end(state, &app.world);
+        self.game.animation_preview_end(state, app);
     }
 
-    /// The child paths below `entity` a clip track can name, one per line, allocated with `gpa`.
+    /// The targets a clip played by `entity` can name, one per line (child paths, then `/` paths
+    /// from the top of the scene), allocated with `gpa`.
     pub fn animationTargets(self: *const HotGame, gpa: std.mem.Allocator, app: *eggy.App, entity: eggy.ecs.EntityId) ![]u8 {
         if (self.library == null) return gpa.alloc(u8, 0);
         var buffer = try gpa.alloc(u8, 512);
@@ -844,7 +845,25 @@ pub const HotGame = struct {
         return gpa.realloc(buffer, needed);
     }
 
-    /// Position, rotation (degrees) and scale of the child of `entity` at `path` (empty: itself).
+    /// What `property` is now on what a clip played by `entity` names with `path`, as a key's
+    /// numbers; null when it has none.
+    pub fn animationValue(self: *const HotGame, app: *eggy.App, entity: eggy.ecs.EntityId, path: []const u8, property: eggy.assets.clip.Property) ?[3]f32 {
+        if (self.library == null) return null;
+        var out: [3]f32 = undefined;
+        return if (self.game.animation_value(&app.world, entityOf(entity), path.ptr, path.len, @backingInt(property), &out)) out else null;
+    }
+
+    /// The target text a clip played by `entity` would use for `other`, in `buffer`; null when no
+    /// path reaches it.
+    pub fn animationTargetFor(self: *const HotGame, app: *eggy.App, entity: eggy.ecs.EntityId, other: eggy.ecs.EntityId, buffer: []u8) ?[]const u8 {
+        if (self.library == null) return null;
+        const len = self.game.animation_target_for(&app.world, entityOf(entity), entityOf(other), buffer.ptr, buffer.len);
+        if (len < 0 or len > buffer.len) return null;
+        return buffer[0..@intCast(len)];
+    }
+
+    /// Position, rotation (degrees) and scale of what a clip played by `entity` names with
+    /// `path` (empty: itself).
     pub fn animationTransform(self: *const HotGame, app: *eggy.App, entity: eggy.ecs.EntityId, path: []const u8) ?[9]f32 {
         if (self.library == null) return null;
         var out: [9]f32 = undefined;

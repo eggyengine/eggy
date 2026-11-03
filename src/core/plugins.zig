@@ -5,6 +5,7 @@
 //!     pub fn deinit(self: *Self) void
 //!     pub fn event(self: *Self, app: *eggy.App, event: eggy.Event) !void
 //!     pub fn update(self: *Self, app: *eggy.App) !void  // in the editor, playing and not paused
+//!     pub fn animationEvent(self: *Self, app: *eggy.App, event: eggy.animation.Event) !void  // a clip passed an event key
 //!     pub fn gameUi(self: *Self, app: *eggy.App, ui: *eggy.ui.Context) !void
 //!     pub fn draw(self: *Self, app: *eggy.App, draw: eggy.DrawContext) !void
 //!     pub fn uiEvent(self: *Self, app: *eggy.App, event: eggy.Event) !bool  // true consumes input
@@ -733,6 +734,20 @@ pub fn Set(comptime types: anytype, comptime keys: []const [:0]const u8) type {
             inline for (list, 0..) |T, i| if (@hasDecl(T, "update") and self.enabled[i]) try self.instances[i].update(app);
         }
 
+        /// Host-only: hand each clip event this frame's animation step passed
+        /// (`app.animation_events`) to enabled `animationEvent` hooks, in the order passed and
+        /// game-first. Call after `app.updateWorld`. First hook failure propagates.
+        ///
+        /// ```zig
+        /// try app.updateWorld();
+        /// try plugins.animationEvents(app);
+        /// ```
+        pub fn animationEvents(self: *Self, app: *App) !void {
+            for (app.animation_events.items) |passed| {
+                inline for (list, 0..) |T, i| if (@hasDecl(T, "animationEvent") and self.enabled[i]) try self.instances[i].animationEvent(app, passed);
+            }
+        }
+
         /// Default UI content in plugin order, after scene/custom drawing.
         /// Host-only: context must be in its widget-building frame. Hooks borrow it only
         /// for this call; first failure skips later hooks and leaves earlier UI declarations.
@@ -756,6 +771,8 @@ pub fn Set(comptime types: anytype, comptime keys: []const [:0]const u8) type {
         /// ```
         pub fn gatherUiScenes(self: *Self, app: *App) void {
             ui_scenes.gatherInto(&app.world, &app.ui_scenes, .{ .context = self, .paint = paintUiWidget });
+            // A cutscene that takes the HUD hides the screens it doesn't animate.
+            app.cutscene.hideHud(&app.world, &app.graphics.clips, &app.ui_scenes);
         }
 
         // Dispatch a UI scene's plugin widget to the plugin that declares it; false for none, or

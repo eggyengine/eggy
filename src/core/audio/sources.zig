@@ -42,6 +42,27 @@ pub const AudioListener = struct {
     pub const category = "Audio";
 };
 
+/// Start each sound a clip passed (`animation.Event`s whose `name` is an `AssetRef(.audio)` key)
+/// on its target's `AudioSource`, adding one where there is none. Keys that aren't sounds are
+/// logged and skipped.
+pub fn startFromClips(world: *ecs.World, sounds: []const @import("../animation.zig").Event) void {
+    for (sounds) |passed| {
+        const sound = AssetRef(.audio).parse(passed.name) catch {
+            std.log.warn("a clip's sound key {s} isn't a sound", .{passed.name});
+            continue;
+        };
+        if (!world.isAlive(passed.target)) continue;
+        if (world.get(passed.target, AudioSource) == null) world.addComponent(passed.target, AudioSource{}) catch |err| {
+            std.log.err("cannot add a sound to entity {d}: {t}", .{ passed.target.id, err });
+            continue;
+        };
+        const source = world.get(passed.target, AudioSource).?;
+        source.sound = sound;
+        source.playing = true;
+        world.markChanged(passed.target, AudioSource);
+    }
+}
+
 /// Place the listener, start, update and end `AudioSource`s' voices, and free voices that
 /// finished. Runs in `App.updateWorld`, so only while the game does.
 pub fn step(world: *ecs.World, sound: audio.Audio) void {

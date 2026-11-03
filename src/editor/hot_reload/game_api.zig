@@ -7,7 +7,7 @@ const std = @import("std");
 const eggy = @import("eggy");
 
 /// Bumped whenever these types change, so an editor refuses a library built for another.
-pub const version: u32 = 43;
+pub const version: u32 = 44;
 
 /// The library's one exported function: `fn () callconv(.c) *const Game`.
 pub const entry_symbol = "eggy_game";
@@ -260,22 +260,31 @@ pub const Game = extern struct {
     world_matrix: *const fn (world: *anyopaque, entity: Entity, out: *[4][4]f32) callconv(.c) bool,
     /// The view through the game's camera (`eggy.camera.find`) into `out`; false without one.
     find_camera: *const fn (world: *anyopaque, out: *eggy.camera.View) callconv(.c) bool,
-    /// Start previewing animation on `entity`: remember its `Animator` and the transforms of it
-    /// and its descendants, so `animation_preview_end` can put them back. Ends a preview already
+    /// Start previewing animation on `entity`: remember its `Animator` and what a clip can change
+    /// across the scene, so `animation_preview_end` can put it back. Ends a preview already
     /// under way; false (logged) if the entity isn't alive or memory ran out.
     animation_preview_begin: *const fn (state: *anyopaque, world: *anyopaque, entity: Entity) callconv(.c) bool,
-    /// Pose the previewed entity: an authored clip (`clip`) and/or an imported one
-    /// (`model_clip`), each an animation asset key (`AssetRef.key()`, may be empty), at `time_s`. `clips` is the host's
-    /// `*eggy.ClipCache`. False without a preview or for a clip the entity can't hold.
-    animation_preview_show: *const fn (state: *anyopaque, world: *anyopaque, clips: *anyopaque, clip: [*:0]const u8, model_clip: [*:0]const u8, time_s: f32) callconv(.c) bool,
-    /// Put the previewed entity back as it was. Does nothing without a preview.
-    animation_preview_end: *const fn (state: *anyopaque, world: *anyopaque) callconv(.c) void,
-    /// The child paths below `entity` a clip track can name, one per line, into `buffer`;
-    /// returns the length, more than `capacity` when cut off.
+    /// Pose the scene: the previewed entity's authored clip (`clip`) and/or imported one
+    /// (`model_clip`), each an animation asset key (`AssetRef.key()`, may be empty), at `time_s`,
+    /// through the host's `*eggy.App` (its clips and UI scenes). False without a preview or for
+    /// a clip the entity can't hold.
+    animation_preview_show: *const fn (state: *anyopaque, app: *anyopaque, clip: [*:0]const u8, model_clip: [*:0]const u8, time_s: f32) callconv(.c) bool,
+    /// Put the scene back as it was, through the host's `*eggy.App`. Does nothing without a
+    /// preview.
+    animation_preview_end: *const fn (state: *anyopaque, app: *anyopaque) callconv(.c) void,
+    /// The targets a clip played by `entity` can name, one per line (child paths, then `/`
+    /// paths from the top of the scene), into `buffer`; returns the length, more than `capacity`
+    /// when cut off.
     animation_targets: *const fn (world: *anyopaque, entity: Entity, buffer: [*]u8, capacity: usize) callconv(.c) usize,
-    /// The position, rotation (degrees) and scale of the child of `entity` at `path` (empty: the
-    /// entity itself) into `out`; false when there is none.
+    /// The position, rotation (degrees) and scale of what a clip played by `entity` names with
+    /// `path` (empty: the entity itself) into `out`; false when there is none.
     animation_transform: *const fn (world: *anyopaque, entity: Entity, path: [*]const u8, path_len: usize, out: *[9]f32) callconv(.c) bool,
+    /// What `property` (an `eggy.assets.clip.Property`) is now on what a clip played by `entity`
+    /// names with `path`, as a key's numbers, into `out`; false when it has none.
+    animation_value: *const fn (world: *anyopaque, entity: Entity, path: [*]const u8, path_len: usize, property: u8, out: *[3]f32) callconv(.c) bool,
+    /// The target text a clip played by `entity` would use for `other`, into `buffer`; returns
+    /// its length, or -1 when no path reaches it.
+    animation_target_for: *const fn (world: *anyopaque, entity: Entity, other: Entity, buffer: [*]u8, capacity: usize) callconv(.c) isize,
     /// The key of the model `entity` draws (its `Mesh`) into `buffer`, returning its length; -1 if it
     /// doesn't draw one, or more than `capacity` when cut off.
     animation_model: *const fn (world: *anyopaque, entity: Entity, buffer: [*]u8, capacity: usize) callconv(.c) isize,

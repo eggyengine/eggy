@@ -195,6 +195,7 @@ pub fn Runtime(comptime project: type) type {
             try self.app.advanceInput();
             try self.plugins.update(&self.app);
             try self.app.updateWorld();
+            try self.plugins.animationEvents(&self.app);
             self.app.input.endFrame();
             self.app.graphics.lights = try eggy.lighting.gather(&self.app.world);
             self.app.graphics.time_s = @floatCast(self.app.time.elapsed_s);
@@ -228,10 +229,11 @@ pub fn Runtime(comptime project: type) type {
                 };
                 try self.plugins.draw(&self.app, draw);
                 const loading = self.app.scene_stream.loading();
-                if (has_ui or self.app.graphics_settings_ui.isOpen() or self.app.dev_console.isOpen() or eggy.scenes.loading_screen.shows(loading)) {
+                if (has_ui or self.app.cutscene.shows() or self.app.graphics_settings_ui.isOpen() or self.app.dev_console.isOpen() or eggy.scenes.loading_screen.shows(loading)) {
                     const layer = try self.app.gameUi();
                     layer.begin(draw, ui_time_ms);
                     if (has_ui) try self.plugins.gameUi(&self.app, &layer.context);
+                    self.app.cutscene.draw(&layer.context);
                     self.app.graphics_settings_ui.draw(&self.app, &layer.context);
                     eggy.scenes.loading_screen.draw(loading, &layer.context);
                     eggy.dev_console.overlay.draw(&self.app.dev_console, &self.app, self.plugins.consoleCommands(), &layer.context);
@@ -280,6 +282,8 @@ pub fn Runtime(comptime project: type) type {
                 self.app.input.suppress(curr_event);
                 return .run;
             }
+            // A cutscene that takes input keeps it from the game (its UI above still has it).
+            if (self.app.cutscene.event(curr_event)) return .run;
             try self.app.input.handle(curr_event);
             try self.plugins.event(&self.app, curr_event);
             return .run;
