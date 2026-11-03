@@ -28,7 +28,7 @@ const Shown = struct {
     /// From its `eggy.zon`, or the folder's name when that can't be read.
     title: []const u8,
     opened_s: i64,
-    /// Whether its folder is still there; a missing one can only be taken off the list.
+    /// Whether its folder is still there; a missing one can't be opened.
     found: bool,
     /// Its `.icon`, packed into the font's atlas; null draws its initial on a tile instead.
     logo: ?ui.Glyph = null,
@@ -48,6 +48,7 @@ const plus_glyph = "\u{f067}";
 const folder_glyph = "\u{f07c}";
 const search_glyph = "\u{f002}";
 const link_glyph = "\u{f0c1}";
+const remove_glyph = "\u{f00d}";
 
 pub const Launcher = struct {
     gpa: std.mem.Allocator,
@@ -273,8 +274,9 @@ const Page = struct {
         context.end();
     }
 
-    /// A project: its logo or initial, title and folder, and when it was opened. Clicking a found
-    /// one opens it; a missing one says so and offers to come off the list.
+    /// A project: its logo or initial, title and folder, and when it was opened, with a button that
+    /// takes it off the list (its folder stays as it is). Clicking a found one opens it; a
+    /// missing one says so.
     fn buildRow(page: *Page, context: *ui.Context, shown: *const Shown, index: usize, width: f32) void {
         const arena = context.builder().allocator;
         const b = context.builder();
@@ -284,18 +286,15 @@ const Page = struct {
         const row = arena.create(Row) catch return;
         row.* = .{ .shown = shown, .id = id, .mono = page.launcher.mono, .when = if (shown.found) ago(arena, page.now_s, shown.opened_s) else "Folder missing", .path = "", .version_label = if (shown.eggy_version) |version| std.fmt.allocPrint(arena, "Eggy {s}", .{version}) catch "" else "" };
         // The folder, home shortened to ~, cut to fit beside the time.
-        const right_width = page.launcher.font.measure(row.when, path_size) + if (shown.found) @as(f32, 0) else remove_width;
+        const right_width = page.launcher.font.measure(row.when, path_size) + remove_width;
         row.path = page_style.fitText(arena, page.launcher.mono, project_tile.homeRelative(arena, shown.dir), path_size, width - text_left - right_width - 36);
 
-        var children: []const *ui.Layout.Element = &.{};
-        if (!shown.found) {
-            const remove_id = context.idFor(std.fmt.allocPrint(arena, "##remove {s}", .{shown.dir}) catch shown.dir);
-            if (context.activated(remove_id)) page.chosen = .{ .forget = index };
-            const remove = b.node(remove_id, .{ .width = remove_width, .height = 28 }, .{ .button = .{ .label = "Remove", .variant = .link } }, &.{}) catch return;
-            remove.cursor = .pointer;
-            remove.accessibility = .{ .role = .button, .label = std.fmt.allocPrint(arena, "Remove {s} from the list", .{shown.title}) catch "Remove" };
-            children = arena.dupe(*ui.Layout.Element, &.{remove}) catch return;
-        }
+        // Checked after the row's own click, so removing a project doesn't also open it.
+        const remove_id = context.idFor(std.fmt.allocPrint(arena, "##remove {s}", .{shown.dir}) catch shown.dir);
+        if (context.activated(remove_id)) page.chosen = .{ .forget = index };
+        const remove_label = std.fmt.allocPrint(arena, "Remove {s} from the list", .{shown.title}) catch "Remove from the list";
+        const remove = page_style.iconButtonNode(b, remove_id, remove_glyph, remove_label, false) catch return;
+        const children = arena.dupe(*ui.Layout.Element, &.{remove}) catch return;
         const element = b.node(id, .{ .width = width, .height = row_height, .direction = .row, .justify = .end, .align_items = .center, .padding = .{ .right = 6 } }, .{ .custom = .{ .context = row, .draw = Row.draw } }, children) catch return;
         if (id != 0) {
             element.cursor = .pointer;
@@ -308,7 +307,7 @@ const Page = struct {
 
 /// Where the title and folder start, from the row's left edge.
 const text_left = 8 + tile_size + 14;
-const remove_width = 72;
+const remove_width = 32;
 
 /// What a row draws: its hover, its tile, its words.
 const Row = struct {
@@ -344,8 +343,8 @@ const Row = struct {
         try c.textIn(.{ .x = text.x, .y = r.y + 30, .w = text.w, .h = 16 }, self.path, path_size, t.muted_foreground, .start);
         c.font = ui_font;
 
-        // When it was opened, or that its folder is gone, beside Remove.
-        const right_edge = r.w - 14 - if (self.shown.found) @as(f32, 0) else remove_width;
+        // When it was opened, or that its folder is gone, beside the remove button.
+        const right_edge = r.w - 14 - remove_width;
         try c.textIn(.{ .x = r.x, .y = r.y, .w = right_edge, .h = r.h }, self.when, path_size, t.muted_foreground, .end);
     }
 };

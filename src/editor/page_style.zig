@@ -242,16 +242,25 @@ const Highlight = struct {
 /// if (page_style.iconButton(context, "\u{f04b}", "Play", false)) play();
 /// ```
 pub fn iconButton(context: *ui.Context, glyph: []const u8, label: []const u8, lit: bool) bool {
-    const b = context.builder();
     const id = context.idFor(label);
-    const button = b.node(id, .{ .width = 26, .height = 26, .align_items = .center, .justify = .center }, highlight(b.allocator, id, lit, false), &.{
-        b.node(0, .{}, .{ .text = .{ .value = glyph, .size = 14, .tone = if (lit) .foreground else .muted } }, &.{}) catch return false,
-    }) catch return false;
-    button.cursor = .pointer;
-    button.accessibility = .{ .role = .button, .label = label };
-    context.element(button);
+    context.element(iconButtonNode(context.builder(), id, glyph, label, lit) catch return false);
     context.tooltip(label);
     return context.activated(id);
+}
+
+/// `iconButton`'s element with the id `id`, unadded, for a row built as one element with its
+/// children; `context.activated(id)` says when it was pressed. Allocation errors propagate.
+///
+/// ```zig
+/// const remove = try page_style.iconButtonNode(b, remove_id, "\u{f00d}", "Remove garden", false);
+/// ```
+pub fn iconButtonNode(b: ui.Layout.Builder, id: u32, glyph: []const u8, label: []const u8, lit: bool) !*ui.Layout.Element {
+    const button = try b.node(id, .{ .width = 26, .height = 26, .align_items = .center, .justify = .center }, highlight(b.allocator, id, lit, false), &.{
+        try b.node(0, .{}, .{ .text = .{ .value = glyph, .size = 14, .tone = if (lit) .foreground else .muted } }, &.{}),
+    });
+    button.cursor = .pointer;
+    button.accessibility = .{ .role = .button, .label = label };
+    return button;
 }
 
 /// An empty element that takes the rest of a row, pushing what follows to its end.
