@@ -31,7 +31,7 @@ test "a clip's text is written, read back and parsed again" {
     const gpa = std.testing.allocator;
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
-    var clip = try (Clip{ .duration_s = 2, .tracks = &.{} }).withTrack(gpa, "Arm", .position);
+    var clip = try (Clip{ .duration_s = 2, .tracks = &.{} }).withTrack(gpa, "Arm", .position, "");
     defer clip.deinit(gpa);
 
     const text = try serialize(gpa, clip);

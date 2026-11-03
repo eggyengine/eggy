@@ -139,7 +139,7 @@ pub const Deformation = struct {
         for (clip.tracks) |track| {
             const target = switch (track.where()) {
                 .model => |name| name,
-                .entity => continue,
+                .entity, .scene => continue,
             };
             const value = track.valueAt(at) orelse continue;
             if (track.property == .morph_weight) {
@@ -160,7 +160,8 @@ pub const Deformation = struct {
                 .position => pose_.blendTranslation(node, value, weight),
                 .rotation_deg => pose_.blendRotation(node, eulerQuaternion(value), weight),
                 .scale => pose_.blendScale(node, value, weight),
-                .morph_weight => unreachable,
+                // `validate` keeps other properties off model targets.
+                else => unreachable,
             }
         }
     }
