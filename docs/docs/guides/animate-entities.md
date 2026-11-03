@@ -16,25 +16,39 @@ Console.
 
 ## Preview
 
-Select the entity and open the panel. **Play** runs the clip, the slider scrubs it and
-**Loop** wraps at the end. The entity moves in the Scene while you do. **Reset pose** (or
-selecting something else, hiding the panel or pressing Play on the game) puts the entity
-back exactly as it was. A pose is never saved into your scene.
+Select the entity and open the panel. **Play** runs the clip, clicking or dragging along the
+ruler scrubs it and **Loop** wraps at the end. Everything the clip moves follows in the Scene
+while you do. **Reset pose** (or selecting another entity with an Animator, hiding the panel
+or pressing Play on the game) puts the scene back exactly as it was. A pose is never saved
+into your scene.
+
+The panel stays on its entity while you select others, so you can pose the actors of a
+cutscene one after another.
 
 If the entity has both a clip and a model clip, pick which one the timeline shows. Model
 clips are read-only: you can scrub and play them, not key them.
 
 ## Add keys
 
-A diamond on the timeline is a key. To key a pose:
+Each track has a row, with what it acts on and its property on the left and a diamond for each
+key. To key a pose:
 
 1. Scrub to the time you want.
 2. Move the entity with the gizmo (or its Inspector fields) while the panel is posing it.
-3. Choose **This entity**, or one of its children, and press **Key Position**, **Key
-   Rotation** or **Key Scale**. The key records the transform as it is now.
+3. Choose **This entity**, one of its children or any other entity in the scene, and press
+   **Key Position**, **Key Rotation** or **Key Scale**. The key records the transform as it
+   is now.
 
-Click a key's time under its track to select it, then **Move key to head**, **Delete key**
-or **Remove track**. **Duration** sets the clip's length; it can't be shorter than the last
+Or turn on **Record**: then whatever you move with the gizmo or the 2D handles, and a camera's
+field of view changed in the Inspector, is keyed at the head as soon as you let go. Select
+the entity to move in the Hierarchy; the panel keeps showing the clip.
+
+**Key…** keys the rest: a camera's `fov_deg`, a UI node's `text` or `visible`, a `sound` to
+start, a named `event`, or a sprite's `sprite_frame`. Pick the property, name the UI node where
+it needs one, give the value and press **Add key**.
+
+Click a key's diamond to select it, then **Move key to head**, **Delete key** or **Remove
+track**; click a track's name to select the track. **Duration** sets the clip's length; it can't be shorter than the last
 key. Every change is written to the `.clip.zon` straight away and **Edit > Undo** takes it
 back.
 
