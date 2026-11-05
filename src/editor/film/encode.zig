@@ -5,6 +5,9 @@ const std = @import("std");
 const eggy = @import("eggy");
 const ProjectAssets = @import("../assets/project_assets.zig").ProjectAssets;
 
+/// What the video in a film's folder is called.
+pub const video_name = "film.mp4";
+
 /// Frame file names as written (`std.fmt`) and as `ffmpeg` reads them.
 pub const frame_pattern_format = "frame_{d:0>5}.png";
 const frame_pattern_ffmpeg = "frame_%05d.png";
@@ -73,7 +76,7 @@ pub fn arguments(arena: std.mem.Allocator, inputs: Inputs) ![]const []const u8 {
     try argv.appendSlice(arena, &.{ "-c:v", "libx264", "-pix_fmt", "yuv420p", "-crf", "18", "-t" });
     const length_s = inputs.duration_s + 1 / @as(f32, @floatFromInt(inputs.frames_per_second));
     try argv.append(arena, try std.fmt.allocPrint(arena, "{d:.3}", .{length_s}));
-    try argv.append(arena, try std.fs.path.join(arena, &.{ inputs.out_dir, "film.mp4" }));
+    try argv.append(arena, try std.fs.path.join(arena, &.{ inputs.out_dir, video_name }));
     return argv.items;
 }
 

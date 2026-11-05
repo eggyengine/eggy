@@ -76,6 +76,9 @@ pub const Queued = struct {
     state: enum { waiting, filming, done, failed } = .waiting,
     /// Where it went or why it failed, once over; owned.
     message: []u8 = &.{},
+    /// Once filmed: the video, or the folder of frames without one (absolute, owned).
+    saved: []u8 = &.{},
+    video: bool = false,
 };
 
 /// How a queued film is coming along, for the Export window.
@@ -177,7 +180,9 @@ pub const Film = struct {
         if (self.queue.items.len == 0) try self.add();
         for (self.queue.items) |*queued| if (queued.state != .waiting) {
             self.gpa.free(queued.message);
+            self.gpa.free(queued.saved);
             queued.message = &.{};
+            queued.saved = &.{};
             queued.state = .waiting;
         };
         self.active = true;
@@ -259,6 +264,10 @@ pub const Film = struct {
             queued.state = if (job.stage == .done) .done else .failed;
             self.gpa.free(queued.message);
             queued.message = self.gpa.dupe(u8, job.message.items) catch &.{};
+            self.gpa.free(queued.saved);
+            queued.video = job.video;
+            queued.saved = &.{};
+            if (job.stage == .done) queued.saved = (if (job.video) std.fs.path.join(self.gpa, &.{ job.out_dir, encode.video_name }) else self.gpa.dupe(u8, job.frames_dir)) catch &.{};
         }
         self.endJob(job, env);
         self.running = null;
@@ -279,6 +288,7 @@ pub const Film = struct {
     fn freeQueued(self: *Film, queued: Queued) void {
         self.gpa.free(queued.source.label);
         self.gpa.free(queued.message);
+        self.gpa.free(queued.saved);
     }
 
     fn clearSources(self: *Film) void {
@@ -306,6 +316,8 @@ const Job = struct {
     encoder: ?*encode.Encoder = null,
     sounds: []encode.Sound,
     message: std.ArrayList(u8) = .empty,
+    /// Whether ffmpeg made the video.
+    video: bool = false,
     /// When rendering began, to say how long the rest takes.
     started_ms: u64,
 
@@ -408,7 +420,10 @@ const Job = struct {
         const encoder = self.encoder orelse return;
         switch (encoder.result()) {
             .running => {},
-            .done => self.finish(.done, "Saved {s}{c}film.mp4", .{ self.out_dir, std.fs.path.sep }),
+            .done => {
+                self.video = true;
+                self.finish(.done, "Saved {s}{c}" ++ encode.video_name, .{ self.out_dir, std.fs.path.sep });
+            },
             .not_installed => self.finish(.done, "ffmpeg isn't installed, so the film is left as PNG frames in {s}", .{self.frames_dir}),
             .failed => self.finish(.failed, "ffmpeg couldn't encode the film; the frames are in {s}", .{self.frames_dir}),
         }

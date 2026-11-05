@@ -629,7 +629,10 @@ pub const ExportWindow = struct {
             }
             switch (queued.state) {
                 .failed => context.alert("The film stopped", queued.message, true),
-                .done => context.muted(queued.message),
+                .done => {
+                    context.muted(queued.message);
+                    if (queued.saved.len > 0) self.buildFilmed(context, queued, index);
+                },
                 else => {},
             }
             context.end();
@@ -643,6 +646,20 @@ pub const ExportWindow = struct {
         page_style.endRow(context);
         context.end();
         restyle(context, .{ .gap = page_gap });
+    }
+
+    /// A finished film's buttons: open the video, or its folder.
+    fn buildFilmed(self: *ExportWindow, context: *ui.Context, queued: film_zig.Queued, index: usize) void {
+        const arena = context.builder().allocator;
+        context.begin(.row);
+        if (queued.video) {
+            const play = std.fmt.allocPrint(arena, "Play it##film play {d}", .{index}) catch "Play it";
+            if (context.buttonVariant(play, .outline)) file_manager.openFile(self.gpa, queued.saved) catch |err| std.log.err("cannot open {s}: {t}", .{ queued.saved, err });
+        }
+        const show = std.fmt.allocPrint(arena, "Show in folder##film show {d}", .{index}) catch "Show in folder";
+        const folder = if (queued.video) std.fs.path.dirname(queued.saved) orelse queued.saved else queued.saved;
+        if (context.buttonVariant(show, .ghost)) file_manager.showFolder(self.gpa, folder) catch |err| std.log.err("cannot show {s}: {t}", .{ folder, err });
+        page_style.endRow(context);
     }
 
     /// Start exporting for the platform shown, with its settings and the plugins' arguments.
