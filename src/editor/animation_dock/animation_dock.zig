@@ -149,6 +149,9 @@ pub const Dock = struct {
     imported_len: usize = 0,
     message: [160]u8 = undefined,
     message_len: usize = 0,
+    /// What Record keyed last, shown while it records.
+    keyed: [160]u8 = undefined,
+    keyed_len: usize = 0,
 
     /// Free the copied keys.
     pub fn deinit(self: *Dock) void {
@@ -304,12 +307,14 @@ pub const Dock = struct {
             if (context.buttonVariant(if (self.recording) "Recording" else "Record", if (self.recording) .destructive else .outline)) {
                 self.recording = !self.recording;
                 self.recorded = null;
+                self.keyed_len = 0;
                 if (self.recording) {
                     self.playing = false;
                     self.request();
                 }
             }
         }
+        if (self.recording and self.keyed_len > 0) context.muted(self.keyed[0..self.keyed_len]);
         context.text(std.fmt.allocPrint(arena, "{d:0>4}", .{timeline.frameOf(self.time_s)}) catch "");
         context.muted(std.fmt.allocPrint(arena, "{d:.2} s of {d:.2}", .{ self.time_s, duration }) catch "");
         if (names.items.len > 1) {
@@ -978,6 +983,8 @@ pub const Dock = struct {
         var fixed = std.heap.FixedBufferAllocator.init(&label_buffer);
         const path = env.assets.label(fixed.allocator(), self.authoredKey());
         self.edit(env, clip, self.authoredKey(), path, .{ .keys = keys[0..count] });
+        const shown = std.fmt.bufPrint(&self.keyed, "Keyed {s} {s} at {d}", .{ displayTarget(target), propertyName(keys[0].property), timeline.frameOf(self.time_s) }) catch "";
+        self.keyed_len = shown.len;
     }
 
     /// An edit to the authored clip.
@@ -1294,6 +1301,23 @@ const blend_labels = [_][]const u8{ "3 frames", "6 frames", "10 frames", "15 fra
 /// The shot a camera key names, as the lane shows it.
 fn shotName(text: []const u8) []const u8 {
     return if (text.len == 0) "Game camera" else displayTarget(text);
+}
+
+/// A property as people read it.
+fn propertyName(property: Property) []const u8 {
+    return switch (property) {
+        .position => "Position",
+        .rotation_deg => "Rotation",
+        .scale => "Scale",
+        .morph_weight => "Blend shape",
+        .fov_deg => "Field of view",
+        .visible => "Visible",
+        .text => "Text",
+        .sound => "Sound",
+        .event => "Event",
+        .sprite_frame => "Sprite frame",
+        .camera => "Camera cut",
+    };
 }
 
 fn easeName(ease: Ease) []const u8 {

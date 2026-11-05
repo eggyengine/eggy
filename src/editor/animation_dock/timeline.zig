@@ -369,6 +369,8 @@ fn drawRuler(context: *const anyopaque, c: *ui.Canvas, area: ui.Rect) anyerror!v
         const label = std.fmt.bufPrint(&buffer, "{d}", .{frameOf(time)}) catch continue;
         try c.textIn(.{ .x = x + 4, .y = area.y, .w = 40, .h = area.h }, label, c.theme.small_text_size - 1, c.theme.muted_foreground, .start);
     }
+    // Recording, the timeline is edged in red.
+    if (ruler.recording) try c.rect(.{ .x = area.x, .y = area.y + area.h - 2, .w = area.w, .h = 2 }, .{ 0.98, 0.44, 0.40 });
     if (layout.shows(ruler.head_s)) try head(c, area.x + layout.xOf(ruler.head_s), area.y, area.h, if (ruler.recording) .{ 0.98, 0.44, 0.40 } else c.theme.primary);
 }
 
