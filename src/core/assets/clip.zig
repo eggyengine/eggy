@@ -9,7 +9,7 @@ const zon_file = @import("zon.zig");
 
 /// The `.clip.zon` layout this build writes. It reads this one and `1`, which had only transform
 /// and blend-shape tracks; a file of another version is refused.
-pub const format_version: u32 = 2;
+pub const format_version: u32 = 3;
 const oldest_version: u32 = 1;
 
 /// What a track animates. A rotation is Euler degrees about x, then y, then z, like `Transform`,
@@ -70,12 +70,45 @@ pub const Property = enum {
 
 pub const Interpolation = enum { step, linear };
 
+/// How a blending track speeds up and slows down across the span leaving a key, to the next.
+pub const Ease = enum {
+    linear,
+    /// Starts slow and speeds up.
+    ease_in,
+    /// Starts fast and settles.
+    ease_out,
+    ease_in_out,
+
+    /// How far along the span `t` (0 to 1) of the way through it is.
+    pub fn apply(self: Ease, t: f32) f32 {
+        return switch (self) {
+            .linear => t,
+            .ease_in => t * t,
+            .ease_out => 1 - (1 - t) * (1 - t),
+            .ease_in_out => t * t * (3 - 2 * t),
+        };
+    }
+};
+
 /// A value at a time. A `morph_weight`, `fov_deg`, `visible` or `sprite_frame` key uses only
 /// `value[0]`; a `text`, `sound` or `event` key uses `text`.
 pub const Key = struct {
     time_s: f32,
     value: [3]f32 = .{ 0, 0, 0 },
     text: []const u8 = "",
+    /// The span to the next key; blending tracks only.
+    ease: Ease = .linear,
+};
+
+/// Key `key` of track `track` in a clip.
+pub const KeyRef = struct { track: usize, key: usize };
+
+/// What `Clip.withKeysChanged` does to the keys it is given.
+pub const KeyChange = union(enum) {
+    /// Moved later by this many seconds (earlier when negative), stopping at 0.
+    shift_s: f32,
+    remove,
+    ease: Ease,
 };
 
 /// Where a track acts, from its `target` text.
@@ -131,7 +164,7 @@ pub const Track = struct {
         const to = keys[next];
         if (self.interpolation == .step) return from.value;
         const span = to.time_s - from.time_s;
-        const t = if (span > 0) (time_s - from.time_s) / span else 0;
+        const t = from.ease.apply(if (span > 0) (time_s - from.time_s) / span else 0);
         var out: [3]f32 = undefined;
         for (&out, from.value, to.value) |*value, a, b| value.* = a + (b - a) * t;
         return out;
@@ -241,21 +274,52 @@ pub const Clip = struct {
         return clip;
     }
 
-    /// This clip without key `key` of track `index`.
-    pub fn withoutKey(self: Clip, gpa: std.mem.Allocator, index: usize, key: usize) !Clip {
-        std.debug.assert(index < self.tracks.len and key < self.tracks[index].keys.len);
-        return self.rebuilt(gpa, .{ .remove_key = .{ .track = index, .key = key } });
-    }
-
-    /// This clip with key `key` of track `index` moved to `time_s` (keeping its value and text),
-    /// replacing a key already there, and lengthened to reach it.
-    pub fn withKeyMoved(self: Clip, gpa: std.mem.Allocator, index: usize, key: usize, time_s: f32) !Clip {
-        std.debug.assert(index < self.tracks.len and key < self.tracks[index].keys.len);
-        var moved = self.tracks[index].keys[key];
-        moved.time_s = time_s;
-        const without = try self.withoutKey(gpa, index, key);
-        defer without.deinit(gpa);
-        return without.withKey(gpa, index, moved);
+    /// This clip with `change` made to each of `keys` (any order; ones that don't exist are
+    /// ignored). Shifted keys keep their value and text, replace a key already where they land,
+    /// and lengthen the clip to reach them.
+    /// `error.InvalidClip` for a shift that is not finite.
+    pub fn withKeysChanged(self: Clip, gpa: std.mem.Allocator, keys: []const KeyRef, change: KeyChange) !Clip {
+        if (change == .shift_s and !std.math.isFinite(change.shift_s)) return error.InvalidClip;
+        var tracks: std.ArrayList(Track) = .empty;
+        errdefer {
+            for (tracks.items) |track| freeTrack(gpa, track);
+            tracks.deinit(gpa);
+        }
+        var duration_s = self.duration_s;
+        for (self.tracks, 0..) |track, track_index| {
+            // The keys left where they are, and those shifted, placed among them after.
+            var kept: std.ArrayList(Key) = .empty;
+            defer kept.deinit(gpa);
+            var shifted: std.ArrayList(Key) = .empty;
+            defer shifted.deinit(gpa);
+            for (track.keys, 0..) |key, key_index| {
+                if (!refersTo(keys, track_index, key_index)) {
+                    try kept.append(gpa, key);
+                    continue;
+                }
+                var changed = key;
+                switch (change) {
+                    .remove => {},
+                    .ease => |ease| {
+                        changed.ease = ease;
+                        try kept.append(gpa, changed);
+                    },
+                    .shift_s => |delta_s| {
+                        changed.time_s = @max(0, key.time_s + delta_s);
+                        try shifted.append(gpa, changed);
+                    },
+                }
+            }
+            for (shifted.items) |key| {
+                try placeKey(gpa, &kept, key);
+                duration_s = @max(duration_s, key.time_s);
+            }
+            var shaped = track;
+            shaped.keys = kept.items;
+            try tracks.ensureUnusedCapacity(gpa, 1);
+            tracks.appendAssumeCapacity(try ownTrack(gpa, shaped));
+        }
+        return .{ .duration_s = duration_s, .tracks = try tracks.toOwnedSlice(gpa) };
     }
 
     /// This clip lasting `duration_s`, which must reach the last key of every track.
@@ -271,7 +335,6 @@ pub const Clip = struct {
         add: Track,
         remove: usize,
         set_key: struct { track: usize, key: Key },
-        remove_key: struct { track: usize, key: usize },
     };
 
     /// A copy with `edit` applied, in the current format. Every slice is freshly allocated, so
@@ -293,9 +356,6 @@ pub const Clip = struct {
             try keys.appendSlice(gpa, track.keys);
             if (edit) |change| switch (change) {
                 .set_key => |set| if (set.track == index) try placeKey(gpa, &keys, set.key),
-                .remove_key => |gone| if (gone.track == index) {
-                    _ = keys.orderedRemove(gone.key);
-                },
                 else => {},
             };
             var shaped = track;
@@ -358,6 +418,11 @@ fn freeTrack(gpa: std.mem.Allocator, track: Track) void {
     gpa.free(track.keys);
     gpa.free(track.node);
     gpa.free(track.target);
+}
+
+fn refersTo(keys: []const KeyRef, track: usize, key: usize) bool {
+    for (keys) |ref| if (ref.track == track and ref.key == key) return true;
+    return false;
 }
 
 fn sameChannel(track: Track, target: []const u8, property: Property, node: []const u8) bool {
@@ -441,13 +506,13 @@ test "keys are inserted in time order, replaced at the same time, moved and dele
     try std.testing.expectEqual(@as(f32, 6), clip.tracks[0].keys[1].value[0]);
     try std.testing.expectEqual(@as(f32, 2), clip.duration_s);
 
-    const moved = try clip.withKeyMoved(gpa, 0, 1, 1.5);
+    const moved = try clip.withKeysChanged(gpa, &.{.{ .track = 0, .key = 1 }}, .{ .shift_s = 1 });
     defer moved.deinit(gpa);
     try std.testing.expectEqual(@as(f32, 1.5), moved.tracks[0].keys[1].time_s);
     try std.testing.expectEqual(@as(f32, 6), moved.tracks[0].keys[1].value[0]);
     try moved.validate();
 
-    const deleted = try moved.withoutKey(gpa, 0, 0);
+    const deleted = try moved.withKeysChanged(gpa, &.{.{ .track = 0, .key = 0 }}, .remove);
     defer deleted.deinit(gpa);
     try std.testing.expectEqual(@as(usize, 2), deleted.tracks[0].keys.len);
     try std.testing.expectEqual(@as(?usize, 0), deleted.find("Arm", .position, ""));
@@ -538,4 +603,51 @@ test "cutscene tracks keep text, step from key to key, and say which keys a step
     try std.testing.expectError(error.InvalidClip, empty.withTrack(gpa, "model:Head", .fov_deg, ""));
     try std.testing.expectError(error.InvalidClip, empty.withTrack(gpa, "/", .position, ""));
     try std.testing.expectError(error.InvalidClip, empty.withTrack(gpa, "camera", .position, "line"));
+}
+
+test "a key's ease shapes the span leaving it" {
+    var track = Track{ .target = "", .property = .position, .keys = &.{
+        .{ .time_s = 0, .value = .{ 0, 0, 0 }, .ease = .ease_in },
+        .{ .time_s = 2, .value = .{ 8, 0, 0 } },
+    } };
+    // A quarter of the way in at half time, then all the way at the key.
+    try std.testing.expectEqual(@as(f32, 2), track.valueAt(1).?[0]);
+    try std.testing.expectEqual(@as(f32, 8), track.valueAt(2).?[0]);
+    track.keys = &.{ .{ .time_s = 0, .value = .{ 0, 0, 0 }, .ease = .ease_out }, .{ .time_s = 2, .value = .{ 8, 0, 0 } } };
+    try std.testing.expectEqual(@as(f32, 6), track.valueAt(1).?[0]);
+    try std.testing.expectEqual(@as(f32, 0.5), Ease.ease_in_out.apply(0.5));
+}
+
+test "several keys across tracks shift, ease and go together" {
+    const gpa = std.testing.allocator;
+    const source = Clip{ .duration_s = 2, .tracks = &.{
+        .{ .target = "", .property = .position, .keys = &.{ .{ .time_s = 0 }, .{ .time_s = 1 }, .{ .time_s = 2 } } },
+        .{ .target = "/bee", .property = .scale, .keys = &.{ .{ .time_s = 0.5 }, .{ .time_s = 1.5 } } },
+    } };
+    const picked = [_]KeyRef{ .{ .track = 0, .key = 1 }, .{ .track = 1, .key = 1 }, .{ .track = 1, .key = 9 } };
+
+    // Shifted later: the clip grows to reach the last; the first track's middle key lands on
+    // the one at 2 s and takes its place.
+    const later = try source.withKeysChanged(gpa, &picked, .{ .shift_s = 1 });
+    defer later.deinit(gpa);
+    try later.validate();
+    try std.testing.expectEqual(@as(f32, 2.5), later.duration_s);
+    try std.testing.expectEqual(@as(usize, 2), later.tracks[0].keys.len);
+    try std.testing.expectEqual(@as(f32, 2.5), later.tracks[1].keys[1].time_s);
+
+    // Earlier than the start, they stop at 0.
+    const earlier = try source.withKeysChanged(gpa, &.{.{ .track = 1, .key = 0 }}, .{ .shift_s = -3 });
+    defer earlier.deinit(gpa);
+    try std.testing.expectEqual(@as(f32, 0), earlier.tracks[1].keys[0].time_s);
+
+    const eased = try source.withKeysChanged(gpa, &picked, .{ .ease = .ease_out });
+    defer eased.deinit(gpa);
+    try std.testing.expectEqual(Ease.ease_out, eased.tracks[0].keys[1].ease);
+    try std.testing.expectEqual(Ease.linear, eased.tracks[0].keys[0].ease);
+
+    const removed = try source.withKeysChanged(gpa, &picked, .remove);
+    defer removed.deinit(gpa);
+    try std.testing.expectEqual(@as(usize, 2), removed.tracks[0].keys.len);
+    try std.testing.expectEqual(@as(usize, 1), removed.tracks[1].keys.len);
+    try std.testing.expectError(error.InvalidClip, source.withKeysChanged(gpa, &picked, .{ .shift_s = std.math.inf(f32) }));
 }

@@ -5,6 +5,11 @@
 //! The panel stays on the last entity with an `Animator` while others are selected, so a
 //! cutscene's actors can be posed in turn.
 //!
+//! Keys are picked by pressing them (Shift adds or takes one away, Ctrl+A picks all) and dragged
+//! along their rows together, landing on frames (Ctrl drags freely). Delete removes them, Ctrl+C
+//! and Ctrl+V copy them to the head, and an ease shapes the spans leaving them. Ctrl+wheel over
+//! the timeline zooms it, Shift+wheel pans.
+//!
 //! Posing goes through the game library (`HotGame.beginAnimationPreview`) and is undone whenever
 //! the scene is captured, so the panel never leaves a pose in a saved scene. Clip edits are
 //! written to the `.clip.zon` at once and recorded in History as the file's text before and
@@ -14,7 +19,10 @@ const eggy = @import("eggy");
 const ui = eggy.ui;
 const Clip = eggy.assets.clip.Clip;
 const Key = eggy.assets.clip.Key;
+const KeyRef = eggy.assets.clip.KeyRef;
+const Ease = eggy.assets.clip.Ease;
 const Property = eggy.assets.clip.Property;
+const sdl3 = eggy.sdl_adapter.sdl;
 const HotGame = @import("../hot_reload/hot_reload.zig").HotGame;
 const ProjectAssets = @import("../assets/project_assets.zig").ProjectAssets;
 const history_zig = @import("../history.zig");
@@ -37,6 +45,13 @@ const form_properties = [_]Property{ .fov_deg, .visible, .text, .sound, .event, 
 const form_labels = [_][]const u8{ "fov_deg (Camera)", "visible (UI)", "text (UI node)", "sound (AudioSource)", "event", "sprite_frame (SpriteAnimator)" };
 /// Record keys a change bigger than this.
 const record_epsilon: f32 = 1e-4;
+/// The most keys picked at once.
+// ponytail: a fixed list; make it grow if cutscenes ever need more picked together.
+const max_picked = 512;
+const ease_labels = [_][]const u8{ "Linear", "Ease in", "Ease out", "Ease in-out" };
+/// How much each wheel step zooms the timeline, and how far it pans, as a share of the view.
+const zoom_per_step: f32 = 1.25;
+const pan_per_step: f32 = 0.1;
 
 /// What the panel works on, borrowed for one call.
 pub const Env = struct {
@@ -53,10 +68,27 @@ pub const Env = struct {
     now_ms: u64,
 };
 
-const KeyAt = struct { track: usize, key: usize };
-
 /// A key to place: on the track for `target`, `property` and `node`, made if missing.
 const NewKey = struct { target: []const u8, property: Property, node: []const u8 = "", key: Key };
+
+/// A shortcut pressed over the panel, carried out when it is next built.
+const Shortcut = enum { delete, copy, paste, pick_all };
+
+/// Picked keys being dragged along their rows.
+const Drag = struct {
+    /// Where the pointer pressed, as a time, on the key at `key_s`.
+    anchor_s: f32,
+    key_s: f32,
+    /// The row pressed on, whose lane maps the pointer to times.
+    row: ui.Rect,
+    shift_s: f32 = 0,
+};
+
+/// Keys copied with Ctrl+C, at times from the earliest of them; their memory is `arena`'s.
+const Copied = struct {
+    arena: std.heap.ArenaAllocator,
+    keys: []const NewKey,
+};
 
 /// What Record compares: the selected entity's transform and, for a camera, its field of view.
 const Recorded = struct {
@@ -91,7 +123,18 @@ pub const Dock = struct {
     /// Which clip the timeline shows: 0 the authored clip, 1 the imported one.
     source: usize = 0,
     target: usize = 0,
-    selected_key: ?KeyAt = null,
+    /// The keys picked, and a track picked by its gutter.
+    picked: [max_picked]KeyRef = undefined,
+    picked_count: usize = 0,
+    picked_track: ?usize = null,
+    drag: ?Drag = null,
+    /// The stretch of the clip the timeline shows.
+    view: timeline.View = .{ .duration_s = 0 },
+    /// Where the ruler and rows were last drawn, for the wheel.
+    lanes: ?ui.Rect = null,
+    shortcut: ?Shortcut = null,
+    copied: ?Copied = null,
+    ease_choice: usize = 0,
     duration_edit: NumberEdit = NumberEdit.init("1") catch unreachable,
     duration_for: ?[key_len]u8 = null,
     /// The Key… form: shown, which property, its UI node and its value.
@@ -109,6 +152,49 @@ pub const Dock = struct {
     imported_len: usize = 0,
     message: [160]u8 = undefined,
     message_len: usize = 0,
+
+    /// Free the copied keys.
+    pub fn deinit(self: *Dock) void {
+        if (self.copied) |*copied| copied.arena.deinit();
+        self.copied = null;
+    }
+
+    /// A key pressed while the panel has focus: Delete, Ctrl+C, Ctrl+V, Ctrl+A and Escape act on
+    /// the timeline's keys. Returns whether it was used; a text field typing takes none.
+    pub fn keyDown(self: *Dock, key_down: @FieldType(ui.input.Event, "key_down"), typing: bool) bool {
+        if (typing or self.entity == null) return false;
+        const control = key_down.modifiers.control;
+        const wanted: ?Shortcut = switch (key_down.key) {
+            .delete, .backspace => if (self.picked_count > 0) .delete else null,
+            .c => if (control and self.picked_count > 0) .copy else null,
+            .v => if (control and self.copied != null) .paste else null,
+            .a => if (control) .pick_all else null,
+            .escape => {
+                const any = self.picked_count > 0 or self.picked_track != null or self.drag != null;
+                self.clearPicked();
+                return any;
+            },
+            else => null,
+        };
+        self.shortcut = wanted orelse return false;
+        return true;
+    }
+
+    /// A wheel over the timeline: with Ctrl it zooms about the pointer, with Shift (or sideways)
+    /// it pans. Returns whether it was used; a plain wheel scrolls the panel.
+    pub fn wheel(self: *Dock, event: @FieldType(ui.input.Event, "wheel")) bool {
+        const lanes = self.lanes orelse return false;
+        if (!lanes.contains(event.position.x, event.position.y)) return false;
+        const held = sdl3.keyboard.getModState();
+        const layout = timeline.Layout{ .width = lanes.w, .view = self.view };
+        if (held.controlDown()) {
+            self.view = self.view.zoomed(std.math.pow(f32, zoom_per_step, event.delta.y), layout.timeAtAny(event.position.x - lanes.x));
+            return true;
+        }
+        const sideways = if (event.delta.x != 0) event.delta.x else if (held.shiftDown()) -event.delta.y else return false;
+        self.view = self.view.panned(sideways * self.view.shown_s() * pan_per_step);
+        return true;
+    }
 
     /// Whether the scene is posed now: the editor then skips comparing the world with its last
     /// undo step, as the pose is not an edit.
@@ -165,7 +251,7 @@ pub const Dock = struct {
         try clip_file.write(io, project, path, text);
         var buffer: [key_len]u8 = undefined;
         if (env.assets.keyOf(&buffer, path)) |key| try env.app.graphics.clips.replace(key, clip);
-        self.selected_key = null;
+        self.clearPicked();
         self.dirty = true;
         self.recorded = null;
     }
@@ -203,6 +289,9 @@ pub const Dock = struct {
         const duration = if (loaded) |found| found.duration_s() else 0;
         self.clampTime(duration);
         const clip: ?*const Clip = if (editable) env.app.graphics.clips.authored(key) else null;
+        if (clip) |found| self.keepPicked(found.*) else self.clearPicked();
+        self.view = self.view.resized(duration);
+        if (self.playing) self.view = self.view.following(self.time_s);
 
         // The transport: the clip, play, reset, loop, Record, where the head is, and the length.
         var pending: ?Edit = null;
@@ -224,14 +313,18 @@ pub const Dock = struct {
             }
         }
         context.muted(std.fmt.allocPrint(arena, "{d:.2} / {d:.2} s", .{ self.time_s, duration }) catch "");
+        if (self.view.span_s > 0 and context.buttonVariant("Fit", .outline)) self.view = .{ .duration_s = duration };
         if (clip) |found| pending = self.durationField(context, found, key) orelse pending;
         page_style.endRow(context);
 
         // The timeline: a ruler to scrub on, then a row per track.
-        self.ruler(context, duration);
+        self.lanes = null;
+        self.ruler(context);
         if (clip) |found| {
             if (found.tracks.len == 0) context.muted("No tracks yet. Key something below.");
-            for (found.tracks, 0..) |track, index| self.trackRow(context, track, index, duration);
+            for (found.tracks, 0..) |track, index| self.trackRow(context, track, index);
+            if (self.dragged(context, found.*)) |change| pending = change;
+            if (self.takeShortcut(env, found.*)) |change| pending = change;
         } else if (!editable) {
             context.muted("Imported clips play as they are; key an authored clip (.clip.zon).");
         } else {
@@ -240,56 +333,204 @@ pub const Dock = struct {
 
         const editing = clip orelse return;
         if (self.buildKeying(context, env, entity)) |change| pending = change;
-        if (self.selectedKeyRow(context, editing)) |change| pending = change;
+        if (self.pickedRow(context, editing)) |change| pending = change;
         if (self.message_len > 0) context.alert("Animation", self.message[0..self.message_len], true);
         if (pending) |change| self.edit(env, editing, key, path, change);
     }
 
     // The timeline ------------------------------------------------------------------------------
 
-    fn ruler(self: *Dock, context: *ui.Context, duration: f32) void {
+    fn ruler(self: *Dock, context: *ui.Context) void {
         const arena = context.builder().allocator;
         const id = context.idFor("##animation ruler");
-        const element = context.builder().node(id, .{ .width = context.contentWidth(), .height = timeline.heights.ruler }, timeline.rulerPaint(arena, .{ .duration_s = duration, .head_s = self.time_s, .recording = self.recording }), &.{}) catch return;
+        const element = context.builder().node(id, .{ .width = context.contentWidth(), .height = timeline.heights.ruler }, timeline.rulerPaint(arena, .{ .view = self.view, .head_s = self.time_s, .recording = self.recording }), &.{}) catch return;
         element.accessibility = .{ .role = .slider, .label = "Animation time", .numeric_value = self.time_s };
         context.element(element);
+        const bounds = (context.last_bounds.get(id) orelse return).rect;
+        self.coverLanes(bounds);
         // Pressing on the ruler, or dragging from it, moves the head.
         const dragging = context.pointer_held and if (context.press) |press| press.widget == id else false;
         if (!context.activated(id) and !dragging) return;
-        const bounds = (context.last_bounds.get(id) orelse return).rect;
-        const layout = timeline.Layout{ .width = bounds.w, .duration_s = duration };
+        const layout = timeline.Layout{ .width = bounds.w, .view = self.view };
         const time = layout.timeAt(context.pointer.x - bounds.x) orelse return;
         self.time_s = time;
         self.playing = false;
         self.request();
     }
 
-    fn trackRow(self: *Dock, context: *ui.Context, track: eggy.assets.clip.Track, index: usize, duration: f32) void {
+    fn trackRow(self: *Dock, context: *ui.Context, track: eggy.assets.clip.Track, index: usize) void {
         const arena = context.builder().allocator;
-        const picked = if (self.selected_key) |found| if (found.track == index) found.key else null else null;
-        const row = timeline.rowOf(arena, track, displayTarget(track.target), duration, self.time_s, picked, self.recording) catch return;
+        const picked = arena.alloc(bool, track.keys.len) catch return;
+        for (picked, 0..) |*on, key| on.* = self.isPicked(.{ .track = index, .key = key });
+        const row = timeline.rowOf(arena, track, displayTarget(track.target), .{
+            .view = self.view,
+            .head_s = self.time_s,
+            .picked = picked,
+            .track_picked = self.picked_track == index,
+            .drag_s = if (self.drag) |drag| drag.shift_s else 0,
+            .recording = self.recording,
+        }) catch return;
         const id = context.idFor(std.fmt.allocPrint(arena, "##animation track {d}", .{index}) catch return);
         const element = context.builder().node(id, .{ .width = context.contentWidth(), .height = timeline.heights.row }, timeline.rowPaint(arena, row), &.{}) catch return;
         element.accessibility = .{ .role = .button, .label = std.fmt.allocPrint(arena, "{s} {s}", .{ row.target, row.property }) catch "" };
         context.element(element);
-        if (!context.activated(id)) return;
-
-        // A key under the pointer is picked and the head goes to it; elsewhere the head moves.
         const bounds = (context.last_bounds.get(id) orelse return).rect;
-        const layout = timeline.Layout{ .width = bounds.w, .duration_s = duration };
+        self.coverLanes(bounds);
+        const pressed = context.pressed_down and if (context.press) |press| press.widget == id else false;
+        if (!pressed) return;
+
+        // A key pressed is picked (Shift adds it or takes it away) and the picked keys follow the
+        // pointer from there; elsewhere in the lane the head moves; the gutter picks the track.
+        const layout = timeline.Layout{ .width = bounds.w, .view = self.view };
         const x = context.pointer.x - bounds.x;
+        const adding = sdl3.keyboard.getModState().shiftDown();
         if (layout.keyNear(track.keys, x)) |key| {
-            self.selected_key = .{ .track = index, .key = key };
+            const ref = KeyRef{ .track = index, .key = key };
+            self.picked_track = null;
+            if (adding and self.isPicked(ref)) {
+                self.unpick(ref);
+            } else {
+                if (!adding and !self.isPicked(ref)) self.clearPicked();
+                self.pick(ref);
+                self.drag = .{ .anchor_s = layout.timeAtAny(x), .key_s = track.keys[key].time_s, .row = bounds };
+            }
             self.time_s = track.keys[key].time_s;
         } else if (layout.timeAt(x)) |time| {
-            self.selected_key = null;
+            if (!adding) self.clearPicked();
             self.time_s = time;
         } else {
-            // The gutter picks the track itself (a key past its last), so it can be removed.
-            self.selected_key = .{ .track = index, .key = track.keys.len };
+            self.clearPicked();
+            self.picked_track = index;
         }
         self.playing = false;
         self.request();
+    }
+
+    /// Follow a drag of the picked keys; once let go, the edit moving them.
+    fn dragged(self: *Dock, context: *ui.Context, clip: Clip) ?Edit {
+        const drag = if (self.drag) |*held| held else return null;
+        const layout = timeline.Layout{ .width = drag.row.w, .view = self.view };
+        if (context.pointer_held) {
+            const pointer_s = layout.timeAtAny(context.pointer.x - drag.row.x);
+            const free = sdl3.keyboard.getModState().controlDown();
+            drag.shift_s = timeline.dragShift(layout, drag.anchor_s, drag.key_s, pointer_s, self.time_s, self.earliestPicked(clip), free);
+            return null;
+        }
+        const shift_s = drag.shift_s;
+        self.drag = null;
+        if (shift_s == 0) return null;
+        self.time_s = @max(0, self.time_s + shift_s);
+        return .{ .change_keys = .{ .keys = self.picked[0..self.picked_count], .change = .{ .shift_s = shift_s } } };
+    }
+
+    /// Carry out the shortcut pressed since the last build.
+    fn takeShortcut(self: *Dock, env: Env, clip: Clip) ?Edit {
+        const shortcut = self.shortcut orelse return null;
+        self.shortcut = null;
+        switch (shortcut) {
+            .delete => if (self.picked_count > 0) return .{ .change_keys = .{ .keys = self.picked[0..self.picked_count], .change = .remove } },
+            .copy => self.copy(env.history.gpa, clip),
+            .paste => if (self.copied) |copied| return .{ .paste = .{ .keys = copied.keys, .at_s = self.time_s } },
+            .pick_all => {
+                self.clearPicked();
+                for (clip.tracks, 0..) |track, index| for (0..track.keys.len) |key| self.pick(.{ .track = index, .key = key });
+            },
+        }
+        return null;
+    }
+
+    /// Keep the picked keys, at times from the earliest of them, for Ctrl+V.
+    fn copy(self: *Dock, gpa: std.mem.Allocator, clip: Clip) void {
+        var arena = std.heap.ArenaAllocator.init(gpa);
+        const keys = arena.allocator().alloc(NewKey, self.picked_count) catch return arena.deinit();
+        const earliest = self.earliestPicked(clip);
+        for (keys, self.picked[0..self.picked_count]) |*copied, ref| {
+            const track = clip.tracks[ref.track];
+            var key = track.keys[ref.key];
+            key.time_s -= earliest;
+            key.text = arena.allocator().dupe(u8, key.text) catch return arena.deinit();
+            copied.* = .{
+                .target = arena.allocator().dupe(u8, track.target) catch return arena.deinit(),
+                .property = track.property,
+                .node = arena.allocator().dupe(u8, track.node) catch return arena.deinit(),
+                .key = key,
+            };
+        }
+        self.deinit();
+        self.copied = .{ .arena = arena, .keys = keys };
+    }
+
+    /// Grow the area the wheel zooms and pans over to take in `bounds`.
+    fn coverLanes(self: *Dock, bounds: ui.Rect) void {
+        const lanes = self.lanes orelse {
+            self.lanes = bounds;
+            return;
+        };
+        const bottom = @max(lanes.y + lanes.h, bounds.y + bounds.h);
+        self.lanes = .{ .x = lanes.x, .y = @min(lanes.y, bounds.y), .w = lanes.w, .h = bottom - @min(lanes.y, bounds.y) };
+    }
+
+    // Picking -----------------------------------------------------------------------------------
+
+    fn isPicked(self: *const Dock, ref: KeyRef) bool {
+        for (self.picked[0..self.picked_count]) |other| if (std.meta.eql(other, ref)) return true;
+        return false;
+    }
+
+    fn pick(self: *Dock, ref: KeyRef) void {
+        if (self.isPicked(ref) or self.picked_count == max_picked) return;
+        self.picked[self.picked_count] = ref;
+        self.picked_count += 1;
+    }
+
+    fn unpick(self: *Dock, ref: KeyRef) void {
+        for (self.picked[0..self.picked_count], 0..) |other, index| if (std.meta.eql(other, ref)) {
+            self.picked[index] = self.picked[self.picked_count - 1];
+            self.picked_count -= 1;
+            return;
+        };
+    }
+
+    fn clearPicked(self: *Dock) void {
+        self.picked_count = 0;
+        self.picked_track = null;
+        self.drag = null;
+    }
+
+    /// Let go of picks `clip` no longer has (an undo, another clip).
+    fn keepPicked(self: *Dock, clip: Clip) void {
+        if (self.picked_track) |track| if (track >= clip.tracks.len) {
+            self.picked_track = null;
+        };
+        var index: usize = 0;
+        while (index < self.picked_count) {
+            const ref = self.picked[index];
+            if (ref.track < clip.tracks.len and ref.key < clip.tracks[ref.track].keys.len) {
+                index += 1;
+                continue;
+            }
+            self.unpick(ref);
+        }
+        if (self.picked_count == 0) self.drag = null;
+    }
+
+    fn earliestPicked(self: *const Dock, clip: Clip) f32 {
+        var earliest: f32 = std.math.inf(f32);
+        for (self.picked[0..self.picked_count]) |ref| earliest = @min(earliest, clip.tracks[ref.track].keys[ref.key].time_s);
+        return if (std.math.isFinite(earliest)) earliest else 0;
+    }
+
+    /// Pick the keys of `clip` at `landed`, where an edit put them.
+    fn pickLanded(self: *Dock, clip: Clip, landed: []const Landed) void {
+        self.clearPicked();
+        for (landed) |place| {
+            const track = clip.find(place.target, place.property, place.node) orelse continue;
+            for (clip.tracks[track].keys, 0..) |key, index| {
+                if (@abs(key.time_s - place.time_s) > eggy.assets.clip.same_time_s) continue;
+                self.pick(.{ .track = track, .key = index });
+                break;
+            }
+        }
     }
 
     // Keying ------------------------------------------------------------------------------------
@@ -395,26 +636,40 @@ pub const Dock = struct {
         return .{ .keys = oneKey(arena, .{ .target = target, .property = property, .node = arena.dupe(u8, node) catch return null, .key = key }) };
     }
 
-    /// The picked key: what it is, and moving or deleting it or its track.
-    fn selectedKeyRow(self: *Dock, context: *ui.Context, clip: *const Clip) ?Edit {
-        const picked = self.selected_key orelse return null;
-        if (picked.track >= clip.tracks.len) {
-            self.selected_key = null;
-            return null;
-        }
-        const track = clip.tracks[picked.track];
+    /// The picked keys or track: what they are, their ease, and moving or deleting them.
+    fn pickedRow(self: *Dock, context: *ui.Context, clip: *const Clip) ?Edit {
+        const picked = self.picked[0..self.picked_count];
+        if (picked.len == 0 and self.picked_track == null) return null;
         const arena = context.builder().allocator;
         var pending: ?Edit = null;
-        context.begin(.row);
         var buffer: [96]u8 = undefined;
-        if (picked.key < track.keys.len) {
-            const key = track.keys[picked.key];
+        context.begin(.row);
+        if (self.picked_track) |index| {
+            const track = clip.tracks[index];
+            context.muted(std.fmt.allocPrint(arena, "{s}  {s}", .{ displayTarget(track.target), track.label(&buffer) }) catch "");
+            if (context.buttonVariant("Remove track", .destructive)) pending = .{ .remove_track = index };
+            page_style.endRow(context);
+            return pending;
+        }
+        if (picked.len == 1) {
+            const track = clip.tracks[picked[0].track];
+            const key = track.keys[picked[0].key];
             const label = timeline.keyLabel(arena, track.property, key) catch "";
             context.muted(std.fmt.allocPrint(arena, "{s}  {s} at {d:.2} s{s}{s}", .{ displayTarget(track.target), track.label(&buffer), key.time_s, if (label.len > 0) " · " else "", label }) catch "");
-            if (context.buttonVariant("Move key to head", .outline)) pending = .{ .move_key = .{ picked.track, picked.key, self.time_s } };
-            if (context.buttonVariant("Delete key", .destructive)) pending = .{ .delete_key = .{ picked.track, picked.key } };
-        } else context.muted(std.fmt.allocPrint(arena, "{s}  {s}", .{ displayTarget(track.target), track.label(&buffer) }) catch "");
-        if (context.buttonVariant("Remove track", .destructive)) pending = .{ .remove_track = picked.track };
+            if (context.buttonVariant("Move key to head", .outline)) pending = .{ .change_keys = .{ .keys = picked, .change = .{ .shift_s = self.time_s - key.time_s } } };
+        } else context.muted(std.fmt.allocPrint(arena, "{d} keys", .{picked.len}) catch "");
+
+        // An ease for the keys that start a blend; the list shows the first one's.
+        const blending = for (picked) |ref| {
+            if (!clip.tracks[ref.track].property.discrete()) break ref;
+        } else null;
+        if (blending) |ref| {
+            self.ease_choice = @backingInt(clip.tracks[ref.track].keys[ref.key].ease);
+            if (context.select("##key ease", &ease_labels, &self.ease_choice)) {
+                pending = .{ .change_keys = .{ .keys = picked, .change = .{ .ease = @fromBackingInt(@intCast(self.ease_choice)) } } };
+            }
+        }
+        if (context.buttonVariant(if (picked.len == 1) "Delete key" else "Delete keys", .destructive)) pending = .{ .change_keys = .{ .keys = picked, .change = .remove } };
         page_style.endRow(context);
         return pending;
     }
@@ -460,8 +715,9 @@ pub const Dock = struct {
     const Edit = union(enum) {
         duration: f32,
         keys: []const NewKey,
-        move_key: struct { usize, usize, f32 },
-        delete_key: struct { usize, usize },
+        /// Copied keys, placed from `at_s` on.
+        paste: struct { keys: []const NewKey, at_s: f32 },
+        change_keys: struct { keys: []const KeyRef, change: eggy.assets.clip.KeyChange },
         remove_track: usize,
     };
 
@@ -469,10 +725,30 @@ pub const Dock = struct {
     fn edit(self: *Dock, env: Env, clip: *const Clip, key: []const u8, path: []const u8, change: Edit) void {
         self.message_len = 0;
         const gpa = env.history.gpa;
+        // Where the keys an edit moves or adds land, to stay picked there.
+        var landed: std.ArrayList(Landed) = .empty;
+        defer landed.deinit(gpa);
+        switch (change) {
+            .change_keys => |keys| switch (keys.change) {
+                .shift_s => |shift_s| for (keys.keys) |ref| {
+                    const track = clip.tracks[ref.track];
+                    landed.append(gpa, .{ .target = track.target, .property = track.property, .node = track.node, .time_s = @max(0, track.keys[ref.key].time_s + shift_s) }) catch {};
+                },
+                .ease => for (keys.keys) |ref| {
+                    const track = clip.tracks[ref.track];
+                    landed.append(gpa, .{ .target = track.target, .property = track.property, .node = track.node, .time_s = track.keys[ref.key].time_s }) catch {};
+                },
+                .remove => {},
+            },
+            .paste => |paste| for (paste.keys) |new| {
+                landed.append(gpa, .{ .target = new.target, .property = new.property, .node = new.node, .time_s = new.key.time_s + paste.at_s }) catch {};
+            },
+            else => {},
+        }
         const edited = applied(gpa, clip, change) catch |err| return self.sayError("Can't edit the clip", err);
         defer edited.deinit(gpa);
         commit(env, edited, key, path) catch |err| return self.sayError("Can't save the clip", err);
-        self.selected_key = null;
+        self.pickLanded(edited, landed.items);
         self.dirty = true;
         self.duration_for = null;
         self.wanted = true;
@@ -481,13 +757,18 @@ pub const Dock = struct {
     fn applied(gpa: std.mem.Allocator, clip: *const Clip, change: Edit) !Clip {
         switch (change) {
             .duration => |seconds| return clip.withDuration(gpa, seconds),
-            .move_key => |move| return clip.withKeyMoved(gpa, move[0], move[1], move[2]),
-            .delete_key => |gone| return clip.withoutKey(gpa, gone[0], gone[1]),
+            .change_keys => |keys| return clip.withKeysChanged(gpa, keys.keys, keys.change),
             .remove_track => |index| return clip.withoutTrack(gpa, index),
-            .keys => |keys| {
+            .keys, .paste => {
+                const keys, const at_s = switch (change) {
+                    .paste => |paste| .{ paste.keys, paste.at_s },
+                    else => .{ change.keys, 0 },
+                };
                 var held = try clip.clone(gpa);
                 errdefer held.deinit(gpa);
-                for (keys) |new| {
+                for (keys) |copied| {
+                    var new = copied;
+                    new.key.time_s += at_s;
                     if (held.find(new.target, new.property, new.node) == null) {
                         const added = try held.withTrack(gpa, new.target, new.property, new.node);
                         held.deinit(gpa);
@@ -562,7 +843,8 @@ pub const Dock = struct {
     fn forgetEntity(self: *Dock) void {
         self.authored_len = 0;
         self.imported_len = 0;
-        self.selected_key = null;
+        self.clearPicked();
+        self.view = .{ .duration_s = 0 };
         self.source = 0;
         self.target = 0;
         self.duration_for = null;
@@ -588,7 +870,8 @@ pub const Dock = struct {
 
     /// Another clip was chosen: the pose, the keys and the head start over.
     fn markChanged(self: *Dock) void {
-        self.selected_key = null;
+        self.clearPicked();
+        self.view = .{ .duration_s = 0 };
         self.time_s = 0;
         self.duration_for = null;
         if (self.wanted) self.request();
@@ -655,6 +938,9 @@ pub const Dock = struct {
         self.message_len = text.len;
     }
 };
+
+/// Where a key lands after an edit, by its track and time.
+const Landed = struct { target: []const u8, property: Property, node: []const u8, time_s: f32 };
 
 /// The asset keys of the clips an entity's `Animator` names; a length of 0 where unset.
 pub const ClipKeys = struct {
@@ -762,6 +1048,33 @@ test "an edit keys several properties at once, adding the tracks it needs" {
     try std.testing.expectEqual(@as(usize, 2), edited.tracks[0].keys.len);
     try std.testing.expectEqualStrings("Bzz!", edited.tracks[1].keys[0].text);
     try std.testing.expectEqual(@as(f32, 3), edited.duration_s);
+}
+
+test "copied keys paste from the head onto their tracks, and stay picked there" {
+    const gpa = std.testing.allocator;
+    const clip = Clip{ .duration_s = 2, .tracks = &.{
+        .{ .target = "/bee", .property = .position, .keys = &.{ .{ .time_s = 0.5, .value = .{ 1, 0, 0 } }, .{ .time_s = 1, .value = .{ 2, 0, 0 } } } },
+        .{ .target = "", .property = .event, .interpolation = .step, .keys = &.{.{ .time_s = 1.25, .text = "buzz" }} },
+    } };
+    var dock = Dock{};
+    defer dock.deinit();
+    dock.pick(.{ .track = 0, .key = 1 });
+    dock.pick(.{ .track = 1, .key = 0 });
+    dock.copy(gpa, clip);
+    try std.testing.expectEqual(@as(f32, 0), dock.copied.?.keys[0].key.time_s);
+    try std.testing.expectEqual(@as(f32, 0.25), dock.copied.?.keys[1].key.time_s);
+
+    const pasted = try Dock.applied(gpa, &clip, .{ .paste = .{ .keys = dock.copied.?.keys, .at_s = 1.75 } });
+    defer pasted.deinit(gpa);
+    try std.testing.expectEqual(@as(f32, 2), pasted.duration_s);
+    try std.testing.expectEqual(@as(usize, 3), pasted.tracks[0].keys.len);
+    try std.testing.expectEqual(@as(f32, 2), pasted.tracks[0].keys[2].value[0]);
+    try std.testing.expectEqualStrings("buzz", pasted.tracks[1].keys[1].text);
+
+    dock.pickLanded(pasted, &.{ .{ .target = "/bee", .property = .position, .node = "", .time_s = 1.75 }, .{ .target = "", .property = .event, .node = "", .time_s = 2 } });
+    try std.testing.expect(dock.isPicked(.{ .track = 0, .key = 2 }));
+    try std.testing.expect(dock.isPicked(.{ .track = 1, .key = 1 }));
+    try std.testing.expectEqual(@as(usize, 2), dock.picked_count);
 }
 
 test "a ZON string's text is found between its quotes" {

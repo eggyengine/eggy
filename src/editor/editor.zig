@@ -601,6 +601,7 @@ pub fn Editor(comptime project: type) type {
             self.asset_preview_ui.deinit();
             self.asset_preview.deinit();
             self.scene_2d_ui.deinit();
+            self.animation.deinit();
             self.animation_ui.deinit();
             self.assets_panel.deinit();
             self.asset_icons.deinit(self.gpa);
@@ -3704,6 +3705,15 @@ pub fn Editor(comptime project: type) type {
                         else => false,
                     };
                     self.applyEntityCommands();
+                    if (used) continue;
+                }
+                // The Animation panel's keys, and Ctrl/Shift+wheel over its timeline.
+                if (index == panels.animation_page) {
+                    const used = switch (input) {
+                        .key_down => |key| self.animation.keyDown(key, self.animation_ui.wants_text),
+                        .wheel => |wheel| self.animation.wheel(wheel),
+                        else => false,
+                    };
                     if (used) continue;
                 }
                 // The UI Tree's, likewise.

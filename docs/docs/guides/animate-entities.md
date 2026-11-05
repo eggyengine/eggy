@@ -47,10 +47,18 @@ the entity to move in the Hierarchy; the panel keeps showing the clip.
 start, a named `event`, or a sprite's `sprite_frame`. Pick the property, name the UI node where
 it needs one, give the value and press **Add key**.
 
-Click a key's diamond to select it, then **Move key to head**, **Delete key** or **Remove
-track**; click a track's name to select the track. **Duration** sets the clip's length; it can't be shorter than the last
-key. Every change is written to the `.clip.zon` straight away and **Edit > Undo** takes it
-back.
+Click a key's diamond to select it; Shift-click adds more, from any track, and Ctrl+A selects
+them all. Drag selected keys along their rows to move them together: they land on whole frames
+(30 a second) and on the head when they pass near it, and hold Ctrl to place them freely.
+Delete removes them, Ctrl+C and Ctrl+V copy them to the head, and **Move key to head** moves a
+single key there. Click a track's name to select the track, then **Remove track**.
+
+A key's ease shapes the move from it to the next key: **Ease in** starts slow, **Ease out**
+settles into the next key, and **Ease in-out** does both, which suits most camera moves.
+
+Ctrl+wheel over the timeline zooms in on the pointer and Shift+wheel pans; **Fit** shows the
+whole clip again. **Duration** sets the clip's length; it can't be shorter than the last key.
+Every change is written to the `.clip.zon` straight away and **Edit > Undo** takes it back.
 
 While the panel is posing an entity, edits you make to its transform belong to the clip, and
 the entity returns to its saved transform on **Reset pose**.
