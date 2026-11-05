@@ -39,17 +39,18 @@ the head is on a key). To key a pose:
 
 1. Scrub to the time you want.
 2. Move the entity with the gizmo (or its Inspector fields) while the panel is posing it.
-3. Choose **This entity**, one of its children or any other entity in the scene, and press
-   **Key Position**, **Key Rotation** or **Key Scale**. The key records the transform as it
-   is now.
+3. Press **Add track**, point at **This entity**, one of its children or any other entity in
+   the scene, and pick what to animate: **Position**, **Rotation**, **Scale**, a camera's
+   **Field of view**, a UI scene's **Visible**, a sprite's frame. The key records it as it is
+   now. What already has a track is greyed out; key it again with the diamond on its row.
 
 Or turn on **Record**: then whatever you move with the gizmo or the 2D handles, and a camera's
 field of view changed in the Inspector, is keyed at the head as soon as you let go. Select
 the entity to move in the Hierarchy; the panel keeps showing the clip.
 
-**Key…** keys the rest: a camera's `fov_deg`, a UI node's `text` or `visible`, a `sound` to
-start, a named `event`, or a sprite's `sprite_frame`. Pick the property, name the UI node where
-it needs one, give the value and press **Add key**.
+What needs a value typed, a UI node's **Text**, a **Sound** to start or an **Event**, opens
+**Key…** from Add track. **Key…** keys any property of any target: pick both, name the UI node
+where it needs one, give the value and press **Add key**.
 
 Click a key's diamond to select it; Shift-click adds more, from any track, and Ctrl+A selects
 them all. Drag selected keys along their rows to move them together: they land on whole frames

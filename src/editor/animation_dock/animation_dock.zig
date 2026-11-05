@@ -29,17 +29,13 @@ const history_zig = @import("../history.zig");
 const page_style = @import("../page_style.zig");
 const clip_file = @import("clip_file.zig");
 const timeline = @import("timeline.zig");
+const add_track = @import("add_track.zig");
 
 const NumberEdit = ui.TextEdit(12);
 const NameEdit = ui.TextEdit(64);
 const ValueEdit = ui.TextEdit(eggy.assets.clip.max_text_len);
 const key_len = eggy.assets.id.key_len;
 const max_target_len = 256;
-const key_properties = [_]struct { label: []const u8, property: Property }{
-    .{ .label = "Key Position", .property = .position },
-    .{ .label = "Key Rotation", .property = .rotation_deg },
-    .{ .label = "Key Scale", .property = .scale },
-};
 /// What the Key… form offers, beside the transform buttons.
 const form_properties = [_]Property{ .camera, .fov_deg, .visible, .text, .sound, .event, .sprite_frame };
 const form_labels = [_][]const u8{ "camera cut (This entity: back to the game's)", "fov_deg (Camera)", "visible (UI)", "text (UI node)", "sound (AudioSource)", "event", "sprite_frame (SpriteAnimator)" };
@@ -137,6 +133,7 @@ pub const Dock = struct {
     ease_choice: usize = 0,
     duration_edit: NumberEdit = NumberEdit.init("1") catch unreachable,
     duration_for: ?[key_len]u8 = null,
+    add_track: add_track.AddTrack = .{},
     /// The Key… form: shown, which property, its UI node and its value.
     form_open: bool = false,
     form_property: usize = 0,
@@ -341,7 +338,7 @@ pub const Dock = struct {
         }
 
         const editing = clip orelse return;
-        if (self.buildKeying(context, env, entity)) |change| pending = change;
+        if (self.buildKeying(context, env, entity, editing)) |change| pending = change;
         if (self.pickedRow(context, env, entity, editing)) |change| pending = change;
         if (self.message_len > 0) context.alert("Animation", self.message[0..self.message_len], true);
         if (pending) |change| self.edit(env, editing, key, path, change);
@@ -784,13 +781,13 @@ pub const Dock = struct {
         return .{ .duration = seconds };
     }
 
-    /// The target picker, the transform keys, and the Key… form for the other properties.
-    fn buildKeying(self: *Dock, context: *ui.Context, env: Env, entity: eggy.ecs.EntityId) ?Edit {
+    /// Add track, keying what is picked from it at the head, and the Key… form for a key that
+    /// needs a value typed (a text, a sound, an event) or another target.
+    fn buildKeying(self: *Dock, context: *ui.Context, env: Env, entity: eggy.ecs.EntityId, clip: *const Clip) ?Edit {
         const arena = context.builder().allocator;
         var pending: ?Edit = null;
 
-        // Targets: the entity, its children, then everything else in the scene. The selection,
-        // when it is one of them, is picked for it.
+        // Targets: the entity, its children, then everything else in the scene.
         var targets: std.ArrayList([]const u8) = .empty;
         var labels: std.ArrayList([]const u8) = .empty;
         targets.append(arena, "") catch return null;
@@ -802,24 +799,51 @@ pub const Dock = struct {
             labels.append(arena, displayTarget(line)) catch break;
         }
         if (self.target >= targets.items.len) self.target = 0;
-        const target = targets.items[self.target];
 
         context.begin(.row);
-        _ = context.select("##animation target", labels.items, &self.target);
-        for (key_properties) |entry| {
-            if (context.buttonVariant(entry.label, .outline)) {
-                if (env.game.animationTransform(env.app, entity, target)) |numbers| {
-                    pending = .{ .keys = oneKey(arena, .{ .target = target, .property = entry.property, .key = .{ .time_s = self.time_s, .value = transformPart(numbers, entry.property) } }) };
-                } else self.say("That entity has no Transform.");
-            }
+        // What each target offers is read only while the menu is open.
+        const offered = if (self.add_track.open) offersFor(arena, env, entity, clip, targets.items, labels.items) else &.{};
+        if (self.add_track.build(context, offered)) |chosen| {
+            pending = self.keyPicked(arena, env, entity, targets.items[chosen.target], chosen.target, chosen.property);
         }
         if (context.buttonVariant("Key…", if (self.form_open) .secondary else .outline)) self.form_open = !self.form_open;
         page_style.endRow(context);
 
-        if (self.form_open) if (self.keyForm(context, env, entity, target)) |change| {
-            pending = change;
-        };
+        if (self.form_open) {
+            context.begin(.row);
+            _ = context.select("##animation target", labels.items, &self.target);
+            page_style.endRow(context);
+            if (self.keyForm(context, env, entity, targets.items[self.target])) |change| pending = change;
+        }
         return pending;
+    }
+
+    /// The key for `property` of `target` picked from Add track: at the head, holding what the
+    /// target has now; a text, sound or event opens the Key… form for its value instead.
+    fn keyPicked(self: *Dock, arena: std.mem.Allocator, env: Env, entity: eggy.ecs.EntityId, target: []const u8, target_index: usize, property: Property) ?Edit {
+        var key = Key{ .time_s = self.time_s };
+        switch (property) {
+            .position, .rotation_deg, .scale => {
+                const numbers = env.game.animationTransform(env.app, entity, target) orelse return self.sayNull("That entity has no Transform.");
+                key.value = transformPart(numbers, property);
+            },
+            .fov_deg, .visible, .sprite_frame => {
+                key.value = env.game.animationValue(env.app, entity, target, property) orelse return self.sayNull("Can't read that value from its entity.");
+            },
+            .camera => {
+                key.text = target;
+                return .{ .keys = oneKey(arena, .{ .target = "", .property = .camera, .key = key }) };
+            },
+            .text, .sound, .event, .morph_weight => {
+                self.target = target_index;
+                self.form_open = true;
+                for (form_properties, 0..) |offered, index| if (offered == property) {
+                    self.form_property = index;
+                };
+                return null;
+            },
+        }
+        return .{ .keys = oneKey(arena, .{ .target = target, .property = property, .key = key }) };
     }
 
     /// Key any other property of `target` at the head: a camera's field of view, a UI node's text
@@ -1300,6 +1324,43 @@ fn cameraTargets(arena: std.mem.Allocator, env: Env, entity: eggy.ecs.EntityId) 
         cameras.append(arena, line) catch break;
     }
     return cameras.items;
+}
+
+/// What each of `targets` can be animated by in Add track, read through the game library.
+fn offersFor(arena: std.mem.Allocator, env: Env, entity: eggy.ecs.EntityId, clip: *const Clip, targets: []const []const u8, labels: []const []const u8) []const add_track.Target {
+    var listed: std.ArrayList(add_track.Target) = .empty;
+    for (targets, labels) |target, label| {
+        var offers: std.ArrayList(add_track.Offer) = .empty;
+        const has = struct {
+            fn track(c: *const Clip, t: []const u8, property: Property) bool {
+                return c.find(t, property, "") != null;
+            }
+        }.track;
+        var kind: []const u8 = "";
+        if (env.game.animationTransform(env.app, entity, target) != null) {
+            offers.append(arena, .{ .property = .position, .label = "Position", .on_timeline = has(clip, target, .position) }) catch {};
+            offers.append(arena, .{ .property = .rotation_deg, .label = "Rotation", .on_timeline = has(clip, target, .rotation_deg) }) catch {};
+            offers.append(arena, .{ .property = .scale, .label = "Scale", .on_timeline = has(clip, target, .scale) }) catch {};
+        }
+        if (env.game.animationValue(env.app, entity, target, .fov_deg) != null) {
+            kind = "Camera";
+            offers.append(arena, .{ .property = .fov_deg, .label = "Field of view", .on_timeline = has(clip, target, .fov_deg) }) catch {};
+            if (target.len > 0) offers.append(arena, .{ .property = .camera, .label = "Cut to it", .on_timeline = false }) catch {};
+        }
+        if (env.game.animationValue(env.app, entity, target, .visible) != null) {
+            kind = "UI";
+            offers.append(arena, .{ .property = .visible, .label = "Visible", .on_timeline = has(clip, target, .visible) }) catch {};
+            offers.append(arena, .{ .property = .text, .label = "Text of a node", .on_timeline = false }) catch {};
+        }
+        if (env.game.animationValue(env.app, entity, target, .sprite_frame) != null) {
+            kind = "Sprite";
+            offers.append(arena, .{ .property = .sprite_frame, .label = "Sprite frame", .on_timeline = has(clip, target, .sprite_frame) }) catch {};
+        }
+        offers.append(arena, .{ .property = .sound, .label = "Play a sound", .on_timeline = false }) catch {};
+        if (target.len == 0) offers.append(arena, .{ .property = .event, .label = "Event marker", .on_timeline = false }) catch {};
+        listed.append(arena, .{ .label = label, .kind = kind, .offers = offers.items }) catch break;
+    }
+    return listed.items;
 }
 
 /// The nearest key of any track before (or after) `head_s`.
