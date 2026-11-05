@@ -12,7 +12,7 @@ from **File > Export**.
 
 1. Select an entity named after the cutscene, say `boss intro`, and press **Make a cutscene** in
    **Window > Animation**: it writes a clip into `resources/cutscenes/` and sets the Animator up
-   as below. Or by hand: make a clip (**New > Animation > Animation Clip** in Assets), then an empty entity named
+   as below. Or by hand: make a clip (**New > Animation > Cutscene** in Assets, five seconds long), then an empty entity named
    after the cutscene, say `boss intro`, and give it an **Animator** with that clip. Turn its
    **Playing** off so it waits for the game, set **Repeat** to `once`, and **Takes over** to
    `input_and_hud`.

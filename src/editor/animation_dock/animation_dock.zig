@@ -31,6 +31,7 @@ const clip_file = @import("clip_file.zig");
 const timeline = @import("timeline.zig");
 const add_track = @import("add_track.zig");
 const file_ops = @import("../assets/file_ops.zig");
+const creation = @import("../assets/creation.zig");
 
 const NumberEdit = ui.TextEdit(12);
 const NameEdit = ui.TextEdit(64);
@@ -1171,10 +1172,10 @@ pub const Dock = struct {
         const title: [:0]const u8 = if (file_ops.checkName(name)) std.fmt.bufPrintSentinel(&title_buffer, "{s}", .{name}, 0) catch fallback else |_| fallback;
         try env.history.reserve();
         const path = try file_ops.createFile(gpa, io, project, if (made == .cutscene) "resources/cutscenes" else "resources/animations", .{
-            .key = "eggy/animation_clip",
+            .key = if (made == .cutscene) "eggy/cutscene" else "eggy/animation_clip",
             .title = title,
             .extension = ".clip.zon",
-            .contents = new_clip,
+            .contents = creation.cutscene_template,
         });
         env.history.record(.{ .create = .{ .path = path } });
 
@@ -1182,7 +1183,7 @@ pub const Dock = struct {
         _ = try env.assets.sync();
         var key_buffer: [key_len]u8 = undefined;
         const key = env.assets.keyOf(&key_buffer, path) orelse return error.NotCatalogued;
-        const source = try gpa.dupeSentinel(u8, new_clip, 0);
+        const source = try gpa.dupeSentinel(u8, creation.cutscene_template, 0);
         defer gpa.free(source);
         const clip = try eggy.assets.clip.parse(gpa, source);
         defer clip.deinit(gpa);
@@ -1320,9 +1321,6 @@ pub fn clipKeysOf(game: *const HotGame, app: *eggy.App, entity: eggy.ecs.EntityI
     }
     return keys;
 }
-
-/// What a clip made in the panel starts as: five seconds, nothing keyed.
-const new_clip = ".{\n    .format_version = 4,\n    .duration_s = 5,\n    .tracks = .{},\n}\n";
 
 /// Set `entity`'s `Animator` up as a cutscene's: waiting for the game, played once, and
 /// taking the player's input and HUD while it plays.
