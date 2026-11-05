@@ -20,7 +20,7 @@ fi
 set -euo pipefail
 
 EGGY_REPO="${EGGY_REPO:-eggyengine/eggy}"
-ZIG_RELEASE="0.17.0"
+ZIG_RELEASE="0.17.1"
 
 case "$(uname -s 2>/dev/null || true)" in
     MINGW* | MSYS* | CYGWIN*)
