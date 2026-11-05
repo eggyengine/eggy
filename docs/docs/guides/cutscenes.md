@@ -28,6 +28,10 @@ back to the game's), and choose **Cut** or **Blend** with how many frames and wh
 blends in over, from the shot before or, for the first, from the game's camera. Drag a shot to
 move it. When the cutscene ends the view is the game's again anyway.
 
+While the panel poses the cutscene, the Scene panel shows the shot at the head in its corner,
+and looking through the game's camera from its toolbar shows the cutscene as the player will
+see it, cuts and blends included.
+
 Lines of dialogue are UI scenes: make a `dialogue.ui.zon` in the UI Designer with a `line`
 node, put it on an entity with a **UiScreen**, and key `text` on the `line` node. Its buttons
 work during the cutscene.

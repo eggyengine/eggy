@@ -266,6 +266,8 @@ pub const SceneView = struct {
         if (working.selected.*) |selected| if (self.steering == null or !self.steering.?.eql(selected)) {
             self.preview = game_camera.viewOf(working.game, working.app, selected);
         };
+        // A posed cutscene's shot shows in the corner, unless the panel looks through it already.
+        if (self.preview == null and !self.looking_through_game) self.preview = shotShown(working);
         const area = scene orelse return;
         self.tools.offset = toolbar.keepInside(self.tools, self.tools.offset, area);
         // A plugin's tool in use takes the gizmo's place.
@@ -278,6 +280,15 @@ pub const SceneView = struct {
         if (self.gizmo) |handles| if (shinesAlong(working, entity)) {
             self.light_arrow = light_direction.arrow(handles, placed);
         };
+    }
+
+    /// The view through a cutscene's shot the Animation panel poses, when it isn't the game's
+    /// own camera; null otherwise.
+    fn shotShown(target: Target) ?eggy.camera.View {
+        const shown = target.game.findCamera(target.app) orelse return null;
+        const active = game_camera.find(target.game, target.app) orelse return shown;
+        if (std.meta.eql(shown, active.view)) return null;
+        return shown;
     }
 
     /// Whether `entity` is a directional or spot light, which shine along their local -Z.
@@ -305,6 +316,12 @@ pub const SceneView = struct {
         if (look != .editing) {
             self.steering = null;
             self.view = target.game.findCamera(target.app) orelse camera.view;
+            return;
+        }
+        // Editing a posed cutscene, the view is its shot, which the panel's controls don't move.
+        if (shotShown(target)) |shot| {
+            self.steering = null;
+            self.view = shot;
             return;
         }
         // The panel's camera moved: the game's follows it. Otherwise the panel's camera follows
