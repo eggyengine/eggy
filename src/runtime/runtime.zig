@@ -207,8 +207,8 @@ pub fn Runtime(comptime project: type) type {
             self.app.graphics.ui_billboards = &self.billboards;
             const has_ui = self.plugins.hasGameUi() or self.app.ui_scenes.screen_count != 0;
             const frame = try self.app.graphics.beginFrame();
-            // Through the game's camera; without one, there is nothing to see it from.
-            if (eggy.camera.find(&self.app.world)) |view| {
+            // Through a cutscene's shot or the game's camera; without one, there is nothing to see it from.
+            if (eggy.camera_cuts.find(&self.app.world, &self.app.graphics.clips, null)) |view| {
                 const drawn = try eggy.mesh.gatherAlloc(self.gpa, &self.app.world);
                 defer self.gpa.free(drawn);
                 try self.app.graphics.drawScene(frame, drawn, view);
@@ -244,7 +244,7 @@ pub fn Runtime(comptime project: type) type {
                         if (layer.context.wants_text) try sdl3.keyboard.startTextInput(window) else try sdl3.keyboard.stopTextInput(window);
                     }
                 }
-                if (eggy.camera.find(&self.app.world)) |view| try self.app.drawDebug(draw, view);
+                if (eggy.camera_cuts.find(&self.app.world, &self.app.graphics.clips, null)) |view| try self.app.drawDebug(draw, view);
             }
             try self.app.graphics.endFrame(frame);
             try self.app.finishDiagnosticsFrame();
@@ -297,7 +297,7 @@ pub fn Runtime(comptime project: type) type {
                 else => return false,
             };
             if (down.button != .left or self.app.ui_scenes.billboard_count == 0) return false;
-            const view = eggy.camera.find(&self.app.world) orelse return false;
+            const view = eggy.camera_cuts.find(&self.app.world, &self.app.graphics.clips, null) orelse return false;
             return eggy.ui_scenes.billboards.press(&self.app.ui_scenes, self.app.resources(), view, viewport_points, .init(down.x, down.y));
         }
     };

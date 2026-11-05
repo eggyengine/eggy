@@ -151,6 +151,7 @@ fn colorOf(property: Property) [3]f32 {
         .sound => .{ 0.71, 0.59, 0.88 },
         .event => .{ 0.91, 0.54, 0.42 },
         .sprite_frame => .{ 0.96, 0.75, 0.29 },
+        .camera => .{ 0.95, 0.93, 0.88 },
     };
 }
 
@@ -228,6 +229,11 @@ pub fn keyLabel(arena: std.mem.Allocator, property: Property, key: eggy.assets.c
         .fov_deg => try std.fmt.allocPrint(arena, "{d:.0}°", .{key.value[0]}),
         .visible => if (key.value[0] > 0.5) "on" else "off",
         .sprite_frame => try std.fmt.allocPrint(arena, "{d:.0}", .{key.value[0]}),
+        .camera => {
+            const shot = if (key.text.len == 0) "Game camera" else std.mem.trimStart(u8, key.text, "/");
+            if (!(key.value[0] > 0)) return shot;
+            return try std.fmt.allocPrint(arena, "{s}, {d:.1} s blend", .{ shot, key.value[0] });
+        },
         .position, .rotation_deg, .scale, .morph_weight => "",
     };
 }

@@ -798,7 +798,8 @@ pub const HotGame = struct {
         return eggy.math.fromArray(f32, 4, 4, columns);
     }
 
-    /// The view through the game's camera (`eggy.camera.find`); null without one.
+    /// The view the game shows (`eggy.camera_cuts.find`): a cutscene's shot, the previewed
+    /// clip's included, else the game's camera; null without one.
     /// Editor host only: queries via library-local component types; returns a view value copy
     /// and also returns null when the library is unloaded.
     ///
@@ -807,8 +808,9 @@ pub const HotGame = struct {
     /// ```
     pub fn findCamera(self: *const HotGame, app: *eggy.App) ?eggy.camera.View {
         if (self.library == null) return null;
+        const state = self.state orelse return null;
         var view: eggy.camera.View = undefined;
-        return if (self.game.find_camera(&app.world, &view)) view else null;
+        return if (self.game.find_camera(state, app, &view)) view else null;
     }
 
     /// Start previewing animation on `entity`, remembering what the preview will move. False

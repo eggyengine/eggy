@@ -41,8 +41,8 @@ const key_properties = [_]struct { label: []const u8, property: Property }{
     .{ .label = "Key Scale", .property = .scale },
 };
 /// What the Key… form offers, beside the transform buttons.
-const form_properties = [_]Property{ .fov_deg, .visible, .text, .sound, .event, .sprite_frame };
-const form_labels = [_][]const u8{ "fov_deg (Camera)", "visible (UI)", "text (UI node)", "sound (AudioSource)", "event", "sprite_frame (SpriteAnimator)" };
+const form_properties = [_]Property{ .camera, .fov_deg, .visible, .text, .sound, .event, .sprite_frame };
+const form_labels = [_][]const u8{ "camera cut (This entity: back to the game's)", "fov_deg (Camera)", "visible (UI)", "text (UI node)", "sound (AudioSource)", "event", "sprite_frame (SpriteAnimator)" };
 /// Record keys a change bigger than this.
 const record_epsilon: f32 = 1e-4;
 /// The most keys picked at once.
@@ -362,7 +362,7 @@ pub const Dock = struct {
         const arena = context.builder().allocator;
         const picked = arena.alloc(bool, track.keys.len) catch return;
         for (picked, 0..) |*on, key| on.* = self.isPicked(.{ .track = index, .key = key });
-        const row = timeline.rowOf(arena, track, displayTarget(track.target), .{
+        const row = timeline.rowOf(arena, track, trackOwner(track), .{
             .view = self.view,
             .head_s = self.time_s,
             .picked = picked,
@@ -597,7 +597,8 @@ pub const Dock = struct {
         const before = self.form_property;
         _ = context.select("##key property", &form_labels, &self.form_property);
         const property = form_properties[self.form_property];
-        // A number property starts from what the target has now.
+        // A number property starts from what the target has now; a cut from no blend.
+        if (before != self.form_property and property == .camera) self.form_value.set("0") catch {};
         if (before != self.form_property and !property.textual() and property != .visible) {
             if (env.game.animationValue(env.app, entity, target, property)) |value| {
                 self.form_value.set(std.fmt.allocPrint(arena, "{d}", .{value[0]}) catch "") catch {};
@@ -609,6 +610,7 @@ pub const Dock = struct {
             .sound => _ = context.textInput("##key value", &self.form_value, "resources/sounds/buzz.wav"),
             .text => _ = context.textInput("##key value", &self.form_value, "What the node says"),
             .event => _ = context.textInput("##key value", &self.form_value, "wait_for_choice"),
+            .camera => _ = context.textInput("##key value", &self.form_value, "Blend seconds (0 cuts)"),
             else => _ = context.textInput("##key value", &self.form_value, "0"),
         }
         const add = context.buttonVariant("Add key", .default);
@@ -630,10 +632,19 @@ pub const Dock = struct {
                 const sound = env.assets.keyOf(&buffer, value_text) orelse return self.sayNull("That sound isn't in the project's resources.");
                 key.text = arena.dupe(u8, sound) catch return null;
             },
+            .camera => {
+                const blend_s = std.fmt.parseFloat(f32, if (value_text.len == 0) "0" else value_text) catch return self.sayNull("The blend must be a number of seconds.");
+                if (!(blend_s >= 0)) return self.sayNull("The blend can't be negative.");
+                key.value[0] = blend_s;
+                key.ease = .ease_in_out;
+                key.text = target;
+            },
             else => key.value[0] = std.fmt.parseFloat(f32, value_text) catch return self.sayNull("The value must be a number."),
         }
         if (property == .text and node.len == 0) return self.sayNull("Name the UI node whose text this sets.");
-        return .{ .keys = oneKey(arena, .{ .target = target, .property = property, .node = arena.dupe(u8, node) catch return null, .key = key }) };
+        // A clip has one camera track, on no target; its keys name the shots.
+        const track_target = if (property == .camera) "" else target;
+        return .{ .keys = oneKey(arena, .{ .target = track_target, .property = property, .node = arena.dupe(u8, node) catch return null, .key = key }) };
     }
 
     /// The picked keys or track: what they are, their ease, and moving or deleting them.
@@ -646,7 +657,7 @@ pub const Dock = struct {
         context.begin(.row);
         if (self.picked_track) |index| {
             const track = clip.tracks[index];
-            context.muted(std.fmt.allocPrint(arena, "{s}  {s}", .{ displayTarget(track.target), track.label(&buffer) }) catch "");
+            context.muted(std.fmt.allocPrint(arena, "{s}  {s}", .{ trackOwner(track), track.label(&buffer) }) catch "");
             if (context.buttonVariant("Remove track", .destructive)) pending = .{ .remove_track = index };
             page_style.endRow(context);
             return pending;
@@ -655,7 +666,7 @@ pub const Dock = struct {
             const track = clip.tracks[picked[0].track];
             const key = track.keys[picked[0].key];
             const label = timeline.keyLabel(arena, track.property, key) catch "";
-            context.muted(std.fmt.allocPrint(arena, "{s}  {s} at {d:.2} s{s}{s}", .{ displayTarget(track.target), track.label(&buffer), key.time_s, if (label.len > 0) " · " else "", label }) catch "");
+            context.muted(std.fmt.allocPrint(arena, "{s}  {s} at {d:.2} s{s}{s}", .{ trackOwner(track), track.label(&buffer), key.time_s, if (label.len > 0) " · " else "", label }) catch "");
             if (context.buttonVariant("Move key to head", .outline)) pending = .{ .change_keys = .{ .keys = picked, .change = .{ .shift_s = self.time_s - key.time_s } } };
         } else context.muted(std.fmt.allocPrint(arena, "{d} keys", .{picked.len}) catch "");
 
@@ -1011,6 +1022,11 @@ fn oneKey(arena: std.mem.Allocator, key: NewKey) []const NewKey {
 }
 
 /// A target as a person reads it: `bee` for `/bee`, "This entity" for the animated one.
+/// What a track's row is named for: its target, or the clip's camera cuts.
+fn trackOwner(track: eggy.assets.clip.Track) []const u8 {
+    return if (track.property == .camera) "Camera cuts" else displayTarget(track.target);
+}
+
 fn displayTarget(target: []const u8) []const u8 {
     if (target.len == 0) return "This entity";
     if (std.mem.startsWith(u8, target, eggy.assets.clip.scene_prefix)) return target[eggy.assets.clip.scene_prefix.len..];

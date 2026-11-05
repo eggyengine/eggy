@@ -556,8 +556,10 @@ fn worldMatrix(world: *anyopaque, entity: api.Entity, out: *[4][4]f32) callconv(
     return true;
 }
 
-fn findCamera(world: *anyopaque, out: *eggy.camera.View) callconv(.c) bool {
-    out.* = eggy.camera.find(worldOf(world)) orelse return false;
+fn findCamera(state_ptr: *anyopaque, app_ptr: *anyopaque, out: *eggy.camera.View) callconv(.c) bool {
+    const app = appOf(app_ptr);
+    const previewed = if (stateOf(state_ptr).preview) |preview| preview.root else null;
+    out.* = eggy.camera_cuts.find(&app.world, &app.graphics.clips, previewed) orelse return false;
     return true;
 }
 

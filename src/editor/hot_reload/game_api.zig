@@ -7,7 +7,7 @@ const std = @import("std");
 const eggy = @import("eggy");
 
 /// Bumped whenever these types change, so an editor refuses a library built for another.
-pub const version: u32 = 45;
+pub const version: u32 = 46;
 
 /// The library's one exported function: `fn () callconv(.c) *const Game`.
 pub const entry_symbol = "eggy_game";
@@ -265,8 +265,9 @@ pub const Game = extern struct {
     /// The entity's transform within the world (`eggy.transform.worldMatrix`), as columns, into
     /// `out`; false if it isn't alive.
     world_matrix: *const fn (world: *anyopaque, entity: Entity, out: *[4][4]f32) callconv(.c) bool,
-    /// The view through the game's camera (`eggy.camera.find`) into `out`; false without one.
-    find_camera: *const fn (world: *anyopaque, out: *eggy.camera.View) callconv(.c) bool,
+    /// The view the game shows (`eggy.camera_cuts.find`: a cutscene's shot, the previewed
+    /// clip's included, else the game's camera) into `out`; false without one.
+    find_camera: *const fn (state: *anyopaque, app: *anyopaque, out: *eggy.camera.View) callconv(.c) bool,
     /// Start previewing animation on `entity`: remember its `Animator` and what a clip can change
     /// across the scene, so `animation_preview_end` can put it back. Ends a preview already
     /// under way; false (logged) if the entity isn't alive or memory ran out.

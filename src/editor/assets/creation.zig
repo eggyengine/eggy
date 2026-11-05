@@ -58,7 +58,7 @@ const builtins = [_]Entry{
         .key = "eggy/animation_clip",
         .title = "Animation Clip",
         .extension = ".clip.zon",
-        .contents = ".{\n    .format_version = 3,\n    .duration_s = 1,\n    .tracks = .{},\n}\n",
+        .contents = ".{\n    .format_version = 4,\n    .duration_s = 1,\n    .tracks = .{},\n}\n",
         .category = "Animation",
     } },
     .{ .file = .{

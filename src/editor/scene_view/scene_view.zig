@@ -301,9 +301,10 @@ pub const SceneView = struct {
             self.steering = null;
             return;
         };
+        // Playing, the view follows a cutscene's camera cuts.
         if (look != .editing) {
             self.steering = null;
-            self.view = camera.view;
+            self.view = target.game.findCamera(target.app) orelse camera.view;
             return;
         }
         // The panel's camera moved: the game's follows it. Otherwise the panel's camera follows

@@ -158,9 +158,15 @@ pub const Ray = struct { origin: math.Vec3, direction: math.Vec3 };
 /// ```
 pub fn find(world: *ecs.World) ?View {
     const entity = (Cameras{ .world = world }).activeEntity() orelse return null;
-    const camera = world.get(entity, Camera).?.*;
+    return viewOf(world, entity);
+}
+
+/// The view through `entity`'s `Camera`, placed by its world transform, whether or not it is
+/// the active one (a cutscene's shot); null without a `Camera` or with an invalid one (logged).
+pub fn viewOf(world: *ecs.World, entity: ecs.EntityId) ?View {
+    const camera = (world.get(entity, Camera) orelse return null).*;
     camera.validate() catch |err| {
-        std.log.err("active camera {d} is invalid: {t}", .{ entity.id, err });
+        std.log.err("camera {d} is invalid: {t}", .{ entity.id, err });
         return null;
     };
     const placed = transform_zig.worldMatrix(world, entity);

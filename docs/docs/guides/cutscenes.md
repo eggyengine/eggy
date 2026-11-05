@@ -20,6 +20,14 @@ from **File > Export**.
 3. Use **Key…** for the rest: the camera's `fov_deg` to push in, a dialogue screen's `visible`
    and the `text` of its nodes for each line, a `sound` to start, and `event`s for your code.
 
+Cut between cameras with a camera cut: put a **Camera** on each shot's entity (turn its
+**Active** off so the game doesn't look through it), pick it in the target list, choose
+**camera cut** in **Key…** and give how many seconds to blend from the shot before, `0` for a
+hard cut. From that key on the view looks through that camera; blending eases from the shot
+before, or from the game's camera into the first one. A cut with **This entity** picked hands
+the view back to the game's camera, blending as long as you say, and when the cutscene ends
+the view is the game's again anyway. The keys sit on the **Camera cuts** row.
+
 Lines of dialogue are UI scenes: make a `dialogue.ui.zon` in the UI Designer with a `line`
 node, put it on an entity with a **UiScreen**, and key `text` on the `line` node. Its buttons
 work during the cutscene.
@@ -64,8 +72,8 @@ HUD you draw yourself in `gameUi`.
 
 ## Film it
 
-**File > Export > Film** renders a cutscene of the open scene to a video, through the scene's
-active camera. Pick the cutscene, the size, the frame rate and the motion blur; every frame is
+**File > Export > Film** renders a cutscene of the open scene to a video, through its camera cuts
+(or the scene's active camera). Pick the cutscene, the size, the frame rate and the motion blur; every frame is
 rendered at a fixed step, however long that takes. The frames go to the project's
 `zig-out/film/<clip>-<n>/frames/`, and with [ffmpeg](https://ffmpeg.org) installed they are
 encoded into `film.mp4` there, with the clip's sounds mixed in at their keys.

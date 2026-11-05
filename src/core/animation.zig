@@ -530,7 +530,7 @@ pub fn read(world: *ecs.World, entity: ecs.EntityId, property: assets.clip.Prope
             .{ @floatFromInt(@intFromBool(billboard.visible)), 0, 0 }
         else
             null,
-        .morph_weight, .text, .sound, .event => null,
+        .morph_weight, .text, .sound, .event, .camera => null,
     };
 }
 
@@ -574,7 +574,7 @@ pub fn write(world: *ecs.World, entity: ecs.EntityId, property: assets.clip.Prop
                 world.markChanged(entity, ui_scenes.UiBillboard);
             };
         },
-        .morph_weight, .text, .sound, .event => {},
+        .morph_weight, .text, .sound, .event, .camera => {},
     }
 }
 

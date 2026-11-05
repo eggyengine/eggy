@@ -9,7 +9,7 @@ const zon_file = @import("zon.zig");
 
 /// The `.clip.zon` layout this build writes. It reads this one and `1`, which had only transform
 /// and blend-shape tracks; a file of another version is refused.
-pub const format_version: u32 = 3;
+pub const format_version: u32 = 4;
 const oldest_version: u32 = 1;
 
 /// What a track animates. A rotation is Euler degrees about x, then y, then z, like `Transform`,
@@ -34,19 +34,24 @@ pub const Property = enum {
     event,
     /// The first frame of the run a `SpriteAnimator` plays (`value[0]`).
     sprite_frame,
+    /// Which camera the view looks through from each key on: the key's `text` names a camera
+    /// entity as a track target does (`/bee close`), empty for the game's own camera. `value[0]`
+    /// is how many seconds it blends from the shot before (0 cuts), shaped by the key's `ease`.
+    /// The track's own target is unused (`""`).
+    camera,
 
     /// Whether it changes in steps at its keys rather than blending between them, and acts only
     /// from its first key on.
     pub fn discrete(self: Property) bool {
         return switch (self) {
             .position, .rotation_deg, .scale, .morph_weight, .fov_deg => false,
-            .visible, .text, .sound, .event, .sprite_frame => true,
+            .visible, .text, .sound, .event, .sprite_frame, .camera => true,
         };
     }
 
     /// Whether its keys carry `text` rather than numbers.
     pub fn textual(self: Property) bool {
-        return self == .text or self == .sound or self == .event;
+        return self == .text or self == .sound or self == .event or self == .camera;
     }
 
     /// Whether its keys fire once as the clip passes them (rather than setting a state).
@@ -222,6 +227,7 @@ pub const Clip = struct {
                 if (!std.math.isFinite(key.time_s) or key.time_s < 0 or key.time_s > self.duration_s) return error.InvalidClip;
                 if (at > 0 and key.time_s <= previous) return error.InvalidClip;
                 if (!validKey(key)) return error.InvalidClip;
+                if (track.property == .camera and key.value[0] < 0) return error.InvalidClip;
                 previous = key.time_s;
             }
         }
@@ -451,6 +457,8 @@ fn validTarget(track: Track) bool {
     // Only UI tracks name a node, and `text` must.
     if (track.node.len > 0 and (!track.property.takesNode() or !validName(track.node))) return false;
     if (track.property == .text and track.node.len == 0) return false;
+    // A clip has one camera track; its keys name the cameras.
+    if (track.property == .camera) return track.target.len == 0;
     switch (track.where()) {
         .model => |name| return track.property.onModel() and validName(name),
         .scene => |path| return track.property != .morph_weight and validPath(path),
@@ -650,4 +658,22 @@ test "several keys across tracks shift, ease and go together" {
     try std.testing.expectEqual(@as(usize, 2), removed.tracks[0].keys.len);
     try std.testing.expectEqual(@as(usize, 1), removed.tracks[1].keys.len);
     try std.testing.expectError(error.InvalidClip, source.withKeysChanged(gpa, &picked, .{ .shift_s = std.math.inf(f32) }));
+}
+
+test "a clip has one camera track, on no target, whose keys name cameras and blend forwards" {
+    const gpa = std.testing.allocator;
+    const good = try parse(gpa,
+        \\.{ .format_version = 4, .duration_s = 4, .tracks = .{ .{ .target = "", .property = .camera, .interpolation = .step, .keys = .{
+        \\    .{ .time_s = 0, .text = "/wide" },
+        \\    .{ .time_s = 2, .value = .{ 0.5, 0, 0 }, .text = "", .ease = .ease_in_out },
+        \\} } } }
+    );
+    defer good.deinit(gpa);
+    try std.testing.expectEqualStrings("/wide", good.tracks[0].keyAt(1.9).?.text);
+    try std.testing.expectEqual(@as(f32, 0.5), good.tracks[0].keyAt(2.1).?.value[0]);
+    try std.testing.expect(good.tracks[0].keyAt(2.1).?.text.len == 0);
+
+    // A camera track on an entity, and a negative blend.
+    try std.testing.expectError(error.InvalidClip, parse(gpa, ".{ .format_version = 4, .duration_s = 1, .tracks = .{ .{ .target = \"/bee\", .property = .camera, .keys = .{} } } }"));
+    try std.testing.expectError(error.InvalidClip, parse(gpa, ".{ .format_version = 4, .duration_s = 1, .tracks = .{ .{ .target = \"\", .property = .camera, .keys = .{ .{ .time_s = 0, .value = .{ -1, 0, 0 }, .text = \"/wide\" } } } } }"));
 }
