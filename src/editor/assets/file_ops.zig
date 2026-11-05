@@ -323,8 +323,8 @@ fn extensionStart(name: []const u8) usize {
     return if (std.mem.indexOfScalarPos(u8, name, 1, '.')) |dot| dot else name.len;
 }
 
-/// A name for a file or folder: not empty, no slashes, not `.` or `..`.
-fn checkName(name: []const u8) !void {
+/// A name for a file or folder: not empty, no slashes, not `.` or `..`. Errors: `BadPathName`.
+pub fn checkName(name: []const u8) !void {
     if (name.len == 0 or std.mem.eql(u8, name, ".") or std.mem.eql(u8, name, "..")) return error.BadPathName;
     if (std.mem.indexOfAny(u8, name, "/\\\x00") != null) return error.BadPathName;
 }

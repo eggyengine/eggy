@@ -30,6 +30,7 @@ const page_style = @import("../page_style.zig");
 const clip_file = @import("clip_file.zig");
 const timeline = @import("timeline.zig");
 const add_track = @import("add_track.zig");
+const file_ops = @import("../assets/file_ops.zig");
 
 const NumberEdit = ui.TextEdit(12);
 const NameEdit = ui.TextEdit(64);
@@ -261,10 +262,7 @@ pub const Dock = struct {
         const arena = context.builder().allocator;
         const entity = self.entity orelse return context.muted("Select an entity with an Animator to animate it.");
         if (!self.posed) self.readClipKeys(env, entity);
-        if (self.authored_len == 0 and self.imported_len == 0) {
-            context.muted("No Animator clip. Drop a clip on its Animator.");
-            return;
-        }
+        if (self.authored_len == 0 and self.imported_len == 0) return self.buildEmpty(context, env, entity);
 
         // The clips to choose from: the authored one can be keyed, the imported one only viewed.
         var names: std.ArrayList([]const u8) = .empty;
@@ -1130,6 +1128,71 @@ pub const Dock = struct {
 
     /// The entity to show: the selection when it has an `Animator`, else the one shown so far
     /// while it still has one, so its cutscene's actors can be selected and posed.
+    /// An entity that plays no clip: make it a cutscene or a clip, or give it an Animator.
+    fn buildEmpty(self: *Dock, context: *ui.Context, env: Env, entity: eggy.ecs.EntityId) void {
+        const arena = context.builder().allocator;
+        var name_buffer: [eggy.Name.max_len]u8 = undefined;
+        const name = env.game.readName(env.app, entity, &name_buffer) orelse "This entity";
+        const animator = hasAnimator(env, entity);
+        context.begin(.column);
+        context.muted(std.fmt.allocPrint(arena, "{s} {s}", .{ name, if (animator) "plays no clip" else "has no Animator" }) catch "");
+        context.begin(.row);
+        const make = std.fmt.allocPrint(arena, "Make a cutscene on {s}##make cutscene", .{name}) catch "Make a cutscene##make cutscene";
+        if (context.button(make)) self.makeClip(env, entity, name, .cutscene);
+        if (animator) {
+            if (context.buttonVariant("Make a clip", .outline)) self.makeClip(env, entity, name, .clip);
+        } else if (context.buttonVariant("Add an Animator", .outline)) {
+            if (env.game.builtinComponent("Animator")) |component| _ = env.game.addComponent(env.app, entity, component);
+        }
+        page_style.endRow(context);
+        context.end();
+        page_style.restyle(context, .{ .gap = 10 });
+    }
+
+    const Made = enum { cutscene, clip };
+
+    /// Write a new empty clip into `resources/cutscenes/` (or `animations/`) named after the
+    /// entity, and have its `Animator` play it, set up as a cutscene's (`makeCutscene`).
+    /// The new file and the scene change are each undoable.
+    fn makeClip(self: *Dock, env: Env, entity: eggy.ecs.EntityId, name: []const u8, made: Made) void {
+        self.makeClipOrFail(env, entity, name, made) catch |err| std.log.err("cannot make a clip for {s}: {t}", .{ name, err });
+    }
+
+    fn makeClipOrFail(self: *Dock, env: Env, entity: eggy.ecs.EntityId, name: []const u8, made: Made) !void {
+        const gpa = env.history.gpa;
+        var threaded: std.Io.Threaded = .init_single_threaded;
+        const io = threaded.io();
+        var project = try std.Io.Dir.cwd().openDir(io, env.project_dir, .{});
+        defer project.close(io);
+
+        // Named after the entity where it can be, else after what it is.
+        var title_buffer: [eggy.Name.max_len + 1]u8 = undefined;
+        const fallback: [:0]const u8 = if (made == .cutscene) "Cutscene" else "Animation";
+        const title: [:0]const u8 = if (file_ops.checkName(name)) std.fmt.bufPrintSentinel(&title_buffer, "{s}", .{name}, 0) catch fallback else |_| fallback;
+        try env.history.reserve();
+        const path = try file_ops.createFile(gpa, io, project, if (made == .cutscene) "resources/cutscenes" else "resources/animations", .{
+            .key = "eggy/animation_clip",
+            .title = title,
+            .extension = ".clip.zon",
+            .contents = new_clip,
+        });
+        env.history.record(.{ .create = .{ .path = path } });
+
+        // Catalogue it now, so it has a key for the Animator and the clip is there to key.
+        _ = try env.assets.sync();
+        var key_buffer: [key_len]u8 = undefined;
+        const key = env.assets.keyOf(&key_buffer, path) orelse return error.NotCatalogued;
+        const source = try gpa.dupeSentinel(u8, new_clip, 0);
+        defer gpa.free(source);
+        const clip = try eggy.assets.clip.parse(gpa, source);
+        defer clip.deinit(gpa);
+        try env.app.graphics.clips.replace(key, clip);
+        if (!env.game.assignAnimation(env.app, entity, key, false)) return error.CannotAssign;
+        if (made == .cutscene) makeCutscene(env, entity);
+        self.source = 0;
+        self.markChanged();
+    }
+
     fn follow(self: *const Dock, env: Env) ?eggy.ecs.EntityId {
         if (env.selected) |selected| if (hasAnimator(env, selected)) return selected;
         if (self.entity) |shown| if (hasAnimator(env, shown)) return shown;
@@ -1256,6 +1319,20 @@ pub fn clipKeysOf(game: *const HotGame, app: *eggy.App, entity: eggy.ecs.EntityI
         }
     }
     return keys;
+}
+
+/// What a clip made in the panel starts as: five seconds, nothing keyed.
+const new_clip = ".{\n    .format_version = 4,\n    .duration_s = 5,\n    .tracks = .{},\n}\n";
+
+/// Set `entity`'s `Animator` up as a cutscene's: waiting for the game, played once, and
+/// taking the player's input and HUD while it plays.
+fn makeCutscene(env: Env, entity: eggy.ecs.EntityId) void {
+    const component = env.game.builtinComponent("Animator") orelse return;
+    const settings = [_][2][:0]const u8{ .{ "playing", "false" }, .{ "repeat", ".once" }, .{ "takes_over", ".input_and_hud" } };
+    for (env.game.component_types[component].fields, 0..) |field, index| for (settings) |setting| {
+        if (!std.mem.eql(u8, field.name, setting[0])) continue;
+        if (!env.game.writeField(env.app, entity, component, index, setting[1])) std.log.warn("cannot set the Animator's {s}", .{setting[0]});
+    };
 }
 
 fn hasAnimator(env: Env, entity: eggy.ecs.EntityId) bool {
