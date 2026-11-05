@@ -30,6 +30,7 @@ const page_style = @import("../page_style.zig");
 const clip_file = @import("clip_file.zig");
 const timeline = @import("timeline.zig");
 const add_track = @import("add_track.zig");
+const curves = @import("curves.zig");
 const file_ops = @import("../assets/file_ops.zig");
 const creation = @import("../assets/creation.zig");
 
@@ -71,6 +72,16 @@ const NewKey = struct { target: []const u8, property: Property, node: []const u8
 
 /// A shortcut pressed over the panel, carried out when it is next built.
 const Shortcut = enum { delete, copy, paste, pick_all };
+
+/// A key's value on one axis being dragged in the curve view; the range stays as it was pressed,
+/// so the graph holds still under the pointer.
+const CurveDrag = struct {
+    point: curves.Point,
+    range: curves.Range,
+    start_y: f32,
+    start_value: f32,
+    value: f32,
+};
 
 /// Picked keys being dragged along their rows.
 const Drag = struct {
@@ -126,6 +137,11 @@ pub const Dock = struct {
     picked_count: usize = 0,
     picked_track: ?usize = null,
     drag: ?Drag = null,
+    /// Whether the timeline shows each track's keys in a row, or one track's curves.
+    shown: enum { keys, curves } = .keys,
+    /// The track the curves are of, and a key point being dragged up or down on them.
+    curve_track: usize = 0,
+    curve_drag: ?CurveDrag = null,
     /// The stretch of the clip the timeline shows.
     view: timeline.View = .{ .duration_s = 0 },
     /// Where the ruler and rows were last drawn, for the wheel.
@@ -322,6 +338,8 @@ pub const Dock = struct {
         page_style.spacer(context);
         if (context.buttonVariant("Reset pose", .outline)) self.release(env);
         if (self.view.span_s > 0 and context.buttonVariant("Fit", .outline)) self.view = .{ .duration_s = duration };
+        if (context.buttonVariant("Keys", if (self.shown == .keys) .secondary else .ghost)) self.shown = .keys;
+        if (context.buttonVariant("Curves", if (self.shown == .curves) .secondary else .ghost)) self.shown = .curves;
         if (clip) |found| pending = self.durationField(context, found, key) orelse pending;
         page_style.endRow(context);
 
@@ -330,9 +348,13 @@ pub const Dock = struct {
         self.lanes = null;
         self.ruler(context);
         if (clip) |found| {
-            if (self.shotsRow(context, env, entity, found)) |change| pending = change;
-            if (found.tracks.len == 0) context.muted("No tracks yet. Key something below.");
-            if (self.groupedRows(context, env, entity, found)) |change| pending = change;
+            if (self.shown == .curves) {
+                if (self.curveGraph(context, found)) |change| pending = change;
+            } else {
+                if (self.shotsRow(context, env, entity, found)) |change| pending = change;
+                if (found.tracks.len == 0) context.muted("No tracks yet. Key something below.");
+                if (self.groupedRows(context, env, entity, found)) |change| pending = change;
+            }
             if (self.dragged(context, found.*)) |change| pending = change;
             if (self.takeShortcut(env, found.*)) |change| pending = change;
         } else if (!editable) {
@@ -400,6 +422,103 @@ pub const Dock = struct {
             }
         }
         return pending;
+    }
+
+    /// One track's curves, chosen from the tracks that blend numbers; a key point pressed is
+    /// picked and dragged up or down to change its value, keyed when let go.
+    fn curveGraph(self: *Dock, context: *ui.Context, clip: *const Clip) ?Edit {
+        const arena = context.builder().allocator;
+        var with: std.ArrayList(usize) = .empty;
+        var labels: std.ArrayList([]const u8) = .empty;
+        for (clip.tracks, 0..) |track, index| {
+            if (!curves.hasCurve(track.property)) continue;
+            var buffer: [64]u8 = undefined;
+            const label = std.fmt.allocPrint(arena, "{s}  {s}", .{ trackOwner(track), track.label(&buffer) }) catch continue;
+            with.append(arena, index) catch return null;
+            labels.append(arena, label) catch return null;
+        }
+        if (with.items.len == 0) {
+            self.curve_drag = null;
+            context.muted("No track has a curve yet: key a position, rotation, scale, field of view or morph weight.");
+            return null;
+        }
+        // The track picked in the keys view is shown when its keys are, else the one chosen.
+        if (self.picked_count > 0) for (with.items) |index| if (index == self.picked[0].track) {
+            self.curve_track = index;
+        };
+        var chosen: usize = 0;
+        for (with.items, 0..) |index, at| if (index == self.curve_track) {
+            chosen = at;
+        };
+        if (context.select("##animation curve track", labels.items, &chosen)) {
+            self.clearPicked();
+            self.curve_drag = null;
+        }
+        self.curve_track = with.items[chosen];
+        const track = clip.tracks[self.curve_track];
+
+        // The track as drawn: a dragged key already where it is going.
+        var shown = track;
+        if (self.curve_drag) |drag| if (drag.point.key < track.keys.len) {
+            const keys = arena.dupe(Key, track.keys) catch return null;
+            keys[drag.point.key].value[drag.point.axis] = drag.value;
+            shown.keys = keys;
+        };
+        const range = if (self.curve_drag) |drag| drag.range else curves.rangeOf(track);
+        const picked = arena.alloc(bool, track.keys.len) catch return null;
+        for (picked, 0..) |*on, key| on.* = self.isPicked(.{ .track = self.curve_track, .key = key });
+        var buffer: [64]u8 = undefined;
+        const paint = curves.graphPaint(arena, .{
+            .track = shown,
+            .target = trackOwner(track),
+            .property = arena.dupe(u8, track.label(&buffer)) catch "",
+            .range = range,
+            .view = self.view,
+            .head_s = self.time_s,
+            .recording = self.recording,
+            .picked = picked,
+            .held = if (self.curve_drag) |drag| drag.point else null,
+        });
+        const id = context.idFor("##animation curves");
+        const element = context.builder().node(id, .{ .width = context.contentWidth(), .height = curves.height }, paint, &.{}) catch return null;
+        element.accessibility = .{ .role = .group, .label = "Curves" };
+        context.element(element);
+        const bounds = (context.last_bounds.get(id) orelse return null).rect;
+        self.coverLanes(bounds);
+
+        if (self.curve_drag) |*drag| {
+            if (context.pointer_held) {
+                drag.value = drag.start_value + range.valueAcross(drag.start_y - context.pointer.y, bounds.h);
+                return null;
+            }
+            const done = drag.*;
+            self.curve_drag = null;
+            if (done.value == done.start_value or done.point.key >= track.keys.len) return null;
+            var key = track.keys[done.point.key];
+            key.value[done.point.axis] = done.value;
+            const keys = arena.dupe(NewKey, &.{.{ .target = track.target, .property = track.property, .node = track.node, .key = key }}) catch return null;
+            return .{ .keys = keys };
+        }
+
+        const pressed = context.pressed_down and if (context.press) |press| press.widget == id else false;
+        if (!pressed) return null;
+        const x = context.pointer.x - bounds.x;
+        const y = context.pointer.y - bounds.y;
+        const layout = timeline.Layout{ .width = bounds.w, .view = self.view };
+        if (curves.pointNear(layout, range, bounds.h, track, x, y)) |point| {
+            const ref = KeyRef{ .track = self.curve_track, .key = point.key };
+            if (!sdl3.keyboard.getModState().shiftDown() and !self.isPicked(ref)) self.clearPicked();
+            self.pick(ref);
+            const value = track.keys[point.key].value[point.axis];
+            self.curve_drag = .{ .point = point, .range = range, .start_y = context.pointer.y, .start_value = value, .value = value };
+            self.time_s = track.keys[point.key].time_s;
+        } else if (layout.timeAt(x)) |time| {
+            self.clearPicked();
+            self.time_s = time;
+        } else return null;
+        self.playing = false;
+        self.request();
+        return null;
     }
 
     fn groupRow(self: *Dock, context: *ui.Context, group: usize, name: []const u8, kind: []const u8, times: []const f32) void {
@@ -1552,4 +1671,5 @@ test "a ZON string's text is found between its quotes" {
 test {
     _ = clip_file;
     _ = timeline;
+    _ = curves;
 }

@@ -61,6 +61,10 @@ single key there. Click a track's name to select the track, then **Remove track*
 A key's ease shapes the move from it to the next key: **Ease in** starts slow, **Ease out**
 settles into the next key, and **Ease in-out** does both, which suits most camera moves.
 
+**Curves** swaps the rows for one track's values drawn against time, X, Y and Z in red, green
+and blue: pick the track above the graph, and drag a key up or down to change its value on that
+axis. The curve between keys bends by the key's ease. **Keys** goes back to the rows.
+
 Ctrl+wheel over the timeline zooms in on the pointer and Shift+wheel pans; **Fit** shows the
 whole clip again. **Duration** sets the clip's length; it can't be shorter than the last key.
 Every change is written to the `.clip.zon` straight away and **Edit > Undo** takes it back.
