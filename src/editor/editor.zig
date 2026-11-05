@@ -55,6 +55,7 @@ const PluginSwitches = @import("plugin_switches.zig").PluginSwitches;
 const plugin_bars = @import("plugin_bars.zig");
 const Dragged = @import("dragged.zig").Dragged;
 const save_prompt_zig = @import("save_prompt.zig");
+const overwrite_prompt = @import("overwrite_prompt.zig");
 const crash_recovery = @import("crash_recovery.zig");
 const Activity = @import("activity.zig").Activity;
 const recovery_prompt_zig = @import("recovery_prompt.zig");
@@ -1114,7 +1115,8 @@ pub fn Editor(comptime project: type) type {
                     }
                     const kept = &self.scene_tabs.waiting[copy].?.kept;
                     const scene = if (self.open_scene) |*open| open else return;
-                    scene.saveText(kept.path, kept.text) catch |err| {
+                    self.saveTextOverwriting(scene, kept.path, kept.text) catch |err| {
+                        if (err == error.ChangedOnDisk) return self.workspace.toast("Not saved: the scene changed on disk");
                         std.log.err("cannot save {s}: {t}", .{ kept.path, err });
                         return self.workspace.toast("Couldn't save the scene: see the Console");
                     };
@@ -1251,7 +1253,15 @@ pub fn Editor(comptime project: type) type {
             const scene = if (self.open_scene) |*open| open else return;
             if (scene.path == null or self.play_mode.playing() or self.typing() or !self.workspace.scene_unsaved) return;
             const game = if (self.game) |*loaded| loaded else return;
-            scene.save(&self.app.world, game.sceneAccess(), self.entity_editor.roots(&self.app.world)) catch |err| return std.log.err("cannot autosave the scene: {t}", .{err});
+            scene.save(&self.app.world, game.sceneAccess(), self.entity_editor.roots(&self.app.world), .unless_changed) catch |err| {
+                // Someone else's save stays until a File > Save says to replace it.
+                if (err == error.ChangedOnDisk) {
+                    var changed: [128]u8 = undefined;
+                    std.log.warn("{s} changed on disk, so it wasn't autosaved; File > Save asks whether to overwrite it", .{scene.name() orelse "the scene"});
+                    return self.workspace.toast(std.fmt.bufPrint(&changed, "{s} changed on disk, so it wasn't autosaved", .{scene.name() orelse "The scene"}) catch "The scene changed on disk, so it wasn't autosaved");
+                }
+                return std.log.err("cannot autosave the scene: {t}", .{err});
+            };
             self.workspace.scene_unsaved = false;
             var message: [96]u8 = undefined;
             self.workspace.toast(std.fmt.bufPrint(&message, "Autosaved {s}", .{scene.name() orelse "the scene"}) catch "Autosaved");
@@ -2085,7 +2095,8 @@ pub fn Editor(comptime project: type) type {
             if (self.play_mode.playing()) return std.log.info("save: stop playing first; Stop puts the scene back as it was", .{});
             const scene = if (self.open_scene) |*open| open else return std.log.info("save: open a project first; scenes are kept in it", .{});
             const game = if (self.game) |*loaded| loaded else return std.log.err("save: the game's library isn't loaded, so its components can't be saved", .{});
-            scene.save(&self.app.world, game.sceneAccess(), self.entity_editor.roots(&self.app.world)) catch |err| {
+            self.saveOverwriting(scene, game) catch |err| {
+                if (err == error.ChangedOnDisk) return self.workspace.toast("Not saved: the scene changed on disk");
                 self.workspace.toast("Couldn't save the scene: see the Console");
                 return std.log.err("cannot save the scene: {t}", .{err});
             };
@@ -2093,6 +2104,24 @@ pub fn Editor(comptime project: type) type {
             self.workspace.toast(std.fmt.bufPrint(&message, "Saved {s}", .{scene.name() orelse "the scene"}) catch "Saved");
             self.workspace.scene_unsaved = false;
             self.activity.saves += 1;
+        }
+
+        /// Save the world to `scene`; if something else changed its file since, ask first, and
+        /// return `error.ChangedOnDisk` when the answer is to leave it.
+        fn saveOverwriting(self: *Self, scene: *scene_file.OpenScene, game: *HotGame) !void {
+            const roots = self.entity_editor.roots(&self.app.world);
+            scene.save(&self.app.world, game.sceneAccess(), roots, .unless_changed) catch |err| {
+                if (err != error.ChangedOnDisk or !overwrite_prompt.confirm(self.app.window.window, scene.name() orelse "The scene")) return err;
+                try scene.save(&self.app.world, game.sceneAccess(), roots, .always);
+            };
+        }
+
+        /// `saveOverwriting` for a tab's kept scene `text`, saved to `path` without opening it.
+        fn saveTextOverwriting(self: *Self, scene: *scene_file.OpenScene, path: []const u8, text: []const u8) !void {
+            scene.saveText(path, text, .unless_changed) catch |err| {
+                if (err != error.ChangedOnDisk or !overwrite_prompt.confirm(self.app.window.window, std.fs.path.basename(path))) return err;
+                try scene.saveText(path, text, .always);
+            };
         }
 
         /// Checked save entry point used by synchronous editor-extension requests.
@@ -2109,7 +2138,7 @@ pub fn Editor(comptime project: type) type {
             if (self.play_mode.playing()) return error.NotEditing;
             const scene = if (self.open_scene) |*open| open else return error.NoProject;
             const game = if (self.game) |*loaded| loaded else return error.NoGameLibrary;
-            try scene.save(&self.app.world, game.sceneAccess(), self.entity_editor.roots(&self.app.world));
+            try scene.save(&self.app.world, game.sceneAccess(), self.entity_editor.roots(&self.app.world), .unless_changed);
             self.workspace.scene_unsaved = false;
         }
 
