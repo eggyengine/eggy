@@ -16,8 +16,10 @@ Console.
 
 ## Preview
 
-Select the entity and open the panel. **Play** runs the clip, clicking or dragging along the
-ruler scrubs it and **Loop** wraps at the end. Everything the clip moves follows in the Scene
+Select the entity and open the panel. **Play** runs the clip, the buttons either side of it jump
+to the previous or next key and those at the ends to the start or end, clicking or dragging
+along the ruler scrubs it and **Loop** wraps at the end. The ruler counts frames (30 a second)
+and the head's frame shows beside the buttons. Everything the clip moves follows in the Scene
 while you do. **Reset pose** (or selecting another entity with an Animator, hiding the panel
 or pressing Play on the game) puts the scene back exactly as it was. A pose is never saved
 into your scene.
@@ -30,8 +32,10 @@ clips are read-only: you can scrub and play them, not key them.
 
 ## Add keys
 
-Each track has a row, with what it acts on and its property on the left and a diamond for each
-key. To key a pose:
+Tracks sit under a row for what they act on, which shows a faint diamond wherever any of them
+has a key. Each track's row has a diamond for each key, and at the end of its name, buttons to
+jump to its previous or next key and, between them, one that keys it at the head (filled when
+the head is on a key). To key a pose:
 
 1. Scrub to the time you want.
 2. Move the entity with the gizmo (or its Inspector fields) while the panel is posing it.

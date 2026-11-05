@@ -1,12 +1,14 @@
-//! The Animation panel's timeline: a ruler of seconds, and a row per track of the clip with its
-//! target, its property and a diamond at each key, the scrub head across them all. Rows and the
-//! ruler share one layout (`Layout`) over the stretch of the clip in view, so a click maps back
-//! to a time or a key the same way.
+//! The Animation panel's timeline: a ruler of frames, the clip's camera cuts as shot blocks, and
+//! its tracks grouped under what they act on, each a row with a diamond at each key and buttons
+//! to step between keys, the scrub head across them all. Rows and the ruler share one layout
+//! (`Layout`) over the stretch of the clip in view, so a click maps back to a time or a key the
+//! same way.
 const std = @import("std");
 const eggy = @import("eggy");
 const ui = eggy.ui;
 const Track = eggy.assets.clip.Track;
 const Property = eggy.assets.clip.Property;
+const Ease = eggy.assets.clip.Ease;
 
 /// The gutter on the left of each row for its target and property, in points.
 pub const label_width: f32 = 210;
@@ -14,7 +16,12 @@ pub const label_width: f32 = 210;
 const pick_radius: f32 = 7;
 const key_half: f32 = 4.5;
 const row_height: f32 = 24;
+const group_height: f32 = 24;
+const shots_height: f32 = 44;
 const ruler_height: f32 = 22;
+/// A nested row's buttons at the end of its gutter: previous key, key at the head, next key.
+const nav_width: f32 = 20;
+const nav_end: f32 = 6;
 
 /// The stretch of a clip `duration_s` long in view: from `start_s`, `span_s` long; the whole
 /// clip when `span_s` is 0.
@@ -174,6 +181,8 @@ pub const Row = struct {
     view: View,
     head_s: f32,
     recording: bool,
+    /// Under a group row: its gutter shows the property alone, indented, and the key buttons.
+    nested: bool = false,
 };
 
 /// A paint drawing `row`, copied into `arena`.
@@ -192,6 +201,7 @@ pub const RowState = struct {
     track_picked: bool = false,
     drag_s: f32 = 0,
     recording: bool = false,
+    nested: bool = false,
 };
 
 /// The row for `track`: its keys' times and labels in `arena`.
@@ -217,7 +227,38 @@ pub fn rowOf(arena: std.mem.Allocator, track: Track, target: []const u8, state: 
         .view = state.view,
         .head_s = state.head_s,
         .recording = state.recording,
+        .nested = state.nested,
     };
+}
+
+/// A nested row's key buttons.
+pub const Nav = enum { previous, key, next };
+
+/// The key button at `x` from a nested row's left edge, if any.
+pub fn navAt(x: f32) ?Nav {
+    const right = label_width - nav_end;
+    if (x > right or x < right - nav_width * 3) return null;
+    const slot: usize = @intFromFloat(@min(2, @floor((x - (right - nav_width * 3)) / nav_width)));
+    return @fromBackingInt(@intCast(slot));
+}
+
+/// The key of `keys` to step to from `head_s`: the last before it, or the first after it.
+pub fn stepKey(keys: []const eggy.assets.clip.Key, head_s: f32, toward: enum { previous, next }) ?f32 {
+    const same = eggy.assets.clip.same_time_s;
+    var found: ?f32 = null;
+    for (keys) |key| switch (toward) {
+        .previous => if (key.time_s < head_s - same) {
+            found = key.time_s;
+        },
+        .next => if (key.time_s > head_s + same) return key.time_s,
+    };
+    return found;
+}
+
+/// Whether one of `keys` sits on `head_s`.
+pub fn onKey(keys: []const eggy.assets.clip.Key, head_s: f32) bool {
+    for (keys) |key| if (@abs(key.time_s - head_s) <= eggy.assets.clip.same_time_s) return true;
+    return false;
 }
 
 /// How a key reads beside its diamond: the text it carries, or its number where that says more
@@ -247,9 +288,15 @@ fn drawRow(context: *const anyopaque, c: *ui.Canvas, area: ui.Rect) anyerror!voi
     // The gutter: a swatch of the track's kind, the target, then the property; a picked track
     // is outlined.
     if (row.track_picked) try c.roundRectAlpha(.{ .x = area.x, .y = area.y + 1, .w = label_width - 4, .h = area.h - 2 }, c.theme.primary, 3, 0.18);
-    try c.roundRect(.{ .x = area.x + 2, .y = middle - 3.5, .w = 7, .h = 7 }, row.color, 2);
-    try c.textIn(.{ .x = area.x + 16, .y = area.y, .w = label_width * 0.5 - 16, .h = area.h }, row.target, text_size, c.theme.foreground, .start);
-    try c.textIn(.{ .x = area.x + label_width * 0.5, .y = area.y, .w = label_width * 0.5 - 10, .h = area.h }, row.property, text_size, c.theme.muted_foreground, .end);
+    if (row.nested) {
+        try c.roundRect(.{ .x = area.x + 16, .y = middle - 3.5, .w = 7, .h = 7 }, row.color, 2);
+        try c.textIn(.{ .x = area.x + 30, .y = area.y, .w = label_width - 30 - nav_width * 3 - nav_end - 4, .h = area.h }, row.property, text_size, c.theme.foreground, .start);
+        try navButtons(c, area.x + label_width - nav_end - nav_width * 3, middle, onKeyTimes(row.times_s, row.head_s));
+    } else {
+        try c.roundRect(.{ .x = area.x + 2, .y = middle - 3.5, .w = 7, .h = 7 }, row.color, 2);
+        try c.textIn(.{ .x = area.x + 16, .y = area.y, .w = label_width * 0.5 - 16, .h = area.h }, row.target, text_size, c.theme.foreground, .start);
+        try c.textIn(.{ .x = area.x + label_width * 0.5, .y = area.y, .w = label_width * 0.5 - 10, .h = area.h }, row.property, text_size, c.theme.muted_foreground, .end);
+    }
 
     // The lane, and for a blending track the span its keys cover, cut to the view.
     const lane = ui.Rect{ .x = area.x + label_width, .y = area.y + 1, .w = @max(0, area.w - label_width), .h = area.h - 2 };
@@ -278,8 +325,7 @@ fn drawRow(context: *const anyopaque, c: *ui.Canvas, area: ui.Rect) anyerror!voi
     if (layout.shows(row.head_s)) try head(c, area.x + layout.xOf(row.head_s), area.y, area.h, if (row.recording) .{ 0.98, 0.44, 0.40 } else c.theme.primary);
 }
 
-/// The ruler above the rows: a tick and number at each second (or every few, when long, or
-/// fractions of one, zoomed in).
+/// The ruler above the rows: a tick and frame number (at `snap_fps`) every so many frames.
 pub const Ruler = struct {
     view: View,
     head_s: f32,
@@ -292,10 +338,19 @@ pub fn rulerPaint(arena: std.mem.Allocator, ruler: Ruler) ui.Layout.Paint {
     return .{ .custom = .{ .context = drawing, .draw = drawRuler } };
 }
 
-/// Seconds between numbered ticks, so about a dozen fit across `shown_s` seconds.
+/// Seconds between numbered ticks, a whole number of frames, so about a dozen fit across
+/// `shown_s` seconds.
 pub fn tickStep(shown_s: f32) f32 {
-    for ([_]f32{ 0.05, 0.1, 0.25, 0.5, 1, 2, 5, 10, 30, 60 }) |step| if (shown_s / step <= 14) return step;
-    return 120;
+    for ([_]f32{ 1, 2, 5, 10, 15, 30, 60, 150, 300, 900, 1800 }) |frames| {
+        const step = frames / snap_fps;
+        if (shown_s / step <= 14) return step;
+    }
+    return 3600 / snap_fps;
+}
+
+/// The frame `time_s` falls on, at `snap_fps`.
+pub fn frameOf(time_s: f32) u32 {
+    return @intFromFloat(@max(0, @round(time_s * snap_fps)));
 }
 
 fn drawRuler(context: *const anyopaque, c: *ui.Canvas, area: ui.Rect) anyerror!void {
@@ -311,7 +366,7 @@ fn drawRuler(context: *const anyopaque, c: *ui.Canvas, area: ui.Rect) anyerror!v
         const time = tick * step;
         const x = area.x + layout.xOf(time);
         try c.rect(.{ .x = x, .y = area.y, .w = 1, .h = area.h }, c.theme.border);
-        const label = std.fmt.bufPrint(&buffer, "{d}", .{@round(time * 100) / 100}) catch continue;
+        const label = std.fmt.bufPrint(&buffer, "{d}", .{frameOf(time)}) catch continue;
         try c.textIn(.{ .x = x + 4, .y = area.y, .w = 40, .h = area.h }, label, c.theme.small_text_size - 1, c.theme.muted_foreground, .start);
     }
     if (layout.shows(ruler.head_s)) try head(c, area.x + layout.xOf(ruler.head_s), area.y, area.h, if (ruler.recording) .{ 0.98, 0.44, 0.40 } else c.theme.primary);
@@ -319,8 +374,184 @@ fn drawRuler(context: *const anyopaque, c: *ui.Canvas, area: ui.Rect) anyerror!v
 
 pub const heights = struct {
     pub const row = row_height;
+    pub const group = group_height;
+    pub const shots = shots_height;
     pub const ruler = ruler_height;
 };
+
+// Group rows ----------------------------------------------------------------------------------
+
+/// A group's header row: what its tracks act on, and a faint diamond wherever one has a key.
+pub const Group = struct {
+    name: []const u8,
+    /// What it is (`Camera`, `UI`, `Actor`), or "".
+    kind: []const u8,
+    times_s: []const f32,
+    view: View,
+    head_s: f32,
+    recording: bool,
+};
+
+pub fn groupPaint(arena: std.mem.Allocator, group: Group) ui.Layout.Paint {
+    const drawing = arena.create(Group) catch return .none;
+    drawing.* = group;
+    return .{ .custom = .{ .context = drawing, .draw = drawGroup } };
+}
+
+fn drawGroup(context: *const anyopaque, c: *ui.Canvas, area: ui.Rect) anyerror!void {
+    const group: *const Group = @ptrCast(@alignCast(context));
+    const layout = Layout{ .width = area.w, .view = group.view };
+    const middle = area.y + area.h / 2;
+    const text_size = c.theme.small_text_size - 1;
+    try c.rect(.{ .x = area.x, .y = area.y + 1, .w = area.w, .h = area.h - 2 }, c.theme.card);
+    try c.textIn(.{ .x = area.x + 4, .y = area.y, .w = label_width * 0.6, .h = area.h }, group.name, text_size + 1, c.theme.foreground, .start);
+    try c.textIn(.{ .x = area.x + label_width * 0.6, .y = area.y, .w = label_width * 0.4 - 10, .h = area.h }, group.kind, text_size, c.theme.muted_foreground, .end);
+    for (group.times_s) |time| {
+        if (!layout.shows(time)) continue;
+        try diamondAlpha(c, area.x + layout.xOf(time), middle, key_half - 1, c.theme.muted_foreground, 0.7);
+    }
+    if (layout.shows(group.head_s)) try head(c, area.x + layout.xOf(group.head_s), area.y, area.h, if (group.recording) .{ 0.98, 0.44, 0.40 } else c.theme.primary);
+}
+
+// Camera cuts ---------------------------------------------------------------------------------
+
+/// A shot on the camera cuts lane: from its key to the next (or the clip's end), blending in
+/// over its first `blend_s` from the shot before.
+pub const Shot = struct {
+    start_s: f32,
+    end_s: f32,
+    blend_s: f32,
+    ease: Ease,
+    name: []const u8,
+    detail: []const u8,
+    color: [3]f32,
+    from_color: [3]f32,
+    picked: bool,
+};
+
+pub const Shots = struct {
+    shots: []const Shot,
+    view: View,
+    head_s: f32,
+    recording: bool,
+};
+
+pub fn shotsPaint(arena: std.mem.Allocator, shots: Shots) ui.Layout.Paint {
+    const drawing = arena.create(Shots) catch return .none;
+    drawing.* = shots;
+    return .{ .custom = .{ .context = drawing, .draw = drawShots } };
+}
+
+/// The game's own camera on the lane: the ground's tone, so shots stand out from it.
+pub const game_color: [3]f32 = .{ 0.29, 0.26, 0.23 };
+const shot_colors = [_][3]f32{ .{ 0.96, 0.75, 0.29 }, .{ 0.56, 0.77, 0.91 }, .{ 0.85, 0.64, 0.88 }, .{ 0.91, 0.60, 0.56 }, .{ 0.62, 0.84, 0.66 } };
+
+/// The color of the `index`th camera a clip cuts to (in order of first use).
+pub fn shotColor(index: usize) [3]f32 {
+    return shot_colors[index % shot_colors.len];
+}
+
+/// Where "Add shot" sits in the lane's gutter, from its left edge.
+pub fn addShotAt(x: f32) bool {
+    return x >= label_width - 76 and x <= label_width - 8;
+}
+
+/// The shot of `starts_s` (ascending) under `x` on the lane, if one.
+pub fn shotNear(layout: Layout, starts_s: []const f32, end_s: f32, x: f32) ?usize {
+    const time = layout.timeAt(x) orelse return null;
+    var found: ?usize = null;
+    for (starts_s, 0..) |start, index| {
+        if (start > time) break;
+        found = index;
+    }
+    if (time > end_s) return null;
+    return found;
+}
+
+fn drawShots(context: *const anyopaque, c: *ui.Canvas, area: ui.Rect) anyerror!void {
+    const lane: *const Shots = @ptrCast(@alignCast(context));
+    const layout = Layout{ .width = area.w, .view = lane.view };
+    const text_size = c.theme.small_text_size - 1;
+    const middle = area.y + area.h / 2;
+
+    // The gutter: what the lane is, and the button adding a shot at the head.
+    try c.textIn(.{ .x = area.x + 4, .y = area.y, .w = label_width - 84, .h = area.h }, "Camera cuts", text_size + 1, c.theme.foreground, .start);
+    try c.roundRect(.{ .x = area.x + label_width - 76, .y = middle - 11, .w = 68, .h = 22 }, c.theme.secondary, 6);
+    try c.textIn(.{ .x = area.x + label_width - 76, .y = middle - 11, .w = 68, .h = 22 }, "Add shot", text_size, c.theme.foreground, .center);
+
+    const left = area.x + label_width;
+    const right = area.x + area.w - key_half;
+    try c.rect(.{ .x = left, .y = area.y + 1, .w = @max(0, area.w - label_width), .h = area.h - 2 }, c.theme.background);
+    const top = area.y + 5;
+    const height = area.h - 10;
+    for (lane.shots) |shot| {
+        const x0 = std.math.clamp(area.x + layout.xOf(shot.start_s), left, right);
+        const x1 = std.math.clamp(area.x + layout.xOf(shot.end_s), left, right);
+        if (x1 - x0 < 1) continue;
+        const block = ui.Rect{ .x = x0 + 1, .y = top, .w = x1 - x0 - 2, .h = height };
+        if (shot.picked) try c.roundRect(.{ .x = block.x - 2, .y = block.y - 2, .w = block.w + 4, .h = block.h + 4 }, c.theme.foreground, 8);
+        try c.roundRect(block, shot.color, 6);
+
+        // The blend in: the shot before giving way to this one along the ease.
+        var text_x = block.x + 8;
+        if (shot.blend_s > 0) {
+            const bx1 = std.math.clamp(area.x + layout.xOf(shot.start_s + shot.blend_s), block.x, block.x + block.w);
+            if (bx1 - block.x >= 1) {
+                try c.rect(.{ .x = block.x, .y = block.y, .w = bx1 - block.x, .h = block.h }, shot.from_color);
+                try easeWedge(c, .{ .x = block.x, .y = block.y, .w = bx1 - block.x, .h = block.h }, shot.ease, shot.color);
+                text_x = bx1 + 8;
+            }
+        }
+        const ink: [3]f32 = if (luminance(shot.color) > 0.5) .{ 0.10, 0.09, 0.07 } else c.theme.foreground;
+        const room = block.x + block.w - text_x - 6;
+        if (room > 12) {
+            try c.textIn(.{ .x = text_x, .y = block.y + 2, .w = room, .h = block.h / 2 }, shot.name, text_size + 1, ink, .start);
+            try c.textIn(.{ .x = text_x, .y = block.y + block.h / 2 - 2, .w = room, .h = block.h / 2 }, shot.detail, text_size, ink, .start);
+        }
+    }
+    if (layout.shows(lane.head_s)) try head(c, area.x + layout.xOf(lane.head_s), area.y, area.h, if (lane.recording) .{ 0.98, 0.44, 0.40 } else c.theme.primary);
+}
+
+/// Fill the part of `r` below the curve of `ease`, which climbs from the bottom left to the top
+/// right: how much of the new shot shows across the blend.
+fn easeWedge(c: *ui.Canvas, r: ui.Rect, ease: Ease, color: [3]f32) !void {
+    const steps = 16;
+    const rgba = [4]f32{ color[0], color[1], color[2], 1 };
+    const bottom = r.y + r.h;
+    var x_before = r.x;
+    var y_before = bottom;
+    for (1..steps + 1) |step| {
+        const t = @as(f32, @floatFromInt(step)) / steps;
+        const x = r.x + r.w * t;
+        const y = bottom - r.h * ease.apply(t);
+        try c.triangle(.{ .{ x_before, bottom }, .{ x_before, y_before }, .{ x, y } }, .{ rgba, rgba, rgba });
+        try c.triangle(.{ .{ x_before, bottom }, .{ x, y }, .{ x, bottom } }, .{ rgba, rgba, rgba });
+        x_before = x;
+        y_before = y;
+    }
+}
+
+fn luminance(color: [3]f32) f32 {
+    return 0.2126 * color[0] + 0.7152 * color[1] + 0.0722 * color[2];
+}
+
+/// The three key buttons from `x`: a chevron back, a diamond (filled on a key), a chevron on.
+fn navButtons(c: *ui.Canvas, x: f32, y: f32, on_key: bool) !void {
+    const tone = c.theme.muted_foreground;
+    const rgba = [4]f32{ tone[0], tone[1], tone[2], 1 };
+    const back = x + nav_width / 2;
+    try c.triangle(.{ .{ back + 2.5, y - 4 }, .{ back - 2.5, y }, .{ back + 2.5, y + 4 } }, .{ rgba, rgba, rgba });
+    const middle = x + nav_width * 1.5;
+    try diamond(c, middle, y, key_half, c.theme.foreground);
+    if (!on_key) try diamond(c, middle, y, key_half - 1.5, c.theme.background);
+    const on = x + nav_width * 2.5;
+    try c.triangle(.{ .{ on - 2.5, y - 4 }, .{ on + 2.5, y }, .{ on - 2.5, y + 4 } }, .{ rgba, rgba, rgba });
+}
+
+fn onKeyTimes(times_s: []const f32, head_s: f32) bool {
+    for (times_s) |time| if (@abs(time - head_s) <= eggy.assets.clip.same_time_s) return true;
+    return false;
+}
 
 fn diamond(c: *ui.Canvas, x: f32, y: f32, half: f32, color: [3]f32) !void {
     try diamondAlpha(c, x, y, half, color, 1);
@@ -387,9 +618,29 @@ test "a click picks the nearest key within reach" {
     try std.testing.expect(layout.keyNear(&keys, layout.xOf(4)) == null);
 }
 
-test "ticks are spaced so about a dozen fit" {
+test "ticks fall on whole frames, spaced so about a dozen fit" {
     try std.testing.expectEqual(@as(f32, 1), tickStep(12));
-    try std.testing.expectEqual(@as(f32, 0.25), tickStep(2));
+    try std.testing.expectEqual(@as(f32, 5.0 / 30.0), tickStep(2));
     try std.testing.expectEqual(@as(f32, 10), tickStep(90));
-    try std.testing.expectEqual(@as(f32, 0.05), tickStep(0.4));
+    try std.testing.expectEqual(@as(f32, 1.0 / 30.0), tickStep(0.4));
+    try std.testing.expectEqual(@as(u32, 108), frameOf(3.6));
+}
+
+test "a nested row's key buttons step between keys" {
+    try std.testing.expectEqual(Nav.previous, navAt(label_width - nav_end - nav_width * 3 + 1).?);
+    try std.testing.expectEqual(Nav.next, navAt(label_width - nav_end - 1).?);
+    try std.testing.expect(navAt(10) == null);
+    const keys = [_]eggy.assets.clip.Key{ .{ .time_s = 1 }, .{ .time_s = 2 }, .{ .time_s = 3 } };
+    try std.testing.expectEqual(@as(?f32, 1), stepKey(&keys, 2, .previous));
+    try std.testing.expectEqual(@as(?f32, 3), stepKey(&keys, 2, .next));
+    try std.testing.expect(stepKey(&keys, 3, .next) == null);
+    try std.testing.expect(onKey(&keys, 2) and !onKey(&keys, 2.5));
+}
+
+test "a click on the camera lane finds the shot under it" {
+    const layout = Layout{ .width = label_width + 209, .view = .{ .duration_s = 10 } };
+    const starts = [_]f32{ 0, 3, 5.2 };
+    try std.testing.expectEqual(@as(?usize, 1), shotNear(layout, &starts, 10, layout.xOf(4)));
+    try std.testing.expectEqual(@as(?usize, 2), shotNear(layout, &starts, 10, layout.xOf(9)));
+    try std.testing.expect(shotNear(layout, &starts, 10, 20) == null);
 }

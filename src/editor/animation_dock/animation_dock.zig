@@ -293,15 +293,16 @@ pub const Dock = struct {
         self.view = self.view.resized(duration);
         if (self.playing) self.view = self.view.following(self.time_s);
 
-        // The transport: the clip, play, reset, loop, Record, where the head is, and the length.
+        // The transport: to the start, the key before, play, the key after, the end; loop and
+        // Record; the frame the head is on; the clip; reset, fit and the length.
         var pending: ?Edit = null;
         context.begin(.row);
-        if (names.items.len > 1) {
-            if (context.select("##animation clip", names.items, &chosen)) self.markChanged();
-        } else context.text(std.fs.path.basename(path));
-        if (context.buttonVariant(if (self.playing) "Pause" else "Play", .default)) self.togglePlay(env, duration);
-        if (context.buttonVariant("Reset pose", .outline)) self.release(env);
-        _ = context.checkbox("Loop", &self.loop);
+        if (page_style.iconButton(context, "\u{f049}", "Go to start", false)) self.jumpTo(0);
+        if (page_style.iconButton(context, "\u{f053}", "Previous key", false)) if (clip) |found| if (stepAll(found.*, self.time_s, .previous)) |time| self.jumpTo(time);
+        if (page_style.iconButton(context, if (self.playing) "\u{f04c}" else "\u{f04b}", if (self.playing) "Pause" else "Play", self.playing)) self.togglePlay(env, duration);
+        if (page_style.iconButton(context, "\u{f054}", "Next key", false)) if (clip) |found| if (stepAll(found.*, self.time_s, .next)) |time| self.jumpTo(time);
+        if (page_style.iconButton(context, "\u{f050}", "Go to end", false)) self.jumpTo(duration);
+        if (page_style.iconButton(context, "\u{f01e}", "Loop", self.loop)) self.loop = !self.loop;
         if (editable) {
             if (context.buttonVariant(if (self.recording) "Recording" else "Record", if (self.recording) .destructive else .outline)) {
                 self.recording = !self.recording;
@@ -312,17 +313,25 @@ pub const Dock = struct {
                 }
             }
         }
-        context.muted(std.fmt.allocPrint(arena, "{d:.2} / {d:.2} s", .{ self.time_s, duration }) catch "");
+        context.text(std.fmt.allocPrint(arena, "{d:0>4}", .{timeline.frameOf(self.time_s)}) catch "");
+        context.muted(std.fmt.allocPrint(arena, "{d:.2} s of {d:.2}", .{ self.time_s, duration }) catch "");
+        if (names.items.len > 1) {
+            if (context.select("##animation clip", names.items, &chosen)) self.markChanged();
+        } else context.muted(std.fs.path.basename(path));
+        page_style.spacer(context);
+        if (context.buttonVariant("Reset pose", .outline)) self.release(env);
         if (self.view.span_s > 0 and context.buttonVariant("Fit", .outline)) self.view = .{ .duration_s = duration };
         if (clip) |found| pending = self.durationField(context, found, key) orelse pending;
         page_style.endRow(context);
 
-        // The timeline: a ruler to scrub on, then a row per track.
+        // The timeline: a ruler to scrub on, the camera cuts, then the tracks under what they
+        // act on.
         self.lanes = null;
         self.ruler(context);
         if (clip) |found| {
+            if (self.shotsRow(context, env, entity, found)) |change| pending = change;
             if (found.tracks.len == 0) context.muted("No tracks yet. Key something below.");
-            for (found.tracks, 0..) |track, index| self.trackRow(context, track, index);
+            if (self.groupedRows(context, env, entity, found)) |change| pending = change;
             if (self.dragged(context, found.*)) |change| pending = change;
             if (self.takeShortcut(env, found.*)) |change| pending = change;
         } else if (!editable) {
@@ -333,7 +342,7 @@ pub const Dock = struct {
 
         const editing = clip orelse return;
         if (self.buildKeying(context, env, entity)) |change| pending = change;
-        if (self.pickedRow(context, editing)) |change| pending = change;
+        if (self.pickedRow(context, env, entity, editing)) |change| pending = change;
         if (self.message_len > 0) context.alert("Animation", self.message[0..self.message_len], true);
         if (pending) |change| self.edit(env, editing, key, path, change);
     }
@@ -358,9 +367,59 @@ pub const Dock = struct {
         self.request();
     }
 
-    fn trackRow(self: *Dock, context: *ui.Context, track: eggy.assets.clip.Track, index: usize) void {
+    /// The tracks of `clip`, but its camera cuts, each under a row for what it acts on.
+    fn groupedRows(self: *Dock, context: *ui.Context, env: Env, entity: eggy.ecs.EntityId, clip: *const Clip) ?Edit {
         const arena = context.builder().allocator;
-        const picked = arena.alloc(bool, track.keys.len) catch return;
+        var owners: std.ArrayList([]const u8) = .empty;
+        for (clip.tracks) |track| {
+            if (track.property == .camera) continue;
+            const owner = trackOwner(track);
+            for (owners.items) |known| {
+                if (std.mem.eql(u8, known, owner)) break;
+            } else owners.append(arena, owner) catch return null;
+        }
+        var pending: ?Edit = null;
+        for (owners.items, 0..) |owner, group| {
+            var times: std.ArrayList(f32) = .empty;
+            var kind: []const u8 = "";
+            for (clip.tracks) |track| {
+                if (track.property == .camera or !std.mem.eql(u8, trackOwner(track), owner)) continue;
+                for (track.keys) |key| times.append(arena, key.time_s) catch {};
+                kind = switch (track.property) {
+                    .fov_deg => "Camera",
+                    .text, .visible => if (kind.len == 0) "UI" else kind,
+                    .sprite_frame => if (kind.len == 0) "Sprite" else kind,
+                    else => kind,
+                };
+            }
+            self.groupRow(context, group, owner, kind, times.items);
+            for (clip.tracks, 0..) |track, index| {
+                if (track.property == .camera or !std.mem.eql(u8, trackOwner(track), owner)) continue;
+                if (self.trackRow(context, env, entity, track, index)) |change| pending = change;
+            }
+        }
+        return pending;
+    }
+
+    fn groupRow(self: *Dock, context: *ui.Context, group: usize, name: []const u8, kind: []const u8, times: []const f32) void {
+        const arena = context.builder().allocator;
+        const id = context.idFor(std.fmt.allocPrint(arena, "##animation group {d}", .{group}) catch return);
+        const paint = timeline.groupPaint(arena, .{ .name = name, .kind = kind, .times_s = times, .view = self.view, .head_s = self.time_s, .recording = self.recording });
+        const element = context.builder().node(id, .{ .width = context.contentWidth(), .height = timeline.heights.group }, paint, &.{}) catch return;
+        element.accessibility = .{ .role = .group, .label = name };
+        context.element(element);
+        const bounds = (context.last_bounds.get(id) orelse return).rect;
+        self.coverLanes(bounds);
+        // Pressing along it moves the head.
+        if (!context.activated(id)) return;
+        const layout = timeline.Layout{ .width = bounds.w, .view = self.view };
+        const time = layout.timeAt(context.pointer.x - bounds.x) orelse return;
+        self.jumpTo(time);
+    }
+
+    fn trackRow(self: *Dock, context: *ui.Context, env: Env, entity: eggy.ecs.EntityId, track: eggy.assets.clip.Track, index: usize) ?Edit {
+        const arena = context.builder().allocator;
+        const picked = arena.alloc(bool, track.keys.len) catch return null;
         for (picked, 0..) |*on, key| on.* = self.isPicked(.{ .track = index, .key = key });
         const row = timeline.rowOf(arena, track, trackOwner(track), .{
             .view = self.view,
@@ -369,20 +428,30 @@ pub const Dock = struct {
             .track_picked = self.picked_track == index,
             .drag_s = if (self.drag) |drag| drag.shift_s else 0,
             .recording = self.recording,
-        }) catch return;
-        const id = context.idFor(std.fmt.allocPrint(arena, "##animation track {d}", .{index}) catch return);
-        const element = context.builder().node(id, .{ .width = context.contentWidth(), .height = timeline.heights.row }, timeline.rowPaint(arena, row), &.{}) catch return;
+            .nested = true,
+        }) catch return null;
+        const id = context.idFor(std.fmt.allocPrint(arena, "##animation track {d}", .{index}) catch return null);
+        const element = context.builder().node(id, .{ .width = context.contentWidth(), .height = timeline.heights.row }, timeline.rowPaint(arena, row), &.{}) catch return null;
         element.accessibility = .{ .role = .button, .label = std.fmt.allocPrint(arena, "{s} {s}", .{ row.target, row.property }) catch "" };
         context.element(element);
-        const bounds = (context.last_bounds.get(id) orelse return).rect;
+        const bounds = (context.last_bounds.get(id) orelse return null).rect;
         self.coverLanes(bounds);
         const pressed = context.pressed_down and if (context.press) |press| press.widget == id else false;
-        if (!pressed) return;
+        if (!pressed) return null;
+
+        // The gutter's buttons step the head between this track's keys, or key it at the head.
+        const x = context.pointer.x - bounds.x;
+        if (timeline.navAt(x)) |nav| switch (nav) {
+            .previous, .next => {
+                if (timeline.stepKey(track.keys, self.time_s, if (nav == .previous) .previous else .next)) |time| self.jumpTo(time);
+                return null;
+            },
+            .key => return self.keyHere(arena, env, entity, track),
+        };
 
         // A key pressed is picked (Shift adds it or takes it away) and the picked keys follow the
         // pointer from there; elsewhere in the lane the head moves; the gutter picks the track.
         const layout = timeline.Layout{ .width = bounds.w, .view = self.view };
-        const x = context.pointer.x - bounds.x;
         const adding = sdl3.keyboard.getModState().shiftDown();
         if (layout.keyNear(track.keys, x)) |key| {
             const ref = KeyRef{ .track = index, .key = key };
@@ -404,6 +473,170 @@ pub const Dock = struct {
         }
         self.playing = false;
         self.request();
+        return null;
+    }
+
+    /// A key on `track` at the head holding what it shows now: the target's transform or value,
+    /// or for a text, sound, event or camera track the key in force there.
+    fn keyHere(self: *Dock, arena: std.mem.Allocator, env: Env, entity: eggy.ecs.EntityId, track: eggy.assets.clip.Track) ?Edit {
+        var key = Key{ .time_s = self.time_s };
+        switch (track.property) {
+            .position, .rotation_deg, .scale => {
+                const numbers = env.game.animationTransform(env.app, entity, track.target) orelse return self.sayNull("That entity has no Transform.");
+                key.value = transformPart(numbers, track.property);
+            },
+            .fov_deg, .visible, .sprite_frame => {
+                key.value = env.game.animationValue(env.app, entity, track.target, track.property) orelse return self.sayNull("Can't read that value from its entity.");
+            },
+            .morph_weight, .text, .sound, .event, .camera => {
+                const held = track.keyAt(self.time_s) orelse return self.sayNull("No key before the head to hold.");
+                key.value = held.value;
+                key.text = held.text;
+                key.ease = held.ease;
+            },
+        }
+        return .{ .keys = oneKey(arena, .{ .target = track.target, .property = track.property, .node = track.node, .key = key }) };
+    }
+
+    // Camera cuts ------------------------------------------------------------------------------
+
+    /// The camera cuts lane: a block per shot to pick and drag, and "Add shot" in its gutter.
+    fn shotsRow(self: *Dock, context: *ui.Context, env: Env, entity: eggy.ecs.EntityId, clip: *const Clip) ?Edit {
+        const arena = context.builder().allocator;
+        const track_index = clip.find("", .camera, "");
+        const keys: []const Key = if (track_index) |index| clip.tracks[index].keys else &.{};
+        const starts = arena.alloc(f32, keys.len) catch return null;
+        const shots = arena.alloc(timeline.Shot, keys.len) catch return null;
+        var named: std.ArrayList([]const u8) = .empty;
+        for (keys, shots, starts, 0..) |key, *shot, *start, index| {
+            const picked = if (track_index) |track| self.isPicked(.{ .track = track, .key = index }) else false;
+            const shift_s = if (picked) if (self.drag) |drag| drag.shift_s else 0 else 0;
+            start.* = key.time_s;
+            const end_s = if (index + 1 < keys.len) keys[index + 1].time_s else clip.duration_s;
+            shot.* = .{
+                .start_s = @max(0, key.time_s + shift_s),
+                .end_s = end_s + shift_s,
+                .blend_s = key.value[0],
+                .ease = key.ease,
+                .name = shotName(key.text),
+                .detail = if (key.value[0] > 0) std.fmt.allocPrint(arena, "{d} frame {s} blend", .{ timeline.frameOf(key.value[0]), easeName(key.ease) }) catch "" else "Cut",
+                .color = shotColorOf(arena, &named, key.text),
+                .from_color = if (index == 0) timeline.game_color else shotColorOf(arena, &named, keys[index - 1].text),
+                .picked = picked,
+            };
+        }
+        const id = context.idFor("##animation shots");
+        const paint = timeline.shotsPaint(arena, .{ .shots = shots, .view = self.view, .head_s = self.time_s, .recording = self.recording });
+        const element = context.builder().node(id, .{ .width = context.contentWidth(), .height = timeline.heights.shots }, paint, &.{}) catch return null;
+        element.accessibility = .{ .role = .group, .label = "Camera cuts" };
+        context.element(element);
+        const bounds = (context.last_bounds.get(id) orelse return null).rect;
+        self.coverLanes(bounds);
+        const pressed = context.pressed_down and if (context.press) |press| press.widget == id else false;
+        if (!pressed) return null;
+
+        // "Add shot" cuts at the head to the next camera; a shot pressed is picked and can be
+        // dragged; elsewhere the head moves.
+        const x = context.pointer.x - bounds.x;
+        if (timeline.addShotAt(x)) return self.addShot(arena, env, entity, keys);
+        const layout = timeline.Layout{ .width = bounds.w, .view = self.view };
+        const time = layout.timeAt(x) orelse return null;
+        if (timeline.shotNear(layout, starts, clip.duration_s, x)) |index| if (track_index) |track| {
+            const ref = KeyRef{ .track = track, .key = index };
+            const adding = sdl3.keyboard.getModState().shiftDown();
+            self.picked_track = null;
+            if (adding and self.isPicked(ref)) {
+                self.unpick(ref);
+            } else {
+                if (!adding and !self.isPicked(ref)) self.clearPicked();
+                self.pick(ref);
+                self.drag = .{ .anchor_s = layout.timeAtAny(x), .key_s = keys[index].time_s, .row = bounds };
+            }
+            self.jumpTo(time);
+            return null;
+        };
+        self.clearPicked();
+        self.jumpTo(time);
+        return null;
+    }
+
+    /// A cut at the head to the camera after the one showing there (the first camera in the
+    /// scene when none is).
+    fn addShot(self: *Dock, arena: std.mem.Allocator, env: Env, entity: eggy.ecs.EntityId, keys: []const Key) ?Edit {
+        const cameras = cameraTargets(arena, env, entity);
+        if (cameras.len == 0) return self.sayNull("Put a Camera on an entity in the scene to cut to it.");
+        var showing: []const u8 = "";
+        for (keys) |key| {
+            if (key.time_s > self.time_s) break;
+            showing = key.text;
+        }
+        var next: usize = 0;
+        for (cameras, 0..) |camera, index| if (std.mem.eql(u8, camera, showing)) {
+            next = (index + 1) % cameras.len;
+        };
+        return .{ .keys = oneKey(arena, .{ .target = "", .property = .camera, .key = .{ .time_s = self.time_s, .text = cameras[next] } }) };
+    }
+
+    /// The picked shot's camera, how it comes in (a cut, or a blend of some frames and ease),
+    /// and removing it.
+    fn shotSettings(self: *Dock, context: *ui.Context, env: Env, entity: eggy.ecs.EntityId, clip: *const Clip, ref: KeyRef) ?Edit {
+        const arena = context.builder().allocator;
+        const track = clip.tracks[ref.track];
+        const key = track.keys[ref.key];
+        const end_s = if (ref.key + 1 < track.keys.len) track.keys[ref.key + 1].time_s else clip.duration_s;
+        var pending: ?Edit = null;
+        context.begin(.row);
+        context.text(shotName(key.text));
+        context.muted(std.fmt.allocPrint(arena, "frames {d} to {d}", .{ timeline.frameOf(key.time_s), timeline.frameOf(end_s) }) catch "");
+
+        // The camera: the game's own, or any in the scene.
+        const cameras = cameraTargets(arena, env, entity);
+        const labels = arena.alloc([]const u8, cameras.len + 1) catch return null;
+        labels[0] = "Game camera";
+        var chosen: usize = 0;
+        for (cameras, labels[1..], 1..) |camera, *label, index| {
+            label.* = displayTarget(camera);
+            if (std.mem.eql(u8, camera, key.text)) chosen = index;
+        }
+        if (context.select("##shot camera", labels, &chosen)) {
+            var changed = key;
+            changed.text = if (chosen == 0) "" else cameras[chosen - 1];
+            pending = .{ .keys = oneKey(arena, .{ .target = "", .property = .camera, .key = changed }) };
+        }
+
+        // Cut, or blend over a number of frames with an ease.
+        const blending = key.value[0] > 0;
+        if (context.buttonVariant("Cut", if (blending) .outline else .secondary) and blending) {
+            var changed = key;
+            changed.value[0] = 0;
+            pending = .{ .keys = oneKey(arena, .{ .target = "", .property = .camera, .key = changed }) };
+        }
+        if (context.buttonVariant("Blend", if (blending) .secondary else .outline) and !blending) {
+            var changed = key;
+            changed.value[0] = 15 / timeline.snap_fps;
+            changed.ease = .ease_in_out;
+            pending = .{ .keys = oneKey(arena, .{ .target = "", .property = .camera, .key = changed }) };
+        }
+        if (blending) {
+            var frames: usize = 0;
+            const now = timeline.frameOf(key.value[0]);
+            for (blend_frames, 0..) |option, index| if (option <= now) {
+                frames = index;
+            };
+            if (context.select("##shot blend", &blend_labels, &frames)) {
+                var changed = key;
+                changed.value[0] = @as(f32, @floatFromInt(blend_frames[frames])) / timeline.snap_fps;
+                pending = .{ .keys = oneKey(arena, .{ .target = "", .property = .camera, .key = changed }) };
+            }
+            self.ease_choice = @backingInt(key.ease);
+            if (context.select("##shot ease", &ease_labels, &self.ease_choice)) {
+                pending = .{ .change_keys = .{ .keys = self.picked[0..self.picked_count], .change = .{ .ease = @fromBackingInt(@intCast(self.ease_choice)) } } };
+            }
+        }
+        page_style.spacer(context);
+        if (context.buttonVariant("Remove shot", .destructive)) pending = .{ .change_keys = .{ .keys = self.picked[0..self.picked_count], .change = .remove } };
+        page_style.endRow(context);
+        return pending;
     }
 
     /// Follow a drag of the picked keys; once let go, the edit moving them.
@@ -648,9 +881,10 @@ pub const Dock = struct {
     }
 
     /// The picked keys or track: what they are, their ease, and moving or deleting them.
-    fn pickedRow(self: *Dock, context: *ui.Context, clip: *const Clip) ?Edit {
+    fn pickedRow(self: *Dock, context: *ui.Context, env: Env, entity: eggy.ecs.EntityId, clip: *const Clip) ?Edit {
         const picked = self.picked[0..self.picked_count];
         if (picked.len == 0 and self.picked_track == null) return null;
+        if (picked.len == 1 and clip.tracks[picked[0].track].property == .camera) return self.shotSettings(context, env, entity, clip, picked[0]);
         const arena = context.builder().allocator;
         var pending: ?Edit = null;
         var buffer: [96]u8 = undefined;
@@ -888,6 +1122,13 @@ pub const Dock = struct {
         if (self.wanted) self.request();
     }
 
+    /// Put the head at `time_s`, stopping playback.
+    fn jumpTo(self: *Dock, time_s: f32) void {
+        self.time_s = time_s;
+        self.playing = false;
+        self.request();
+    }
+
     fn togglePlay(self: *Dock, env: Env, duration: f32) void {
         self.playing = !self.playing;
         self.last_tick_ms = env.now_ms;
@@ -1022,6 +1263,55 @@ fn oneKey(arena: std.mem.Allocator, key: NewKey) []const NewKey {
 }
 
 /// A target as a person reads it: `bee` for `/bee`, "This entity" for the animated one.
+/// The blend lengths a shot offers, in frames at `timeline.snap_fps`.
+const blend_frames = [_]u32{ 3, 6, 10, 15, 20, 30, 45, 60, 90 };
+const blend_labels = [_][]const u8{ "3 frames", "6 frames", "10 frames", "15 frames", "20 frames", "30 frames", "45 frames", "60 frames", "90 frames" };
+
+/// The shot a camera key names, as the lane shows it.
+fn shotName(text: []const u8) []const u8 {
+    return if (text.len == 0) "Game camera" else displayTarget(text);
+}
+
+fn easeName(ease: Ease) []const u8 {
+    return switch (ease) {
+        .linear => "linear",
+        .ease_in => "ease in",
+        .ease_out => "ease out",
+        .ease_in_out => "ease in-out",
+    };
+}
+
+/// The lane color of the camera `text` names: the game's own, or the next of the palette for
+/// each camera in the order `named` met them.
+fn shotColorOf(arena: std.mem.Allocator, named: *std.ArrayList([]const u8), text: []const u8) [3]f32 {
+    if (text.len == 0) return timeline.game_color;
+    for (named.items, 0..) |known, index| if (std.mem.eql(u8, known, text)) return timeline.shotColor(index);
+    named.append(arena, text) catch {};
+    return timeline.shotColor(named.items.len - 1);
+}
+
+/// The targets in the scene with a `Camera`, as `animationTargets` names them.
+fn cameraTargets(arena: std.mem.Allocator, env: Env, entity: eggy.ecs.EntityId) []const []const u8 {
+    const listed = env.game.animationTargets(arena, env.app, entity) catch return &.{};
+    var cameras: std.ArrayList([]const u8) = .empty;
+    var lines = std.mem.tokenizeScalar(u8, listed, '\n');
+    while (lines.next()) |line| {
+        if (env.game.animationValue(env.app, entity, line, .fov_deg) == null) continue;
+        cameras.append(arena, line) catch break;
+    }
+    return cameras.items;
+}
+
+/// The nearest key of any track before (or after) `head_s`.
+fn stepAll(clip: Clip, head_s: f32, toward: enum { previous, next }) ?f32 {
+    var found: ?f32 = null;
+    for (clip.tracks) |track| {
+        const time = timeline.stepKey(track.keys, head_s, if (toward == .previous) .previous else .next) orelse continue;
+        found = if (found) |best| (if (toward == .previous) @max(best, time) else @min(best, time)) else time;
+    }
+    return found;
+}
+
 /// What a track's row is named for: its target, or the clip's camera cuts.
 fn trackOwner(track: eggy.assets.clip.Track) []const u8 {
     return if (track.property == .camera) "Camera cuts" else displayTarget(track.target);

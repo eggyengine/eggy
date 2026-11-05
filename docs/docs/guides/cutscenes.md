@@ -20,13 +20,13 @@ from **File > Export**.
 3. Use **Key…** for the rest: the camera's `fov_deg` to push in, a dialogue screen's `visible`
    and the `text` of its nodes for each line, a `sound` to start, and `event`s for your code.
 
-Cut between cameras with a camera cut: put a **Camera** on each shot's entity (turn its
-**Active** off so the game doesn't look through it), pick it in the target list, choose
-**camera cut** in **Key…** and give how many seconds to blend from the shot before, `0` for a
-hard cut. From that key on the view looks through that camera; blending eases from the shot
-before, or from the game's camera into the first one. A cut with **This entity** picked hands
-the view back to the game's camera, blending as long as you say, and when the cutscene ends
-the view is the game's again anyway. The keys sit on the **Camera cuts** row.
+Cut between cameras on the **Camera cuts** lane at the top of the timeline. Put a **Camera** on
+each shot's entity (turn its **Active** off so the game doesn't look through it), scrub to where
+the shot starts and press **Add shot**: it cuts there to the next camera in the scene. Each shot
+runs until the next one. Click a shot to pick its **Camera** (**Game camera** hands the view
+back to the game's), and choose **Cut** or **Blend** with how many frames and which ease it
+blends in over, from the shot before or, for the first, from the game's camera. Drag a shot to
+move it. When the cutscene ends the view is the game's again anyway.
 
 Lines of dialogue are UI scenes: make a `dialogue.ui.zon` in the UI Designer with a `line`
 node, put it on an entity with a **UiScreen**, and key `text` on the `line` node. Its buttons
