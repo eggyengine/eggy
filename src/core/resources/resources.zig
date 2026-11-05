@@ -3,6 +3,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 const assets = @import("eggy_assets");
 const refs = @import("../refs.zig");
+const asset_catalog = @import("../asset_catalog.zig");
 const Files = @import("../scene_instances.zig").Files;
 const ModelLoader = @import("../model_cache.zig").Loader;
 const ImageLoader = @import("../texture_cache.zig").Loader;
@@ -215,21 +216,15 @@ pub const Resources = struct {
 };
 
 fn checkRawAsset(identity: u64) !void {
-    const root = @import("root");
-    if (comptime @hasDecl(root, "eggy_asset_ids")) {
-        if (root.eggy_asset_ids.findId(identity)) |entry| {
-            if (entry.converted) return error.ConvertedResource;
-        }
+    if (asset_catalog.findId(identity)) |entry| {
+        if (entry.converted) return error.ConvertedResource;
     }
 }
 
 fn checkImageAsset(identity: u64) !void {
-    const root = @import("root");
-    if (comptime @hasDecl(root, "eggy_asset_ids")) {
-        if (root.eggy_asset_ids.findId(identity)) |entry| {
-            if (entry.kind != @backingInt(assets.Kind.image)) return error.WrongAssetKind;
-            if (!entry.converted) return error.UnsupportedImageFormat;
-        }
+    if (asset_catalog.findId(identity)) |entry| {
+        if (entry.kind != @backingInt(assets.Kind.image)) return error.WrongAssetKind;
+        if (!entry.converted) return error.UnsupportedImageFormat;
     }
 }
 

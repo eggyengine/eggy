@@ -4,7 +4,6 @@ const std = @import("std");
 const eggy = @import("eggy");
 const editor = @import("eggy_editor");
 const Editor = editor.Editor(@import("eggy_project"));
-pub const eggy_asset_ids = @import("eggy_project").asset_ids;
 const sdl3 = eggy.sdl_adapter.sdl;
 
 comptime {

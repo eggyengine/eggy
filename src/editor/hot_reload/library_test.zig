@@ -88,6 +88,8 @@ test "the game's library loads, runs, swaps for a fresh copy, and unloads cleanl
     try std.testing.expectEqualStrings("game/fixture", game.file_types[0].key);
     try std.testing.expectEqualStrings("ab\x00cd", game.file_types[0].contents);
     try std.testing.expect(@intFromPtr(game.file_types[0].title.ptr) != @intFromPtr(game.game.file_types[0].title));
+    // The editor compiles no asset catalog; it takes the library's.
+    try std.testing.expectEqual(@as(u64, 43), eggy.asset_catalog.find("resources/player.inmap.zon").?.id);
     const first_copy = try gpa.dupe(u8, game.copy_path);
     defer gpa.free(first_copy);
 
@@ -108,6 +110,7 @@ test "the game's library loads, runs, swaps for a fresh copy, and unloads cleanl
     defer gpa.free(last_copy);
     game.deinit(&app);
     game_loaded = false;
+    try std.testing.expect(eggy.asset_catalog.findId(43) == null);
     try std.testing.expectError(error.FileNotFound, std.Io.Dir.cwd().access(io, last_copy, .{}));
 }
 

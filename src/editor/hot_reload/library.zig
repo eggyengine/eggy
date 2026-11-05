@@ -6,7 +6,7 @@ const eggy = @import("eggy");
 const project = @import("eggy_project");
 const api = @import("game_api.zig");
 
-/// The project's asset identities, which `AssetRef.init` resolves paths through at compile time.
+/// The project's asset catalog (`eggy.asset_catalog`), which this library also hands the editor.
 pub const eggy_asset_ids = project.asset_ids;
 
 const Plugins = eggy.plugins.Set(project.plugins, &project.plugin_keys);
@@ -42,6 +42,11 @@ const console_commands = blk: {
 const bar_menus = blk: {
     var list: [Plugins.editor_menus.len]api.Menu = undefined;
     for (&list, Plugins.editor_menus) |*menu, source| menu.* = .{ .key = source.key.ptr, .title = source.title.ptr, .extends = if (source.extends) |builtin| @backingInt(builtin) else -1, .item_count = source.items.len };
+    break :blk list;
+};
+const assets = blk: {
+    var list: [eggy.asset_catalog.compiled.len]api.Asset = undefined;
+    for (&list, eggy.asset_catalog.compiled) |*asset, entry| asset.* = .{ .path = entry.path.ptr, .path_len = entry.path.len, .id = entry.id, .kind = entry.kind, .converted = entry.converted };
     break :blk list;
 };
 const bar_menu_items = barItems(Plugins.editor_menus);
@@ -189,6 +194,8 @@ const game = api.Game{
     .export_platform_count = export_platforms.len,
     .export_ui = exportUi,
     .export_args = exportArgs,
+    .assets = &assets,
+    .asset_count = assets.len,
     .preferences = &preference_sets,
     .preference_count = preference_sets.len,
     .components = &component_types,

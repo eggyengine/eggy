@@ -51,6 +51,7 @@ pub const Camera = camera.Camera;
 pub const max_drawables = @import("mesh_renderer.zig").max_drawables;
 pub const Color = @import("color.zig").Color;
 pub const refs = @import("refs.zig");
+pub const asset_catalog = @import("asset_catalog.zig");
 pub const EntityRef = refs.EntityRef;
 pub const AssetRef = refs.AssetRef;
 pub const ui = @import("weeoui");
@@ -161,6 +162,7 @@ test {
     _ = cutscene;
     _ = film;
     _ = @import("eggy_assets");
+    _ = asset_catalog;
     _ = @import("camera.zig");
     _ = @import("bounds.zig");
     _ = @import("shadows.zig");

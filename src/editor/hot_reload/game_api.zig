@@ -7,7 +7,7 @@ const std = @import("std");
 const eggy = @import("eggy");
 
 /// Bumped whenever these types change, so an editor refuses a library built for another.
-pub const version: u32 = 44;
+pub const version: u32 = 45;
 
 /// The library's one exported function: `fn () callconv(.c) *const Game`.
 pub const entry_symbol = "eggy_game";
@@ -53,6 +53,9 @@ pub const StatusItem = extern struct {
     side: u8,
     item_count: usize,
 };
+
+/// One of the project's packaged assets (`eggy.asset_catalog.Entry`).
+pub const Asset = extern struct { path: [*]const u8, path_len: usize, id: u64, kind: u8, converted: bool };
 
 pub const UiWidget = extern struct { key: [*:0]const u8, title: [*:0]const u8 };
 /// A file type a plugin imports (`eggy.plugins.AssetImporter`).
@@ -207,6 +210,10 @@ pub const Game = extern struct {
     export_platform_count: usize,
     export_ui: *const fn (state: *anyopaque, platform: usize, target_ptr: [*]const u8, target_len: usize, editor: *anyopaque, context: *anyopaque) callconv(.c) void,
     export_args: *const fn (state: *anyopaque, platform: usize, target_ptr: [*]const u8, target_len: usize, args: *anyopaque) callconv(.c) bool,
+    /// The project's asset catalog, which the editor doesn't compile in, so changing assets
+    /// rebuilds only this library.
+    assets: [*]const Asset,
+    asset_count: usize,
     /// Each plugin's preferences, for the Settings window.
     preferences: [*]const Preferences,
     preference_count: usize,

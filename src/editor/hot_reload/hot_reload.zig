@@ -542,6 +542,15 @@ pub const HotGame = struct {
             .note = try arena.dupeSentinel(u8, std.mem.span(source.note), 0),
             .icon_png = try arena.dupe(u8, source.icon_png[0..source.icon_png_len]),
         };
+        // The editor compiles no asset catalog; it looks assets up in the game's.
+        const catalog = try arena.alloc(eggy.asset_catalog.Entry, game.asset_count);
+        for (catalog, game.assets[0..game.asset_count]) |*asset, source| asset.* = .{
+            .path = try arena.dupe(u8, source.path[0..source.path_len]),
+            .id = source.id,
+            .kind = source.kind,
+            .converted = source.converted,
+        };
+        eggy.asset_catalog.set(catalog);
         self.* = .{ .gpa = gpa, .path = self.path, .copy_path = copy_path, .library = library, .game = game, .state = null, .panels = panels, .commands = commands, .console_commands = console_commands, .file_types = file_types, .ui_widgets = ui_widgets, .component_inspectors = component_inspectors, .asset_importers = asset_importers, .scene_tools = scene_tools, .menus = menus, .status_items = status_items, .export_platforms = export_platforms, .loads = self.loads, .preference_manifests = manifests, .component_types = component_types, .plugin_keys = plugin_keys, .manifest_arena = self.manifest_arena };
     }
 
@@ -617,6 +626,7 @@ pub const HotGame = struct {
         self.preference_manifests = &.{};
         self.component_types = &.{};
         self.plugin_keys = &.{};
+        eggy.asset_catalog.set(&.{});
         _ = self.manifest_arena.reset(.free_all);
         library.close();
         self.library = null;

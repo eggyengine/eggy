@@ -11,6 +11,7 @@
 const std = @import("std");
 const ecs = @import("clutch");
 const asset_id = @import("eggy_assets").id;
+const asset_catalog = @import("asset_catalog.zig");
 /// What kind of file an `AssetRef` takes (see `eggy.assets.Kind`).
 pub const AssetKind = @import("eggy_assets").Kind;
 
@@ -96,7 +97,7 @@ pub fn AssetRef(comptime kind: AssetKind) type {
             return self;
         }
 
-        /// Parse an identity. Legacy serialized paths resolve through the compiled project
+        /// Parse an identity. Legacy serialized paths resolve through the project's asset
         /// catalog and are immediately converted; the next save writes only the identity.
         pub fn parse(project_path: []const u8) error{ PathTooLong, InvalidPath, WrongAssetKind, InvalidAssetId, UnknownAsset }!@This() {
             if (project_path.len == 0) return .{};
@@ -106,12 +107,9 @@ pub fn AssetRef(comptime kind: AssetKind) type {
                 } else true;
                 if (hex) return fromId(try asset_id.parse(project_path));
             }
-            const root = @import("root");
-            if (comptime @hasDecl(root, "eggy_asset_ids")) {
-                if (root.eggy_asset_ids.find(project_path)) |entry| {
-                    if (kind != .any and entry.kind != @backingInt(kind)) return error.WrongAssetKind;
-                    return fromId(entry.id);
-                }
+            if (asset_catalog.find(project_path)) |entry| {
+                if (kind != .any and entry.kind != @backingInt(kind)) return error.WrongAssetKind;
+                return fromId(entry.id);
             }
             try validatePath(project_path);
             if (comptime @import("builtin").is_test) {

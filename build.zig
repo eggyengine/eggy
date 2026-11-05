@@ -329,12 +329,11 @@ fn addProject(b: *std.Build, engine: *std.Build, emscripten: Emscripten, target:
     const library_options = b.addOptions();
     library_options.addOption([]const u8, "file_name", if (game_library) |library| library.out_filename else "");
     const editor_project = b.createModule(.{
-        .root_source_file = b.addWriteFiles().add("eggy_editor_project.zig", b.fmt("pub const name = \"{f}\";\npub const asset_ids = @import(\"eggy_asset_ids\");\npub const game_library = @import(\"game_library\");\n", .{std.zig.fmtString(options.name)})),
+        .root_source_file = b.addWriteFiles().add("eggy_editor_project.zig", b.fmt("pub const name = \"{f}\";\npub const game_library = @import(\"game_library\");\n", .{std.zig.fmtString(options.name)})),
         .target = target,
         .optimize = optimize,
     });
     editor_project.addOptions("game_library", library_options);
-    editor_project.addImport("eggy_asset_ids", prepared.ids);
     const editor_module = b.createModule(.{
         .root_source_file = engine.path("src/editor/main.zig"),
         .target = target,
