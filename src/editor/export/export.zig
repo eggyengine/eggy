@@ -219,7 +219,7 @@ pub const ExportWindow = struct {
     fn build(self: *ExportWindow, context: *ui.Context, status: ?job_zig.Status, game: ?*HotGame, editor: *eggy.editor.Context) void {
         self.fitWindow(context, if (status == null) .settings else if (self.show_output) .output else .progress);
         if (status) |current| return self.buildProgress(context, current);
-        if (self.film) |film| if (film.progress()) |shown| return self.buildFilmProgress(context, film, shown);
+        if (self.film) |film| if (film.active) return self.buildFilmProgress(context, film);
         if (!self.has_default_scene) return self.chooseScene(context);
         // A plugin platform gone with a rebuilt library falls back to this system.
         if (self.selected == .plugin and self.pluginIndex(game) == null) self.select(.{ .builtin = platforms.this_system });
@@ -424,7 +424,9 @@ pub const ExportWindow = struct {
         context.end();
         restyle(context, .{ .grow = 1 });
         if (context.buttonVariant("Close", .outline)) self.closing = true;
-        if (context.button("Export")) if (self.selected == .film) self.startFilm() else self.start(game);
+        if (self.selected == .film) {
+            if (context.button("Film all")) self.startFilm();
+        } else if (context.button("Export")) self.start(game);
         page_style.endRow(context);
         context.end();
         restyle(context, .{ .height = footer_height, .gap = page_gap });
@@ -499,14 +501,15 @@ pub const ExportWindow = struct {
         }
     }
 
-    /// The Film page: which cutscene, and how it is rendered.
+    /// The Film page: the queue of cutscenes, and how the picked one (or the next added) is
+    /// rendered.
     fn buildFilm(self: *ExportWindow, context: *ui.Context) void {
         const b = context.builder();
         context.begin(.row);
         if (b.node(0, .{ .width = 40, .height = 40 }, self.icons.film(), &.{})) |image| context.element(image) else |_| {}
         context.begin(.column);
         context.heading(3, "Film");
-        context.muted("A cutscene of the open scene, through its camera.");
+        context.muted("Cutscenes of the open scene, through their camera cuts.");
         smallText(context, 12);
         context.end();
         restyle(context, .{ .grow = 1, .gap = 2 });
@@ -520,20 +523,59 @@ pub const ExportWindow = struct {
         rows.begin(context, "Cutscene", "");
         if (film.sources.items.len == 0) {
             context.muted("No entity in the open scene has an Animator with a .clip.zon");
-        } else _ = context.select("##film clip", film.sourceLabels(b.allocator), &film.chosen);
+        } else {
+            context.begin(.row);
+            _ = context.select("##film clip", film.sourceLabels(b.allocator), &film.chosen);
+            if (context.buttonVariant("Add to queue", .outline)) film.add() catch |err| {
+                self.problem = if (err == error.NoCutscene) "Choose a cutscene first." else "The cutscene couldn't be queued: see the Console.";
+            };
+            page_style.endRow(context);
+        }
         rows.end(context);
+        setting_rows.endGroup(context);
+
+        // The queue, each film with its settings in short; picking one edits its settings below.
+        if (film.queue.items.len > 0) {
+            setting_rows.beginGroup(context);
+            var removed: ?usize = null;
+            for (film.queue.items, 0..) |queued, index| {
+                var summary_buffer: [96]u8 = undefined;
+                const summary = queued.look.summary(&summary_buffer);
+                const picked = film.picked == index;
+                context.begin(.row);
+                const name = std.fmt.allocPrint(b.allocator, "{s}##film queued {d}", .{ queued.source.label, index }) catch queued.source.label;
+                if (context.buttonVariant(name, if (picked) .secondary else .ghost)) film.picked = if (picked) null else index;
+                context.begin(.row);
+                context.end();
+                restyle(context, .{ .grow = 1 });
+                context.muted(switch (queued.state) {
+                    .waiting => summary,
+                    .filming => "Filming",
+                    .done => "Filmed",
+                    .failed => "Failed",
+                });
+                const remove = std.fmt.allocPrint(b.allocator, "Remove##film remove {d}", .{index}) catch "Remove";
+                if (context.buttonVariant(remove, .ghost)) removed = index;
+                page_style.endRow(context);
+            }
+            if (removed) |index| film.remove(index);
+            setting_rows.endGroup(context);
+        }
+
+        const look = film.editing();
+        setting_rows.beginGroup(context);
         rows.begin(context, "Size", "");
-        _ = context.select("##film size", &film_zig.size_labels, &film.size);
+        _ = context.select("##film size", &film_zig.size_labels, &look.size);
         rows.end(context);
         rows.begin(context, "Frame rate", "Every frame is rendered, however slow.");
-        _ = context.select("##film rate", &film_zig.rate_labels, &film.rate);
+        _ = context.select("##film rate", &film_zig.rate_labels, &look.rate);
         rows.end(context);
         rows.begin(context, "Motion blur", "");
-        _ = context.select("##film blur", &film_zig.blur_labels, &film.blur);
+        _ = context.select("##film blur", &film_zig.blur_labels, &look.blur);
         rows.end(context);
-        rows.begin(context, "Format", if (film.format == .mp4) "Needs ffmpeg; without it the frames are kept." else "");
-        var format: usize = @backingInt(film.format);
-        if (context.select("##film format", &film_zig.Format.labels, &format)) film.format = @fromBackingInt(@intCast(format));
+        rows.begin(context, "Format", if (look.format == .mp4) "Needs ffmpeg; without it the frames are kept." else "");
+        var format: usize = @backingInt(look.format);
+        if (context.select("##film format", &film_zig.Format.labels, &format)) look.format = @fromBackingInt(@intCast(format));
         rows.end(context);
         setting_rows.endGroup(context);
     }
@@ -545,45 +587,59 @@ pub const ExportWindow = struct {
             self.problem = "The game's code isn't running, so nothing can be posed. Fix it (see the Console), then film.";
             return;
         };
-        film.start(env) catch |err| {
+        film.filmAll(env) catch |err| {
             self.problem = switch (err) {
                 error.NoCutscene => "Choose a cutscene first.",
-                error.ClipNotLoaded => "The cutscene's clip can't be read: see the Console.",
                 else => "The film couldn't start: see the Console.",
             };
             if (err != error.NoCutscene) std.log.err("cannot start the film: {t}", .{err});
         };
     }
 
-    /// The film under way, or how it ended.
-    fn buildFilmProgress(self: *ExportWindow, context: *ui.Context, film: *Film, shown: film_zig.Progress) void {
+    /// The queue being filmed, or how each film went.
+    fn buildFilmProgress(self: *ExportWindow, context: *ui.Context, film: *Film) void {
         const arena = context.builder().allocator;
         context.begin(.column);
-        context.heading(3, switch (shown.stage) {
-            .rendering => std.fmt.allocPrint(arena, "Rendering {s}", .{shown.label}) catch "Rendering",
-            .encoding => std.fmt.allocPrint(arena, "Encoding {s}", .{shown.label}) catch "Encoding",
-            .done => std.fmt.allocPrint(arena, "Filmed {s}", .{shown.label}) catch "Filmed",
-            .failed => std.fmt.allocPrint(arena, "Filming {s} failed", .{shown.label}) catch "Filming failed",
-        });
-        const fraction: f32 = if (shown.stage == .rendering) @as(f32, @floatFromInt(shown.frame)) / @as(f32, @floatFromInt(@max(1, shown.frames))) else 1;
-        context.begin(.row);
-        context.progress(fraction);
-        restyle(context, .{ .grow = 1 });
-        context.label("frame {d} / {d}", .{ @min(shown.frame + 1, shown.frames), shown.frames });
-        page_style.endRow(context);
-        switch (shown.stage) {
-            .failed => context.alert("The film stopped", shown.message, true),
-            .done => context.muted(shown.message),
-            else => {},
+        context.heading(3, if (film.finished()) "Filmed" else "Filming");
+        for (film.queue.items, 0..) |queued, index| {
+            context.begin(.column);
+            context.begin(.row);
+            context.label("{s}", .{queued.source.label});
+            context.begin(.row);
+            context.end();
+            restyle(context, .{ .grow = 1 });
+            if (film.progress(index)) |shown| {
+                switch (shown.stage) {
+                    .encoding => context.muted("Encoding"),
+                    else => if (shown.left_s) |left|
+                        context.muted(std.fmt.allocPrint(arena, "frame {d} of {d}, about {d} s left", .{ @min(shown.frame + 1, shown.frames), shown.frames, left }) catch "")
+                    else
+                        context.muted(std.fmt.allocPrint(arena, "frame {d} of {d}", .{ @min(shown.frame + 1, shown.frames), shown.frames }) catch ""),
+                }
+            } else context.muted(switch (queued.state) {
+                .waiting => "Waiting",
+                .filming => "Filming",
+                .done => "Filmed",
+                .failed => "Failed",
+            });
+            page_style.endRow(context);
+            if (film.progress(index)) |shown| {
+                const fraction: f32 = if (shown.stage == .rendering) @as(f32, @floatFromInt(shown.frame)) / @as(f32, @floatFromInt(@max(1, shown.frames))) else 1;
+                context.progress(fraction);
+            }
+            switch (queued.state) {
+                .failed => context.alert("The film stopped", queued.message, true),
+                .done => context.muted(queued.message),
+                else => {},
+            }
+            context.end();
+            restyle(context, .{ .gap = 4 });
         }
         context.begin(.row);
-        switch (shown.stage) {
-            .done, .failed => {
-                if (context.buttonVariant("Back to settings", .outline)) film.close(self.film_env);
-                if (context.buttonVariant("Close", .outline)) self.closing = true;
-            },
-            else => if (context.buttonVariant("Cancel", .outline)) film.close(self.film_env),
-        }
+        if (film.finished()) {
+            if (context.buttonVariant("Back to settings", .outline)) film.close(self.film_env);
+            if (context.buttonVariant("Close", .outline)) self.closing = true;
+        } else if (context.buttonVariant("Stop", .outline)) film.close(self.film_env);
         page_style.endRow(context);
         context.end();
         restyle(context, .{ .gap = page_gap });

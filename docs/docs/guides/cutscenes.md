@@ -78,7 +78,9 @@ HUD you draw yourself in `gameUi`.
 
 **File > Export > Film** renders a cutscene of the open scene to a video, through its camera cuts
 (or the scene's active camera). Pick the cutscene, the size, the frame rate and the motion blur; every frame is
-rendered at a fixed step, however long that takes. The frames go to the project's
+rendered at a fixed step, however long that takes. **Add to queue** lines up several cutscenes,
+each with its own settings (pick one in the queue to change them), and **Film all** films them one
+after another; Stop leaves the rest waiting. The frames go to the project's
 `zig-out/film/<clip>-<n>/frames/`, and with [ffmpeg](https://ffmpeg.org) installed they are
 encoded into `film.mp4` there, with the clip's sounds mixed in at their keys.
 
