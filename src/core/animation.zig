@@ -47,8 +47,10 @@ pub const Animator = struct {
     repeat: Repeat = .loop,
     /// What the clip takes from the player while it plays, as a cutscene does: their input
     /// (holding Escape skips to the end), and the HUD (`UiScreen`s the clip doesn't animate are
-    /// hidden, and the view is letterboxed). See `cutscene.zig`.
+    /// hidden). See `cutscene.zig`.
     takes_over: Takeover = .nothing,
+    /// Black bars over the top and bottom of the view while it plays and takes something over.
+    letterbox: bool = false,
     previous_clip: AssetRef(.animation) = .{},
     previous_model_clip: AssetRef(.animation) = .{},
     previous_time_s: f32 = 0,
@@ -143,7 +145,7 @@ pub const Animation = struct {
     /// ```
     pub fn play(self: Animation, entity: ecs.EntityId, clip: Clip, options: PlayOptions) Error!void {
         const target = try self.prepare(entity, clip, options);
-        target.* = .{ .clip = clip.asset, .model_clip = clip.imported, .time_s = options.start_s, .speed = options.speed, .repeat = options.repeat, .takes_over = target.takes_over };
+        target.* = .{ .clip = clip.asset, .model_clip = clip.imported, .time_s = options.start_s, .speed = options.speed, .repeat = options.repeat, .takes_over = target.takes_over, .letterbox = target.letterbox };
         self.world.markChanged(entity, Animator);
     }
 
@@ -166,6 +168,7 @@ pub const Animation = struct {
             .speed = options.speed,
             .repeat = options.repeat,
             .takes_over = old.takes_over,
+            .letterbox = old.letterbox,
             .previous_clip = if (fading) old.clip else .{},
             .previous_model_clip = if (fading) old.model_clip else .{},
             .previous_time_s = old.time_s,

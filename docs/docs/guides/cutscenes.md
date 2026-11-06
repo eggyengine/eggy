@@ -71,8 +71,9 @@ pub const Game = struct {
 ```
 
 While a cutscene that takes over plays, the player's input doesn't reach the game (UI
-buttons still take presses), screens the clip doesn't animate are hidden, and the view is
-letterboxed, until it ends; one paused on a choice keeps them. Holding **Escape** for a second skips to the end; the events it skips over are
+buttons still take presses) and screens the clip doesn't animate are hidden, until it ends;
+one paused on a choice keeps them. Turn on the Animator's **Letterbox** for black bars over the
+top and bottom of the view while it plays. Holding **Escape** for a second skips to the end; the events it skips over are
 still sent, so the fight still starts. `app.cutscene.takeover` says what is taken now, for
 HUD you draw yourself in `gameUi`.
 

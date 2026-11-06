@@ -81,14 +81,15 @@ pub const Preview = struct {
     /// `error.InvalidClip` for a key that isn't an asset identity.
     pub fn show(self: *Preview, world: *ecs.World, clips: *ClipCache, ui: ?*ui_scenes.State, pose: Pose) Error!void {
         if (!world.isAlive(self.root)) return error.InvalidEntity;
-        const kept = if (world.get(self.root, Animator)) |found| found.takes_over else .nothing;
+        const kept: Animator = if (world.get(self.root, Animator)) |found| found.* else .{};
         const shown = Animator{
             .clip = refs.AssetRef(.animation).parse(pose.clip) catch return error.InvalidClip,
             .model_clip = refs.AssetRef(.animation).parse(pose.model_clip) catch return error.InvalidClip,
             .time_s = pose.time_s,
             .playing = false,
             .repeat = .once,
-            .takes_over = kept,
+            .takes_over = kept.takes_over,
+            .letterbox = kept.letterbox,
         };
         if (world.get(self.root, Animator)) |found| {
             found.* = shown;

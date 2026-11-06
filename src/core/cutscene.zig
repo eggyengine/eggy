@@ -1,6 +1,7 @@
 //! Cutscenes in play: while an `Animator` whose `takes_over` asks for it plays its clip, the
 //! player's input is held back from the game (holding Escape skips to the end), the `UiScreen`s
-//! the clip doesn't animate are hidden, and the view is letterboxed. `App.updateWorld` updates
+//! the clip doesn't animate are hidden, and, if it asks (`Animator.letterbox`), the view is
+//! letterboxed. `App.updateWorld` updates
 //! the `Cutscene` after the animation step; hosts then route input through `event`, filter the
 //! screens with `hideHud` and draw the bars and the skip ring with `draw`.
 const std = @import("std");
@@ -48,7 +49,7 @@ pub const Cutscene = struct {
                 self.takeover = taken(world, clips);
             }
         }
-        const goal: f32 = if (self.takeover.takesHud()) 1 else 0;
+        const goal: f32 = if (letterboxed(world, clips)) 1 else 0;
         const moved = bar_rate * @max(real_delta_s, 0);
         self.bars = if (self.bars < goal) @min(goal, self.bars + moved) else @max(goal, self.bars - moved);
         return self.takeover.takesInput() and !before.takesInput();
@@ -129,6 +130,16 @@ pub fn taken(world: *ecs.World, clips: *ClipCache) Takeover {
     if (input) return .input;
     if (hud) return .hud;
     return .nothing;
+}
+
+/// Whether a cutscene that takes something over and asks for the bars is playing.
+fn letterboxed(world: *ecs.World, clips: *ClipCache) bool {
+    var animators = world.query(.{*const Animator});
+    while (animators.next()) |view| {
+        const animator = view.get(*const Animator).*;
+        if (animator.letterbox and animator.takes_over != .nothing and animation.inProgress(animator, clips)) return true;
+    }
+    return false;
 }
 
 /// Jump every input-taking cutscene to its end, firing the keys it skips over so the game hears
@@ -259,4 +270,25 @@ test "a cutscene takes input and the HUD while it plays, Escape held skips it, a
     try std.testing.expectEqual(@as(usize, 1), events.items.len);
     try std.testing.expectEqualStrings("start_quest", events.items[0].name);
     try std.testing.expectEqual(Takeover.nothing, cutscene.takeover);
+}
+
+test "the bars come only with a cutscene that asks for them" {
+    const gpa = std.testing.allocator;
+    var cache = ClipCache{ .gpa = gpa };
+    defer cache.deinit();
+    const key = @import("refs.zig").AssetRef(.animation).fromId(0x52).key();
+    try cache.replace(key, .{ .duration_s = 10, .tracks = &.{} });
+    var world = ecs.World.init(gpa);
+    defer world.deinit();
+    const intro = try world.spawn(.{Animator{ .clip = .fromId(0x52), .playing = false, .takes_over = .input_and_hud }});
+    try (animation.Animation{ .world = &world }).start(intro);
+    animation.step(&world, &cache, 1, .{});
+
+    var cutscene = Cutscene{};
+    _ = cutscene.update(&world, &cache, 1, .{});
+    try std.testing.expect(!cutscene.shows());
+
+    world.get(intro, Animator).?.letterbox = true;
+    _ = cutscene.update(&world, &cache, 1, .{});
+    try std.testing.expect(cutscene.shows());
 }
