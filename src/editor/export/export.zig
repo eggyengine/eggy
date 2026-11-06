@@ -4,8 +4,7 @@
 //! below. It asks which scene starts first only when the project has no default scene yet.
 //! Export runs `zig build export` (see `src/build/export.zig`) in the background, showing a bar
 //! for the whole build, the step under way and, on request, Zig's output. Exports land in the
-//! project's `zig-out/export/`. Its Film page renders a cutscene of the open scene to a video
-//! instead (`../film/film.zig`), in the editor, into the project's `zig-out/film/`.
+//! project's `zig-out/export/`.
 const std = @import("std");
 const eggy = @import("eggy");
 const PickedPaths = @import("../picked_paths.zig").PickedPaths;
@@ -23,8 +22,6 @@ const listing = @import("../assets/listing.zig");
 const project_settings = @import("../project_settings.zig");
 const page_style = @import("../page_style.zig");
 const HotGame = @import("../hot_reload/hot_reload.zig").HotGame;
-const film_zig = @import("../film/film.zig");
-const Film = film_zig.Film;
 pub const platforms = @import("platforms.zig");
 const Icons = @import("icons.zig").Icons;
 const setting_rows = eggy.setting_rows;
@@ -45,8 +42,8 @@ const output_height: f32 = 360;
 /// dragged it to stays.
 const Fit = enum { settings, progress, output };
 
-/// The platform shown: one of Eggy's, a plugin's by its key (owned), or a film of a cutscene.
-const Selected = union(enum) { builtin: platforms.Platform, plugin: []u8, film };
+/// The platform shown: one of Eggy's, or a plugin's by its key (owned).
+const Selected = union(enum) { builtin: platforms.Platform, plugin: []u8 };
 
 /// What a frame left for the editor to do.
 pub const Result = struct {
@@ -98,9 +95,6 @@ pub const ExportWindow = struct {
     platform_scroll: ui.Layout.ScrollState = .{},
     /// The SDK folder chosen in the system's picker, for the next frame.
     picked_sdk: PickedPaths = .{},
-    /// The editor's film session and what it renders with, for this frame's `update`.
-    film: ?*Film = null,
-    film_env: ?film_zig.Env = null,
 
     /// Open the window for the project in `project_dir`. On the heap, as the output view keeps a
     /// pointer to itself.
@@ -185,13 +179,10 @@ pub const ExportWindow = struct {
     ///     history.recordProjectSettings(change.before, change.after, now_ms);
     /// if (!result.open) export_ui.close(graphics);
     /// ```
-    /// `film` is the editor's, and `film_env` what it renders with (null without the game).
-    pub fn update(self: *ExportWindow, graphics: *eggy.Graphics, style: *const ui.Context, game: ?*HotGame, editor: *eggy.editor.Context, film: *Film, film_env: ?film_zig.Env) !Result {
+    pub fn update(self: *ExportWindow, graphics: *eggy.Graphics, style: *const ui.Context, game: ?*HotGame, editor: *eggy.editor.Context) !Result {
         var arena = std.heap.ArenaAllocator.init(self.gpa);
         defer arena.deinit();
         const status: ?job_zig.Status = if (self.job) |job| try job.status(arena.allocator()) else null;
-        self.film = film;
-        self.film_env = film_env;
         const Page = struct {
             window: *ExportWindow,
             status: ?job_zig.Status,
@@ -219,7 +210,6 @@ pub const ExportWindow = struct {
     fn build(self: *ExportWindow, context: *ui.Context, status: ?job_zig.Status, game: ?*HotGame, editor: *eggy.editor.Context) void {
         self.fitWindow(context, if (status == null) .settings else if (self.show_output) .output else .progress);
         if (status) |current| return self.buildProgress(context, current);
-        if (self.film) |film| if (film.active) return self.buildFilmProgress(context, film);
         if (!self.has_default_scene) return self.chooseScene(context);
         // A plugin platform gone with a rebuilt library falls back to this system.
         if (self.selected == .plugin and self.pluginIndex(game) == null) self.select(.{ .builtin = platforms.this_system });
@@ -281,10 +271,6 @@ pub const ExportWindow = struct {
             const shown = self.selected == .builtin and self.selected.builtin == platform;
             if (self.sidebarItem(context, platforms.title(platform), "builtin " ++ @tagName(platform), self.icons.builtin(platform, context.theme), shown)) self.select(.{ .builtin = platform });
         }
-        if (self.sidebarItem(context, "Film", "film", self.icons.film(), self.selected == .film)) {
-            self.select(.film);
-            if (self.film) |film| if (self.film_env) |env| film.findSources(env);
-        }
         if (game) |loaded| for (loaded.export_platforms) |platform| {
             const shown = self.selected == .plugin and std.mem.eql(u8, self.selected.plugin, platform.key);
             const id_text = std.fmt.allocPrint(context.builder().allocator, "plugin {s}", .{platform.key}) catch continue;
@@ -313,7 +299,6 @@ pub const ExportWindow = struct {
     /// The platform shown: its icon, title and what it builds, then its settings and the
     /// plugins' for it.
     fn buildPlatform(self: *ExportWindow, context: *ui.Context, game: ?*HotGame, editor: *eggy.editor.Context) void {
-        if (self.selected == .film) return self.buildFilm(context);
         const shown = self.shownPlatform(game);
 
         // The header: icon, title and a line on what it builds.
@@ -321,7 +306,6 @@ pub const ExportWindow = struct {
         const icon = switch (self.selected) {
             .builtin => |platform| self.icons.builtin(platform, context.theme),
             .plugin => |key| self.icons.plugin(key, shown.icon_png, context.theme),
-            .film => unreachable,
         };
         context.begin(.row);
         if (b.node(0, .{ .width = 40, .height = 40 }, icon, &.{})) |image| context.element(image) else |_| {}
@@ -424,9 +408,7 @@ pub const ExportWindow = struct {
         context.end();
         restyle(context, .{ .grow = 1 });
         if (context.buttonVariant("Close", .outline)) self.closing = true;
-        if (self.selected == .film) {
-            if (context.button("Film all")) self.startFilm();
-        } else if (context.button("Export")) self.start(game);
+        if (context.button("Export")) self.start(game);
         page_style.endRow(context);
         context.end();
         restyle(context, .{ .height = footer_height, .gap = page_gap });
@@ -501,167 +483,6 @@ pub const ExportWindow = struct {
         }
     }
 
-    /// The Film page: the queue of cutscenes, and how the picked one (or the next added) is
-    /// rendered.
-    fn buildFilm(self: *ExportWindow, context: *ui.Context) void {
-        const b = context.builder();
-        context.begin(.row);
-        if (b.node(0, .{ .width = 40, .height = 40 }, self.icons.film(), &.{})) |image| context.element(image) else |_| {}
-        context.begin(.column);
-        context.heading(3, "Film");
-        context.muted("Cutscenes of the open scene, through their camera cuts.");
-        smallText(context, 12);
-        context.end();
-        restyle(context, .{ .grow = 1, .gap = 2 });
-        context.end();
-        restyle(context, .{ .direction = .row, .gap = 14, .align_items = .center });
-        if (self.problem) |why| context.alert("Couldn't film", why, true);
-
-        const film = self.film orelse return context.muted("The game isn't running: see the Console.");
-        var rows = SettingRows{};
-        setting_rows.beginGroup(context);
-        rows.begin(context, "Cutscene", "");
-        if (film.sources.items.len == 0) {
-            context.muted("No entity in the open scene has an Animator with a .clip.zon");
-        } else {
-            context.begin(.row);
-            _ = context.select("##film clip", film.sourceLabels(b.allocator), &film.chosen);
-            if (context.buttonVariant("Add to queue", .outline)) film.add() catch |err| {
-                self.problem = if (err == error.NoCutscene) "Choose a cutscene first." else "The cutscene couldn't be queued: see the Console.";
-            };
-            page_style.endRow(context);
-        }
-        rows.end(context);
-        setting_rows.endGroup(context);
-
-        // The queue, each film with its settings in short; picking one edits its settings below.
-        if (film.queue.items.len > 0) {
-            setting_rows.beginGroup(context);
-            var removed: ?usize = null;
-            for (film.queue.items, 0..) |queued, index| {
-                var summary_buffer: [96]u8 = undefined;
-                const summary = queued.look.summary(&summary_buffer);
-                const picked = film.picked == index;
-                context.begin(.row);
-                const name = std.fmt.allocPrint(b.allocator, "{s}##film queued {d}", .{ queued.source.label, index }) catch queued.source.label;
-                if (context.buttonVariant(name, if (picked) .secondary else .ghost)) film.picked = if (picked) null else index;
-                context.begin(.row);
-                context.end();
-                restyle(context, .{ .grow = 1 });
-                context.muted(switch (queued.state) {
-                    .waiting => summary,
-                    .filming => "Filming",
-                    .done => "Filmed",
-                    .failed => "Failed",
-                });
-                const remove = std.fmt.allocPrint(b.allocator, "Remove##film remove {d}", .{index}) catch "Remove";
-                if (context.buttonVariant(remove, .ghost)) removed = index;
-                page_style.endRow(context);
-            }
-            if (removed) |index| film.remove(index);
-            setting_rows.endGroup(context);
-        }
-
-        const look = film.editing();
-        setting_rows.beginGroup(context);
-        rows.begin(context, "Size", "");
-        _ = context.select("##film size", &film_zig.size_labels, &look.size);
-        rows.end(context);
-        rows.begin(context, "Frame rate", "Every frame is rendered, however slow.");
-        _ = context.select("##film rate", &film_zig.rate_labels, &look.rate);
-        rows.end(context);
-        rows.begin(context, "Motion blur", "");
-        _ = context.select("##film blur", &film_zig.blur_labels, &look.blur);
-        rows.end(context);
-        rows.begin(context, "Format", if (look.format == .mp4) "Needs ffmpeg; without it the frames are kept." else "");
-        var format: usize = @backingInt(look.format);
-        if (context.select("##film format", &film_zig.Format.labels, &format)) look.format = @fromBackingInt(@intCast(format));
-        rows.end(context);
-        setting_rows.endGroup(context);
-    }
-
-    fn startFilm(self: *ExportWindow) void {
-        self.problem = null;
-        const film = self.film orelse return;
-        const env = self.film_env orelse {
-            self.problem = "The game's code isn't running, so nothing can be posed. Fix it (see the Console), then film.";
-            return;
-        };
-        film.filmAll(env) catch |err| {
-            self.problem = switch (err) {
-                error.NoCutscene => "Choose a cutscene first.",
-                else => "The film couldn't start: see the Console.",
-            };
-            if (err != error.NoCutscene) std.log.err("cannot start the film: {t}", .{err});
-        };
-    }
-
-    /// The queue being filmed, or how each film went.
-    fn buildFilmProgress(self: *ExportWindow, context: *ui.Context, film: *Film) void {
-        const arena = context.builder().allocator;
-        context.begin(.column);
-        context.heading(3, if (film.finished()) "Filmed" else "Filming");
-        for (film.queue.items, 0..) |queued, index| {
-            context.begin(.column);
-            context.begin(.row);
-            context.label("{s}", .{queued.source.label});
-            context.begin(.row);
-            context.end();
-            restyle(context, .{ .grow = 1 });
-            if (film.progress(index)) |shown| {
-                switch (shown.stage) {
-                    .encoding => context.muted("Encoding"),
-                    else => if (shown.left_s) |left|
-                        context.muted(std.fmt.allocPrint(arena, "frame {d} of {d}, about {d} s left", .{ @min(shown.frame + 1, shown.frames), shown.frames, left }) catch "")
-                    else
-                        context.muted(std.fmt.allocPrint(arena, "frame {d} of {d}", .{ @min(shown.frame + 1, shown.frames), shown.frames }) catch ""),
-                }
-            } else context.muted(switch (queued.state) {
-                .waiting => "Waiting",
-                .filming => "Filming",
-                .done => "Filmed",
-                .failed => "Failed",
-            });
-            page_style.endRow(context);
-            if (film.progress(index)) |shown| {
-                const fraction: f32 = if (shown.stage == .rendering) @as(f32, @floatFromInt(shown.frame)) / @as(f32, @floatFromInt(@max(1, shown.frames))) else 1;
-                context.progress(fraction);
-            }
-            switch (queued.state) {
-                .failed => context.alert("The film stopped", queued.message, true),
-                .done => {
-                    context.muted(queued.message);
-                    if (queued.saved.len > 0) self.buildFilmed(context, queued, index);
-                },
-                else => {},
-            }
-            context.end();
-            restyle(context, .{ .gap = 4 });
-        }
-        context.begin(.row);
-        if (film.finished()) {
-            if (context.buttonVariant("Back to settings", .outline)) film.close(self.film_env);
-            if (context.buttonVariant("Close", .outline)) self.closing = true;
-        } else if (context.buttonVariant("Stop", .outline)) film.close(self.film_env);
-        page_style.endRow(context);
-        context.end();
-        restyle(context, .{ .gap = page_gap });
-    }
-
-    /// A finished film's buttons: open the video, or its folder.
-    fn buildFilmed(self: *ExportWindow, context: *ui.Context, queued: film_zig.Queued, index: usize) void {
-        const arena = context.builder().allocator;
-        context.begin(.row);
-        if (queued.video) {
-            const play = std.fmt.allocPrint(arena, "Play it##film play {d}", .{index}) catch "Play it";
-            if (context.buttonVariant(play, .outline)) file_manager.openFile(self.gpa, queued.saved) catch |err| std.log.err("cannot open {s}: {t}", .{ queued.saved, err });
-        }
-        const show = std.fmt.allocPrint(arena, "Show in folder##film show {d}", .{index}) catch "Show in folder";
-        const folder = if (queued.video) std.fs.path.dirname(queued.saved) orelse queued.saved else queued.saved;
-        if (context.buttonVariant(show, .ghost)) file_manager.showFolder(self.gpa, folder) catch |err| std.log.err("cannot show {s}: {t}", .{ folder, err });
-        page_style.endRow(context);
-    }
-
     /// Start exporting for the platform shown, with its settings and the plugins' arguments.
     fn start(self: *ExportWindow, game: ?*HotGame) void {
         self.problem = null;
@@ -696,8 +517,6 @@ pub const ExportWindow = struct {
                 if (shown.zips and !settings.zip) list.append(arena, "-Dexport-zip=false") catch return self.fail(error.OutOfMemory);
                 break :blk list;
             },
-            // Films start from `startFilm`.
-            .film => unreachable,
         };
 
         // And the plugins'. A plugin's own platform can't export without them.
@@ -747,14 +566,13 @@ pub const ExportWindow = struct {
                 const platform = game.?.export_platforms[self.pluginIndex(game).?];
                 return .{ .title = platform.title, .note = platform.note, .target = platform.target, .icon_png = platform.icon_png, .zips = platform.zips };
             },
-            .film => unreachable,
         };
     }
 
     fn shownSettings(self: *ExportWindow) *platforms.Settings {
         return switch (self.selected) {
             .builtin => |platform| &self.settings[@backingInt(platform)],
-            .plugin, .film => &self.plugin_settings,
+            .plugin => &self.plugin_settings,
         };
     }
 
@@ -772,7 +590,6 @@ pub const ExportWindow = struct {
         return switch (self.selected) {
             .builtin => |platform| @backingInt(platform),
             .plugin => platforms.count + self.pluginIndex(game).?,
-            .film => unreachable,
         };
     }
 

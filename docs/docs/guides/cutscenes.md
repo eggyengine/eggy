@@ -1,12 +1,12 @@
 ---
-title: Make cutscenes and film them
+title: Make cutscenes and render them
 ---
 
 A cutscene in Eggy is a clip played live in your scene, in the game's own time and lighting:
 the player walks up to the boss, presses a key, and the camera, the characters and the
 dialogue move as you keyed them while the world goes on around them. It is an entity with an
 **Animator** whose clip moves other entities, and the same clip can be rendered to a video
-from **File > Export**.
+from the **Render** menu.
 
 ## Set one up
 
@@ -76,15 +76,19 @@ letterboxed, until it ends; one paused on a choice keeps them. Holding **Escape*
 still sent, so the fight still starts. `app.cutscene.takeover` says what is taken now, for
 HUD you draw yourself in `gameUi`.
 
-## Film it
+## Render it
 
-**File > Export > Film** renders a cutscene of the open scene to a video, through its camera cuts
-(or the scene's active camera). Pick the cutscene, the size, the frame rate and the motion blur; every frame is
-rendered at a fixed step, however long that takes. **Add to queue** lines up several cutscenes,
-each with its own settings (pick one in the queue to change them), and **Film all** films them one
-after another; Stop leaves the rest waiting. The frames go to the project's
-`zig-out/film/<clip>-<n>/frames/`, and with [ffmpeg](https://ffmpeg.org) installed they are
-encoded into `film.mp4` there, with the clip's sounds mixed in at their keys.
+The **Render** menu renders cutscenes of the open scene as Blender does, through their camera
+cuts (or the scene's active camera), in the Render window, which shows each frame as it is made.
+**Render Animation** (Ctrl+F12) renders the cutscene chosen in the window, which starts as the
+one open in the Animation panel; **Render Image** renders the frame at the Animation panel's
+playhead; **Render All Cutscenes** renders each in turn. **View Render** (F11) opens the window
+without rendering, to change the size, frame rate, motion blur and format first.
+
+Every frame is rendered at a fixed step, however long that takes, and Stop keeps the frames
+made so far. They go to the project's `zig-out/film/<clip>-<n>/frames/`, and with
+[ffmpeg](https://ffmpeg.org) installed they are encoded into `film.mp4` there, with the clip's
+sounds mixed in at their keys.
 
 The same works for any shot that isn't a cutscene in the game: an entity with an Animator and
 a clip that moves the camera is a film of its own.

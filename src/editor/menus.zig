@@ -1,4 +1,4 @@
-//! The editor's menus (File, Edit, View, Window, Help) and the ones plugins add: their items, and
+//! The editor's menus (File, Edit, View, Render, Window, Help) and the ones plugins add: their items, and
 //! what pressing one does.
 //! Menus that don't fit beside the play button fold into a "..." menu, as VS Code's do. Weeoui
 //! draws them compact, as a desktop menu bar's are.
@@ -18,6 +18,7 @@ pub const Menu = enum(u32) {
     file = first_id,
     edit,
     view,
+    render,
     window,
     help,
     /// The "..." menu holding the menus that don't fit.
@@ -28,6 +29,7 @@ pub const Menu = enum(u32) {
             .file => "File",
             .edit => "Edit",
             .view => "View",
+            .render => "Render",
             .window => "Window",
             .help => "Help",
             .more => "More",
@@ -35,7 +37,7 @@ pub const Menu = enum(u32) {
     }
 };
 /// The menus in order, all but `more`.
-const menu_order = [_]Menu{ .file, .edit, .view, .window, .help };
+const menu_order = [_]Menu{ .file, .edit, .view, .render, .window, .help };
 pub const Command = enum(u32) {
     new_project = first_id + 0x100,
     open_project,
@@ -64,7 +66,15 @@ pub const Command = enum(u32) {
     new_tab_2d,
     new_tab_ui,
     oopsies,
+    render_image,
+    render_animation,
+    render_all,
+    view_render,
 };
+
+/// What the Render menu asks for: a still at the Animation panel's playhead, the cutscene, every
+/// cutscene of the scene, or only the Render window.
+pub const Render = enum { image, animation, all, view };
 /// File > Open in: a row whose submenu opens on press or hover, not a command.
 const open_in_row: u32 = first_id + 0x1F0;
 /// Window menu items: `window_item_first` + panel id.
@@ -175,6 +185,13 @@ pub const Menubar = struct {
             .{ .id = @backingInt(Command.preferences), .label = "Settings..." },
             .{ .id = @backingInt(Command.plugins), .label = "Plugins...", .disabled = !project.open },
         };
+        const render_items = [_]widgets.MenuItem{
+            .{ .id = @backingInt(Command.render_image), .label = "Render Image", .disabled = !project.open },
+            .{ .id = @backingInt(Command.render_animation), .label = "Render Animation", .shortcut = "Ctrl+F12", .disabled = !project.open },
+            .{ .id = @backingInt(Command.render_all), .label = "Render All Cutscenes", .disabled = !project.open },
+            .{ .kind = .separator },
+            .{ .id = @backingInt(Command.view_render), .label = "View Render", .shortcut = "F11", .disabled = !project.open },
+        };
         const help_items = [_]widgets.MenuItem{
             .{ .id = @backingInt(Command.documentation), .label = "Documentation" },
             .{ .id = @backingInt(Command.report_issue), .label = "Report an Issue" },
@@ -191,6 +208,7 @@ pub const Menubar = struct {
             .{ .id = @backingInt(Menu.file), .label = Menu.file.label(), .items = try plugin_bars.extend(gpa, file_items, .file, bars, states) },
             .{ .id = @backingInt(Menu.edit), .label = Menu.edit.label(), .items = try plugin_bars.extend(gpa, &edit_items, .edit, bars, states) },
             .{ .id = @backingInt(Menu.view), .label = Menu.view.label(), .items = try plugin_bars.extend(gpa, command_items, .view, bars, states) },
+            .{ .id = @backingInt(Menu.render), .label = Menu.render.label(), .items = try plugin_bars.extend(gpa, &render_items, .render, bars, states) },
             .{ .id = @backingInt(Menu.window), .label = Menu.window.label(), .items = try plugin_bars.extend(gpa, window_items, .window, bars, states) },
             .{ .id = @backingInt(Menu.help), .label = Menu.help.label(), .items = try plugin_bars.extend(gpa, &help_items, .help, bars, states) },
         };
@@ -415,14 +433,14 @@ test "plugin menus join the bar and Eggy's menus, and their rows run by place" {
     const states = try plugin_bars.States.declared(arena.allocator(), bars);
     const list = try menubar.list(arena.allocator(), &layout, &.{}, &.{}, bars, states, .{}, menu_order.len + 1);
 
-    // Eggy's five, then the one menu that stands alone.
-    try std.testing.expectEqual(@as(usize, 6), list.len);
-    try std.testing.expectEqualStrings("Tools", list[5].label);
+    // Eggy's six, then the one menu that stands alone.
+    try std.testing.expectEqual(@as(usize, 7), list.len);
+    try std.testing.expectEqualStrings("Tools", list[6].label);
     // The extension's row ends View.
     try std.testing.expectEqualStrings("Snap", list[2].items[list[2].items.len - 1].label);
 
-    try std.testing.expectEqual(Action.handled, menubar.press(list[5].id, bars).?);
-    const press = menubar.press(list[5].items[1].id, bars).?;
+    try std.testing.expectEqual(Action.handled, menubar.press(list[6].id, bars).?);
+    const press = menubar.press(list[6].items[1].id, bars).?;
     try std.testing.expectEqual(@as(usize, 0), press.plugin_bar.menu_item.menu);
     try std.testing.expectEqual(@as(usize, 1), press.plugin_bar.menu_item.item);
     try std.testing.expectEqual(@as(u32, 0), menubar.open);

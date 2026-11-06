@@ -1,6 +1,7 @@
-//! Film: cutscenes of the open scene rendered to videos, from File > Export's Film page, as a
-//! queue filmed one after another, each with its own size, rate, blur and format. The clip an
-//! entity's `Animator` plays is posed (through the animation preview) at each sample time,
+//! Film: cutscenes of the open scene rendered as Blender renders, from the Render menu: a still
+//! at the Animation panel's playhead, the whole cutscene, or every cutscene in turn, all with the
+//! same output settings. The clip an entity's `Animator` plays is posed (through the animation
+//! preview) at each sample time,
 //! rendered offscreen through its camera cuts (or the game's camera) at the size and frame rate
 //! (`eggy.film`), and written as PNG frames into the project's `zig-out/film/`; when `ffmpeg` is
 //! installed they are encoded into an MP4 with the clip's sounds. Rendering goes a frame at a time
@@ -69,19 +70,26 @@ pub const Look = struct {
     }
 };
 
-/// A cutscene waiting in the queue, being filmed, or filmed.
+/// What a render makes: one frame at a moment of the clip, or all of it.
+pub const Span = union(enum) {
+    still_s: f32,
+    animation,
+};
+
+/// A cutscene waiting to be rendered, being rendered, or rendered.
 pub const Queued = struct {
     source: Source,
-    look: Look,
+    span: Span,
     state: enum { waiting, filming, done, failed } = .waiting,
     /// Where it went or why it failed, once over; owned.
     message: []u8 = &.{},
-    /// Once filmed: the video, or the folder of frames without one (absolute, owned).
+    /// Once rendered: the picture or video, or the folder of frames without one (absolute,
+    /// owned), and whether it is a file to open.
     saved: []u8 = &.{},
-    video: bool = false,
+    openable: bool = false,
 };
 
-/// How a queued film is coming along, for the Export window.
+/// How a queued render is coming along, for the Render window.
 pub const Progress = struct {
     stage: Stage,
     frame: u32,
@@ -92,30 +100,35 @@ pub const Progress = struct {
 
 pub const Film = struct {
     gpa: std.mem.Allocator,
-    /// What the next cutscene added is filmed with.
-    next: Look = .{},
+    /// The output settings every render takes.
+    look: Look = .{},
     sources: std.ArrayList(Source) = .empty,
     chosen: usize = 0,
+    /// What the last Render asked for, in turn.
     queue: std.ArrayList(Queued) = .empty,
-    /// The queued film whose settings the page edits; null for `next`.
-    picked: ?usize = null,
-    /// Filming the queue (or showing how it went) since `filmAll`, until `close`.
-    active: bool = false,
-    /// The queued film being made, and its job.
+    /// The queued render being made, and its job.
     running: ?usize = null,
     job: ?*Job = null,
+    /// The last render's target, kept to show once its job is over.
+    kept: ?eggy.film.Recorder = null,
 
     pub fn deinit(self: *Film, env: ?Env) void {
         if (self.job) |job| self.endJob(job, env);
+        if (self.kept) |*kept| {
+            // The Render window may have drawn it in a frame still in flight.
+            if (env) |found| found.app.graphics.queue.waitIdle() catch {};
+            kept.deinit();
+        }
         self.clearSources();
         self.sources.deinit(self.gpa);
-        for (self.queue.items) |queued| self.freeQueued(queued);
+        self.clearQueue();
         self.queue.deinit(self.gpa);
     }
 
-    /// Find the cutscenes the open scene has, keeping the one chosen where it can.
-    pub fn findSources(self: *Film, env: Env) void {
-        const before: ?eggy.ecs.EntityId = if (self.chosen < self.sources.items.len) self.sources.items[self.chosen].entity else null;
+    /// Find the cutscenes the open scene has, choosing `prefer`'s (the Animation panel's) or
+    /// else keeping the one chosen where it can.
+    pub fn findSources(self: *Film, env: Env, prefer: ?eggy.ecs.EntityId) void {
+        const before: ?eggy.ecs.EntityId = prefer orelse if (self.chosen < self.sources.items.len) self.sources.items[self.chosen].entity else null;
         self.clearSources();
         self.chosen = 0;
         for (env.app.world.slots.items, 0..) |slot, index| {
@@ -139,53 +152,29 @@ pub const Film = struct {
         }
     }
 
-    /// The cutscenes as the Export window lists them.
+    /// The cutscenes as the Render window lists them.
     pub fn sourceLabels(self: *const Film, arena: std.mem.Allocator) []const []const u8 {
         const labels = arena.alloc([]const u8, self.sources.items.len) catch return &.{};
         for (labels, self.sources.items) |*label, source| label.* = source.label;
         return labels;
     }
 
-    /// The settings the page shows: the picked queued film's, or the next one's.
-    pub fn editing(self: *Film) *Look {
-        if (self.picked) |index| if (index < self.queue.items.len and self.queue.items[index].state == .waiting) return &self.queue.items[index].look;
-        return &self.next;
-    }
-
-    /// Queue the chosen cutscene with the next film's settings, and pick it.
-    /// Errors: no cutscene, or out of memory.
-    pub fn add(self: *Film) !void {
-        if (self.chosen >= self.sources.items.len) return error.NoCutscene;
-        const source = self.sources.items[self.chosen];
-        const label = try self.gpa.dupe(u8, source.label);
-        errdefer self.gpa.free(label);
-        try self.queue.append(self.gpa, .{ .source = .{ .entity = source.entity, .clip = source.clip, .label = label }, .look = self.next });
-        self.picked = self.queue.items.len - 1;
-    }
-
-    /// Take queued film `index` out, unless it is being filmed.
-    pub fn remove(self: *Film, index: usize) void {
-        if (index >= self.queue.items.len or self.running == index) return;
-        self.freeQueued(self.queue.orderedRemove(index));
-        if (self.running) |running| if (running > index) {
-            self.running = running - 1;
-        };
-        self.picked = null;
-    }
-
-    /// Film every waiting cutscene in turn; with none queued, the chosen one. Errors: nothing
-    /// to film, or the first film can't start.
-    pub fn filmAll(self: *Film, env: Env) !void {
+    /// Render the chosen cutscene: a still at `span.still_s`, or all of it. Errors: a render
+    /// is under way, there is no cutscene, or out of memory.
+    pub fn render(self: *Film, env: Env, span: Span) !void {
         if (self.job != null) return error.FilmUnderWay;
-        if (self.queue.items.len == 0) try self.add();
-        for (self.queue.items) |*queued| if (queued.state != .waiting) {
-            self.gpa.free(queued.message);
-            self.gpa.free(queued.saved);
-            queued.message = &.{};
-            queued.saved = &.{};
-            queued.state = .waiting;
-        };
-        self.active = true;
+        if (self.chosen >= self.sources.items.len) return error.NoCutscene;
+        self.clearQueue();
+        try self.enqueue(self.sources.items[self.chosen], span);
+        self.startNext(env);
+    }
+
+    /// Render every cutscene of the open scene in turn. Errors as `render`.
+    pub fn renderAll(self: *Film, env: Env) !void {
+        if (self.job != null) return error.FilmUnderWay;
+        if (self.sources.items.len == 0) return error.NoCutscene;
+        self.clearQueue();
+        for (self.sources.items) |source| try self.enqueue(source, .animation);
         self.startNext(env);
     }
 
@@ -209,7 +198,7 @@ pub const Film = struct {
         }
     }
 
-    /// How queued film `index` is coming along, while it is filmed.
+    /// How queued render `index` is coming along, while it is made.
     pub fn progress(self: *const Film, index: usize) ?Progress {
         if (self.running != index) return null;
         const job = self.job orelse return null;
@@ -218,23 +207,33 @@ pub const Film = struct {
         return .{ .stage = job.stage, .frame = job.frame, .frames = job.frames, .left_s = left };
     }
 
-    /// Whether every queued film is over.
+    /// Whether every queued render is over.
     pub fn finished(self: *const Film) bool {
         return self.job == null;
     }
 
-    /// Stop filming, keeping the frames written; the rest of the queue waits. Leaves the
-    /// progress view.
-    pub fn close(self: *Film, env: ?Env) void {
+    /// The picture to show: the render under way, or the last one made; null before any.
+    pub fn picture(self: *const Film) ?Picture {
+        const recorder = if (self.job) |job| &job.recorder else if (self.kept) |*kept| kept else return null;
+        return .{ .scene = &recorder.scene, .width_px = recorder.settings.width_px, .height_px = recorder.settings.height_px };
+    }
+
+    /// Stop rendering, keeping the frames written; what is left of the queue stays waiting.
+    pub fn stop(self: *Film, env: ?Env) void {
         if (self.job) |job| {
             if (self.running) |index| self.queue.items[index].state = .waiting;
             self.endJob(job, env);
         }
         self.running = null;
-        self.active = false;
     }
 
-    /// Start the first waiting film; one that can't start fails and the next is tried.
+    fn enqueue(self: *Film, source: Source, span: Span) !void {
+        const label = try self.gpa.dupe(u8, source.label);
+        errdefer self.gpa.free(label);
+        try self.queue.append(self.gpa, .{ .source = .{ .entity = source.entity, .clip = source.clip, .label = label }, .span = span });
+    }
+
+    /// Start the first waiting render; one that can't start fails and the next is tried.
     fn startNext(self: *Film, env: Env) void {
         for (self.queue.items, 0..) |*queued, index| {
             if (queued.state != .waiting) continue;
@@ -243,9 +242,9 @@ pub const Film = struct {
                 continue;
             };
             const job = self.gpa.create(Job) catch return self.failQueued(queued, "Out of memory.");
-            job.* = Job.init(self.gpa, env, queued.source, clip.*, queued.look.settings(), queued.look.format) catch |err| {
+            job.* = Job.init(self.gpa, env, queued.source, clip.*, self.look.settings(), self.look.format, queued.span) catch |err| {
                 self.gpa.destroy(job);
-                std.log.err("cannot start the film of {s}: {t}", .{ queued.source.label, err });
+                std.log.err("cannot start the render of {s}: {t}", .{ queued.source.label, err });
                 self.failQueued(queued, "It couldn't start: see the Console.");
                 continue;
             };
@@ -257,7 +256,7 @@ pub const Film = struct {
         self.running = null;
     }
 
-    /// Record how the job of the running film ended, and drop the job.
+    /// Record how the job of the running render ended, and drop the job.
     fn settle(self: *Film, job: *Job, env: Env) void {
         if (self.running) |index| {
             const queued = &self.queue.items[index];
@@ -265,9 +264,9 @@ pub const Film = struct {
             self.gpa.free(queued.message);
             queued.message = self.gpa.dupe(u8, job.message.items) catch &.{};
             self.gpa.free(queued.saved);
-            queued.video = job.video;
+            queued.openable = job.saved_file != null;
             queued.saved = &.{};
-            if (job.stage == .done) queued.saved = (if (job.video) std.fs.path.join(self.gpa, &.{ job.out_dir, encode.video_name }) else self.gpa.dupe(u8, job.frames_dir)) catch &.{};
+            if (job.stage == .done) queued.saved = self.gpa.dupe(u8, job.saved_file orelse job.frames_dir) catch &.{};
         }
         self.endJob(job, env);
         self.running = null;
@@ -279,22 +278,39 @@ pub const Film = struct {
         queued.message = self.gpa.dupe(u8, why) catch &.{};
     }
 
+    /// End `job`, keeping its target as the picture shown. The GPU may still be drawing the
+    /// picture kept before, so it is let go of only once the GPU is idle.
     fn endJob(self: *Film, job: *Job, env: ?Env) void {
+        if (self.kept) |*kept| {
+            if (env) |found| found.app.graphics.queue.waitIdle() catch {};
+            kept.deinit();
+        }
+        self.kept = job.recorder;
         job.deinit(env);
         self.gpa.destroy(job);
         self.job = null;
     }
 
-    fn freeQueued(self: *Film, queued: Queued) void {
-        self.gpa.free(queued.source.label);
-        self.gpa.free(queued.message);
-        self.gpa.free(queued.saved);
+    fn clearQueue(self: *Film) void {
+        for (self.queue.items) |queued| {
+            self.gpa.free(queued.source.label);
+            self.gpa.free(queued.message);
+            self.gpa.free(queued.saved);
+        }
+        self.queue.clearRetainingCapacity();
     }
 
     fn clearSources(self: *Film) void {
         for (self.sources.items) |source| self.gpa.free(source.label);
         self.sources.clearRetainingCapacity();
     }
+};
+
+/// A render's target and its size, to draw in a window.
+pub const Picture = struct {
+    scene: *const eggy.SceneTexture,
+    width_px: u32,
+    height_px: u32,
 };
 
 const Job = struct {
@@ -304,6 +320,9 @@ const Job = struct {
     clip_key: [key_len]u8,
     format: Format,
     duration_s: f32,
+    /// Where in the clip the first frame is, for a still.
+    start_s: f32,
+    still: bool,
     frame: u32 = 0,
     frames: u32,
     stage: Stage = .rendering,
@@ -316,12 +335,12 @@ const Job = struct {
     encoder: ?*encode.Encoder = null,
     sounds: []encode.Sound,
     message: std.ArrayList(u8) = .empty,
-    /// Whether ffmpeg made the video.
-    video: bool = false,
+    /// Once done, the picture or video made (owned); null when only frames were kept.
+    saved_file: ?[]u8 = null,
     /// When rendering began, to say how long the rest takes.
     started_ms: u64,
 
-    fn init(gpa: std.mem.Allocator, env: Env, source: Source, clip: eggy.assets.clip.Clip, settings: eggy.film.Settings, format: Format) !Job {
+    fn init(gpa: std.mem.Allocator, env: Env, source: Source, clip: eggy.assets.clip.Clip, settings: eggy.film.Settings, format: Format, span: Span) !Job {
         var recorder = try eggy.film.Recorder.init(gpa, &env.app.graphics, settings);
         errdefer recorder.deinit();
         const label = try gpa.dupe(u8, source.label);
@@ -347,9 +366,11 @@ const Job = struct {
             .recorder = recorder,
             .entity = source.entity,
             .clip_key = source.clip,
-            .format = format,
+            .format = if (span == .still_s) .png_frames else format,
             .duration_s = clip.duration_s,
-            .frames = settings.frameCount(clip.duration_s),
+            .start_s = if (span == .still_s) span.still_s else 0,
+            .still = span == .still_s,
+            .frames = if (span == .still_s) 1 else settings.frameCount(clip.duration_s),
             .label = label,
             .out_dir = out_dir,
             .frames_dir = frames_dir,
@@ -361,12 +382,12 @@ const Job = struct {
     fn deinit(self: *Job, env: ?Env) void {
         if (self.posed) if (env) |found| found.game.endAnimationPreview(found.app);
         if (self.encoder) |encoder| encoder.destroy();
+        if (self.saved_file) |file| self.gpa.free(file);
         encode.freeSounds(self.gpa, self.sounds);
         self.message.deinit(self.gpa);
         self.gpa.free(self.frames_dir);
         self.gpa.free(self.out_dir);
         self.gpa.free(self.label);
-        self.recorder.deinit();
     }
 
     fn render(self: *Job, env: Env, cmd: eggy.vit.CommandBuffer) !void {
@@ -382,7 +403,7 @@ const Job = struct {
             if (!env.game.beginAnimationPreview(env.app, self.entity)) return error.CannotPose;
             self.posed = true;
         }
-        const time = self.recorder.settings.sampleTime(self.frame, self.recorder.samples);
+        const time = self.start_s + self.recorder.settings.sampleTime(self.frame, self.recorder.samples);
         if (!env.game.showAnimationPreview(env.app, &self.clip_key, "", time)) return error.CannotPose;
         const view = env.game.findCamera(env.app) orelse return error.NoCamera;
         const drawn = env.game.gatherMeshes(env.app, env.drawables);
@@ -405,6 +426,12 @@ const Job = struct {
     fn finishRendering(self: *Job, env: Env) void {
         env.game.endAnimationPreview(env.app);
         self.posed = false;
+        if (self.still) {
+            var name: [32]u8 = undefined;
+            const file = std.fmt.bufPrint(&name, encode.frame_pattern_format, .{0}) catch unreachable;
+            self.saved_file = std.fs.path.join(self.gpa, &.{ self.frames_dir, file }) catch return self.finish(.done, "Saved in {s}", .{self.frames_dir});
+            return self.finish(.done, "Saved {s}", .{self.saved_file.?});
+        }
         if (self.format == .png_frames) return self.finish(.done, "The frames are in {s}", .{self.frames_dir});
         self.encoder = encode.Encoder.start(self.gpa, .{
             .frames_dir = self.frames_dir,
@@ -421,7 +448,7 @@ const Job = struct {
         switch (encoder.result()) {
             .running => {},
             .done => {
-                self.video = true;
+                self.saved_file = std.fs.path.join(self.gpa, &.{ self.out_dir, encode.video_name }) catch null;
                 self.finish(.done, "Saved {s}{c}" ++ encode.video_name, .{ self.out_dir, std.fs.path.sep });
             },
             .not_installed => self.finish(.done, "ffmpeg isn't installed, so the film is left as PNG frames in {s}", .{self.frames_dir}),
@@ -476,26 +503,19 @@ test "a film's folder takes the first free number" {
     try std.testing.expect(std.mem.endsWith(u8, second, "bee_intro-2"));
 }
 
-test "queued films keep their own settings, and the page edits the picked one" {
+test "Render All queues every cutscene, and a new render replaces the last queue" {
     var film = Film{ .gpa = std.testing.allocator };
     defer film.deinit(null);
-    const label = try std.testing.allocator.dupe(u8, "bee · intro.clip.zon");
-    try film.sources.append(std.testing.allocator, .{ .entity = .{ .id = 3, .generation = 0 }, .clip = @splat('a'), .label = label });
-
-    try film.add();
-    film.editing().format = .png_frames;
-    film.picked = null;
-    film.editing().size = 3;
-    try film.add();
-    try std.testing.expectEqual(Format.png_frames, film.queue.items[0].look.format);
-    try std.testing.expectEqual(@as(usize, 1), film.queue.items[0].look.size);
-    try std.testing.expectEqual(@as(usize, 3), film.queue.items[1].look.size);
-    try std.testing.expectEqual(@as(?usize, 1), film.picked);
-
-    film.remove(0);
+    for ([_][]const u8{ "bee · intro.clip.zon", "wasp · outro.clip.zon" }, 0..) |text, index| {
+        const label = try std.testing.allocator.dupe(u8, text);
+        try film.sources.append(std.testing.allocator, .{ .entity = .{ .id = @intCast(index), .generation = 0 }, .clip = @splat('a'), .label = label });
+    }
+    for (film.sources.items) |source| try film.enqueue(source, .animation);
+    try std.testing.expectEqual(@as(usize, 2), film.queue.items.len);
+    film.clearQueue();
+    try film.enqueue(film.sources.items[1], .{ .still_s = 1.5 });
     try std.testing.expectEqual(@as(usize, 1), film.queue.items.len);
-    try std.testing.expectEqual(@as(usize, 3), film.queue.items[0].look.size);
-    try std.testing.expectEqual(@as(?usize, null), film.picked);
+    try std.testing.expectEqual(@as(f32, 1.5), film.queue.items[0].span.still_s);
 }
 
 test {

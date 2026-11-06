@@ -217,7 +217,7 @@ pub const Plugin = struct {
   index, not a stored callback, so a reload that changes the list never leaves a stale one.
 - A status item with `items` opens a menu above it; without them it acts when pressed.
 - `side` is `.left` (after the project name) or `.right`; the default is `.left`.
-- `extends` adds the rows to `.file`, `.edit`, `.view`, `.window` or `.help` instead of
+- `extends` adds the rows to `.file`, `.edit`, `.view`, `.render`, `.window` or `.help` instead of
   giving the menu its own trigger. Built-in rows come first.
 - `editorBarState` is optional. `state.enabled` greys a row out, `state.checked` marks a
   checkable row, and `state.setText` replaces the label. Keep it cheap: it runs every frame.

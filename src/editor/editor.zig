@@ -19,6 +19,9 @@ const Upgrades = @import("projects/upgrades.zig").Upgrades;
 const file_manager = @import("file_manager.zig");
 const BuildWindow = @import("build_window.zig").BuildWindow;
 const ExportWindow = @import("export/export.zig").ExportWindow;
+const menus = @import("menus.zig");
+const render_window = @import("film/render_window.zig");
+const RenderWindow = render_window.RenderWindow;
 const plugin_manager = @import("plugin_manager/plugin_manager.zig");
 const project_settings_zig = @import("project_settings.zig");
 const ProjectSettings = project_settings_zig.ProjectSettings;
@@ -171,6 +174,8 @@ pub fn Editor(comptime project: type) type {
         preferences_window: ?*preferences.PreferencesWindow = null,
         /// File > Export, while open.
         export_window: ?*ExportWindow = null,
+        /// The Render window, while open.
+        render_window: ?*RenderWindow = null,
         plugins_window: ?*plugin_manager.PluginsWindow = null,
         /// The installed plugins being checked for newer versions, and when that last began.
         plugin_updates: ?*plugin_manager.AutoUpdate = null,
@@ -213,7 +218,7 @@ pub fn Editor(comptime project: type) type {
         /// Which scene each 3D tab shows; the live one's is the open scene.
         scene_tabs: scene_tabs.SceneTabs = .{},
         animation: animation_dock.Dock = .{},
-        /// A cutscene being filmed from File > Export's Film page.
+        /// The cutscenes the Render menu renders, and the render under way.
         film: film_zig.Film,
         asset_icons: AssetIcons,
         console: Console,
@@ -536,6 +541,7 @@ pub fn Editor(comptime project: type) type {
             if (self.about_window) |window| window.close(&self.app.graphics);
             if (self.preferences_window) |window| window.close(&self.app.graphics);
             if (self.export_window) |window| window.close(&self.app.graphics);
+            if (self.render_window) |window| window.close(&self.app.graphics);
             if (self.plugins_window) |window| window.close(&self.app.graphics);
             if (self.plugin_updates) |updates| updates.destroy();
             if (self.update_prompt) |prompt| prompt.close(&self.app.graphics);
@@ -905,7 +911,7 @@ pub fn Editor(comptime project: type) type {
             // File > Export, if open.
             if (self.export_window) |window| {
                 var editor_context = extensions.context(self);
-                const result = try window.update(&self.app.graphics, &self.ui, if (self.game) |*game| game else null, &editor_context, &self.film, self.filmEnv());
+                const result = try window.update(&self.app.graphics, &self.ui, if (self.game) |*game| game else null, &editor_context);
                 // Choosing the scene it starts in keeps it as the default: a step to undo.
                 if (result.change) |change| {
                     self.history.recordProjectSettings(change.before, change.after, self.workspace.time_ms);
@@ -917,6 +923,11 @@ pub fn Editor(comptime project: type) type {
                     self.export_window = null;
                 }
             }
+            // Render > View Render, if open.
+            if (self.render_window) |window| if (!try window.update(&self.app.graphics, &self.ui, &self.film, self.filmEnv(), self.animationPlayhead())) {
+                window.close(&self.app.graphics);
+                self.render_window = null;
+            };
             // Edit > Plugins, if open: an install or uninstall is a step to undo, and a rebuild; a
             // switch is as Settings > Plugins makes it.
             if (self.plugins_window) |window| {
@@ -2281,7 +2292,7 @@ pub fn Editor(comptime project: type) type {
             const frame = try surface.beginFrame();
             // A film under way renders its next frame first, posing the scene the panel then shows.
             if (slot == main_slot) if (self.filmEnv()) |env| {
-                if (self.play_mode.playing() and self.film.busy()) self.film.close(env) else self.film.step(env, frame.cmd);
+                if (self.play_mode.playing() and self.film.busy()) self.film.stop(env) else self.film.step(env, frame.cmd);
             };
             const scene_px = if (self.workspace.placed.scene) |placed| if (placed.slot == slot) eggy.game_ui.pixelRect(placed.rect, viewport, frame.extent) else null else null;
             // Nothing at all without a camera to see it through.
@@ -2586,6 +2597,7 @@ pub fn Editor(comptime project: type) type {
             }
             // File > Export's window takes its own events.
             if (self.export_window) |window| if (window.handle(curr_event)) return self.toolWindowTook(curr_event);
+            if (self.render_window) |window| if (window.handle(curr_event)) return self.toolWindowTook(curr_event);
             // Help > DevTools' window takes its own events; while inspecting, the main window's
             // pointer moves and presses go to it too.
             if (self.devtools_window) |window| {
@@ -2638,6 +2650,11 @@ pub fn Editor(comptime project: type) type {
             };
             if (curr_event == .mouse_motion or curr_event == .window_mouse_leave) self.game_input.pointer_in_scene = false;
 
+            // F11 is Render > View Render, as in Blender; Weeoui has no F11 for the menus to hear.
+            if (curr_event == .key_down) if (curr_event.key_down.key) |key| if (key == .func11 and !curr_event.key_down.repeat) {
+                self.render(.view);
+                return .run;
+            };
             // The Scene panel's camera takes presses, drags and wheels over it; F frames the
             // selection, and Delete deletes it.
             if (!game_has_scene) if (self.scene_view.handleFirst(curr_event, self.sceneRectFor(slot, curr_event))) {
@@ -2759,6 +2776,7 @@ pub fn Editor(comptime project: type) type {
                 .project_settings => try self.showProjectSettings(),
                 .plugins => _ = self.showPlugins(),
                 .export_game => self.showExport(),
+                .render => |what| self.render(what),
                 .undo => self.undoOrRedo(.undo),
                 .redo => self.undoOrRedo(.redo),
                 .preferences => self.openPreferences(),
@@ -3443,6 +3461,30 @@ pub fn Editor(comptime project: type) type {
             };
         }
 
+        /// The Render menu: open the Render window if it isn't, with the open scene's cutscenes,
+        /// and start what was asked.
+        fn render(self: *Self, what: menus.Render) void {
+            if (self.project == null) return;
+            const window = self.render_window orelse RenderWindow.open(self.gpa, &self.app.graphics, self.ui.font) catch |err| {
+                std.log.err("cannot open the Render window: {t}", .{err});
+                return;
+            };
+            self.render_window = window;
+            const playhead = self.animationPlayhead();
+            if (self.film.finished()) RenderWindow.refresh(&self.film, self.filmEnv(), playhead);
+            switch (what) {
+                .view => {},
+                .image => window.start(&self.film, self.filmEnv(), .image, playhead),
+                .animation => window.start(&self.film, self.filmEnv(), .animation, playhead),
+                .all => window.start(&self.film, self.filmEnv(), .all, playhead),
+            }
+        }
+
+        /// The Animation panel's playhead, where Render Image takes its still.
+        fn animationPlayhead(self: *const Self) render_window.Playhead {
+            return .{ .entity = self.animation.entity, .time_s = self.animation.time_s };
+        }
+
         /// Edit > Plugins, opened if it isn't; null without a project, or if it can't open.
         fn showPlugins(self: *Self) ?*plugin_manager.PluginsWindow {
             if (self.plugins_window) |window| return window;
@@ -4046,6 +4088,7 @@ test {
     _ = @import("input_map_asset/input_map_asset.zig");
     _ = @import("animation_dock/animation_dock.zig");
     _ = @import("film/film.zig");
+    _ = @import("film/render_window.zig");
     _ = @import("ui_designer/ui_designer.zig");
     _ = @import("asset_preview.zig");
     _ = @import("process_environ.zig");

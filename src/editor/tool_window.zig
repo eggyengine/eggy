@@ -76,7 +76,8 @@ pub const ToolWindow = struct {
 
     /// Draw a frame: `page.build(&context)` describes the page, styled like `style` (the editor's
     /// own UI). Does nothing when SDL reports zero logical width or height.
-    /// `page` must expose `pub fn build(*Page, *ui.Context) void` and remain alive for
+    /// `page` must expose `pub fn build(*Page, *ui.Context) void`, and may expose
+    /// `pub fn drawOver(*Page, *const ui.Context, vit.CommandBuffer, vit.Extent2D) void`; it must remain alive for
     /// this synchronous call. It builds, renders, manages text input, and presents the surface;
     /// viewport, allocation, upload, and GPU errors propagate.
     ///
@@ -123,6 +124,9 @@ pub const ToolWindow = struct {
             .clear_value = .{ .r = channel(self.ui.srgb_target, background[0]), .g = channel(self.ui.srgb_target, background[1]), .b = channel(self.ui.srgb_target, background[2]), .a = 1 },
         }} });
         self.popout.overlay.draw(frame.cmd, frame.extent, 0, vertices.len);
+        // A page may draw over its UI in the same pass, such as the Render window its picture,
+        // given the page as laid out and the target's size in pixels.
+        if (@hasDecl(std.meta.Child(@TypeOf(page)), "drawOver")) page.drawOver(&self.ui, frame.cmd, frame.extent);
         frame.cmd.endRenderPass();
         try self.popout.surface.endFrame(graphics, frame);
     }

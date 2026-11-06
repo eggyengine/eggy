@@ -253,7 +253,7 @@ pub const EditorPanel = struct {
 pub const EditorCommand = struct { key: [:0]const u8, title: [:0]const u8 };
 
 /// One of Eggy's own menus, which a plugin's `EditorMenu` can extend.
-pub const BuiltinMenu = enum(u8) { file, edit, view, window, help };
+pub const BuiltinMenu = enum(u8) { file, edit, view, window, help, render };
 
 /// A row in a plugin's menu, or in a menu hanging off a status bar item. Keys are local to the
 /// menu, and in the Set's metadata they are the full `<plugin>/<menu>/<item>` identity.
