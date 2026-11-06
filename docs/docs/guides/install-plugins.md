@@ -11,29 +11,34 @@ nothing else is installed until you choose to.
 
 The Plugins window has three pages:
 
-- **Installed** lists the plugins this project installed from the window. Plugins your
-  `build.zig` adds by hand aren't listed.
+- **Installed** lists the plugins this project installed from the window, each with its
+  switch. Choosing one shows it beside the list: where it comes from, its preferences, and
+  its read-me. Plugins your `build.zig` adds by hand aren't listed.
 - **Made by Eggy** lists the plugins that ship with Eggy, such as **Git** (stage, commit,
-  pull and push from the editor) and **Frame Stats** (frames per second in a corner of
-  the game).
-- **From an Address** fetches any plugin by its `eggy.zon`. Paste its address, or the
-  GitHub page of its folder, or a folder on your computer, and press **Fetch**.
+  pull and push from the editor), **Frame Stats** (frames per second in a corner of the
+  game) and **Discord** (what you're working on as your Discord status).
+- **From Elsewhere** fetches any plugin by its `eggy.zon`. Paste its address, or the
+  GitHub page of its folder, and press **Fetch**; or press **Folder...** and choose a
+  plugin's folder on your computer.
 
+The box above the pages keeps the plugins whose name or description has what you type.
 You can also drop a plugin's `eggy.zon` onto the editor: the Plugins window opens on that
 plugin.
 
 ## Read it, then install it
 
-Choosing a plugin opens its page: its version, the repository it comes from, and its
-read-me. A plugin without a read-me says "No README.md was provided." Press **Back** to
-return without installing anything.
+**Read Me** opens a plugin's read-me, with its version and the repository it comes from.
+A plugin without a read-me says "No README.md was provided." Press **Back** to return
+without installing anything.
 
 Press **Install** to add it. The editor fetches the plugin's package, checks it, saves it
 into your `build.zig.zon`, lists it in your `eggy.zon`, then rebuilds the game with it.
-Edit > Undo takes the install back.
+A plugin from a folder on your computer isn't copied: your `build.zig.zon` points at its
+folder, so the game builds whatever is there, edits included. Edit > Undo takes the
+install back.
 
-When a page shows a newer version of a plugin you have, its button reads **Update to
-1.2.0**.
+When a newer version of a plugin you have is found, its button reads **Update to
+1.2.0**: choosing an installed plugin from an address reads it again from there.
 
 ## Updates
 

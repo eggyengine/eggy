@@ -116,3 +116,31 @@ test "a tile shows the title's first character, upper-cased" {
 test "a project keeps its colour" {
     try std.testing.expectEqual(colorsFor("Space", true), colorsFor("Space", true));
 }
+
+/// `title`'s tile, `size` points square, as a node to place in a hand-built row: its initial on
+/// its colour, as Settings > Plugins and Edit > Plugins show a plugin.
+///
+/// ```zig
+/// const tile = try project_tile.node(context.builder(), plugin.title, 32);
+/// ```
+pub fn node(b: ui.Layout.Builder, title: []const u8, size: f32) !*ui.Layout.Element {
+    const tile = try b.allocator.create(Tile);
+    tile.* = .{ .title = title };
+    const element = try b.node(0, .{ .width = size, .height = size }, .{ .custom = .{ .context = tile, .draw = Tile.paint } }, &.{});
+    element.accessibility = .{ .role = .ignored };
+    return element;
+}
+
+/// Add `title`'s tile (see `node`) to `context`.
+pub fn add(context: *ui.Context, title: []const u8, size: f32) void {
+    context.element(node(context.builder(), title, size) catch return);
+}
+
+const Tile = struct {
+    title: []const u8,
+
+    fn paint(context: *const anyopaque, c: *ui.Canvas, r: ui.Rect) anyerror!void {
+        const self: *const Tile = @ptrCast(@alignCast(context));
+        try draw(c, r, self.title, null, @round(r.h * 0.22), .normal);
+    }
+};

@@ -920,7 +920,8 @@ pub fn Editor(comptime project: type) type {
             // Edit > Plugins, if open: an install or uninstall is a step to undo, and a rebuild; a
             // switch is as Settings > Plugins makes it.
             if (self.plugins_window) |window| {
-                const outcome = try window.update(&self.app.graphics, &self.ui, self.plugin_switches.off());
+                const plugin_preferences: ?plugin_manager.Preferences = if (self.game) |*game| .{ .store = &self.app.preference_values, .folders = self.preference_folders, .history = &self.history, .manifests = game.preference_manifests } else null;
+                const outcome = try window.update(&self.app.graphics, &self.ui, self.plugin_switches.off(), plugin_preferences);
                 if (outcome.change) |change| {
                     self.history.record(.{ .plugins = .{ .project = change.project, .package = change.package } });
                     if (self.project_settings) |settings| settings.reload() catch {};
@@ -4121,6 +4122,7 @@ test {
     _ = @import("hot_reload/hot_reload.zig");
     _ = @import("preferences/preferences.zig");
     _ = @import("preferences/window.zig");
+    _ = @import("preferences/preference_form.zig");
     _ = @import("entities/entities.zig");
     _ = @import("page_style.zig");
     _ = @import("projects/source_stamp.zig");

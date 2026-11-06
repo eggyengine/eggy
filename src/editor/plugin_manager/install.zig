@@ -6,7 +6,7 @@ const std = @import("std");
 const zon_file = @import("eggy").assets.zon;
 const builtin = @import("builtin");
 const process_environ = @import("../process_environ.zig");
-const package_removal = @import("package_removal.zig");
+const package_entry = @import("package_entry.zig");
 
 pub const Request = struct {
     /// The project's folder, absolute.
@@ -123,10 +123,10 @@ pub const Install = struct {
         var project = try std.Io.Dir.cwd().openDir(io, request.project_dir, .{});
         defer project.close(io);
         const package = try project.readFileAllocOptions(io, "build.zig.zon", arena, .limited(1 << 20), .of(u8), 0);
-        const replaces_folder = package_removal.isFolderDependency(arena, package, request.dependency) catch false;
+        const replaces_folder = package_entry.isFolderDependency(arena, package, request.dependency) catch false;
         if (replaces_folder) {
             self.say("Replacing the folder dependency {s}", .{request.dependency});
-            try project.writeFile(io, .{ .sub_path = "build.zig.zon", .data = (try package_removal.withoutDependency(arena, package, request.dependency)).? });
+            try project.writeFile(io, .{ .sub_path = "build.zig.zon", .data = (try package_entry.withoutDependency(arena, package, request.dependency)).? });
         }
         errdefer if (replaces_folder) project.writeFile(io, .{ .sub_path = "build.zig.zon", .data = package }) catch {};
 
@@ -210,7 +210,7 @@ fn zonInArchive(arena: std.mem.Allocator, gzipped: *std.Io.Reader, hash: []const
 }
 
 /// The `.fingerprint` of `text`, a `build.zig.zon`.
-fn fingerprintIn(arena: std.mem.Allocator, text: [:0]const u8) !u64 {
+pub fn fingerprintIn(arena: std.mem.Allocator, text: [:0]const u8) !u64 {
     const zon = try zon_file.parse(struct { fingerprint: u64 }, arena, text, .{ .ignore_unknown_fields = true });
     return zon.fingerprint;
 }
