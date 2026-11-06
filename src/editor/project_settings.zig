@@ -213,7 +213,7 @@ pub const ProjectSettings = struct {
         }
 
         if (cards.row(1, texts.orientation)) {
-            _ = context.tabs(&orientations, &self.orientation);
+            _ = context.select("##orientation", &orientations, &self.orientation);
             cards.end();
         }
         if (cards.row(1, texts.dev_console)) {

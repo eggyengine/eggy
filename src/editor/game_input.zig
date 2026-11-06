@@ -104,7 +104,8 @@ pub const State = struct {
             app.input.suppress(local);
             return;
         }
-        if (running) {
+        // A cutscene that takes input keeps it from the game (its UI above still has it).
+        if (running and !app.cutscene.event(local)) {
             try app.input.handle(local);
             game.event(app, local);
         } else app.input.suppress(local);

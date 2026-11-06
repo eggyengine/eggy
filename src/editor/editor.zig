@@ -19,6 +19,9 @@ const Upgrades = @import("projects/upgrades.zig").Upgrades;
 const file_manager = @import("file_manager.zig");
 const BuildWindow = @import("build_window.zig").BuildWindow;
 const ExportWindow = @import("export/export.zig").ExportWindow;
+const menus = @import("menus.zig");
+const render_window = @import("film/render_window.zig");
+const RenderWindow = render_window.RenderWindow;
 const plugin_manager = @import("plugin_manager/plugin_manager.zig");
 const project_settings_zig = @import("project_settings.zig");
 const ProjectSettings = project_settings_zig.ProjectSettings;
@@ -55,6 +58,7 @@ const PluginSwitches = @import("plugin_switches.zig").PluginSwitches;
 const plugin_bars = @import("plugin_bars.zig");
 const Dragged = @import("dragged.zig").Dragged;
 const save_prompt_zig = @import("save_prompt.zig");
+const overwrite_prompt = @import("overwrite_prompt.zig");
 const crash_recovery = @import("crash_recovery.zig");
 const Activity = @import("activity.zig").Activity;
 const recovery_prompt_zig = @import("recovery_prompt.zig");
@@ -80,6 +84,7 @@ const ViewportMouse = @import("viewport_mouse.zig").State;
 const InputSettings = @import("input_settings.zig").InputSettings;
 const input_map_asset = @import("input_map_asset/input_map_asset.zig");
 const animation_dock = @import("animation_dock/animation_dock.zig");
+const film_zig = @import("film/film.zig");
 const ui_designer = @import("ui_designer/ui_designer.zig");
 const AssetPreview = @import("asset_preview.zig").AssetPreview;
 const AssetPreviewRequest = @import("asset_preview.zig").Request;
@@ -169,6 +174,8 @@ pub fn Editor(comptime project: type) type {
         preferences_window: ?*preferences.PreferencesWindow = null,
         /// File > Export, while open.
         export_window: ?*ExportWindow = null,
+        /// The Render window, while open.
+        render_window: ?*RenderWindow = null,
         plugins_window: ?*plugin_manager.PluginsWindow = null,
         /// The installed plugins being checked for newer versions, and when that last began.
         plugin_updates: ?*plugin_manager.AutoUpdate = null,
@@ -211,6 +218,8 @@ pub fn Editor(comptime project: type) type {
         /// Which scene each 3D tab shows; the live one's is the open scene.
         scene_tabs: scene_tabs.SceneTabs = .{},
         animation: animation_dock.Dock = .{},
+        /// The cutscenes the Render menu renders, and the render under way.
+        film: film_zig.Film,
         asset_icons: AssetIcons,
         console: Console,
         /// A UI of its own for each plugin panel there can be, drawing with `ui`'s font.
@@ -479,7 +488,7 @@ pub fn Editor(comptime project: type) type {
             // What the scene shows loads as the first frame draws it.
             splash.step(.assets);
             if (project_assets) |loaders| loaders.loading = splash.detail;
-            self.* = .{ .gpa = gpa, .game = game, .game_modified = modifiedAt(library_path), .app = app, .ui = context, .mono = mono, .console_ui = console_ui, .hierarchy_ui = hierarchy_ui, .assets_ui = assets_ui, .assets_panel = .init(gpa), .animation_ui = animation_ui, .ui_designer_ui = ui_designer_ui, .ui_tree_ui = ui_tree_ui, .ui_properties_ui = ui_properties_ui, .asset_preview_ui = asset_preview_ui, .asset_preview = .init(gpa, mono), .scene_2d_ui = scene_2d_ui, .asset_icons = asset_icons, .entity_editor = .init(gpa), .console = console, .plugin_pages = plugin_pages, .workspace = workspace, .frame = frame, .scene = scene, .camera_preview = camera_preview, .drawables = drawables, .drawables_2d = drawables_2d, .overlay = overlay, .project = opened_project, .editor_modified = if (opened_project) |opened| editorModified(gpa, opened) else null, .upgrades = upgrades, .preference_folders = preference_folders, .open_scene = open_scene, .history = .{ .gpa = gpa }, .plugin_switches = plugin_switches, .project_assets = project_assets };
+            self.* = .{ .gpa = gpa, .game = game, .game_modified = modifiedAt(library_path), .app = app, .ui = context, .mono = mono, .console_ui = console_ui, .hierarchy_ui = hierarchy_ui, .assets_ui = assets_ui, .assets_panel = .init(gpa), .animation_ui = animation_ui, .ui_designer_ui = ui_designer_ui, .ui_tree_ui = ui_tree_ui, .ui_properties_ui = ui_properties_ui, .asset_preview_ui = asset_preview_ui, .asset_preview = .init(gpa, mono), .scene_2d_ui = scene_2d_ui, .asset_icons = asset_icons, .entity_editor = .init(gpa), .console = console, .plugin_pages = plugin_pages, .workspace = workspace, .frame = frame, .scene = scene, .camera_preview = camera_preview, .drawables = drawables, .drawables_2d = drawables_2d, .overlay = overlay, .project = opened_project, .editor_modified = if (opened_project) |opened| editorModified(gpa, opened) else null, .upgrades = upgrades, .preference_folders = preference_folders, .open_scene = open_scene, .history = .{ .gpa = gpa }, .film = .{ .gpa = gpa }, .plugin_switches = plugin_switches, .project_assets = project_assets };
             self.workspace.close_guard = .{ .context = self, .mayClose = mayCloseScenes };
             self.input_settings = input_settings;
             self.entity_editor.assets = project_assets;
@@ -515,6 +524,8 @@ pub fn Editor(comptime project: type) type {
         /// defer host.deinit(); // Once after SDL stops delivering callbacks.
         /// ```
         pub fn deinit(self: *Self) void {
+            // While the game's library is still loaded, to put a film's pose back.
+            self.film.deinit(self.filmEnv());
             if (self.splash_shown) self.closeSplash();
             splash.wait();
             icon.waitForProjectIcon();
@@ -530,6 +541,7 @@ pub fn Editor(comptime project: type) type {
             if (self.about_window) |window| window.close(&self.app.graphics);
             if (self.preferences_window) |window| window.close(&self.app.graphics);
             if (self.export_window) |window| window.close(&self.app.graphics);
+            if (self.render_window) |window| window.close(&self.app.graphics);
             if (self.plugins_window) |window| window.close(&self.app.graphics);
             if (self.plugin_updates) |updates| updates.destroy();
             if (self.update_prompt) |prompt| prompt.close(&self.app.graphics);
@@ -574,6 +586,7 @@ pub fn Editor(comptime project: type) type {
             self.app.graphics.queue.waitIdle() catch {};
             self.scene.deinit();
             self.camera_preview.deinit();
+            self.scene_view.deinit();
             if (self.model_view) |*view| view.deinit();
             if (self.scene_2d_view) |*view| view.deinit();
             self.scene_2d.brush.deinit(self.gpa);
@@ -595,6 +608,7 @@ pub fn Editor(comptime project: type) type {
             self.asset_preview_ui.deinit();
             self.asset_preview.deinit();
             self.scene_2d_ui.deinit();
+            self.animation.deinit();
             self.animation_ui.deinit();
             self.assets_panel.deinit();
             self.asset_icons.deinit(self.gpa);
@@ -732,7 +746,7 @@ pub fn Editor(comptime project: type) type {
             // A few times a second (not while playing: Stop puts the scene back), compare the world
             // with the saved scene, for the status bar's `*`, and with the last undo step.
             // Nor while the Animation panel poses the scene: the pose is not an edit.
-            if (self.workspace.time_ms -| self.unsaved_checked_ms >= 300 and !self.play_mode.playing() and !self.animation.isPosed()) {
+            if (self.workspace.time_ms -| self.unsaved_checked_ms >= 300 and !self.play_mode.playing() and !self.animation.isPosed() and !self.film.busy()) {
                 self.unsaved_checked_ms = self.workspace.time_ms;
                 if (self.sceneText()) |text| {
                     const hash = std.hash.Wyhash.hash(0, text);
@@ -910,10 +924,16 @@ pub fn Editor(comptime project: type) type {
                     self.export_window = null;
                 }
             }
+            // Render > View Render, if open.
+            if (self.render_window) |window| if (!try window.update(&self.app.graphics, &self.ui, &self.film, self.filmEnv(), self.animationPlayhead())) {
+                window.close(&self.app.graphics);
+                self.render_window = null;
+            };
             // Edit > Plugins, if open: an install or uninstall is a step to undo, and a rebuild; a
             // switch is as Settings > Plugins makes it.
             if (self.plugins_window) |window| {
-                const outcome = try window.update(&self.app.graphics, &self.ui, self.plugin_switches.off());
+                const plugin_preferences: ?plugin_manager.Preferences = if (self.game) |*game| .{ .store = &self.app.preference_values, .folders = self.preference_folders, .history = &self.history, .manifests = game.preference_manifests } else null;
+                const outcome = try window.update(&self.app.graphics, &self.ui, self.plugin_switches.off(), plugin_preferences);
                 if (outcome.change) |change| {
                     self.history.record(.{ .plugins = .{ .project = change.project, .package = change.package } });
                     if (self.project_settings) |settings| settings.reload() catch {};
@@ -1109,7 +1129,8 @@ pub fn Editor(comptime project: type) type {
                     }
                     const kept = &self.scene_tabs.waiting[copy].?.kept;
                     const scene = if (self.open_scene) |*open| open else return;
-                    scene.saveText(kept.path, kept.text) catch |err| {
+                    self.saveTextOverwriting(scene, kept.path, kept.text) catch |err| {
+                        if (err == error.ChangedOnDisk) return self.workspace.toast("Not saved: the scene changed on disk");
                         std.log.err("cannot save {s}: {t}", .{ kept.path, err });
                         return self.workspace.toast("Couldn't save the scene: see the Console");
                     };
@@ -1246,7 +1267,15 @@ pub fn Editor(comptime project: type) type {
             const scene = if (self.open_scene) |*open| open else return;
             if (scene.path == null or self.play_mode.playing() or self.typing() or !self.workspace.scene_unsaved) return;
             const game = if (self.game) |*loaded| loaded else return;
-            scene.save(&self.app.world, game.sceneAccess(), self.entity_editor.roots(&self.app.world)) catch |err| return std.log.err("cannot autosave the scene: {t}", .{err});
+            scene.save(&self.app.world, game.sceneAccess(), self.entity_editor.roots(&self.app.world), .unless_changed) catch |err| {
+                // Someone else's save stays until a File > Save says to replace it.
+                if (err == error.ChangedOnDisk) {
+                    var changed: [128]u8 = undefined;
+                    std.log.warn("{s} changed on disk, so it wasn't autosaved; File > Save asks whether to overwrite it", .{scene.name() orelse "the scene"});
+                    return self.workspace.toast(std.fmt.bufPrint(&changed, "{s} changed on disk, so it wasn't autosaved", .{scene.name() orelse "The scene"}) catch "The scene changed on disk, so it wasn't autosaved");
+                }
+                return std.log.err("cannot autosave the scene: {t}", .{err});
+            };
             self.workspace.scene_unsaved = false;
             var message: [96]u8 = undefined;
             self.workspace.toast(std.fmt.bufPrint(&message, "Autosaved {s}", .{scene.name() orelse "the scene"}) catch "Autosaved");
@@ -1724,8 +1753,22 @@ pub fn Editor(comptime project: type) type {
                 .project_dir = opened.dir,
                 .history = &self.history,
                 .selected = self.entity_editor.selected,
-                .playing = self.play_mode.playing(),
+                // A film poses the scene itself while it renders.
+                .playing = self.play_mode.playing() or self.film.busy(),
+                .steering = self.scene_view.steeringNow() or self.scene_2d.isMoving() or self.entity_editor.inspector.scrubbing(),
                 .now_ms = self.workspace.time_ms,
+            };
+        }
+
+        /// What a film renders with; null without a project or the game's library.
+        fn filmEnv(self: *Self) ?film_zig.Env {
+            const opened = self.project orelse return null;
+            return .{
+                .game = self.gamePtr() orelse return null,
+                .app = &self.app,
+                .assets = self.project_assets orelse return null,
+                .project_dir = opened.dir,
+                .drawables = self.drawables,
             };
         }
 
@@ -2066,7 +2109,8 @@ pub fn Editor(comptime project: type) type {
             if (self.play_mode.playing()) return std.log.info("save: stop playing first; Stop puts the scene back as it was", .{});
             const scene = if (self.open_scene) |*open| open else return std.log.info("save: open a project first; scenes are kept in it", .{});
             const game = if (self.game) |*loaded| loaded else return std.log.err("save: the game's library isn't loaded, so its components can't be saved", .{});
-            scene.save(&self.app.world, game.sceneAccess(), self.entity_editor.roots(&self.app.world)) catch |err| {
+            self.saveOverwriting(scene, game) catch |err| {
+                if (err == error.ChangedOnDisk) return self.workspace.toast("Not saved: the scene changed on disk");
                 self.workspace.toast("Couldn't save the scene: see the Console");
                 return std.log.err("cannot save the scene: {t}", .{err});
             };
@@ -2074,6 +2118,24 @@ pub fn Editor(comptime project: type) type {
             self.workspace.toast(std.fmt.bufPrint(&message, "Saved {s}", .{scene.name() orelse "the scene"}) catch "Saved");
             self.workspace.scene_unsaved = false;
             self.activity.saves += 1;
+        }
+
+        /// Save the world to `scene`; if something else changed its file since, ask first, and
+        /// return `error.ChangedOnDisk` when the answer is to leave it.
+        fn saveOverwriting(self: *Self, scene: *scene_file.OpenScene, game: *HotGame) !void {
+            const roots = self.entity_editor.roots(&self.app.world);
+            scene.save(&self.app.world, game.sceneAccess(), roots, .unless_changed) catch |err| {
+                if (err != error.ChangedOnDisk or !overwrite_prompt.confirm(self.app.window.window, scene.name() orelse "The scene")) return err;
+                try scene.save(&self.app.world, game.sceneAccess(), roots, .always);
+            };
+        }
+
+        /// `saveOverwriting` for a tab's kept scene `text`, saved to `path` without opening it.
+        fn saveTextOverwriting(self: *Self, scene: *scene_file.OpenScene, path: []const u8, text: []const u8) !void {
+            scene.saveText(path, text, .unless_changed) catch |err| {
+                if (err != error.ChangedOnDisk or !overwrite_prompt.confirm(self.app.window.window, std.fs.path.basename(path))) return err;
+                try scene.saveText(path, text, .always);
+            };
         }
 
         /// Checked save entry point used by synchronous editor-extension requests.
@@ -2090,7 +2152,7 @@ pub fn Editor(comptime project: type) type {
             if (self.play_mode.playing()) return error.NotEditing;
             const scene = if (self.open_scene) |*open| open else return error.NoProject;
             const game = if (self.game) |*loaded| loaded else return error.NoGameLibrary;
-            try scene.save(&self.app.world, game.sceneAccess(), self.entity_editor.roots(&self.app.world));
+            try scene.save(&self.app.world, game.sceneAccess(), self.entity_editor.roots(&self.app.world), .unless_changed);
             self.workspace.scene_unsaved = false;
         }
 
@@ -2229,6 +2291,10 @@ pub fn Editor(comptime project: type) type {
 
             // Render the scene offscreen at the Scene panel's pixel size.
             const frame = try surface.beginFrame();
+            // A film under way renders its next frame first, posing the scene the panel then shows.
+            if (slot == main_slot) if (self.filmEnv()) |env| {
+                if (self.play_mode.playing() and self.film.busy()) self.film.stop(env) else self.film.step(env, frame.cmd);
+            };
             const scene_px = if (self.workspace.placed.scene) |placed| if (placed.slot == slot) eggy.game_ui.pixelRect(placed.rect, viewport, frame.extent) else null else null;
             // Nothing at all without a camera to see it through.
             const preview_px = if (scene_px != null and self.scene_view.preview != null) eggy.game_ui.pixelRect(scene_view.previewRect(self.workspace.placed.scene.?.rect), viewport, frame.extent) else null;
@@ -2258,7 +2324,7 @@ pub fn Editor(comptime project: type) type {
                 const game_overlay = self.build_window == null and self.play_mode.playing() and !self.workspace.simulating;
                 const has_screens = self.app.ui_scenes.screen_count != 0;
                 const loading = self.app.scene_stream.loading();
-                const has_game_ui = has_screens or self.app.dev_console.isOpen() or eggy.scenes.loading_screen.shows(loading);
+                const has_game_ui = has_screens or self.app.cutscene.shows() or self.app.dev_console.isOpen() or eggy.scenes.loading_screen.shows(loading);
                 const has_game_overlay = game_overlay and if (self.game) |*game| game.hasDraw() or game.hasGameUi() or has_game_ui else false;
                 if (has_game_overlay or self.app.debug_draw.line_count != 0 or self.app.debug_draw.label_count != 0) {
                     const logical = self.workspace.placed.scene.?.rect;
@@ -2277,6 +2343,7 @@ pub fn Editor(comptime project: type) type {
                             const layer = try self.app.gameUi();
                             layer.begin(draw_context, sdl3.timer.getMillisecondsSinceInit());
                             game.gameUi(&self.app, &layer.context);
+                            self.app.cutscene.draw(&layer.context);
                             eggy.scenes.loading_screen.draw(loading, &layer.context);
                             eggy.dev_console.overlay.draw(&self.app.dev_console, &self.app, game.consoleCommands(), &layer.context);
                             if (try layer.render(draw_context)) self.app.input.cancel();
@@ -2531,6 +2598,7 @@ pub fn Editor(comptime project: type) type {
             }
             // File > Export's window takes its own events.
             if (self.export_window) |window| if (window.handle(curr_event)) return self.toolWindowTook(curr_event);
+            if (self.render_window) |window| if (window.handle(curr_event)) return self.toolWindowTook(curr_event);
             // Help > DevTools' window takes its own events; while inspecting, the main window's
             // pointer moves and presses go to it too.
             if (self.devtools_window) |window| {
@@ -2583,6 +2651,11 @@ pub fn Editor(comptime project: type) type {
             };
             if (curr_event == .mouse_motion or curr_event == .window_mouse_leave) self.game_input.pointer_in_scene = false;
 
+            // F11 is Render > View Render, as in Blender; Weeoui has no F11 for the menus to hear.
+            if (curr_event == .key_down) if (curr_event.key_down.key) |key| if (key == .func11 and !curr_event.key_down.repeat) {
+                self.render(.view);
+                return .run;
+            };
             // The Scene panel's camera takes presses, drags and wheels over it; F frames the
             // selection, and Delete deletes it.
             if (!game_has_scene) if (self.scene_view.handleFirst(curr_event, self.sceneRectFor(slot, curr_event))) {
@@ -2704,6 +2777,7 @@ pub fn Editor(comptime project: type) type {
                 .project_settings => try self.showProjectSettings(),
                 .plugins => _ = self.showPlugins(),
                 .export_game => self.showExport(),
+                .render => |what| self.render(what),
                 .undo => self.undoOrRedo(.undo),
                 .redo => self.undoOrRedo(.redo),
                 .preferences => self.openPreferences(),
@@ -3388,6 +3462,30 @@ pub fn Editor(comptime project: type) type {
             };
         }
 
+        /// The Render menu: open the Render window if it isn't, with the open scene's cutscenes,
+        /// and start what was asked.
+        fn render(self: *Self, what: menus.Render) void {
+            if (self.project == null) return;
+            const window = self.render_window orelse RenderWindow.open(self.gpa, &self.app.graphics, self.ui.font) catch |err| {
+                std.log.err("cannot open the Render window: {t}", .{err});
+                return;
+            };
+            self.render_window = window;
+            const playhead = self.animationPlayhead();
+            if (self.film.finished()) RenderWindow.refresh(&self.film, self.filmEnv(), playhead);
+            switch (what) {
+                .view => {},
+                .image => window.start(&self.film, self.filmEnv(), .image, playhead),
+                .animation => window.start(&self.film, self.filmEnv(), .animation, playhead),
+                .all => window.start(&self.film, self.filmEnv(), .all, playhead),
+            }
+        }
+
+        /// The Animation panel's playhead, where Render Image takes its still.
+        fn animationPlayhead(self: *const Self) render_window.Playhead {
+            return .{ .entity = self.animation.entity, .time_s = self.animation.time_s };
+        }
+
         /// Edit > Plugins, opened if it isn't; null without a project, or if it can't open.
         fn showPlugins(self: *Self) ?*plugin_manager.PluginsWindow {
             if (self.plugins_window) |window| return window;
@@ -3653,6 +3751,15 @@ pub fn Editor(comptime project: type) type {
                     self.applyEntityCommands();
                     if (used) continue;
                 }
+                // The Animation panel's keys, and Ctrl/Shift+wheel over its timeline.
+                if (index == panels.animation_page) {
+                    const used = switch (input) {
+                        .key_down => |key| self.animation.keyDown(key, self.animation_ui.wants_text),
+                        .wheel => |wheel| self.animation.wheel(wheel),
+                        else => false,
+                    };
+                    if (used) continue;
+                }
                 // The UI Tree's, likewise.
                 if (index == panels.ui_tree_page) if (self.uiDesignerEnv()) |env| {
                     const used = switch (input) {
@@ -3894,7 +4001,20 @@ pub fn Editor(comptime project: type) type {
                 .selection = .{ .gpa = self.gpa, .set = &self.entity_editor.selection },
                 .scene_tool = .{ .context = self, .use = useSceneTool },
                 .selection_hidden = !self.play_mode.playing() and if (self.entity_editor.selected) |entity| self.entity_editor.view_state.isHidden(&self.app.world, entity) else false,
+                .bones = if (!self.play_mode.playing() and !self.film.busy() and self.animation.keysBonesOf(self.entity_editor.selected)) .{ .gpa = self.gpa, .context = self, .key = keyBone } else null,
             };
+        }
+
+        /// Key a bone the Scene panel's gizmo moves into the clip the Animation panel shows.
+        fn keyBone(context: *anyopaque, node: []const u8, field: scene_view.Bones.Field, value: eggy.math.Vec3, stage: scene_view.Bones.Stage) void {
+            const self: *Self = @ptrCast(@alignCast(context));
+            const env = self.animationEnv() orelse return;
+            const property: eggy.assets.clip.Property = switch (field) {
+                .position => .position,
+                .rotation_deg => .rotation_deg,
+                .scale => .scale,
+            };
+            self.animation.keyBone(env, node, property, value.toArray(), stage == .final);
         }
 
         /// Hand the pointer to a plugin's Scene tool; outside Play, a stroke is one undo step.
@@ -3981,6 +4101,8 @@ test {
     _ = @import("input_mappings.zig");
     _ = @import("input_map_asset/input_map_asset.zig");
     _ = @import("animation_dock/animation_dock.zig");
+    _ = @import("film/film.zig");
+    _ = @import("film/render_window.zig");
     _ = @import("ui_designer/ui_designer.zig");
     _ = @import("asset_preview.zig");
     _ = @import("process_environ.zig");
@@ -4057,6 +4179,7 @@ test {
     _ = @import("hot_reload/hot_reload.zig");
     _ = @import("preferences/preferences.zig");
     _ = @import("preferences/window.zig");
+    _ = @import("preferences/preference_form.zig");
     _ = @import("entities/entities.zig");
     _ = @import("page_style.zig");
     _ = @import("projects/source_stamp.zig");

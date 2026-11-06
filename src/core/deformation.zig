@@ -98,16 +98,8 @@ pub const Deformation = struct {
 
     fn pose(self: *Deformation, drawable: *mesh.Drawable, model: *const assets.Model, path: []const u8, animator: Animator, clips: ?*ClipCache) !void {
         const arena = self.scratch.allocator();
-        var current = try assets.rig.Pose.init(arena, model.*);
+        const current = try posed(arena, model, path, animator, clips, self);
         var deformer = try assets.rig.Deformer.init(arena, model.*);
-
-        // A fade starts from the previous clips, then eases to the current ones.
-        const fading = animator.isBlending();
-        const weight = animator.blendWeight();
-        if (fading) {
-            self.layer(&current, model, path, clips, animator.previous_model_clip.key(), animator.previous_clip.key(), animator.previous_time_s, animator.repeat, 1);
-        }
-        self.layer(&current, model, path, clips, animator.model_clip.key(), animator.clip.key(), animator.time_s, animator.repeat, if (fading) weight else 1);
 
         // Every part's corners as the pose places them, and the box round them.
         const corners = try arena.alloc(Vertex, model.vertices.len);
@@ -122,47 +114,6 @@ pub const Deformation = struct {
         drawable.deformed = 1;
         drawable.bounds_min = box.min;
         drawable.bounds_max = box.max;
-    }
-
-    /// Lay one imported clip and one authored clip over `pose`, `weight` of the way. `path` is
-    /// the model's key, the hex of its id, which an imported clip must have been made for.
-    fn layer(self: *Deformation, pose_: *assets.rig.Pose, model: *const assets.Model, path: []const u8, clips: ?*ClipCache, imported: []const u8, authored: []const u8, time_s: f32, repeat: animation.Repeat, weight: f32) void {
-        if (imported.len > 0) if (clips) |cache| {
-            const model_id = assets.id.parse(path) catch 0;
-            if (cache.importedFor(imported, model_id, model.*)) |found| {
-                pose_.apply(model.*, found.*, animation.clipTime(time_s, found.duration_s, repeat), weight);
-            }
-        };
-        if (authored.len == 0) return;
-        const clip = (clips orelse return).authored(authored) orelse return;
-        const at = animation.clipTime(time_s, clip.duration_s, repeat);
-        for (clip.tracks) |track| {
-            const target = switch (track.where()) {
-                .model => |name| name,
-                .entity => continue,
-            };
-            const value = track.valueAt(at) orelse continue;
-            if (track.property == .morph_weight) {
-                const target_at = for (model.rig.morph_targets, 0..) |blend_shape, i| {
-                    if (std.mem.eql(u8, blend_shape.name, target)) break i;
-                } else {
-                    self.reportOnce(target, "{s} has no blend shape named {s}", .{ path, target });
-                    continue;
-                };
-                pose_.blendMorph(target_at, value[0], weight);
-                continue;
-            }
-            const node = model.rig.node(target) orelse {
-                self.reportOnce(target, "{s} has no node named {s}", .{ path, target });
-                continue;
-            };
-            switch (track.property) {
-                .position => pose_.blendTranslation(node, value, weight),
-                .rotation_deg => pose_.blendRotation(node, eulerQuaternion(value), weight),
-                .scale => pose_.blendScale(node, value, weight),
-                .morph_weight => unreachable,
-            }
-        }
     }
 
     /// Write `bytes` into the entity's buffer for this frame's slot, making the buffers first.
@@ -224,6 +175,63 @@ pub const Deformation = struct {
         log.warn(format, args);
     }
 };
+
+/// The pose `animator` gives `model` (`path` is its key): its imported and authored clips at
+/// their time, the previous ones faded out as `blendTo` fades them. Allocates in `arena`.
+/// `report`, when given, logs once each name a clip has that the model doesn't.
+pub fn posed(arena: std.mem.Allocator, model: *const assets.Model, path: []const u8, animator: Animator, clips: ?*ClipCache, report: ?*Deformation) !assets.rig.Pose {
+    var current = try assets.rig.Pose.init(arena, model.*);
+    // A fade starts from the previous clips, then eases to the current ones.
+    const fading = animator.isBlending();
+    const weight = animator.blendWeight();
+    if (fading) {
+        layer(report, &current, model, path, clips, animator.previous_model_clip.key(), animator.previous_clip.key(), animator.previous_time_s, animator.repeat, 1);
+    }
+    layer(report, &current, model, path, clips, animator.model_clip.key(), animator.clip.key(), animator.time_s, animator.repeat, if (fading) weight else 1);
+    return current;
+}
+
+/// Lay one imported clip and one authored clip over `pose`, `weight` of the way. `path` is
+/// the model's key, the hex of its id, which an imported clip must have been made for.
+fn layer(report: ?*Deformation, pose_: *assets.rig.Pose, model: *const assets.Model, path: []const u8, clips: ?*ClipCache, imported: []const u8, authored: []const u8, time_s: f32, repeat: animation.Repeat, weight: f32) void {
+    if (imported.len > 0) if (clips) |cache| {
+        const model_id = assets.id.parse(path) catch 0;
+        if (cache.importedFor(imported, model_id, model.*)) |found| {
+            pose_.apply(model.*, found.*, animation.clipTime(time_s, found.duration_s, repeat), weight);
+        }
+    };
+    if (authored.len == 0) return;
+    const clip = (clips orelse return).authored(authored) orelse return;
+    const at = animation.clipTime(time_s, clip.duration_s, repeat);
+    for (clip.tracks) |track| {
+        const target = switch (track.where()) {
+            .model => |name| name,
+            .entity, .scene => continue,
+        };
+        const value = track.valueAt(at) orelse continue;
+        if (track.property == .morph_weight) {
+            const target_at = for (model.rig.morph_targets, 0..) |blend_shape, i| {
+                if (std.mem.eql(u8, blend_shape.name, target)) break i;
+            } else {
+                if (report) |found| found.reportOnce(target, "{s} has no blend shape named {s}", .{ path, target });
+                continue;
+            };
+            pose_.blendMorph(target_at, value[0], weight);
+            continue;
+        }
+        const node = model.rig.node(target) orelse {
+            if (report) |found| found.reportOnce(target, "{s} has no node named {s}", .{ path, target });
+            continue;
+        };
+        switch (track.property) {
+            .position => pose_.blendTranslation(node, value, weight),
+            .rotation_deg => pose_.blendRotation(node, eulerQuaternion(value), weight),
+            .scale => pose_.blendScale(node, value, weight),
+            // `validate` keeps other properties off model targets.
+            else => unreachable,
+        }
+    }
+}
 
 /// Whether `animator` asks for anything that moves a model.
 fn plays(animator: Animator) bool {

@@ -81,6 +81,8 @@ pub const Outcome = union(enum) {
     save,
     /// File > Export: open the Export window.
     export_game,
+    /// The Render menu, and Ctrl+F12 (Render Animation).
+    render: menus.Render,
     /// File > Project Settings: open Settings on its General page.
     project_settings,
     /// Edit > Plugins: open the Plugins window.
@@ -927,7 +929,7 @@ pub const Workspace = struct {
                     if (self.dock.dismissMenu()) return .handled;
                 }
                 // The menus' shortcuts.
-                if (key.key == .f12 and !key.repeat) return .toggle_devtools;
+                if (key.key == .f12 and !key.repeat) return if (key.modifiers.control) .{ .render = .animation } else .toggle_devtools;
                 if (key.repeat or !(key.modifiers.control or key.modifiers.super)) return .ignored;
                 // Ctrl+Tab and Ctrl+Shift+Tab step through the tabs; Ctrl+T offers a new one.
                 if (key.key == .tab) {
@@ -984,6 +986,10 @@ pub const Workspace = struct {
                 .preferences => return .preferences,
                 .save => return .save,
                 .export_game => return .export_game,
+                .render_image => return .{ .render = .image },
+                .render_animation => return .{ .render = .animation },
+                .render_all => return .{ .render = .all },
+                .view_render => return .{ .render = .view },
                 .project_settings => return .project_settings,
                 .plugins => return .plugins,
                 .undo => return .undo,

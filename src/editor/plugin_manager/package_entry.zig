@@ -1,6 +1,7 @@
-//! A plugin package's entry in a project's `build.zig.zon`: taken back out once the last plugin
-//! installed from it is uninstalled (the reverse of `install.zig`'s `zig fetch --save`), or
-//! before `zig fetch --save` replaces a folder entry, which it would otherwise keep as `.path`.
+//! A plugin package's entry in a project's `build.zig.zon`: a plugin's own folder put in as a
+//! `.path` entry, and an entry taken back out once the last plugin installed from it is
+//! uninstalled (the reverse of `install.zig`'s `zig fetch --save`), or before `zig fetch --save`
+//! replaces a folder entry, which it would otherwise keep as `.path`.
 const std = @import("std");
 const Ast = std.zig.Ast;
 
@@ -39,6 +40,35 @@ pub fn isFolderDependency(arena: std.mem.Allocator, manifest: [:0]const u8, name
     var buffer: [2]Ast.Node.Index = undefined;
     const fields = tree.fullStructInit(&buffer, dependency) orelse return false;
     return fieldNamed(tree, fields, "path") != null;
+}
+
+/// `manifest` (a `build.zig.zon`'s text) with dependency `name` pointed at the folder `path`
+/// (relative to the project), replacing any entry it had, in `arena`; the rest is kept as
+/// written. Fails with `error.ParseZon` when it isn't ZON, or `error.NoDependencies` without a
+/// `.dependencies` list to add to.
+///
+/// ```zig
+/// const after = try withFolderDependency(arena, text, "eggy_mcp", "../eggy-mcp");
+/// ```
+pub fn withFolderDependency(arena: std.mem.Allocator, manifest: [:0]const u8, name: []const u8, path: []const u8) ![]const u8 {
+    const without = if (try withoutDependency(arena, manifest, name)) |rest| try arena.dupeSentinel(u8, rest, 0) else manifest;
+    const tree = try parse(arena, without);
+    var root_buffer: [2]Ast.Node.Index = undefined;
+    const root = tree.fullStructInit(&root_buffer, tree.rootDecls()[0]) orelse return error.ParseZon;
+    const dependencies = fieldNamed(tree, root, "dependencies") orelse return error.NoDependencies;
+    const close = tree.lastToken(dependencies);
+    const close_at = tree.tokenStart(close);
+    const entry = try std.fmt.allocPrint(arena, ".{f} = .{{ .path = \"{f}\" }},", .{ std.zig.fmtId(name), std.zig.fmtString(path) });
+
+    // On a line of its own above the closing brace when the list spans lines, indented one
+    // step past it; else inline before the brace.
+    const line_start = if (std.mem.lastIndexOfScalar(u8, without[0..close_at], '\n')) |newline| newline + 1 else 0;
+    if (line_start > 0 and isBlank(without[line_start..close_at])) {
+        const indent = without[line_start..close_at];
+        return std.mem.concat(arena, u8, &.{ without[0..line_start], indent, "    ", entry, "\n", without[line_start..] });
+    }
+    const after_comma = tree.tokenTag(close - 1) == .comma or tree.tokenTag(close - 1) == .l_brace;
+    return std.mem.concat(arena, u8, &.{ std.mem.trimEnd(u8, without[0..close_at], " "), if (after_comma) " " else ", ", entry, " ", without[close_at..] });
 }
 
 fn parse(arena: std.mem.Allocator, manifest: [:0]const u8) !Ast {
@@ -102,6 +132,36 @@ test "a dependency is taken out of build.zig.zon, the others kept as written" {
     , (try withoutDependency(arena.allocator(), manifest, "stat_pack")).?);
     try std.testing.expect(std.mem.indexOf(u8, (try withoutDependency(arena.allocator(), manifest, "wobble")).?, "wobble") == null);
     try std.testing.expect(try withoutDependency(arena.allocator(), manifest, "missing") == null);
+}
+
+test "a plugin's folder goes in as a path entry, replacing a fetched one" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const manifest =
+        \\.{
+        \\    .name = .rats,
+        \\    .dependencies = .{
+        \\        .eggy = .{ .path = "../eggy" },
+        \\        .stat_pack = .{ .url = "git+https://github.com/rat/stat_pack#1234", .hash = "stat_pack-1.0.0-AAAA" },
+        \\    },
+        \\}
+        \\
+    ;
+    try std.testing.expectEqualStrings(
+        \\.{
+        \\    .name = .rats,
+        \\    .dependencies = .{
+        \\        .eggy = .{ .path = "../eggy" },
+        \\        .stat_pack = .{ .path = "../stat-pack" },
+        \\    },
+        \\}
+        \\
+    , try withFolderDependency(a, manifest, "stat_pack", "../stat-pack"));
+    const inline_list = try withFolderDependency(a, ".{ .name = .rats, .dependencies = .{ .eggy = .{ .path = \"../eggy\" } } }", "wobble", "C:\\wobble");
+    try std.testing.expectEqualStrings(".{ .name = .rats, .dependencies = .{ .eggy = .{ .path = \"../eggy\" }, .wobble = .{ .path = \"C:\\\\wobble\" }, } }", inline_list);
+    try std.testing.expect(try isFolderDependency(a, try a.dupeSentinel(u8, inline_list, 0), "wobble"));
+    try std.testing.expectError(error.NoDependencies, withFolderDependency(a, ".{ .name = .rats }", "wobble", "w"));
 }
 
 test "a folder dependency is told from a fetched one" {

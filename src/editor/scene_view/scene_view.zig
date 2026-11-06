@@ -16,6 +16,7 @@ const L = ui.Layout;
 const sdl3 = eggy.sdl_adapter.sdl;
 const HotGame = @import("../hot_reload/hot_reload.zig").HotGame;
 const gizmo = @import("gizmo.zig");
+const skeleton_zig = @import("skeleton.zig");
 pub const picking = @import("picking.zig");
 const orientation = @import("orientation.zig");
 pub const game_camera = @import("game_camera.zig");
@@ -35,6 +36,11 @@ pub const Overlay = struct {
     hot: ?gizmo.Handle = null,
     drag: ?gizmo.Drag = null,
     hot_end: ?orientation.End = null,
+    /// The selected model's skeleton while its bones can be keyed, borrowed from the `SceneView`
+    /// until its next `update`, with the joint picked and the one under the pointer.
+    skeleton: ?*const skeleton_zig.Skeleton = null,
+    bone: ?u32 = null,
+    hot_bone: ?u32 = null,
     /// Which way the selected directional or spot light shines.
     light_arrow: ?light_direction.Arrow = null,
     /// The directional lights' badges; borrowed from the `SceneView` until its next `update`.
@@ -92,6 +98,12 @@ pub fn overlayElements(b: L.Builder, overlay: Overlay, scene: ui.Rect) ![]*L.Ele
         shine.overlay = .{ .point = .init(scene.x, scene.y) };
         shine.accessibility.role = .ignored;
         try parts.append(b.allocator, shine);
+    }
+    if (overlay.skeleton) |skeleton| {
+        const bones = try b.node(0, .{ .width = scene.w, .height = scene.h, .z_index = 11 }, skeleton.paint(b.allocator, overlay.bone, overlay.hot_bone), &.{});
+        bones.overlay = .{ .point = .init(scene.x, scene.y) };
+        bones.accessibility.role = .ignored;
+        try parts.append(b.allocator, bones);
     }
     if (overlay.gizmo) |layout| {
         const handles = try b.node(0, .{ .width = scene.w, .height = scene.h, .z_index = 11 }, gizmo.paint(b.allocator, layout, overlay.hot, overlay.drag, overlay.pointer, overlay.feedback), &.{});
@@ -157,6 +169,28 @@ pub const Target = struct {
     selection: ?struct { gpa: std.mem.Allocator, set: *selection_zig.Selection } = null,
     /// Hands the pointer to the plugin Scene tool in use (`toolbar.State.plugin_tool`).
     scene_tool: ?SceneToolHook = null,
+    /// While the selected model's bones can be keyed: its skeleton shows, and a picked bone
+    /// takes the gizmo.
+    bones: ?Bones = null,
+};
+
+/// Posing a model's bones, whose keys the host puts in the clip being animated.
+pub const Bones = struct {
+    gpa: std.mem.Allocator,
+    context: *anyopaque,
+    /// Key bone `node`'s `field` at `value`: a preview while a drag goes on, then `final` (one
+    /// undo step) as it ends.
+    key: *const fn (context: *anyopaque, node: []const u8, field: gizmo.Field, value: eggy.math.Vec3, stage: Stage) void,
+
+    pub const Stage = enum { preview, final };
+    pub const Field = gizmo.Field;
+};
+
+/// A bone being dragged: its name (copied, as the model's may be reloaded) and the change so far.
+const BoneDrag = struct {
+    name: [128]u8 = undefined,
+    name_len: usize = 0,
+    change: ?gizmo.Change = null,
 };
 
 /// The host's way to a plugin's `sceneTool` hook, which needs the editor's context.
@@ -170,6 +204,14 @@ pub const SceneToolHook = struct {
 const max_carried = 64;
 
 pub const SceneView = struct {
+    /// The selected model's skeleton, while its bones can be keyed (made with `Bones.gpa`), the
+    /// joint picked and the one under the pointer.
+    skeleton: ?skeleton_zig.Skeleton = null,
+    skeleton_shown: bool = false,
+    bone: ?u32 = null,
+    bone_entity: ?eggy.ecs.EntityId = null,
+    hot_bone: ?u32 = null,
+    bone_drag: ?BoneDrag = null,
     camera: SceneCamera = .{},
     tools: toolbar.State = .{},
     /// The gizmo handle under the pointer, and the one being dragged.
@@ -212,6 +254,10 @@ pub const SceneView = struct {
     /// toolbar says), or through the game's while it plays.
     pub const Look = enum { editing, simulating, playing };
 
+    pub fn deinit(self: *SceneView) void {
+        if (self.skeleton) |*skeleton| skeleton.deinit();
+    }
+
     /// What the dock draws over the panel.
     /// Editor-only: call after `update`; returned geometry is copied, but feedback borrows
     /// this SceneView's buffer until the next `overlay` call/mutation. Build paint before reuse.
@@ -222,7 +268,8 @@ pub const SceneView = struct {
     pub fn overlay(self: *SceneView) Overlay {
         const feedback = if (self.drag) |drag| drag.feedback(self.pointer, self.snapping(), &self.feedback_buffer) else "";
         const inset = if (self.preview != null) if (self.scene) |area| previewRect(area) else null else null;
-        return .{ .tools = self.tools, .view = self.view, .gizmo = self.gizmo, .hot = self.hot, .drag = self.drag, .hot_end = self.hot_end, .light_arrow = self.light_arrow, .suns = self.suns[0..self.sun_count], .pointer = self.pointer, .feedback = feedback, .no_camera = self.no_camera, .preview = inset, .playing = self.playing, .fly_speed = self.camera.flySpeedNote() };
+        const shown: ?*const skeleton_zig.Skeleton = if (self.skeleton_shown) &self.skeleton.? else null;
+        return .{ .skeleton = shown, .bone = self.bone, .hot_bone = self.hot_bone, .tools = self.tools, .view = self.view, .gizmo = self.gizmo, .hot = self.hot, .drag = self.drag, .hot_end = self.hot_end, .light_arrow = self.light_arrow, .suns = self.suns[0..self.sun_count], .pointer = self.pointer, .feedback = feedback, .no_camera = self.no_camera, .preview = inset, .playing = self.playing, .fly_speed = self.camera.flySpeedNote() };
     }
 
     /// Before each frame: what the panel at `scene` is seen from, as `look` says, the selected
@@ -241,6 +288,7 @@ pub const SceneView = struct {
         self.camera.projection = .perspective;
         self.view = self.camera.view();
         self.gizmo = null;
+        self.skeleton_shown = false;
         self.light_arrow = null;
         self.sun_count = 0;
         self.scene = scene;
@@ -266,11 +314,14 @@ pub const SceneView = struct {
         if (working.selected.*) |selected| if (self.steering == null or !self.steering.?.eql(selected)) {
             self.preview = game_camera.viewOf(working.game, working.app, selected);
         };
+        // A posed cutscene's shot shows in the corner, unless the panel looks through it already.
+        if (self.preview == null and !self.looking_through_game) self.preview = shotShown(working);
         const area = scene orelse return;
         self.tools.offset = toolbar.keepInside(self.tools, self.tools.offset, area);
         // A plugin's tool in use takes the gizmo's place.
         if (self.tools.plugin_tool != null) return;
         const entity = working.selected.* orelse return;
+        if (working.bones) |bones| if (self.poseSkeleton(working, bones, entity, area)) return;
         const component = transformIndex(working.game) orelse return;
         if (!working.game.hasComponent(working.app, entity, component)) return;
         const placed = working.game.worldMatrix(working.app, entity) orelse return;
@@ -278,6 +329,52 @@ pub const SceneView = struct {
         if (self.gizmo) |handles| if (shinesAlong(working, entity)) {
             self.light_arrow = light_direction.arrow(handles, placed);
         };
+    }
+
+    /// Pose `entity`'s skeleton for `bones`; with a bone of it picked, the gizmo goes on that
+    /// bone. Returns whether it did.
+    fn poseSkeleton(self: *SceneView, target: Target, bones: Bones, entity: eggy.ecs.EntityId, area: ui.Rect) bool {
+        if (self.skeleton == null) self.skeleton = .init(bones.gpa);
+        const skeleton = &self.skeleton.?;
+        skeleton.update(target.app, self.drawn, entity, self.view, area);
+        const shown = skeleton.entity orelse {
+            self.bone = null;
+            return false;
+        };
+        self.skeleton_shown = true;
+        const same = if (self.bone_entity) |picked| picked.eql(shown) else false;
+        if (!same or (self.bone != null and self.bone.? >= skeleton.joints.len)) self.bone = null;
+        const bone = self.bone orelse return false;
+        self.gizmo = gizmo.layout(self.tools.tool, self.tools.space, skeleton.joints[bone].world, self.view, area);
+        return true;
+    }
+
+    /// The skeleton shown this frame, if any.
+    fn shownSkeleton(self: *const SceneView) ?*const skeleton_zig.Skeleton {
+        if (!self.skeleton_shown) return null;
+        return &self.skeleton.?;
+    }
+
+    /// Start dragging the picked bone by `handle`, from its pose; null when there is none.
+    fn startBoneDrag(self: *SceneView, layout: gizmo.Layout, handle: gizmo.Handle, at: ui.Vec2) ?gizmo.Drag {
+        const skeleton = self.shownSkeleton() orelse return null;
+        const bone = self.bone orelse return null;
+        const joint = skeleton.joints[bone];
+        const to_local = eggy.math.inverse4x4(f32, skeleton.parentSpace(bone)) orelse return null;
+        var drag = BoneDrag{};
+        drag.name_len = @min(joint.name.len, drag.name.len);
+        @memcpy(drag.name[0..drag.name_len], joint.name[0..drag.name_len]);
+        self.bone_drag = drag;
+        return gizmo.Drag.init(handle, at, layout, .{ .position = joint.local[0], .rotation_deg = joint.local[1], .scale = joint.local[2] }, to_local);
+    }
+
+    /// The view through a cutscene's shot the Animation panel poses, when it isn't the game's
+    /// own camera; null otherwise.
+    fn shotShown(target: Target) ?eggy.camera.View {
+        const shown = target.game.findCamera(target.app) orelse return null;
+        const active = game_camera.find(target.game, target.app) orelse return shown;
+        if (std.meta.eql(shown, active.view)) return null;
+        return shown;
     }
 
     /// Whether `entity` is a directional or spot light, which shine along their local -Z.
@@ -301,9 +398,16 @@ pub const SceneView = struct {
             self.steering = null;
             return;
         };
+        // Playing, the view follows a cutscene's camera cuts.
         if (look != .editing) {
             self.steering = null;
-            self.view = camera.view;
+            self.view = target.game.findCamera(target.app) orelse camera.view;
+            return;
+        }
+        // Editing a posed cutscene, the view is its shot, which the panel's controls don't move.
+        if (shotShown(target)) |shot| {
+            self.steering = null;
+            self.view = shot;
             return;
         }
         // The panel's camera moved: the game's follows it. Otherwise the panel's camera follows
@@ -439,10 +543,21 @@ pub const SceneView = struct {
                     return true;
                 }
                 if (self.gizmo) |layout| if (gizmo.hit(layout, at)) |handle| {
+                    if (self.bone != null and target.bones != null) {
+                        self.drag = self.startBoneDrag(layout, handle, at);
+                        return true;
+                    }
                     self.drag = startDrag(target, layout, handle, at);
                     self.carryOthers(target);
                     return true;
                 };
+                // A joint of the skeleton shown picks its bone for the gizmo.
+                if (self.shownSkeleton()) |skeleton| if (skeleton.jointAt(at)) |joint| {
+                    self.bone = joint;
+                    self.bone_entity = skeleton.entity;
+                    return true;
+                };
+                self.bone = null;
                 if (stand_ins.sunAt(self.suns[0..self.sun_count], at)) |light| {
                     choose(target, instanceRoot(target, light));
                     return true;
@@ -461,8 +576,17 @@ pub const SceneView = struct {
                 const drag = self.drag orelse {
                     self.hot = if (self.gizmo) |layout| gizmo.hit(layout, at) else null;
                     self.hot_end = if (scene) |area| orientation.hit(self.view, area, at) else null;
+                    self.hot_bone = if (self.hot == null) if (self.shownSkeleton()) |skeleton| skeleton.jointAt(at) else null else null;
                     return false;
                 };
+                // A bone's change is keyed, shown as it goes and kept on release.
+                if (self.bone_drag) |*moving| {
+                    const bones = target.bones orelse return true;
+                    const change = drag.changeAt(at, self.snapping());
+                    moving.change = change;
+                    bones.key(bones.context, moving.name[0..moving.name_len], change.field, change.value, .preview);
+                    return true;
+                }
                 const entity = target.selected.* orelse return true;
                 const component = transformIndex(target.game) orelse return true;
                 const change = drag.changeAt(at, self.snapping());
@@ -490,6 +614,10 @@ pub const SceneView = struct {
             },
             .mouse_button_up => |up| {
                 if (up.button != .left or (self.drag == null and self.toolbar_drag == null)) return false;
+                if (self.bone_drag) |moving| if (moving.change) |change| if (target.bones) |bones| {
+                    bones.key(bones.context, moving.name[0..moving.name_len], change.field, change.value, .final);
+                };
+                self.bone_drag = null;
                 self.drag = null;
                 self.carried_count = 0;
                 self.toolbar_drag = null;
@@ -687,6 +815,7 @@ test {
     _ = picking;
     _ = toolbar;
     _ = orientation;
+    _ = @import("skeleton.zig");
     _ = @import("rotation.zig");
     _ = @import("scene_camera.zig");
 }

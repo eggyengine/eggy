@@ -7,6 +7,7 @@ pub const Command = @import("commands.zig").Command;
 pub const Call = @import("commands.zig").Call;
 pub const Commands = @import("commands.zig").Commands;
 pub const overlay = @import("overlay.zig");
+pub const candidates_height = @import("prompt.zig").candidates_height;
 /// Whether this build runs Buzz; where it doesn't, only commands run.
 pub const scripting = @import("buzz_session.zig").available;
 

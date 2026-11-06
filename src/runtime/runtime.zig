@@ -195,6 +195,7 @@ pub fn Runtime(comptime project: type) type {
             try self.app.advanceInput();
             try self.plugins.update(&self.app);
             try self.app.updateWorld();
+            try self.plugins.animationEvents(&self.app);
             self.app.input.endFrame();
             self.app.graphics.lights = try eggy.lighting.gather(&self.app.world);
             self.app.graphics.time_s = @floatCast(self.app.time.elapsed_s);
@@ -206,8 +207,8 @@ pub fn Runtime(comptime project: type) type {
             self.app.graphics.ui_billboards = &self.billboards;
             const has_ui = self.plugins.hasGameUi() or self.app.ui_scenes.screen_count != 0;
             const frame = try self.app.graphics.beginFrame();
-            // Through the game's camera; without one, there is nothing to see it from.
-            if (eggy.camera.find(&self.app.world)) |view| {
+            // Through a cutscene's shot or the game's camera; without one, there is nothing to see it from.
+            if (eggy.camera_cuts.find(&self.app.world, &self.app.graphics.clips, null)) |view| {
                 const drawn = try eggy.mesh.gatherAlloc(self.gpa, &self.app.world);
                 defer self.gpa.free(drawn);
                 try self.app.graphics.drawScene(frame, drawn, view);
@@ -228,10 +229,11 @@ pub fn Runtime(comptime project: type) type {
                 };
                 try self.plugins.draw(&self.app, draw);
                 const loading = self.app.scene_stream.loading();
-                if (has_ui or self.app.graphics_settings_ui.isOpen() or self.app.dev_console.isOpen() or eggy.scenes.loading_screen.shows(loading)) {
+                if (has_ui or self.app.cutscene.shows() or self.app.graphics_settings_ui.isOpen() or self.app.dev_console.isOpen() or eggy.scenes.loading_screen.shows(loading)) {
                     const layer = try self.app.gameUi();
                     layer.begin(draw, ui_time_ms);
                     if (has_ui) try self.plugins.gameUi(&self.app, &layer.context);
+                    self.app.cutscene.draw(&layer.context);
                     self.app.graphics_settings_ui.draw(&self.app, &layer.context);
                     eggy.scenes.loading_screen.draw(loading, &layer.context);
                     eggy.dev_console.overlay.draw(&self.app.dev_console, &self.app, self.plugins.consoleCommands(), &layer.context);
@@ -242,7 +244,7 @@ pub fn Runtime(comptime project: type) type {
                         if (layer.context.wants_text) try sdl3.keyboard.startTextInput(window) else try sdl3.keyboard.stopTextInput(window);
                     }
                 }
-                if (eggy.camera.find(&self.app.world)) |view| try self.app.drawDebug(draw, view);
+                if (eggy.camera_cuts.find(&self.app.world, &self.app.graphics.clips, null)) |view| try self.app.drawDebug(draw, view);
             }
             try self.app.graphics.endFrame(frame);
             try self.app.finishDiagnosticsFrame();
@@ -280,6 +282,8 @@ pub fn Runtime(comptime project: type) type {
                 self.app.input.suppress(curr_event);
                 return .run;
             }
+            // A cutscene that takes input keeps it from the game (its UI above still has it).
+            if (self.app.cutscene.event(curr_event)) return .run;
             try self.app.input.handle(curr_event);
             try self.plugins.event(&self.app, curr_event);
             return .run;
@@ -293,7 +297,7 @@ pub fn Runtime(comptime project: type) type {
                 else => return false,
             };
             if (down.button != .left or self.app.ui_scenes.billboard_count == 0) return false;
-            const view = eggy.camera.find(&self.app.world) orelse return false;
+            const view = eggy.camera_cuts.find(&self.app.world, &self.app.graphics.clips, null) orelse return false;
             return eggy.ui_scenes.billboards.press(&self.app.ui_scenes, self.app.resources(), view, viewport_points, .init(down.x, down.y));
         }
     };

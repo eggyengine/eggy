@@ -5,6 +5,7 @@ const std = @import("std");
 const ecs = @import("clutch");
 const assets = @import("eggy_assets");
 const refs = @import("../refs.zig");
+const asset_catalog = @import("../asset_catalog.zig");
 const scene = @import("../scene.zig");
 const SceneInstances = @import("../scene_instances.zig").SceneInstances;
 const resources_zig = @import("../resources/resources.zig");
@@ -182,8 +183,6 @@ pub const SceneStream = struct {
 /// The models and images (tilemaps draw as models) `text`, a scene file, refers to by key, each
 /// once. Keys the build's catalog doesn't know are left to load when drawn.
 fn findAssets(gpa: std.mem.Allocator, text: []const u8, found: *std.ArrayList(Asset)) !void {
-    const root = @import("root");
-    if (comptime !@hasDecl(root, "eggy_asset_ids")) return;
     var rest = text;
     while (std.mem.indexOfScalar(u8, rest, '"')) |open| {
         rest = rest[open + 1 ..];
@@ -192,7 +191,7 @@ fn findAssets(gpa: std.mem.Allocator, text: []const u8, found: *std.ArrayList(As
         rest = rest[close + 1 ..];
         if (quoted.len != assets.id.key_len) continue;
         const id = assets.id.parse(quoted) catch continue;
-        const entry = root.eggy_asset_ids.findId(id) orelse continue;
+        const entry = asset_catalog.findId(id) orelse continue;
         const kind: @FieldType(Asset, "kind") = switch (@as(assets.Kind, @fromBackingInt(@intCast(entry.kind)))) {
             .model, .tilemap => .model,
             .image => .image,
@@ -208,10 +207,7 @@ fn findAssets(gpa: std.mem.Allocator, text: []const u8, found: *std.ArrayList(As
 
 /// `file`'s project path where the build's catalog knows it, else its key.
 fn nameOf(file: *const refs.AssetRef(.scene)) []const u8 {
-    const root = @import("root");
-    if (comptime @hasDecl(root, "eggy_asset_ids")) {
-        if (root.eggy_asset_ids.findId(file.id())) |entry| return entry.path;
-    }
+    if (asset_catalog.findId(file.id())) |entry| return entry.path;
     return file.key();
 }
 

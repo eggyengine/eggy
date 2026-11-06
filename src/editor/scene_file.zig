@@ -19,6 +19,13 @@ pub const OpenScene = struct {
     path: ?[]u8 = null,
     /// A hash of the world as last saved or opened, to tell when it has changed since.
     saved_hash: ?u64 = null,
+    /// What each scene file held when this editor last read or wrote it (a hash of its bytes,
+    /// by project path; keys owned), to tell when something else changed it since.
+    on_disk: std.StringHashMapUnmanaged(u64) = .empty,
+
+    /// Whether a save may replace a scene file something else changed since this editor last
+    /// read or wrote it.
+    pub const Overwrite = enum { unless_changed, always };
 
     /// Free the editor's owned scene path, not the borrowed project folder or world.
     /// Does not save changes; the value must not be reused without reinitializing it.
@@ -29,6 +36,9 @@ pub const OpenScene = struct {
     /// ```
     pub fn deinit(self: *OpenScene) void {
         if (self.path) |path| self.gpa.free(path);
+        var keys = self.on_disk.keyIterator();
+        while (keys.next()) |key| self.gpa.free(key.*);
+        self.on_disk.deinit(self.gpa);
     }
 
     /// Its file name, for the status bar; null with none open.
@@ -76,6 +86,7 @@ pub const OpenScene = struct {
         defer self.gpa.free(source);
         var scene = try eggy.scene.Scene.parse(self.gpa, source);
         defer scene.deinit();
+        try self.remember(path, source);
 
         world.clear();
         const made = try scene.instantiate(self.gpa, world, access, null);
@@ -116,13 +127,15 @@ pub const OpenScene = struct {
     /// open, to a new one in `resources/scene/`, which becomes the open one.
     /// `access` must match `world`; null roots uses the capture's default ordering.
     /// Writes the project file, creating parent folders, and updates the saved hash on success.
+    /// With `.unless_changed`, a file something else changed since this editor read or wrote it
+    /// is left alone and `error.ChangedOnDisk` returned, for the host to ask about.
     /// I/O/capture/allocation errors propagate; a fresh path may already be selected on failure.
     ///
     /// ```zig
-    /// try open_scene.save(&app.world, game.sceneAccess(), root_ids);
+    /// try open_scene.save(&app.world, game.sceneAccess(), root_ids, .unless_changed);
     /// // null instead of root_ids captures with the registry's default root ordering.
     /// ```
-    pub fn save(self: *OpenScene, world: *eggy.ecs.World, access: eggy.scene.Access, roots: ?[]const eggy.ecs.EntityId) !void {
+    pub fn save(self: *OpenScene, world: *eggy.ecs.World, access: eggy.scene.Access, roots: ?[]const eggy.ecs.EntityId, overwrite: Overwrite) !void {
         if (self.path == null) {
             const fresh = try self.freshPath();
             defer self.gpa.free(fresh);
@@ -134,24 +147,46 @@ pub const OpenScene = struct {
         var text: std.Io.Writer.Allocating = .init(self.gpa);
         defer text.deinit();
         try scene.write(&text.writer);
-        try self.saveText(path, text.written());
+        try self.saveText(path, text.written(), overwrite);
         self.saved_hash = std.hash.Wyhash.hash(0, text.written());
         log.info("saved {d} entities to {s}", .{ scene.entities.len, path });
     }
 
     /// Write `text`, a scene as `save` writes one, to `path` in the project: how a world kept
-    /// aside for another tab (`scene_tabs.Kept`) is saved without opening it. I/O errors propagate.
+    /// aside for another tab (`scene_tabs.Kept`) is saved without opening it. `overwrite` as
+    /// for `save`; I/O errors propagate.
     ///
     /// ```zig
-    /// try open_scene.saveText(kept.path, kept.text);
+    /// try open_scene.saveText(kept.path, kept.text, .unless_changed);
     /// ```
-    pub fn saveText(self: *const OpenScene, path: []const u8, text: []const u8) !void {
+    pub fn saveText(self: *OpenScene, path: []const u8, text: []const u8, overwrite: Overwrite) !void {
         var threaded: std.Io.Threaded = .init_single_threaded;
         const io = threaded.io();
         var project = try std.Io.Dir.cwd().openDir(io, self.project_dir, .{});
         defer project.close(io);
+        if (overwrite == .unless_changed) if (self.on_disk.get(path)) |known| {
+            const now = project.readFileAlloc(io, path, self.gpa, .limited(64 << 20)) catch |err| switch (err) {
+                error.FileNotFound => null,
+                else => return err,
+            };
+            if (now) |bytes| {
+                defer self.gpa.free(bytes);
+                if (std.hash.Wyhash.hash(0, bytes) != known) return error.ChangedOnDisk;
+            }
+        };
         if (std.fs.path.dirname(path)) |parent| try project.createDirPath(io, parent);
         try project.writeFile(io, .{ .sub_path = path, .data = text });
+        try self.remember(path, text);
+    }
+
+    /// Note that `path`'s file now holds `bytes`.
+    fn remember(self: *OpenScene, path: []const u8, bytes: []const u8) !void {
+        const entry = try self.on_disk.getOrPut(self.gpa, path);
+        if (!entry.found_existing) entry.key_ptr.* = self.gpa.dupe(u8, path) catch |err| {
+            self.on_disk.removeByPtr(entry.key_ptr);
+            return err;
+        };
+        entry.value_ptr.* = std.hash.Wyhash.hash(0, bytes);
     }
 
     /// Start a new, empty scene in `folder` (relative to the project; "" for the project
@@ -170,7 +205,7 @@ pub const OpenScene = struct {
         const fresh = try self.freshPathIn(folder);
         defer self.gpa.free(fresh);
         try self.setPath(fresh);
-        try self.save(world, access, null);
+        try self.save(world, access, null, .unless_changed);
     }
 
     /// Make `path` (none: no scene) the open scene again, its file holding what hashes to
@@ -213,6 +248,11 @@ pub const OpenScene = struct {
         if (rest.len > 0 and rest[0] != '/' and rest[0] != std.fs.path.sep) return;
         const updated = std.fmt.allocPrint(self.gpa, "{s}{s}", .{ to, rest }) catch return;
         defer self.gpa.free(updated);
+        // What it held moves with it.
+        if (self.on_disk.fetchRemove(path)) |known| {
+            self.gpa.free(known.key);
+            self.on_disk.put(self.gpa, self.gpa.dupe(u8, updated) catch return, known.value) catch {};
+        }
         self.setPath(updated) catch {};
     }
 
@@ -336,7 +376,7 @@ test "a saved scene is remembered, and a new one gets a free name" {
     const named = try world.spawn(.{});
     access.setName(&world, named, "Sun");
     try std.testing.expect(first.unsaved(&world, access)); // an entity, and nowhere saved
-    try first.save(&world, access, null);
+    try first.save(&world, access, null, .unless_changed);
     try std.testing.expectEqualStrings("untitled.scene.zon", first.name().?);
     try std.testing.expect(!first.unsaved(&world, access));
     access.setName(&world, named, "Sol");
@@ -351,4 +391,48 @@ test "a saved scene is remembered, and a new one gets a free name" {
     try std.testing.expectEqualStrings("untitled-2.scene.zon", second.name().?);
     try second.open(eggy.project.scenes_dir ++ "/untitled.scene.zon", &world, access);
     try std.testing.expectEqual(@as(usize, 1), world.entityCount());
+}
+
+test "a save leaves a scene file another editor changed alone, unless told to overwrite it" {
+    const gpa = std.testing.allocator;
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const dir = try tmp.dir.realPathFileAlloc(io, ".", gpa);
+    defer gpa.free(dir);
+    const access = eggy.scene.registryAccess(eggy.components.Registry(&.{}, &.{}));
+    var world = eggy.ecs.World.init(gpa);
+    defer world.deinit();
+    var scene = OpenScene{ .gpa = gpa, .project_dir = dir };
+    defer scene.deinit();
+    access.setName(&world, try world.spawn(.{}), "Sun");
+    try scene.save(&world, access, null, .unless_changed);
+    const path = try gpa.dupe(u8, scene.path.?);
+    defer gpa.free(path);
+
+    // Saving over its own save is fine.
+    try scene.save(&world, access, null, .unless_changed);
+
+    // Another editor opens the file and saves something else into it.
+    var other_world = eggy.ecs.World.init(gpa);
+    defer other_world.deinit();
+    var other = OpenScene{ .gpa = gpa, .project_dir = dir };
+    defer other.deinit();
+    try other.open(path, &other_world, access);
+    access.setName(&other_world, try other_world.spawn(.{}), "Moon");
+    try other.save(&other_world, access, null, .unless_changed);
+    const theirs = try tmp.dir.readFileAlloc(io, path, gpa, .limited(1 << 20));
+    defer gpa.free(theirs);
+
+    // This one leaves their save be until told to overwrite it.
+    try std.testing.expectError(error.ChangedOnDisk, scene.save(&world, access, null, .unless_changed));
+    const kept = try tmp.dir.readFileAlloc(io, path, gpa, .limited(1 << 20));
+    defer gpa.free(kept);
+    try std.testing.expectEqualStrings(theirs, kept);
+    try scene.save(&world, access, null, .always);
+    try std.testing.expectError(error.ChangedOnDisk, other.save(&other_world, access, null, .unless_changed));
+
+    // Opening the file again takes what it holds now as the baseline.
+    try other.open(path, &other_world, access);
+    try other.save(&other_world, access, null, .unless_changed);
 }

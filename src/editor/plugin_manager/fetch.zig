@@ -186,5 +186,5 @@ test "a plugin is read from a folder, without a read-me" {
     defer fetched.destroy();
     try std.testing.expectEqualStrings("stats", fetched.manifest.module);
     try std.testing.expect(fetched.readme == null);
-    try std.testing.expect(std.mem.endsWith(u8, fetched.package.fetch.url, "pack"));
+    try std.testing.expect(std.mem.endsWith(u8, fetched.package.folder.path, "pack"));
 }

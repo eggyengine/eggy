@@ -16,9 +16,10 @@ const weeoui_sdl3 = @import("weeoui_sdl3");
 const ToolWindow = @import("../tool_window.zig").ToolWindow;
 const files = @import("preferences.zig");
 const History = @import("../history.zig").History;
+const preference_form = @import("preference_form.zig");
+const PreferenceForm = preference_form.PreferenceForm;
 const page_style = @import("../page_style.zig");
 const project_tile = @import("../projects/project_tile.zig");
-const code_editor = @import("../code_editor.zig");
 const ProjectSettings = @import("../project_settings.zig").ProjectSettings;
 const graphics_settings = eggy.graphics_settings;
 const setting_rows = eggy.setting_rows;
@@ -80,9 +81,6 @@ pub const Action = union(enum) {
     restart,
 };
 
-/// The most number fields a section shows.
-const max_fields = 64;
-const NumberEdit = ui.TextEdit(64);
 const SearchEdit = ui.TextEdit(64);
 const scopes = [_][]const u8{ "All projects##scope", "This project##scope" };
 const graphics_scopes = [_][]const u8{ "This computer##graphics scope", "Shipped with the game##graphics scope" };
@@ -91,8 +89,6 @@ const nav_height: f32 = 32;
 const reset_glyph = "\u{f0e2}";
 const gear_glyph = "\u{f013}";
 const search_glyph = "\u{f002}";
-/// Which tab and scope the window shows.
-const Showing = struct { section: usize, scope: usize };
 
 pub const PreferencesWindow = struct {
     gpa: std.mem.Allocator,
@@ -104,9 +100,8 @@ pub const PreferencesWindow = struct {
     /// The Graphics page's: 0 for this computer's, 1 for what the game ships with.
     graphics_scope: usize = 0,
     search: SearchEdit = SearchEdit.init("") catch unreachable,
-    /// The number fields' text for the section and scope shown, which `synced` names.
-    edits: [max_fields]NumberEdit = undefined,
-    synced: ?Showing = null,
+    /// The page's preferences, when it shows a manifest's.
+    form: PreferenceForm = .{},
     /// Where changes are recorded for undo, given each frame.
     history: ?*History = null,
     /// What this frame asks of the editor, for `update` to return.
@@ -117,8 +112,6 @@ pub const PreferencesWindow = struct {
     /// This computer's graphics, as the Graphics page edits them, loaded when it is first shown.
     graphics: graphics_settings.Form = .{},
     graphics_loaded: bool = false,
-    capturing_stop_key: bool = false,
-    captured_stop_key: ?eggy.Key = null,
     /// The sidebar and the page shown scroll apart.
     sidebar_scroll: ui.Layout.ScrollState = .{},
     section_scroll: ui.Layout.ScrollState = .{},
@@ -172,7 +165,7 @@ pub const PreferencesWindow = struct {
         if (!self.window.owns(curr_event)) return false;
         if (curr_event == .window_close_requested) return true;
         const input = weeoui_sdl3.translate(curr_event) orelse return false;
-        return !self.capturing_stop_key and input == .key_down and input.key_down.key == .escape;
+        return !self.form.wantsEscape() and input == .key_down and input.key_down.key == .escape;
     }
 
     /// Handle `curr_event` if it is for this window; returns whether it was.
@@ -183,13 +176,7 @@ pub const PreferencesWindow = struct {
     /// ```
     pub fn handle(self: *PreferencesWindow, curr_event: sdl3.events.Event) bool {
         if (!self.window.owns(curr_event)) return false;
-        if (self.capturing_stop_key and curr_event == .key_down) {
-            if (!curr_event.key_down.repeat) if (curr_event.key_down.scancode) |key| {
-                self.captured_stop_key = key;
-                self.capturing_stop_key = false;
-            };
-            return true;
-        }
+        if (self.form.takeKey(curr_event)) return true;
         self.window.handle(curr_event);
         return true;
     }
@@ -234,7 +221,7 @@ pub const PreferencesWindow = struct {
     fn showSection(self: *PreferencesWindow, index: usize) void {
         if (self.section == index) return;
         self.section = index;
-        self.synced = null;
+        self.form.forget();
         self.section_scroll = .{};
     }
 
@@ -331,7 +318,7 @@ pub const PreferencesWindow = struct {
                 const layer: Store.Layer = if (folders.project != null) .project else .global;
                 var count: usize = 0;
                 for (manifest.fields) |field| {
-                    if (!std.mem.eql(u8, current(store, layer, manifest.key, field), field.default)) count += 1;
+                    if (!std.mem.eql(u8, preference_form.current(store, layer, manifest.key, field), field.default)) count += 1;
                 }
                 return count;
             },
@@ -359,7 +346,7 @@ pub const PreferencesWindow = struct {
         context.end();
         restyle(context, .{ .grow = 1, .gap = 4 });
         if (is_editor and folders.project != null) {
-            if (context.tabs(&scopes, &self.scope)) self.synced = null;
+            if (context.tabs(&scopes, &self.scope)) self.form.forget();
         } else if (shipped != null) {
             if (context.tabs(&graphics_scopes, &self.graphics_scope)) self.graphics_loaded = false;
         } else if (section.content == .plugins) {
@@ -379,32 +366,7 @@ pub const PreferencesWindow = struct {
         const scope: usize = if (is_editor) self.scope else 1;
         const layer: Store.Layer = if (scope == 1) .project else .global;
 
-        // The number fields start from the values shown, for each section and scope.
-        const showing = Showing{ .section = self.section, .scope = scope };
-        if (self.synced == null or !std.meta.eql(self.synced.?, showing)) {
-            for (manifest.fields[0..@min(manifest.fields.len, max_fields)], 0..) |field, i| {
-                self.edits[i] = NumberEdit.init(current(store, layer, manifest.key, field)) catch NumberEdit.init("") catch unreachable;
-            }
-            self.synced = showing;
-        }
-
-        // A card for each of the struct's groups, holding its fields in their order.
-        const fields = manifest.fields[0..@min(manifest.fields.len, max_fields)];
-        var last_group: u8 = 0;
-        for (fields) |field| last_group = @max(last_group, field.group);
-        const arena = context.builder().allocator;
-        for (0..@as(usize, last_group) + 1) |group| {
-            var rows = SettingRows{ .query = query_text };
-            var card_open = false;
-            for (fields, 0..) |field, i| {
-                if (field.group != group) continue;
-                if (!rows.shows(files.displayName(arena, field.name) catch field.name, field.description)) continue;
-                if (!card_open) setting_rows.beginGroup(context);
-                card_open = true;
-                self.fieldRow(context, &rows, store, folders, layer, manifest.key, field, &self.edits[i]);
-            }
-            if (card_open) setting_rows.endGroup(context);
-        }
+        self.form.build(context, manifest, query_text, .{ .gpa = self.gpa, .store = store, .folders = folders, .layer = layer, .history = self.history, .now_ms = self.window.ui.time_ms });
     }
 
     /// The Graphics page for this computer: the user's own choices, on top of the game's (the
@@ -455,11 +417,7 @@ pub const PreferencesWindow = struct {
             rows.divide(context);
             context.begin(.row);
 
-            const tile = arena.create(Tile) catch continue;
-            tile.* = .{ .title = plugin.title };
-            const tile_element = context.builder().node(0, .{ .width = 36, .height = 36 }, .{ .custom = .{ .context = tile, .draw = Tile.draw } }, &.{}) catch continue;
-            tile_element.accessibility = .{ .role = .ignored };
-            context.element(tile_element);
+            project_tile.add(context, plugin.title, 36);
 
             context.begin(.column);
             context.begin(.row);
@@ -495,97 +453,6 @@ pub const PreferencesWindow = struct {
         }
         if (card_open) setting_rows.endGroup(context);
     }
-
-    /// One preference as a row: its name and description on the left, its control on the right
-    /// with, under it, where an inherited or overridden value is from, and a reset beside it
-    /// when this scope sets it.
-    fn fieldRow(self: *PreferencesWindow, context: *ui.Context, rows: *SettingRows, store: *Store, folders: files.Folders, layer: Store.Layer, key: []const u8, field: prefs.Field, edit: *NumberEdit) void {
-        const arena = context.builder().allocator;
-        const unit = unitOf(field.name);
-        const title = files.displayName(arena, field.name[0 .. field.name.len - unit.suffix.len]) catch field.name;
-        const value = current(store, layer, key, field);
-        // Controls take their ids from their (hidden) label: the field's name.
-        const hidden = std.fmt.allocPrint(arena, "##{s}", .{field.name}) catch return;
-        const global_value = store.literal(.global, key, field.name);
-        const set_here = store.literal(layer, key, field.name) != null;
-        // What the value would be without this scope's: All projects', else the default.
-        const inherited = if (layer == .project) global_value orelse field.default else field.default;
-
-        rows.beginMarked(context, title, field.description, .{ .changed = set_here and !std.mem.eql(u8, value, inherited) });
-        const changed: ?[]const u8 = switch (field.kind) {
-            .bool => blk: {
-                var on = std.mem.eql(u8, value, "true");
-                break :blk if (context.toggle(hidden, &on)) (if (on) "true" else "false") else null;
-            },
-            .@"enum" => blk: {
-                if (std.mem.eql(u8, key, files.editor_key) and std.mem.eql(u8, field.name, "stop_play_key")) break :blk self.stopKeyControl(context, value);
-                const options = arena.alloc([]const u8, field.options.len) catch break :blk null;
-                var selected: usize = 0;
-                for (options, field.options, 0..) |*option, name, index| {
-                    // Tabs take their ids from their labels, so each gets the field's too.
-                    const label = optionLabel(arena, key, field.name, name);
-                    option.* = if (field.options.len <= 4) std.fmt.allocPrint(arena, "{s}##{s} {s}", .{ label, field.name, name }) catch name else label;
-                    if (value.len > 1 and std.mem.eql(u8, value[1..], name)) selected = index;
-                }
-                // A few short choices side by side; more in a dropdown.
-                const picked = if (options.len <= 4) context.tabs(options, &selected) else context.select(hidden, options, &selected);
-                break :blk if (picked) (std.fmt.allocPrint(arena, ".{s}", .{field.options[selected]}) catch null) else null;
-            },
-            .int, .float => blk: {
-                context.begin(.row);
-                const typed = context.textInput(hidden, edit, field.default);
-                restyle(context, .{ .width = 96 });
-                if (unit.label.len > 0) context.muted(unit.label);
-                context.end();
-                restyle(context, .{ .direction = .row, .gap = 8, .align_items = .center });
-                if (!typed) break :blk null;
-                const text = std.mem.trim(u8, edit.text(), " ");
-                const valid = if (field.kind == .int) !std.meta.isError(std.fmt.parseInt(i128, text, 10)) else !std.meta.isError(std.fmt.parseFloat(f64, text));
-                break :blk if (valid) text else null;
-            },
-        };
-        if (changed) |literal| self.apply(store, folders, layer, key, field.name, literal);
-
-        // Under the control: what a reset goes back to, else where the value shown is from, else
-        // (on All projects) that this project overrides it.
-        const shown = valueLabel(arena, key, field, inherited);
-        const note: []const u8 = if (set_here)
-            (if (layer == .project and global_value != null) std.fmt.allocPrint(arena, "All projects use {s}", .{shown}) catch "" else std.fmt.allocPrint(arena, "Default is {s}", .{shown}) catch "")
-        else if (layer == .project and global_value != null)
-            "From All projects"
-        else if (layer == .global and folders.project != null and store.literal(.project, key, field.name) != null)
-            std.fmt.allocPrint(arena, "This project uses {s}", .{valueLabel(arena, key, field, store.literal(.project, key, field.name).?)}) catch ""
-        else
-            "";
-        if (rows.endResettable(context, note, set_here, field.name)) {
-            self.apply(store, folders, layer, key, field.name, null);
-            self.synced = null;
-        }
-    }
-
-    /// The key that stops Play, as a keycap, and a button to press another; returns the new
-    /// key's literal once one is pressed.
-    fn stopKeyControl(self: *PreferencesWindow, context: *ui.Context, value: []const u8) ?[]const u8 {
-        const code = (if (value.len > 1) std.meta.stringToEnum(eggy.Key, value[1..]) else null) orelse (files.Editor{}).stop_play_key;
-        context.begin(.row);
-        context.badge(if (self.capturing_stop_key) "Press a key..." else sdl3.keyboard.getScancodeName(code) orelse @tagName(code), .outline);
-        if (self.capturing_stop_key) {
-            if (context.buttonVariant("Cancel##stop key", .ghost)) self.capturing_stop_key = false;
-        } else if (context.buttonVariant("Change##stop key", .outline)) self.capturing_stop_key = true;
-        context.end();
-        restyle(context, .{ .direction = .row, .gap = 8, .align_items = .center });
-        const captured = self.captured_stop_key orelse return null;
-        self.captured_stop_key = null;
-        return std.fmt.allocPrint(context.builder().allocator, ".{t}", .{captured}) catch null;
-    }
-
-    /// Set `field` of `key` in `layer` to `literal` (null clears it), and save its file.
-    fn apply(self: *PreferencesWindow, store: *Store, folders: files.Folders, layer: Store.Layer, key: []const u8, field: []const u8, literal: ?[]const u8) void {
-        // Undoable: what it was goes with the change.
-        if (self.history) |history| history.recordPreference(layer, key, field, store.literal(layer, key, field), literal, self.window.ui.time_ms);
-        store.set(layer, key, field, literal) catch |err| return log.err("cannot set {s}.{s}: {t}", .{ key, field, err });
-        files.save(self.gpa, store, folders, layer, key) catch |err| log.err("cannot save {s}'s preferences: {t}", .{ key, err });
-    }
 };
 
 /// A sidebar row: its title, lit while shown or hovered, with a count of changes in a pill.
@@ -609,16 +476,6 @@ const Nav = struct {
         const pill = ui.Rect{ .x = r.x + r.w - 8 - pill_w, .y = r.y + (r.h - 18) / 2, .w = pill_w, .h = 18 };
         try c.roundRect(pill, t.primary, 9);
         try c.textIn(pill, self.count, 11, t.primary_foreground, .center);
-    }
-};
-
-/// A plugin's tile: its initial on a colour picked from its title.
-const Tile = struct {
-    title: []const u8,
-
-    fn draw(context: *const anyopaque, c: *ui.Canvas, r: ui.Rect) anyerror!void {
-        const self: *const Tile = @ptrCast(@alignCast(context));
-        try project_tile.draw(c, r, self.title, null, 8, .normal);
     }
 };
 
@@ -647,74 +504,10 @@ fn displayNameInto(buffer: []u8, name: []const u8) []const u8 {
     return files.displayName(fixed.allocator(), name[0..@min(name.len, buffer.len)]) catch name;
 }
 
-/// A number field's unit, from its name's suffix: the suffix, and the word shown after it.
-fn unitOf(name: []const u8) struct { suffix: []const u8, label: []const u8 } {
-    const units = [_][2][]const u8{ .{ "_seconds", "seconds" }, .{ "_ms", "ms" }, .{ "_px", "px" }, .{ "_m", "m" } };
-    for (units) |unit| if (std.mem.endsWith(u8, name, unit[0]) and name.len > unit[0].len) return .{ .suffix = unit[0], .label = unit[1] };
-    return .{ .suffix = "", .label = "" };
-}
-
-/// An enum choice as people read it: the editor's own have names of their own.
-fn optionLabel(arena: std.mem.Allocator, key: []const u8, field: []const u8, name: []const u8) []const u8 {
-    if (std.mem.eql(u8, key, files.editor_key)) {
-        if (std.mem.eql(u8, field, "code_editor")) if (std.meta.stringToEnum(code_editor.Choice, name)) |choice| {
-            return if (choice == .system) "System default" else choice.label();
-        };
-        if (std.mem.eql(u8, field, "log_level")) {
-            const levels = [_][2][]const u8{ .{ "err", "Errors" }, .{ "warn", "Warnings" }, .{ "info", "Info" }, .{ "debug", "Debug" } };
-            for (levels) |level| if (std.mem.eql(u8, name, level[0])) return level[1];
-        }
-    }
-    return files.displayName(arena, name) catch name;
-}
-
-/// `literal`, a value of `field`, as its control shows it.
-fn valueLabel(arena: std.mem.Allocator, key: []const u8, field: prefs.Field, literal: []const u8) []const u8 {
-    return switch (field.kind) {
-        .bool => if (std.mem.eql(u8, literal, "true")) "On" else "Off",
-        .@"enum" => if (literal.len > 1 and literal[0] == '.') optionLabel(arena, key, field.name, literal[1..]) else literal,
-        .int, .float => blk: {
-            const unit = unitOf(field.name);
-            break :blk if (unit.label.len > 0) std.fmt.allocPrint(arena, "{s} {s}", .{ literal, unit.label }) catch literal else literal;
-        },
-    };
-}
-
-/// What `field` of `key` is in `layer`: its own value, else (for the project) the global one,
-/// else the default.
-fn current(store: *const Store, layer: Store.Layer, key: []const u8, field: prefs.Field) []const u8 {
-    if (store.literal(layer, key, field.name)) |value| return value;
-    if (layer == .project) if (store.literal(.global, key, field.name)) |value| return value;
-    return field.default;
-}
-
 test "field names become labels" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     try std.testing.expectEqualStrings("Show gizmos", try files.displayName(arena.allocator(), "show_gizmos"));
-}
-
-test "a project falls back on the global value, then the default" {
-    var store = Store.init(std.testing.allocator);
-    defer store.deinit();
-    const field = prefs.Field{ .name = "volume", .kind = .float, .default = "0.8" };
-    try std.testing.expectEqualStrings("0.8", current(&store, .project, "game", field));
-    try store.set(.global, "game", "volume", "0.5");
-    try std.testing.expectEqualStrings("0.5", current(&store, .project, "game", field));
-    try store.set(.project, "game", "volume", "0.2");
-    try std.testing.expectEqualStrings("0.2", current(&store, .project, "game", field));
-    try std.testing.expectEqualStrings("0.5", current(&store, .global, "game", field));
-}
-
-test "number fields show their unit, and enum values their names" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    try std.testing.expectEqualStrings("seconds", unitOf("autosave_seconds").label);
-    try std.testing.expectEqualStrings("", unitOf("volume").label);
-    try std.testing.expectEqualStrings("VS Code", optionLabel(arena.allocator(), files.editor_key, "code_editor", "vscode"));
-    try std.testing.expectEqualStrings("Warnings", optionLabel(arena.allocator(), files.editor_key, "log_level", "warn"));
-    const field = prefs.Field{ .name = "autosave_seconds", .kind = .int, .default = "60" };
-    try std.testing.expectEqualStrings("60 seconds", valueLabel(arena.allocator(), files.editor_key, field, "60"));
 }
 
 test "a search keeps the pages with a matching row" {

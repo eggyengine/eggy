@@ -1,0 +1,14 @@
+.{
+    .plugin = .{
+        .title = "Discord",
+        .module = "eggy_discord",
+        .version = "0.1.0",
+        .description = "Shows what you're working on in the editor as your Discord status.",
+        // The editor runs it; exported games leave it out.
+        .dev = true,
+        .repository = "https://github.com/eggyengine/eggy",
+        // Eggy's own build.zig.zon fingerprint: this plugin ships inside Eggy.
+        .fingerprint = 0x634131700cbdf8dd,
+        .package = "eggy",
+    },
+}

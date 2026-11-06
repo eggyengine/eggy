@@ -7,7 +7,7 @@ const std = @import("std");
 const eggy = @import("eggy");
 const fetch_zig = @import("fetch.zig");
 const install_zig = @import("install.zig");
-const package_removal = @import("package_removal.zig");
+const package_entry = @import("package_entry.zig");
 const project_plugins = @import("project_plugins.zig");
 const Installed = eggy.plugin_manifest.Installed;
 const log = std.log.scoped(.plugins);
@@ -74,7 +74,7 @@ pub const AutoUpdate = struct {
         for (config.plugins) |installed| {
             const dependency = installed.dependency orelse continue;
             if (installed.source.len == 0) continue;
-            if (package_removal.isFolderDependency(a, package, dependency) catch false) continue;
+            if (package_entry.isFolderDependency(a, package, dependency) catch false) continue;
             try queue.append(a, installed);
         }
         self.* = .{ .gpa = gpa, .arena = arena, .project_dir = try a.dupe(u8, project_dir), .queue = queue.items, .reported = .init(gpa) };
@@ -142,8 +142,10 @@ pub const AutoUpdate = struct {
             why
         else if (project_plugins.needsNewerEggy(manifest))
             "it needs a newer Eggy: use File > Upgrade Editor"
-        else if (fetched.package != .fetch)
+        else if (fetched.package == .eggy)
             "it now says it ships inside Eggy"
+        else if (fetched.package == .folder)
+            "it is read from a folder now, so whoever develops it updates it"
         else {
             self.offered = fetched;
             self.offer_reported = false;

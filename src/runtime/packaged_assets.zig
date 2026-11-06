@@ -111,27 +111,21 @@ pub const Data = struct {
     fn loadModel(context: *anyopaque, gpa: std.mem.Allocator, path: []const u8) !eggy.assets.Model {
         const self: *Data = @ptrCast(@alignCast(context));
         // A tilemap is copied as it is, and drawn as the model its tiles make.
-        const root = @import("root");
-        if (comptime @hasDecl(root, "eggy_asset_ids")) {
-            if (root.eggy_asset_ids.findId(try eggy.assets.id.parse(path))) |entry| if (entry.kind == @backingInt(eggy.assets.Kind.tilemap)) {
-                const text = try readCopy(context, gpa, path);
-                defer gpa.free(text);
-                const map = try eggy.assets.tilemap.parse(gpa, text);
-                defer map.deinit(gpa);
-                return map.buildModel(gpa);
-            };
-        }
+        if (eggy.asset_catalog.findId(try eggy.assets.id.parse(path))) |entry| if (entry.kind == @backingInt(eggy.assets.Kind.tilemap)) {
+            const text = try readCopy(context, gpa, path);
+            defer gpa.free(text);
+            const map = try eggy.assets.tilemap.parse(gpa, text);
+            defer map.deinit(gpa);
+            return map.buildModel(gpa);
+        };
         return self.readPackaged(eggy.assets.Model, eggy.assets.model, gpa, path);
     }
 
     fn loadTexture(context: *anyopaque, gpa: std.mem.Allocator, path: []const u8) !eggy.assets.Texture {
         const self: *Data = @ptrCast(@alignCast(context));
-        const root = @import("root");
-        if (comptime @hasDecl(root, "eggy_asset_ids")) {
-            if (root.eggy_asset_ids.findId(try eggy.assets.id.parse(path))) |entry| {
-                if (entry.kind != @backingInt(eggy.assets.Kind.image)) return error.WrongAssetKind;
-                if (!entry.converted) return error.UnsupportedImageFormat;
-            }
+        if (eggy.asset_catalog.findId(try eggy.assets.id.parse(path))) |entry| {
+            if (entry.kind != @backingInt(eggy.assets.Kind.image)) return error.WrongAssetKind;
+            if (!entry.converted) return error.UnsupportedImageFormat;
         }
         return self.readPackaged(eggy.assets.Texture, eggy.assets.texture, gpa, path);
     }
@@ -139,11 +133,8 @@ pub const Data = struct {
     fn readCopy(context: *anyopaque, gpa: std.mem.Allocator, path: []const u8) anyerror![:0]u8 {
         const self: *Data = @ptrCast(@alignCast(context));
         const identity = try eggy.assets.id.parse(path);
-        const root = @import("root");
-        if (comptime @hasDecl(root, "eggy_asset_ids")) {
-            if (root.eggy_asset_ids.findId(identity)) |entry| {
-                if (entry.converted) return error.ConvertedResource;
-            }
+        if (eggy.asset_catalog.findId(identity)) |entry| {
+            if (entry.converted) return error.ConvertedResource;
         }
         if (bundled) {
             var key: [eggy.assets.id.key_len]u8 = undefined;

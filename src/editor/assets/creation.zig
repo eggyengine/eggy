@@ -58,7 +58,14 @@ const builtins = [_]Entry{
         .key = "eggy/animation_clip",
         .title = "Animation Clip",
         .extension = ".clip.zon",
-        .contents = ".{\n    .format_version = 1,\n    .duration_s = 1,\n    .tracks = .{},\n}\n",
+        .contents = ".{\n    .format_version = 4,\n    .duration_s = 1,\n    .tracks = .{},\n}\n",
+        .category = "Animation",
+    } },
+    .{ .file = .{
+        .key = "eggy/cutscene",
+        .title = "Cutscene",
+        .extension = ".clip.zon",
+        .contents = cutscene_template,
         .category = "Animation",
     } },
     .{ .file = .{
@@ -79,6 +86,9 @@ const builtins = [_]Entry{
 };
 
 /// A pass over the image, which a `PostProcess` lists in its `passes`.
+/// A cutscene's clip as it starts: five seconds, nothing keyed.
+pub const cutscene_template = ".{\n    .format_version = 4,\n    .duration_s = 5,\n    .tracks = .{},\n}\n";
+
 const post_shader_template =
     \\#include "eggy.slang"
     \\

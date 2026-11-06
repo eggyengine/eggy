@@ -60,25 +60,26 @@ pub const Package = union(enum) {
     eggy,
     /// A package to fetch (as `zig fetch` takes it) into dependency `dependency`.
     fetch: struct { url: []const u8, dependency: []const u8 },
+    /// A package on this computer, its folder `path` linked as dependency `dependency`, so the
+    /// game builds whatever is there now.
+    folder: struct { path: []const u8, dependency: []const u8 },
 };
 
-/// The package `manifest`, read from `origin`, is built from, in `arena`: Eggy, its own
-/// `.package`, the commit of its repository a raw.githubusercontent.com `origin` names, the
-/// package around a local `origin` (`package_root`, found by `packageRoot`), or its repository at
-/// tag `v<version>`. Fails with `error.NotFromRepository` when a raw.githubusercontent.com
+/// The package `manifest`, read from `origin`, is built from, in `arena`: Eggy, the folder of
+/// the package around a local `origin` (`package_root`, found by `packageRoot`), its own
+/// `.package`, the commit of its repository a raw.githubusercontent.com `origin` names, or its
+/// repository at tag `v<version>`. Fails with `error.NotFromRepository` when a raw.githubusercontent.com
 /// `origin` lies outside the repository the manifest names.
 pub fn packageFor(arena: std.mem.Allocator, manifest: Manifest, origin: Origin, package_root: ?[]const u8) !Package {
     if (manifest.inEggy()) return .eggy;
     const dependency = try dependencyName(arena, manifest.repository);
+    if (origin == .path) if (package_root) |root| return .{ .folder = .{ .path = root, .dependency = dependency } };
     if (manifest.package) |package| return .{ .fetch = .{ .url = package, .dependency = dependency } };
-    switch (origin) {
-        .url => |url| if (rawGitHub(url)) |raw| {
-            const at = try std.fmt.allocPrint(arena, "https://github.com/{s}/{s}", .{ raw.owner, raw.repo });
-            if (!eggy.plugin_manifest.packageInRepository(at, manifest.repository)) return error.NotFromRepository;
-            return .{ .fetch = .{ .url = try std.fmt.allocPrint(arena, "git+{s}#{s}", .{ at, raw.ref }), .dependency = dependency } };
-        },
-        .path => if (package_root) |root| return .{ .fetch = .{ .url = root, .dependency = dependency } },
-    }
+    if (origin == .url) if (rawGitHub(origin.url)) |raw| {
+        const at = try std.fmt.allocPrint(arena, "https://github.com/{s}/{s}", .{ raw.owner, raw.repo });
+        if (!eggy.plugin_manifest.packageInRepository(at, manifest.repository)) return error.NotFromRepository;
+        return .{ .fetch = .{ .url = try std.fmt.allocPrint(arena, "git+{s}#{s}", .{ at, raw.ref }), .dependency = dependency } };
+    };
     return .{ .fetch = .{ .url = try std.fmt.allocPrint(arena, "git+{s}#v{s}", .{ std.mem.trimEnd(u8, manifest.repository, "/"), manifest.version }), .dependency = dependency } };
 }
 
@@ -171,7 +172,7 @@ test "a plugin's package is its repository at the commit its eggy.zon came from"
     try std.testing.expectError(error.NotFromRepository, packageFor(a, manifest, .{ .url = "https://raw.githubusercontent.com/mallory/pack/main/stats/eggy.zon" }, null));
     // Elsewhere: the tag of its version; from a folder: that folder's package.
     try std.testing.expectEqualStrings("git+https://github.com/Me/eggy-pack#v1.2.0", (try packageFor(a, manifest, .{ .url = "https://example.com/eggy.zon" }, null)).fetch.url);
-    try std.testing.expectEqualStrings("/work/pack", (try packageFor(a, manifest, .{ .path = "/work/pack/stats/eggy.zon" }, "/work/pack")).fetch.url);
+    try std.testing.expectEqualStrings("/work/pack", (try packageFor(a, manifest, .{ .path = "/work/pack/stats/eggy.zon" }, "/work/pack")).folder.path);
     var in_eggy = manifest;
     in_eggy.package = "eggy";
     try std.testing.expect(try packageFor(a, in_eggy, .{ .path = "/x/eggy.zon" }, null) == .eggy);

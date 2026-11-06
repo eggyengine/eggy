@@ -542,6 +542,15 @@ pub const HotGame = struct {
             .note = try arena.dupeSentinel(u8, std.mem.span(source.note), 0),
             .icon_png = try arena.dupe(u8, source.icon_png[0..source.icon_png_len]),
         };
+        // The editor compiles no asset catalog; it looks assets up in the game's.
+        const catalog = try arena.alloc(eggy.asset_catalog.Entry, game.asset_count);
+        for (catalog, game.assets[0..game.asset_count]) |*asset, source| asset.* = .{
+            .path = try arena.dupe(u8, source.path[0..source.path_len]),
+            .id = source.id,
+            .kind = source.kind,
+            .converted = source.converted,
+        };
+        eggy.asset_catalog.set(catalog);
         self.* = .{ .gpa = gpa, .path = self.path, .copy_path = copy_path, .library = library, .game = game, .state = null, .panels = panels, .commands = commands, .console_commands = console_commands, .file_types = file_types, .ui_widgets = ui_widgets, .component_inspectors = component_inspectors, .asset_importers = asset_importers, .scene_tools = scene_tools, .menus = menus, .status_items = status_items, .export_platforms = export_platforms, .loads = self.loads, .preference_manifests = manifests, .component_types = component_types, .plugin_keys = plugin_keys, .manifest_arena = self.manifest_arena };
     }
 
@@ -617,6 +626,7 @@ pub const HotGame = struct {
         self.preference_manifests = &.{};
         self.component_types = &.{};
         self.plugin_keys = &.{};
+        eggy.asset_catalog.set(&.{});
         _ = self.manifest_arena.reset(.free_all);
         library.close();
         self.library = null;
@@ -788,7 +798,8 @@ pub const HotGame = struct {
         return eggy.math.fromArray(f32, 4, 4, columns);
     }
 
-    /// The view through the game's camera (`eggy.camera.find`); null without one.
+    /// The view the game shows (`eggy.camera_cuts.find`): a cutscene's shot, the previewed
+    /// clip's included, else the game's camera; null without one.
     /// Editor host only: queries via library-local component types; returns a view value copy
     /// and also returns null when the library is unloaded.
     ///
@@ -797,8 +808,9 @@ pub const HotGame = struct {
     /// ```
     pub fn findCamera(self: *const HotGame, app: *eggy.App) ?eggy.camera.View {
         if (self.library == null) return null;
+        const state = self.state orelse return null;
         var view: eggy.camera.View = undefined;
-        return if (self.game.find_camera(&app.world, &view)) view else null;
+        return if (self.game.find_camera(state, app, &view)) view else null;
     }
 
     /// Start previewing animation on `entity`, remembering what the preview will move. False
@@ -822,16 +834,17 @@ pub const HotGame = struct {
         clip_z[clip.len] = 0;
         @memcpy(model_z[0..model_clip.len], model_clip);
         model_z[model_clip.len] = 0;
-        return self.game.animation_preview_show(state, &app.world, &app.graphics.clips, &clip_z, &model_z, time_s);
+        return self.game.animation_preview_show(state, app, &clip_z, &model_z, time_s);
     }
 
     /// Put the previewed entity back as it was; does nothing without a preview.
     pub fn endAnimationPreview(self: *const HotGame, app: *eggy.App) void {
         const state = self.state orelse return;
-        self.game.animation_preview_end(state, &app.world);
+        self.game.animation_preview_end(state, app);
     }
 
-    /// The child paths below `entity` a clip track can name, one per line, allocated with `gpa`.
+    /// The targets a clip played by `entity` can name, one per line (child paths, then `/` paths
+    /// from the top of the scene), allocated with `gpa`.
     pub fn animationTargets(self: *const HotGame, gpa: std.mem.Allocator, app: *eggy.App, entity: eggy.ecs.EntityId) ![]u8 {
         if (self.library == null) return gpa.alloc(u8, 0);
         var buffer = try gpa.alloc(u8, 512);
@@ -844,7 +857,25 @@ pub const HotGame = struct {
         return gpa.realloc(buffer, needed);
     }
 
-    /// Position, rotation (degrees) and scale of the child of `entity` at `path` (empty: itself).
+    /// What `property` is now on what a clip played by `entity` names with `path`, as a key's
+    /// numbers; null when it has none.
+    pub fn animationValue(self: *const HotGame, app: *eggy.App, entity: eggy.ecs.EntityId, path: []const u8, property: eggy.assets.clip.Property) ?[3]f32 {
+        if (self.library == null) return null;
+        var out: [3]f32 = undefined;
+        return if (self.game.animation_value(&app.world, entityOf(entity), path.ptr, path.len, @backingInt(property), &out)) out else null;
+    }
+
+    /// The target text a clip played by `entity` would use for `other`, in `buffer`; null when no
+    /// path reaches it.
+    pub fn animationTargetFor(self: *const HotGame, app: *eggy.App, entity: eggy.ecs.EntityId, other: eggy.ecs.EntityId, buffer: []u8) ?[]const u8 {
+        if (self.library == null) return null;
+        const len = self.game.animation_target_for(&app.world, entityOf(entity), entityOf(other), buffer.ptr, buffer.len);
+        if (len < 0 or len > buffer.len) return null;
+        return buffer[0..@intCast(len)];
+    }
+
+    /// Position, rotation (degrees) and scale of what a clip played by `entity` names with
+    /// `path` (empty: itself).
     pub fn animationTransform(self: *const HotGame, app: *eggy.App, entity: eggy.ecs.EntityId, path: []const u8) ?[9]f32 {
         if (self.library == null) return null;
         var out: [9]f32 = undefined;

@@ -6,7 +6,7 @@ const eggy = @import("eggy");
 const project = @import("eggy_project");
 const api = @import("game_api.zig");
 
-/// The project's asset identities, which `AssetRef.init` resolves paths through at compile time.
+/// The project's asset catalog (`eggy.asset_catalog`), which this library also hands the editor.
 pub const eggy_asset_ids = project.asset_ids;
 
 const Plugins = eggy.plugins.Set(project.plugins, &project.plugin_keys);
@@ -42,6 +42,11 @@ const console_commands = blk: {
 const bar_menus = blk: {
     var list: [Plugins.editor_menus.len]api.Menu = undefined;
     for (&list, Plugins.editor_menus) |*menu, source| menu.* = .{ .key = source.key.ptr, .title = source.title.ptr, .extends = if (source.extends) |builtin| @backingInt(builtin) else -1, .item_count = source.items.len };
+    break :blk list;
+};
+const assets = blk: {
+    var list: [eggy.asset_catalog.compiled.len]api.Asset = undefined;
+    for (&list, eggy.asset_catalog.compiled) |*asset, entry| asset.* = .{ .path = entry.path.ptr, .path_len = entry.path.len, .id = entry.id, .kind = entry.kind, .converted = entry.converted };
     break :blk list;
 };
 const bar_menu_items = barItems(Plugins.editor_menus);
@@ -189,6 +194,8 @@ const game = api.Game{
     .export_platform_count = export_platforms.len,
     .export_ui = exportUi,
     .export_args = exportArgs,
+    .assets = &assets,
+    .asset_count = assets.len,
     .preferences = &preference_sets,
     .preference_count = preference_sets.len,
     .components = &component_types,
@@ -222,6 +229,8 @@ const game = api.Game{
     .animation_preview_end = animationPreviewEnd,
     .animation_targets = animationTargets,
     .animation_transform = animationTransform,
+    .animation_value = animationValue,
+    .animation_target_for = animationTargetFor,
     .animation_model = animationModel,
     .animation_assign = animationAssign,
 };
@@ -264,7 +273,7 @@ fn start(editor: *const api.Host, gpa_ptr: *const anyopaque, app_ptr: *anyopaque
 
 /// What can fail each frame, and the error each last failed with: one failing every frame is
 /// logged once, and again only when it fails differently or after it recovers.
-const Hook = enum { update, game_ui, draw, ui_event, editor_update, editor_ui, editor_panel_ui, component_inspector_ui, import_asset, scene_tool, editor_command, bar_action, bar_state, export_ui, export_args, event, world_start, world_update, scene_lights };
+const Hook = enum { update, game_ui, draw, ui_event, editor_update, editor_ui, editor_panel_ui, component_inspector_ui, import_asset, scene_tool, editor_command, bar_action, bar_state, export_ui, export_args, event, world_start, world_update, scene_lights, animation_event };
 var failures: [@typeInfo(Hook).@"enum".field_names.len]?anyerror = @splat(null);
 
 fn report(hook: Hook, err: anyerror) void {
@@ -273,6 +282,7 @@ fn report(hook: Hook, err: anyerror) void {
     last.* = err;
     const what = switch (hook) {
         .update => "an update hook",
+        .animation_event => "an animationEvent hook",
         .game_ui => "a gameUi hook",
         .draw => "a draw hook",
         .ui_event => "a uiEvent hook",
@@ -303,7 +313,7 @@ fn recovered(hook: Hook) void {
 fn stop(state_ptr: *anyopaque) callconv(.c) void {
     const state = stateOf(state_ptr);
     // The world may already be gone: free the snapshot without restoring it.
-    if (state.preview) |preview| state.gpa.free(preview.saved);
+    if (state.preview) |*preview| preview.discard();
     state.plugins.deinit();
     state.gpa.destroy(state);
 }
@@ -318,6 +328,10 @@ fn update(state_ptr: *anyopaque, app_ptr: *anyopaque) callconv(.c) bool {
     // The world's systems run here, where their errors have their names.
     if (app.updateWorld()) recovered(.world_update) else |err| {
         report(.world_update, err);
+        ok = false;
+    }
+    if (stateOf(state_ptr).plugins.animationEvents(app)) recovered(.animation_event) else |err| {
+        report(.animation_event, err);
         ok = false;
     }
     return ok;
@@ -542,8 +556,10 @@ fn worldMatrix(world: *anyopaque, entity: api.Entity, out: *[4][4]f32) callconv(
     return true;
 }
 
-fn findCamera(world: *anyopaque, out: *eggy.camera.View) callconv(.c) bool {
-    out.* = eggy.camera.find(worldOf(world)) orelse return false;
+fn findCamera(state_ptr: *anyopaque, app_ptr: *anyopaque, out: *eggy.camera.View) callconv(.c) bool {
+    const app = appOf(app_ptr);
+    const previewed = if (stateOf(state_ptr).preview) |preview| preview.root else null;
+    out.* = eggy.camera_cuts.find(&app.world, &app.graphics.clips, previewed) orelse return false;
     return true;
 }
 
@@ -557,21 +573,22 @@ fn animationPreviewBegin(state_ptr: *anyopaque, world: *anyopaque, entity: api.E
     return true;
 }
 
-fn animationPreviewShow(state_ptr: *anyopaque, world: *anyopaque, clips: *anyopaque, clip: [*:0]const u8, model_clip: [*:0]const u8, time_s: f32) callconv(.c) bool {
-    const preview = stateOf(state_ptr).preview orelse return false;
-    const cache: *eggy.ClipCache = @ptrCast(@alignCast(clips));
-    preview.show(worldOf(world), cache, .{ .clip = std.mem.span(clip), .model_clip = std.mem.span(model_clip), .time_s = time_s }) catch |err| {
+fn animationPreviewShow(state_ptr: *anyopaque, app_ptr: *anyopaque, clip: [*:0]const u8, model_clip: [*:0]const u8, time_s: f32) callconv(.c) bool {
+    const preview = if (stateOf(state_ptr).preview) |*found| found else return false;
+    const app = appOf(app_ptr);
+    preview.show(&app.world, &app.graphics.clips, &app.ui_scenes, .{ .clip = std.mem.span(clip), .model_clip = std.mem.span(model_clip), .time_s = time_s }) catch |err| {
         std.log.err("cannot show the animation: {t}", .{err});
         return false;
     };
     return true;
 }
 
-fn animationPreviewEnd(state_ptr: *anyopaque, world: *anyopaque) callconv(.c) void {
+fn animationPreviewEnd(state_ptr: *anyopaque, app_ptr: *anyopaque) callconv(.c) void {
     const state = stateOf(state_ptr);
     var preview = state.preview orelse return;
     state.preview = null;
-    preview.end(worldOf(world));
+    const app = appOf(app_ptr);
+    preview.end(&app.world, &app.ui_scenes);
 }
 
 fn animationTargets(world: *anyopaque, entity: api.Entity, buffer: [*]u8, capacity: usize) callconv(.c) usize {
@@ -588,6 +605,18 @@ fn animationTargets(world: *anyopaque, entity: api.Entity, buffer: [*]u8, capaci
 fn animationTransform(world: *anyopaque, entity: api.Entity, path: [*]const u8, path_len: usize, out: *[9]f32) callconv(.c) bool {
     out.* = eggy.animation_preview.transformAt(worldOf(world), entityOf(entity), path[0..path_len]) orelse return false;
     return true;
+}
+
+fn animationValue(world: *anyopaque, entity: api.Entity, path: [*]const u8, path_len: usize, property: u8, out: *[3]f32) callconv(.c) bool {
+    const which = std.enums.fromInt(eggy.assets.clip.Property, property) orelse return false;
+    const target = eggy.animation_preview.entityAt(worldOf(world), entityOf(entity), path[0..path_len]) orelse return false;
+    out.* = eggy.animation.read(worldOf(world), target, which) orelse return false;
+    return true;
+}
+
+fn animationTargetFor(world: *anyopaque, entity: api.Entity, other: api.Entity, buffer: [*]u8, capacity: usize) callconv(.c) isize {
+    const text = eggy.animation.targetFor(worldOf(world), entityOf(entity), entityOf(other), buffer[0..capacity]) orelse return -1;
+    return @intCast(text.len);
 }
 
 fn animationModel(world: *anyopaque, entity: api.Entity, buffer: [*]u8, capacity: usize) callconv(.c) isize {

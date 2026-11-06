@@ -28,7 +28,11 @@ pub fn entryFor(fetched: *const Fetched, embedded: bool) Installed {
     const manifest = fetched.manifest;
     return .{
         .module = manifest.module,
-        .dependency = if (fetched.package == .fetch) fetched.package.fetch.dependency else null,
+        .dependency = switch (fetched.package) {
+            .eggy => null,
+            .fetch => |package| package.dependency,
+            .folder => |package| package.dependency,
+        },
         .version = manifest.version,
         .dev = manifest.dev,
         .source = if (embedded) "" else fetched.origin.text(),

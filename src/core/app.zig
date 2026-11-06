@@ -21,6 +21,8 @@ const GraphicsSettingsUi = @import("game_ui/graphics_settings.zig").GraphicsSett
 const DevConsole = @import("dev_console/dev_console.zig").DevConsole;
 const ui_scenes = @import("ui_scenes/ui_scenes.zig");
 const audio_zig = @import("audio/audio.zig");
+const animation_zig = @import("animation.zig");
+const Cutscene = @import("cutscene.zig").Cutscene;
 
 const web = builtin.os.tag == .emscripten;
 const android = builtin.abi.isAndroid();
@@ -65,6 +67,12 @@ pub const App = struct {
     /// The mixer and device sound plays through (see `audio`); null only for hosts without one.
     audio_host: ?*audio_zig.Host = null,
     draw2d: @import("draw2d.zig").Draw2d = .{},
+    /// What playing cutscenes take from the player, and their letterbox (see `cutscene.zig`).
+    cutscene: Cutscene = .{},
+    /// The clip events this frame's animation step passed, for the `animationEvent` hook.
+    animation_events: std.ArrayList(animation_zig.Event) = .empty,
+    /// The sound keys it passed, started on their targets' `AudioSource`s the same frame.
+    animation_sounds: std.ArrayList(animation_zig.Event) = .empty,
     /// UI scenes' caches, what code changed about them and their presses (see `uiScenes`).
     ui_scenes: ui_scenes.State = .{},
     particles: @import("particles.zig").Particles = .{},
@@ -201,6 +209,8 @@ pub const App = struct {
         self.dev_console.deinit(self.world.allocator);
         self.debug_draw.deinit(self.world.allocator);
         self.draw2d.deinit();
+        self.animation_events.deinit(self.world.allocator);
+        self.animation_sounds.deinit(self.world.allocator);
         self.graphics.ui_billboards = null;
         self.ui_scenes.deinit();
         self.scene_transition.deinit();
@@ -406,6 +416,9 @@ pub const App = struct {
         self.graphics.world_draw = null;
         self.graphics.ui_billboards = null;
         self.ui_scenes.clearEntities();
+        self.animation_events.clearRetainingCapacity();
+        self.animation_sounds.clearRetainingCapacity();
+        self.cutscene = .{};
         self.profiling = .{};
         self.graphics.lights = .{};
         self.scene_transition.deinit();
@@ -458,8 +471,14 @@ pub const App = struct {
         try self.world.insertResource(self.time);
         try ui_scenes.publish(&self.world, &self.ui_scenes);
         inline for (.{ .PreUpdate, .Update, .PostUpdate }) |stage| try self.world.runStage(stage);
-        // Clips play after the game's systems, by the game's (scaled, pause-held) time.
-        @import("animation.zig").step(&self.world, &self.graphics.clips, self.time.delta_s);
+        // Clips play after the game's systems, by the game's (scaled, pause-held) time; a
+        // cutscene skipped with Escape goes by real time.
+        self.animation_events.clearRetainingCapacity();
+        self.animation_sounds.clearRetainingCapacity();
+        const effects = animation_zig.Effects{ .ui = &self.ui_scenes, .events = &self.animation_events, .sounds = &self.animation_sounds, .gpa = self.world.allocator };
+        animation_zig.step(&self.world, &self.graphics.clips, self.time.delta_s, effects);
+        if (self.cutscene.update(&self.world, &self.graphics.clips, self.time.unscaled_delta_s, effects)) self.input.cancel();
+        audio_zig.startFromClips(&self.world, self.animation_sounds.items);
         @import("sprite_animator.zig").step(&self.world, self.time.delta_s);
         // Particles move on game time too, and are drawn where they end up.
         self.particles.step(self.time.delta_s);

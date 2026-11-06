@@ -12,7 +12,7 @@
 # Do not call exit: this file is invoked inside the caller's session.
 
 $EggyRepo = if ($env:EGGY_REPO) { $env:EGGY_REPO } else { 'eggyengine/eggy' }
-$ZigRelease = '0.17.0'
+$ZigRelease = '0.17.1'
 $Platform = 'windows-x86_64'
 
 function Test-Yes([string]$Reply) {

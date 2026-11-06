@@ -20,6 +20,7 @@ pub const max_voices = @import("host.zig").max_voices;
 pub const AudioSource = sources.AudioSource;
 pub const AudioListener = sources.AudioListener;
 pub const step = sources.step;
+pub const startFromClips = sources.startFromClips;
 
 test {
     _ = voices;
