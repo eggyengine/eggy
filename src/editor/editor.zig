@@ -586,6 +586,7 @@ pub fn Editor(comptime project: type) type {
             self.app.graphics.queue.waitIdle() catch {};
             self.scene.deinit();
             self.camera_preview.deinit();
+            self.scene_view.deinit();
             if (self.model_view) |*view| view.deinit();
             if (self.scene_2d_view) |*view| view.deinit();
             self.scene_2d.brush.deinit(self.gpa);
@@ -4000,7 +4001,20 @@ pub fn Editor(comptime project: type) type {
                 .selection = .{ .gpa = self.gpa, .set = &self.entity_editor.selection },
                 .scene_tool = .{ .context = self, .use = useSceneTool },
                 .selection_hidden = !self.play_mode.playing() and if (self.entity_editor.selected) |entity| self.entity_editor.view_state.isHidden(&self.app.world, entity) else false,
+                .bones = if (!self.play_mode.playing() and !self.film.busy() and self.animation.keysBonesOf(self.entity_editor.selected)) .{ .gpa = self.gpa, .context = self, .key = keyBone } else null,
             };
+        }
+
+        /// Key a bone the Scene panel's gizmo moves into the clip the Animation panel shows.
+        fn keyBone(context: *anyopaque, node: []const u8, field: scene_view.Bones.Field, value: eggy.math.Vec3, stage: scene_view.Bones.Stage) void {
+            const self: *Self = @ptrCast(@alignCast(context));
+            const env = self.animationEnv() orelse return;
+            const property: eggy.assets.clip.Property = switch (field) {
+                .position => .position,
+                .rotation_deg => .rotation_deg,
+                .scale => .scale,
+            };
+            self.animation.keyBone(env, node, property, value.toArray(), stage == .final);
         }
 
         /// Hand the pointer to a plugin's Scene tool; outside Play, a stroke is one undo step.

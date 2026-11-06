@@ -48,6 +48,13 @@ Or turn on **Record**: then whatever you move with the gizmo or the 2D handles, 
 field of view changed in the Inspector, is keyed at the head as soon as you let go. Select
 the entity to move in the Hierarchy; the panel keeps showing the clip.
 
+A model with a skeleton is posed bone by bone. While the panel shows the clip of an entity
+whose model has bones, the Scene panel draws them over it: click a joint to pick its bone, and
+the gizmo moves, turns or scales that bone instead of the entity. Every drag is keyed on the
+bone at the head as you let go, so a walk cycle is a handful of poses at different times. Click
+anywhere off the joints to put the gizmo back on the entity. A model clip on the same entity
+plays underneath, and the bones you key take over from it.
+
 What needs a value typed, a UI node's **Text**, a **Sound** to start or an **Event**, opens
 **Key…** from Add track. **Key…** keys any property of any target: pick both, name the UI node
 where it needs one, give the value and press **Add key**.

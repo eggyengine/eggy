@@ -220,8 +220,11 @@ pub fn hit(gizmo: Layout, pointer: ui.Vec2) ?Handle {
 }
 
 /// Which `Transform` field a drag changes, and to what.
+/// Which of a `Transform`'s fields a drag changes, in their order.
+pub const Field = enum { position, rotation_deg, scale };
+
 pub const Change = struct {
-    field: enum { position, rotation_deg, scale },
+    field: Field,
     value: Vec3,
 };
 
@@ -492,7 +495,8 @@ fn pair(v: ui.Vec2) [2]f32 {
     return .{ v.x, v.y };
 }
 
-fn line(c: *ui.Canvas, from: ui.Vec2, to: ui.Vec2, width: f32, color: [4]f32) !void {
+/// A straight line `width` points thick from `from` to `to`.
+pub fn line(c: *ui.Canvas, from: ui.Vec2, to: ui.Vec2, width: f32, color: [4]f32) !void {
     const along = sub2(to, from);
     const span = @sqrt(along.x * along.x + along.y * along.y);
     if (span < 0.01) return;
@@ -535,7 +539,7 @@ fn dot2(c: *ui.Canvas, centre: ui.Vec2, radius: f32, color: [4]f32) !void {
 }
 
 /// Where world `point` lands in `scene`, in points; null behind the camera.
-fn toScreen(view_projection: math.Mat4, scene: ui.Rect, world: Vec3) ?ui.Vec2 {
+pub fn toScreen(view_projection: math.Mat4, scene: ui.Rect, world: Vec3) ?ui.Vec2 {
     const projected = eggy.camera.project(view_projection, world);
     if (!projected.in_front) return null;
     return .{ .x = scene.x + (projected.x + 1) / 2 * scene.w, .y = scene.y + (1 - projected.y) / 2 * scene.h };

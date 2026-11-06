@@ -257,6 +257,37 @@ pub const Dock = struct {
         self.show(env);
     }
 
+    /// Whether the panel keys `entity`'s model bones: it shows that entity's authored clip.
+    pub fn keysBonesOf(self: *const Dock, entity: ?eggy.ecs.EntityId) bool {
+        const shown = self.entity orelse return false;
+        const chosen = entity orelse return false;
+        return shown.eql(chosen) and self.authored_len > 0 and self.source == 0 and !self.playing;
+    }
+
+    /// Key bone `node`'s `property` of the model at the head, in the authored clip. `final`
+    /// writes the file as one undo step; otherwise only the clip the game plays shows it, for a
+    /// drag under way. The pose is shown from then on.
+    pub fn keyBone(self: *Dock, env: Env, node: []const u8, property: Property, value: [3]f32, final: bool) void {
+        const clip = env.app.graphics.clips.authored(self.authoredKey()) orelse return;
+        var target_buffer: [max_target_len]u8 = undefined;
+        const target = std.fmt.bufPrint(&target_buffer, "{s}{s}", .{ eggy.assets.clip.model_prefix, node }) catch return self.say("That bone's name is too long to key.");
+        const keys = [_]NewKey{.{ .target = target, .property = property, .key = .{ .time_s = self.time_s, .value = value } }};
+        self.request();
+        if (final) {
+            var label_buffer: [512]u8 = undefined;
+            var fixed = std.heap.FixedBufferAllocator.init(&label_buffer);
+            const path = env.assets.label(fixed.allocator(), self.authoredKey());
+            self.edit(env, clip, self.authoredKey(), path, .{ .keys = &keys });
+            const shown = std.fmt.bufPrint(&self.keyed, "Keyed {s} {s} at {d}", .{ node, propertyName(property), timeline.frameOf(self.time_s) }) catch "";
+            self.keyed_len = shown.len;
+            return;
+        }
+        const gpa = env.history.gpa;
+        const shown = applied(gpa, clip, .{ .keys = &keys }) catch return;
+        defer shown.deinit(gpa);
+        env.app.graphics.clips.replace(self.authoredKey(), shown) catch {};
+    }
+
     /// Carry out an undo or redo of a clip edit: `text` becomes the file at `path` and the clip
     /// the game plays, and the pose follows.
     /// Errors: the file can't be written or `text` isn't a valid clip.
@@ -1598,6 +1629,7 @@ fn trackOwner(track: eggy.assets.clip.Track) []const u8 {
 
 fn displayTarget(target: []const u8) []const u8 {
     if (target.len == 0) return "This entity";
+    if (std.mem.startsWith(u8, target, eggy.assets.clip.model_prefix)) return target[eggy.assets.clip.model_prefix.len..];
     if (std.mem.startsWith(u8, target, eggy.assets.clip.scene_prefix)) return target[eggy.assets.clip.scene_prefix.len..];
     return target;
 }

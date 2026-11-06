@@ -73,6 +73,8 @@ pub const Support = @import("support.zig").Support;
 pub const audio = @import("audio/audio.zig");
 pub const animation = @import("animation.zig");
 pub const animation_preview = @import("animation_preview.zig");
+/// How a model is posed and deformed by what its `Animator` plays.
+pub const deformation = @import("deformation.zig");
 pub const cutscene = @import("cutscene.zig");
 pub const camera_cuts = @import("camera_cuts.zig");
 pub const film = @import("film.zig");
