@@ -1,7 +1,9 @@
 //! A third-person player: WASD or the left stick walks, the mouse or right stick orbits the camera,
 //! and Shift or the controller's west button sprints. Add `ThirdPersonPlayer` to an entity (its
 //! model as a child) and it makes its own camera over the shoulder; the body turns to face where
-//! it walks. This file is yours to change; keep it in `src/`, beside the game.
+//! it walks. Give it clips to stand, walk and sprint with (keyed in the Animation panel, bones
+//! included, or a model's own) and its model fades between them as it goes. This file is yours
+//! to change; keep it in `src/`, beside the game.
 //!
 //! List it in your game (`src/main.zig`), or in any plugin of yours:
 //!
@@ -53,7 +55,19 @@ pub const ThirdPersonPlayer = struct {
     yaw_deg: f32 = 0,
     /// Ground velocity along world X and Z. Set by walking.
     velocity_m_per_s: eggy.math.Vec2 = .zero,
+    /// What the model plays standing, walking and sprinting; unset leaves it as it is.
+    idle_clip: eggy.AssetRef(.animation) = .{},
+    walk_clip: eggy.AssetRef(.animation) = .{},
+    run_clip: eggy.AssetRef(.animation) = .{},
+    /// How long the model takes to fade from one of them to the next.
+    clip_fade_s: f32 = 0.2,
+    /// The entity that plays them; unset for the first child with an `Animator`.
+    model: eggy.EntityRef(eggy.animation.Animator) = .{},
+    /// Which of them plays now. Set by walking.
+    gait: Gait = .none,
 };
+
+pub const Gait = enum { none, idle, walk, run };
 
 pub const Controls = eggy.input.Map(enum { move, look, look_stick, sprint }, .{
     .key = "third_person_player",
@@ -130,7 +144,46 @@ pub fn update(app: *eggy.App) !void {
             pivot.rotation_deg = .init(player.pitch_deg, player.yaw_deg - body_yaw_deg, 0);
         }
         if (player.camera.get(world)) |camera| camera.position = .init(player.shoulder_offset_m, 0, player.distance_m);
+
+        try animateGait(app, view.entity, player);
     }
+}
+
+/// Fade the player's model to the clip for how fast it goes, when that changes.
+fn animateGait(app: *eggy.App, entity: ecs.EntityId, player: *ThirdPersonPlayer) !void {
+    const gait = gaitFor(player.velocity_m_per_s.length(), player.walk_speed_m_per_s, player.sprint_speed_m_per_s);
+    if (gait == player.gait) return;
+    const clip = switch (gait) {
+        .idle => player.idle_clip,
+        .walk => player.walk_clip,
+        .run => player.run_clip,
+        .none => return,
+    };
+    if (clip.len == 0) return;
+    const model = player.model.entity orelse animatedChild(&app.world, entity) orelse return;
+    // Authored clips and a model's own are played through different fields.
+    const loaded = app.graphics.clips.get(clip.key()) orelse return;
+    const played: eggy.animation.Clip = switch (loaded.*) {
+        .authored => .{ .asset = clip },
+        .imported => .{ .imported = clip },
+    };
+    try app.animation().blendTo(model, played, @max(player.clip_fade_s, 0.001), .{ .repeat = .loop });
+    player.gait = gait;
+}
+
+/// Standing until it moves at a tenth of walking speed, sprinting past halfway from walking to
+/// sprinting speed.
+fn gaitFor(speed_m_per_s: f32, walk_m_per_s: f32, sprint_m_per_s: f32) Gait {
+    if (speed_m_per_s < 0.1 * walk_m_per_s) return .idle;
+    if (speed_m_per_s > (walk_m_per_s + sprint_m_per_s) / 2) return .run;
+    return .walk;
+}
+
+/// The first child of `entity` with an `Animator`.
+fn animatedChild(world: *ecs.World, entity: ecs.EntityId) ?ecs.EntityId {
+    var children = world.children(entity);
+    while (children.next()) |child| if (world.get(child, eggy.animation.Animator) != null) return child;
+    return null;
 }
 
 /// Frees the mouse again. Call it whenever the game stops running, from `editorUpdate`.
@@ -192,6 +245,12 @@ test "a player gets a pivot at its height and a camera behind it on the pivot" {
     try std.testing.expect(world.getParent(pivot).?.eql(body));
     try std.testing.expect(world.getParent(camera).?.eql(pivot));
     try std.testing.expectEqual(@as(f32, 5), world.get(camera, eggy.Transform).?.position.z);
+}
+
+test "the model stands, walks and sprints by how fast the body goes" {
+    try std.testing.expectEqual(Gait.idle, gaitFor(0.1, 4, 8));
+    try std.testing.expectEqual(Gait.walk, gaitFor(4, 4, 8));
+    try std.testing.expectEqual(Gait.run, gaitFor(7.5, 4, 8));
 }
 
 test "the body turns the short way round" {

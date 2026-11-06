@@ -40,3 +40,8 @@ Then add the component to an entity in the Inspector. The player makes its own c
 the game starts. Its fields set the speeds, look sensitivity, field of view and how far up
 and down it can look, and for the third-person player how far behind and to the side the
 camera sits. Click in the game to capture the mouse, and press Escape to let it go.
+
+Give the third-person player's **Idle clip**, **Walk clip** and **Run clip** and its model
+fades between them by how fast it goes: clips you keyed in the Animation panel, bones and all
+(see [Animate entities](animate-entities.md)), or a model's own. The model is the first child
+with an **Animator**, or the entity you set as **Model**.
