@@ -5,7 +5,8 @@ const ui = eggy.ui;
 const console_log = @import("console_log.zig");
 const terminal_view = @import("terminal_view.zig");
 const diagnostic = @import("diagnostic.zig");
-const restyle = @import("page_style.zig").restyle;
+const page_style = @import("page_style.zig");
+const restyle = page_style.restyle;
 
 /// The level chips, in the order they sit in the toolbar.
 const level_chips = [_]struct { level: std.log.Level, label: []const u8 }{
@@ -19,8 +20,6 @@ const chip_padding: f32 = 10;
 const chip_gap: f32 = 6;
 const chip_text_size: f32 = 12;
 const dot_size: f32 = 7;
-/// Room under the messages for the dev console's prompt and the candidates under it.
-const command_line_height: f32 = 32 + 22 + 12;
 
 /// The dev console's prompt under the messages: what it runs on and with. Its output is logged
 /// (`DevConsole.log_output`), so it shows among the messages.
@@ -55,6 +54,18 @@ const LevelChip = struct {
 };
 
 const grip_height: f32 = 10;
+
+// ponytail: these mirror Weeoui's private `controlHeight` and `gap`; use those once Weeoui makes
+// them public.
+/// The height of a text field or button at `context`'s density.
+fn controlHeight(context: *const ui.Context) f32 {
+    return if (context.density == .compact) 28 else 40;
+}
+
+/// The space between widgets at `context`'s density.
+fn widgetGap(context: *const ui.Context) f32 {
+    return if (context.density == .compact) 8 else 12;
+}
 const min_detail_height: f32 = 60;
 const min_list_height: f32 = 60;
 
@@ -161,10 +172,19 @@ pub const Console = struct {
         context.end();
         restyle(context, .{ .direction = .row, .gap = 6, .align_items = .center });
 
-        // The list takes what the details, dragged to the height wanted, leave of the page.
-        const available = @max(120, context.viewport.h - 114 - if (command_line != null) command_line_height else 0);
-        const detail_height = std.math.clamp(self.detail_height, min_detail_height, @max(min_detail_height, available - 44 - grip_height - min_list_height));
-        try self.messageRows(context, if (self.selected != null) @max(min_list_height, available - detail_height - 44 - grip_height) else available);
+        // The list takes what the toolbar, the details (dragged to the height wanted) and the
+        // prompt leave of the page, so the prompt sits at its bottom. Room for the prompt's
+        // candidates is kept only while it shows them (as of the last frame).
+        const gap = widgetGap(context);
+        const control = controlHeight(context);
+        const prompt_height: f32 = if (command_line) |line|
+            gap + control + if (line.app.dev_console.prompt.candidates_shown != 0) gap + eggy.dev_console.candidates_height else 0
+        else
+            0;
+        const available = @max(120, page_style.pageHeight(context) - control - gap - prompt_height);
+        const details_extra = 3 * gap + grip_height + control;
+        const detail_height = std.math.clamp(self.detail_height, min_detail_height, @max(min_detail_height, available - details_extra - min_list_height));
+        try self.messageRows(context, if (self.selected != null) @max(min_list_height, available - detail_height - details_extra) else available);
         var source: ?diagnostic.Location = null;
         if (self.selectedEntry()) |entry| {
             try self.resizeGrip(context, detail_height);

@@ -9,7 +9,9 @@ const Palette = @import("palette.zig").Palette;
 pub const max_line_bytes = 1024;
 /// The most lines Up and Down recall.
 const max_history = 100;
-const chip_height: f32 = 22;
+/// The height of the row of candidates under (or over) the field.
+pub const candidates_height: f32 = 22;
+const chip_height = candidates_height;
 const chip_gap: f32 = 6;
 const chip_padding: f32 = 8;
 const chip_text_size: f32 = 12;
