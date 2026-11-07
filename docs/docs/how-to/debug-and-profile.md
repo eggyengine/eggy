@@ -21,10 +21,14 @@ They are overlays: they remain visible through scene geometry, do not receive in
 do not require a `gameUi` or `draw` hook. Lines are clipped against the camera frustum;
 labels behind the camera are omitted.
 
-A frame holds up to 1024 line segments and 128 labels of at most 256 bytes. A box needs
+A frame holds up to 4096 line segments and 128 labels of at most 256 bytes. A box needs
 twelve segments and is recorded all-or-nothing. Invalid coordinates, colors, bounds,
 UTF-8 or capacity exhaustion return explicit errors. Requests clear before the next
 frame's hooks; startup-only requests are not persistent gizmos.
+
+`eggy.physics.drawColliders(&app.world, gpa, &.{entity}, &app.debug_draw)` adds an entity's
+colliders as wireframes, and the console's `physics debug on` draws every collider each frame
+(see [Physics](../guides/physics.md)).
 
 ## Measure CPU work
 

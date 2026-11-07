@@ -1200,6 +1200,12 @@ pub const Workspace = struct {
     }
 
     /// Pop tab `index` out into an OS window, or bring it back when it is out.
+    /// The kind of the tab the main window shows; null with none shown.
+    pub fn shownKind(self: *const Workspace) ?workspace_tabs.Kind {
+        const index = self.tabs.active orelse return null;
+        return (self.tabs.list[index] orelse return null).kind;
+    }
+
     fn popOutTab(self: *Workspace, index: usize) void {
         if (self.tabs.windowOf(&self.dock, index) != null) return self.tabs.show(&self.dock, index);
         const area = self.dock.viewport;

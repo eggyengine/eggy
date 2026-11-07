@@ -12,7 +12,7 @@ through it step by step.
 The console reads the first word of each line:
 
 1. If it names one of Eggy's commands (`help`, `clear`, `run`, `entities`, `get`, `set`,
-   `timescale`), that command runs.
+   `timescale`, `physics`), that command runs.
 2. If it names a command your game or a plugin adds, that runs.
 3. Otherwise the whole line runs as Buzz.
 
@@ -36,12 +36,13 @@ Play share it.
 
 ## Natives
 
-Eggy gives every session two functions:
+Eggy gives every session these functions:
 
 | Function | What it does |
 | --- | --- |
 | `print(value: str) > void` | Shows `value` as a line of console output. |
 | `run(command: str) > bool` | Runs a console command, as if typed. Returns `true` if it ran, and `false` if there's no such command or it failed. Whatever the command prints shows in the console. |
+| `physicsDebug(on: bool) > bool` | Draws every collider and contact each frame, or stops; `run("physics debug on")` underneath. |
 
 `print` takes a string only. Put other values in one with interpolation:
 `print("lives: {lives}")`.
@@ -62,6 +63,7 @@ These are the commands `run` can reach, as well as any [your game adds](./script
 | `get <entity> <Component.field>` | Shows a component's field as ZON. |
 | `set <entity> <Component.field> <zon>` | Sets a component's field from ZON. |
 | `timescale [scale]` | Shows or sets how fast game time passes. `1` is normal and `0` pauses. |
+| `physics [debug [on\|off]]` | Shows the physics precision and whether colliders are drawn; `debug on` draws every collider and contact, `debug` alone flips it. |
 
 An `<entity>` is its name, or `#` and its id. `entities`, `get` and `set` look into the
 game's world, and say so when there's no game loaded to look into.

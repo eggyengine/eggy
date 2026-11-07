@@ -210,6 +210,7 @@ const game = api.Game{
     .write_name = writeName,
     .gather_meshes = gatherMeshes,
     .gather_lights = gatherLights,
+    .draw_colliders = drawColliders,
     .gather_ui_scenes = gatherUiScenes,
     .ui_widgets = &ui_widgets,
     .ui_widget_count = ui_widgets.len,
@@ -540,6 +541,15 @@ fn gatherLights(world: *anyopaque, out: *eggy.lighting.Frame) callconv(.c) bool 
     recovered(.scene_lights);
     eggy.lighting.reportInvalid(frame, &invalid_lights_reported);
     return true;
+}
+
+fn drawColliders(app_ptr: *anyopaque, entities: [*]const api.Entity, count: usize) callconv(.c) void {
+    const app: *eggy.App = @ptrCast(@alignCast(app_ptr));
+    // The editor draws a selection, so a short list; past it, the first ones.
+    var ids: [64]eggy.ecs.EntityId = undefined;
+    const shown = @min(count, ids.len);
+    for (ids[0..shown], entities[0..shown]) |*id, entity| id.* = entityOf(entity);
+    eggy.physics.drawColliders(&app.world, app.world.allocator, ids[0..shown], &app.debug_draw) catch |err| std.log.warn("cannot draw colliders: {t}", .{err});
 }
 
 fn gatherUiScenes(state_ptr: *anyopaque, app_ptr: *anyopaque) callconv(.c) void {

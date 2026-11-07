@@ -45,6 +45,8 @@ pub const Content = union(enum) {
     project: *ProjectSettings,
     /// The graphics the editor draws with, and those the game ships with.
     graphics: Graphics,
+    /// The project's physics, in its `eggy.zon`, which the caller saves after each frame.
+    physics: *ProjectSettings,
     /// Another window, which picking it in the sidebar opens.
     link: Opening,
 };
@@ -359,6 +361,7 @@ pub const PreferencesWindow = struct {
             .preferences => |manifest| manifest,
             .plugins => |plugins| return self.pluginRows(context, plugins, query_text, sections),
             .project => |settings| return settings.build(context, query_text),
+            .physics => |settings| return settings.buildPhysics(context, query_text),
             .graphics => |graphics| return if (shipped != null and self.graphics_scope == 1) shipped.?.buildGraphics(context, query_text) else self.graphicsRows(context, graphics, query_text),
             .link => return,
         };
@@ -490,6 +493,7 @@ fn sectionMatches(section: Section, query_text: []const u8) bool {
         },
         .graphics => return graphics_settings.anyRowMatches(query_text),
         .project => return ProjectSettings.matches(query_text),
+        .physics => return ProjectSettings.physicsMatches(query_text),
         .plugins => |plugins| for (plugins) |plugin| {
             if (setting_rows.matches(query_text, plugin.title, plugin.description)) return true;
         },

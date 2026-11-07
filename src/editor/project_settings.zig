@@ -1,7 +1,7 @@
 //! Settings' pages for the open project's `eggy.zon`: General (its title, icon, version, package
 //! name, first scene, which way up phones show the game, the dev console, and what the game's
-//! executable says about itself) and the graphics the game ships with, which players can change
-//! in the game. Every change is written as it is made, and handed back to the editor as a step
+//! executable says about itself), the graphics the game ships with, which players can change
+//! in the game, and what its physics computes in. Every change is written as it is made, and handed back to the editor as a step
 //! to undo.
 const std = @import("std");
 const eggy = @import("eggy");
@@ -21,6 +21,8 @@ const LongEdit = ui.TextEdit(256);
 const max_extra = 32;
 /// The Orientation choices, in `eggy.project.Orientation`'s order.
 const orientations = [_][]const u8{ "Landscape", "Portrait", "Any" };
+/// The Precision choices, in `eggy.project.Physics`'s order.
+const precisions = [_][]const u8{ "Single (f32)", "Double (f64)" };
 
 /// `eggy.zon` changed from `before` to `after` (both its text, owned by `gpa`).
 pub const Change = struct { before: []u8, after: []u8 };
@@ -62,6 +64,8 @@ pub const ProjectSettings = struct {
     dev_console: bool = true,
     /// Which of `orientations` phones and tablets show the game in, by its place there.
     orientation: usize = 0,
+    /// Which of `precisions` physics computes in, by its place there.
+    precision: usize = 0,
     /// What this machine offers, with the game's window and frame limit choices always shown:
     /// they are for the built game, not the editor's own window.
     caps: render_settings.Capabilities,
@@ -130,6 +134,7 @@ pub const ProjectSettings = struct {
         self.saved_graphics = config.graphics;
         self.dev_console = config.dev_console;
         self.orientation = @backingInt(config.orientation);
+        self.precision = @backingInt(config.physics.precision);
         self.gpa.free(self.written);
         self.written = try self.gpa.dupe(u8, text);
 
@@ -277,6 +282,25 @@ pub const ProjectSettings = struct {
         self.graphics.notice(context);
     }
 
+    /// The Physics page: what the game's physics computes in. Builds like `build`.
+    ///
+    /// ```zig
+    /// settings.buildPhysics(context, "");
+    /// ```
+    pub fn buildPhysics(self: *ProjectSettings, context: *ui.Context, query: []const u8) void {
+        var cards = Cards{ .context = context, .query = query };
+        if (cards.row(0, texts.precision)) {
+            _ = context.select("##physics precision", &precisions, &self.precision);
+            cards.end();
+        }
+        cards.finish();
+    }
+
+    /// Whether any row of the Physics page has `query` in its words.
+    pub fn physicsMatches(query: []const u8) bool {
+        return setting_rows.matches(query, texts.precision.title, texts.precision.note);
+    }
+
     /// Whether any row of the General page has `query` in its words.
     ///
     /// ```zig
@@ -341,6 +365,7 @@ pub const ProjectSettings = struct {
             .dev_console = self.dev_console,
             .orientation = @fromBackingInt(@intCast(self.orientation)),
             .graphics = graphics,
+            .physics = .{ .precision = @fromBackingInt(@intCast(self.precision)) },
             .metadata = .{ .company = self.company.text(), .description = self.description.text(), .copyright = self.copyright.text(), .extra = extra.items },
         };
         var text: std.Io.Writer.Allocating = .init(arena);
@@ -361,13 +386,14 @@ pub const ProjectSettings = struct {
 };
 
 /// What of `eggy.zon` the editor puts to use as it changes: the project's graphics defaults,
-/// and whether the dev console can show over the game.
+/// whether the dev console can show over the game, and physics' precision.
 pub const Applied = struct {
     graphics: render_settings.Settings,
     dev_console: bool,
+    physics: eggy.project.Physics = .{},
 
     fn of(config: eggy.project.Config) Applied {
-        return .{ .graphics = config.graphics, .dev_console = config.dev_console };
+        return .{ .graphics = config.graphics, .dev_console = config.dev_console, .physics = config.physics };
     }
 };
 
@@ -436,6 +462,7 @@ const texts = struct {
     const scene = RowText{ .title = "First scene", .note = "" };
     const orientation = RowText{ .title = "Phone orientation", .note = "" };
     const dev_console = RowText{ .title = "Dev console", .note = "Opens with ` in Play and the built game." };
+    const precision = RowText{ .title = "Precision", .note = "Double keeps worlds kilometres across steady, at some speed. Takes effect on the next Play." };
     const company = RowText{ .title = "Company", .note = "" };
     const description = RowText{ .title = "Description", .note = "" };
     const copyright = RowText{ .title = "Copyright", .note = "" };

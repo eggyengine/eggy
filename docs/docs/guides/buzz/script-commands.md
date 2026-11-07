@@ -84,7 +84,7 @@ command prints with `call.print` shows in the console either way.
 
 - A command's name is one word.
 - Names are unique. Two plugins can't declare the same name, and none can take one of
-  Eggy's (`help`, `clear`, `run`, `entities`, `get`, `set`, `timescale`). Either is a
+  Eggy's (`help`, `clear`, `run`, `entities`, `get`, `set`, `timescale`, `physics`). Either is a
   compile error.
 - A line runs a command when its first word, up to the first space, is the command's name.
   So `lives 9` runs the command, while `lives()` runs as Buzz and calls a function named

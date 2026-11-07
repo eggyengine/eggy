@@ -1,6 +1,6 @@
 //! The world's entities as the Hierarchy lists them: in tree order (each followed by its
 //! children, a scene instance's marked as made from its file), with their names and components,
-//! narrowed by a filter.
+//! narrowed by a filter. The scene's root comes first, named after the scene, the rest under it.
 const std = @import("std");
 const eggy = @import("eggy");
 const ecs = eggy.ecs;
@@ -20,6 +20,9 @@ pub const Row = struct {
     /// Made by a scene instance above it from its file: it can be tuned for that instance
     /// (its fields are saved as the instance's changes), but not renamed or moved.
     from_instance: bool = false,
+    /// The scene's root (`eggy.SceneRoot`): its settings are tuned, but it isn't renamed, moved,
+    /// copied or deleted.
+    scene_root: bool = false,
     /// Whether it is the last of its siblings shown: the tree's guide line ends at it.
     last: bool = true,
     /// For each level above it (`depth` of them), whether that level's guide line carries on
@@ -30,18 +33,31 @@ pub const Row = struct {
 /// Every entity of `world` in tree order from `roots` (its top-level entities, in order), named
 /// and described through `access` (null: no game library, so neither), into `arena`. With a
 /// `filter`, only the entities whose name or a component's name contains it (ignoring case) are
-/// listed, with their ancestors to place them.
+/// listed, with their ancestors to place them. The scene's root, if any, is listed first as
+/// `scene_name` (null: its own name), and every other top-level entity a level under it.
 /// Editor-only: supply live, ordered roots from this world and access from its loaded game.
 /// Rows, copied names and guide lines live in `arena`; component-name strings still borrow
 /// the game's metadata and must not survive library unload. Allocation failures propagate.
 ///
 /// ```zig
 /// // Given arena allocator, world, ordered root ids and optional game scene access:
-/// const rows = try collect(arena, &world, roots, access, "camera");
+/// const rows = try collect(arena, &world, roots, access, "main", "camera");
 /// ```
-pub fn collect(arena: std.mem.Allocator, world: *ecs.World, roots: []const ecs.EntityId, access: ?eggy.scene.Access, filter: []const u8) ![]const Row {
+pub fn collect(arena: std.mem.Allocator, world: *ecs.World, roots: []const ecs.EntityId, access: ?eggy.scene.Access, scene_name: ?[]const u8, filter: []const u8) ![]const Row {
     var rows: std.ArrayList(Row) = .empty;
-    for (roots) |entity| try addSubtree(arena, &rows, world, access, entity, 0, false);
+    const scene_root = if (access) |through| eggy.scene_root.find(world, through) else null;
+    if (scene_root) |root| {
+        try addSubtree(arena, &rows, world, access, root, 0, false);
+        const row = &rows.items[0];
+        row.scene_root = true;
+        if (scene_name) |name| row.name = name;
+        row.has_children = row.has_children or roots.len > 1;
+    }
+    const depth: usize = @intFromBool(scene_root != null);
+    for (roots) |entity| {
+        if (scene_root) |root| if (root.eql(entity)) continue;
+        try addSubtree(arena, &rows, world, access, entity, depth, false);
+    }
     return narrow(arena, rows.items, filter);
 }
 
@@ -105,7 +121,7 @@ fn addSubtree(arena: std.mem.Allocator, rows: *std.ArrayList(Row), world: *ecs.W
     }
     var children = world.children(entity);
     const has_children = children.next() != null;
-    try rows.append(arena, .{ .entity = entity, .name = name, .depth = depth, .has_parent = depth > 0, .has_children = has_children, .components = names.items, .from_instance = from_instance });
+    try rows.append(arena, .{ .entity = entity, .name = name, .depth = depth, .has_parent = world.getParent(entity) != null, .has_children = has_children, .components = names.items, .from_instance = from_instance });
     children = world.children(entity);
     while (children.next()) |child| try addSubtree(arena, rows, world, access, child, depth + 1, from_instance or instance);
 }
@@ -136,16 +152,16 @@ test "rows come in tree order, and a filter keeps matches with their ancestors" 
     var arena = std.heap.ArenaAllocator.init(gpa);
     defer arena.deinit();
     const roots = [_]ecs.EntityId{ sun, comet };
-    const all = try collect(arena.allocator(), &world, &roots, access, "");
+    const all = try collect(arena.allocator(), &world, &roots, access, null, "");
     try std.testing.expectEqual(@as(usize, 4), all.len);
     try std.testing.expectEqualStrings("Moon", all[2].name);
     try std.testing.expectEqual(@as(usize, 2), all[2].depth);
     try std.testing.expectEqualStrings("Spin", all[2].components[0]);
 
-    const spinning = try collect(arena.allocator(), &world, &roots, access, "spin");
+    const spinning = try collect(arena.allocator(), &world, &roots, access, null, "spin");
     try std.testing.expectEqual(@as(usize, 3), spinning.len); // Sun, Earth, Moon
     try std.testing.expectEqualStrings("Moon", spinning[2].name);
-    const comets = try collect(arena.allocator(), &world, &roots, access, "COMET");
+    const comets = try collect(arena.allocator(), &world, &roots, access, null, "COMET");
     try std.testing.expectEqual(@as(usize, 1), comets.len);
 
     // Earth is the Sun's only child, so its line ends there; the Sun's level carries on past
@@ -169,8 +185,30 @@ test "a scene instance's entities are listed under it, marked as made from its f
 
     var arena = std.heap.ArenaAllocator.init(gpa);
     defer arena.deinit();
-    const rows = try collect(arena.allocator(), &world, &.{player_entity}, access, "");
+    const rows = try collect(arena.allocator(), &world, &.{player_entity}, access, null, "");
     try std.testing.expectEqual(@as(usize, 3), rows.len);
     try std.testing.expect(rows[0].has_children and !rows[0].from_instance);
     try std.testing.expect(rows[1].from_instance and rows[2].from_instance);
+}
+
+test "the scene root comes first under the scene's name, the other top-level entities under it" {
+    const gpa = std.testing.allocator;
+    const access = eggy.scene.registryAccess(eggy.components.Registry(&.{ eggy.physics.PhysicsSettings, eggy.SceneRoot }, &.{ "eggy", "eggy" }));
+    var world = ecs.World.init(gpa);
+    defer world.deinit();
+    const crate = try world.spawn(.{});
+    access.setName(&world, crate, "Crate");
+    const lid = try world.spawn(.{});
+    try world.setParent(lid, crate);
+    const root = (try eggy.scene_root.ensure(&world, access, .three)).?;
+
+    var arena = std.heap.ArenaAllocator.init(gpa);
+    defer arena.deinit();
+    const rows = try collect(arena.allocator(), &world, &.{ crate, root }, access, "level_1", "");
+    try std.testing.expectEqual(@as(usize, 3), rows.len);
+    try std.testing.expect(rows[0].entity.eql(root) and rows[0].scene_root and rows[0].has_children);
+    try std.testing.expectEqualStrings("level_1", rows[0].name);
+    try std.testing.expectEqual(@as(usize, 1), rows[1].depth);
+    try std.testing.expect(!rows[1].has_parent and rows[2].has_parent);
+    try std.testing.expectEqual(@as(usize, 2), rows[2].depth);
 }

@@ -51,18 +51,29 @@ pub const OpenScene = struct {
         return std.fs.path.basename(self.path orelse return null);
     }
 
+    /// Its name: the file name without `.scene.zon`, for the Hierarchy's root; null with none
+    /// open. Borrowed like `name`.
+    ///
+    /// ```zig
+    /// if (open_scene.title()) |title| context.text(title); // "main"
+    /// ```
+    pub fn title(self: *const OpenScene) ?[]const u8 {
+        const file = self.name() orelse return null;
+        return if (std.mem.endsWith(u8, file, extension)) file[0 .. file.len - extension.len] else file;
+    }
+
     /// Reopen the scene that was open last into `world`, if it still exists.
     /// Editor startup helper; `access` must match this world's game's component registry.
     /// Missing/invalid memory is ignored; open failures log. A successful open replaces entities.
     ///
     /// ```zig
-    /// open_scene.reopen(&app.world, game.sceneAccess());
+    /// open_scene.reopen(.three, &app.world, game.sceneAccess());
     /// // Start editor-mode plugins after restoring the remembered scene.
     /// ```
-    pub fn reopen(self: *OpenScene, world: *eggy.ecs.World, access: eggy.scene.Access) void {
+    pub fn reopen(self: *OpenScene, dimension: eggy.scene_root.Dim, world: *eggy.ecs.World, access: eggy.scene.Access) void {
         const remembered = self.readMemory() orelse return;
         defer self.gpa.free(remembered);
-        self.open(remembered, world, access) catch |err| log.err("cannot reopen {s}: {t}", .{ remembered, err });
+        self.open(remembered, dimension, world, access) catch |err| log.err("cannot reopen {s}: {t}", .{ remembered, err });
     }
 
     /// Replace `world`'s entities with the scene at `path` (relative to the project), and
@@ -74,9 +85,9 @@ pub const OpenScene = struct {
     ///
     /// ```zig
     /// // Host has already dealt with unsaved changes and captured undo state.
-    /// try open_scene.open("resources/scene/main.scene.zon", &app.world, game.sceneAccess());
+    /// try open_scene.open("resources/scene/main.scene.zon", .three, &app.world, game.sceneAccess());
     /// ```
-    pub fn open(self: *OpenScene, path: []const u8, world: *eggy.ecs.World, access: eggy.scene.Access) !void {
+    pub fn open(self: *OpenScene, path: []const u8, dimension: eggy.scene_root.Dim, world: *eggy.ecs.World, access: eggy.scene.Access) !void {
         if (!isProjectPath(path)) return error.BadPathName;
         var threaded: std.Io.Threaded = .init_single_threaded;
         const io = threaded.io();
@@ -91,6 +102,9 @@ pub const OpenScene = struct {
         world.clear();
         const made = try scene.instantiate(self.gpa, world, access, null);
         defer self.gpa.free(made.entities);
+        // A scene saved before scenes had roots gets one, `dimension` as the tab it opens in;
+        // it is saved with the next change.
+        _ = eggy.scene_root.ensure(world, access, dimension) catch |err| log.warn("cannot give {s} a root: {t}", .{ path, err });
         if (made.skipped > 0) log.warn("opened {s}: {d} entities, {d} components or fields left out (see above)", .{ path, made.entities.len, made.skipped }) else log.info("opened {s}: {d} entities", .{ path, made.entities.len });
         try self.setPath(path);
         self.saved_hash = hashOf(self.gpa, world, access) catch null;
@@ -189,19 +203,20 @@ pub const OpenScene = struct {
         entry.value_ptr.* = std.hash.Wyhash.hash(0, bytes);
     }
 
-    /// Start a new, empty scene in `folder` (relative to the project; "" for the project
-    /// itself), written at once, and open it: `world` empties.
+    /// Start a new, empty `dimension` scene in `folder` (relative to the project; "" for the
+    /// project itself), written at once, and open it: `world` empties.
     /// Rejects non-project folder paths; capture/allocation/I/O failures propagate.
     /// Clearing happens before file creation, so the host must capture undo/confirm leaving
     /// first. Borrows the folder and matching component access only during this call.
     ///
     /// ```zig
     /// // Host already captured the previous world for an open_scene history step.
-    /// try open_scene.create(eggy.project.scenes_dir, &app.world, game.sceneAccess());
+    /// try open_scene.create(eggy.project.scenes_dir, .three, &app.world, game.sceneAccess());
     /// ```
-    pub fn create(self: *OpenScene, folder: []const u8, world: *eggy.ecs.World, access: eggy.scene.Access) !void {
+    pub fn create(self: *OpenScene, folder: []const u8, dimension: eggy.scene_root.Dim, world: *eggy.ecs.World, access: eggy.scene.Access) !void {
         if (folder.len > 0 and !isProjectPath(folder)) return error.BadPathName;
         world.clear();
+        _ = try eggy.scene_root.ensure(world, access, dimension);
         const fresh = try self.freshPathIn(folder);
         defer self.gpa.free(fresh);
         try self.setPath(fresh);
@@ -381,15 +396,15 @@ test "a saved scene is remembered, and a new one gets a free name" {
     try std.testing.expect(!first.unsaved(&world, access));
     access.setName(&world, named, "Sol");
     try std.testing.expect(first.unsaved(&world, access));
-    try first.create(eggy.project.scenes_dir, &world, access);
+    try first.create(eggy.project.scenes_dir, .three, &world, access);
     try std.testing.expectEqualStrings("untitled-2.scene.zon", first.name().?);
 
     // A later editor reopens the last one, and opening the first brings its entity back.
     var second = OpenScene{ .gpa = gpa, .project_dir = dir };
     defer second.deinit();
-    second.reopen(&world, access);
+    second.reopen(.three, &world, access);
     try std.testing.expectEqualStrings("untitled-2.scene.zon", second.name().?);
-    try second.open(eggy.project.scenes_dir ++ "/untitled.scene.zon", &world, access);
+    try second.open(eggy.project.scenes_dir ++ "/untitled.scene.zon", .three, &world, access);
     try std.testing.expectEqual(@as(usize, 1), world.entityCount());
 }
 
@@ -418,7 +433,7 @@ test "a save leaves a scene file another editor changed alone, unless told to ov
     defer other_world.deinit();
     var other = OpenScene{ .gpa = gpa, .project_dir = dir };
     defer other.deinit();
-    try other.open(path, &other_world, access);
+    try other.open(path, .three, &other_world, access);
     access.setName(&other_world, try other_world.spawn(.{}), "Moon");
     try other.save(&other_world, access, null, .unless_changed);
     const theirs = try tmp.dir.readFileAlloc(io, path, gpa, .limited(1 << 20));
@@ -433,6 +448,6 @@ test "a save leaves a scene file another editor changed alone, unless told to ov
     try std.testing.expectError(error.ChangedOnDisk, other.save(&other_world, access, null, .unless_changed));
 
     // Opening the file again takes what it holds now as the baseline.
-    try other.open(path, &other_world, access);
+    try other.open(path, .three, &other_world, access);
     try other.save(&other_world, access, null, .unless_changed);
 }

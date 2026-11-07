@@ -72,7 +72,8 @@ pub const Step = union(enum) {
         from: ?[]u8,
         from_world: []u8,
         from_saved: ?u64,
-        to: []u8,
+        /// Null: the tab moved to shows no scene.
+        to: ?[]u8,
         to_world: []u8,
         to_saved: ?u64,
         created: bool,
@@ -132,7 +133,7 @@ pub const Step = union(enum) {
             .open_scene => |step| {
                 if (step.from) |path| gpa.free(path);
                 gpa.free(step.from_world);
-                gpa.free(step.to);
+                if (step.to) |path| gpa.free(path);
                 gpa.free(step.to_world);
                 if (step.trashed) |trashed| gpa.free(trashed);
             },

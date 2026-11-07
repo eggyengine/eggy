@@ -8,7 +8,7 @@ const Command = commands.Command;
 const Call = commands.Call;
 
 /// Eggy's commands, in the order `help` lists them.
-pub const Builtin = enum { help, clear, run, entities, get, set, timescale };
+pub const Builtin = enum { help, clear, run, entities, get, set, timescale, physics };
 
 /// What each `Builtin` is, as `help` shows it.
 pub const list = [_]Command{
@@ -19,6 +19,7 @@ pub const list = [_]Command{
     .{ .name = "get", .help = "Show a component's field as ZON", .usage = "<entity> <Component.field>" },
     .{ .name = "set", .help = "Set a component's field from ZON", .usage = "<entity> <Component.field> <zon>" },
     .{ .name = "timescale", .help = "Show or set how fast game time passes (1 is normal)", .usage = "[scale]" },
+    .{ .name = "physics", .help = "Show physics, or draw every collider and contact (debug on) or not", .usage = "[debug [on|off]]" },
 };
 
 /// Run `builtin` (all but `clear` and `run`, which the console carries out) on `app`. `game_commands` are
@@ -52,7 +53,21 @@ pub fn run(builtin: Builtin, app: *App, call: *Call, game_commands: []const Comm
             if (!std.math.isFinite(scale) or scale < 0) return call.print("the scale can't be negative", .{});
             app.time.scale = scale;
         },
+        .physics => {
+            const what = call.arg(0) orelse return call.print("{t} precision, collider drawing {s}", .{ app.physics_precision, onOff(app.physics_debug) });
+            if (!std.mem.eql(u8, what, "debug")) return usage(call, builtin);
+            // Bare `debug` flips it.
+            const to = call.arg(1) orelse {
+                app.physics_debug = !app.physics_debug;
+                return call.print("collider drawing {s}", .{onOff(app.physics_debug)});
+            };
+            if (std.mem.eql(u8, to, "on")) app.physics_debug = true else if (std.mem.eql(u8, to, "off")) app.physics_debug = false else return usage(call, builtin);
+        },
     }
+}
+
+fn onOff(on: bool) []const u8 {
+    return if (on) "on" else "off";
 }
 
 fn usage(call: *Call, builtin: Builtin) void {
