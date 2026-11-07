@@ -193,6 +193,22 @@ pub const OpenScene = struct {
         try self.remember(path, text);
     }
 
+    /// Whether something other than this editor changed `path`'s file (relative to the project)
+    /// since the editor last read or wrote it: it holds other bytes, or is gone. A file the
+    /// editor never read counts as changed. Unreadable files count as unchanged.
+    ///
+    /// ```zig
+    /// if (open_scene.changedOutside(io, "resources/scene/main.scene.zon")) reopen();
+    /// ```
+    pub fn changedOutside(self: *const OpenScene, io: std.Io, path: []const u8) bool {
+        const known = self.on_disk.get(path) orelse return true;
+        var project = std.Io.Dir.cwd().openDir(io, self.project_dir, .{}) catch return false;
+        defer project.close(io);
+        const bytes = project.readFileAlloc(io, path, self.gpa, .limited(64 << 20)) catch |err| return err == error.FileNotFound;
+        defer self.gpa.free(bytes);
+        return std.hash.Wyhash.hash(0, bytes) != known;
+    }
+
     /// Note that `path`'s file now holds `bytes`.
     fn remember(self: *OpenScene, path: []const u8, bytes: []const u8) !void {
         const entry = try self.on_disk.getOrPut(self.gpa, path);

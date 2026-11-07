@@ -31,6 +31,7 @@ const AboutWindow = @import("about_window.zig").AboutWindow;
 const PlayCameraPrompt = @import("play_camera_prompt.zig").PlayCameraPrompt;
 const window_placement = @import("window_placement.zig");
 const source_stamp = @import("projects/source_stamp.zig");
+const file_watch = @import("file_watch.zig");
 const Console = @import("console.zig").Console;
 const CommandLine = @import("console.zig").CommandLine;
 const panels = @import("panels.zig");
@@ -273,6 +274,8 @@ pub fn Editor(comptime project: type) type {
         project: ?workspace_zig.Project = null,
         /// The open project's model and image files, imported for the scene's caches.
         project_assets: ?*ProjectAssets = null,
+        /// The project's `resources/`, watched for scenes changed outside the editor.
+        scene_watch: ?file_watch.Watch = null,
         /// Whether the splash screen is still up, until the first frame is drawn.
         splash_shown: bool = true,
         /// The build started when the window regains focus, while it runs or once it made a new
@@ -509,6 +512,10 @@ pub fn Editor(comptime project: type) type {
                 } else |_| {}
             }
             self.offerRecovery();
+            if (self.project) |*opened| self.scene_watch = file_watch.Watch.init(gpa, threaded.io(), opened.dir, eggy.project.resources_dir) catch |err| blk: {
+                std.log.warn("cannot watch {s} for changed scenes: {t}", .{ eggy.project.resources_dir, err });
+                break :blk null;
+            };
             // So the code editor's Slang language server finds a shader's `#include "eggy.slang"`.
             if (opened_project) |opened| {
                 const choice = preferences.editor(&self.app.preference_values).code_editor;
@@ -568,6 +575,7 @@ pub fn Editor(comptime project: type) type {
             self.keepTabViews();
             layout_file.save(self.gpa, self.preference_folders.global, &self.workspace.dock, &self.workspace.tabs, self.workspace.seen_plugin_panels.items);
             self.preference_folders.deinit(self.gpa);
+            if (self.scene_watch) |*watch| watch.deinit();
             if (self.open_scene) |*scene| scene.deinit();
             self.play_mode.deinit();
             self.history.deinit();
@@ -776,6 +784,7 @@ pub fn Editor(comptime project: type) type {
                     self.workspace.toast("Couldn't check for a newer Eggy: see the Console");
                 },
             };
+            self.pickUpSceneChanges(frame_arena.allocator());
             self.workspace.can_upgrade = self.upgrades.can_upgrade;
             self.workspace.can_check_upgrade = self.upgrades.can_check;
             self.workspace.checking_upgrade = self.upgrades.checking();
@@ -1162,6 +1171,40 @@ pub fn Editor(comptime project: type) type {
                 },
             }
             self.workspace.closeAnyway(close.target);
+        }
+
+        /// Scenes saved outside the editor, as the watch reports them: the open one opens again,
+        /// as a step to undo, unless it has unsaved changes, and every scene instance is made
+        /// again from its file. Not while playing or filming: the reports wait until then.
+        fn pickUpSceneChanges(self: *Self, arena: std.mem.Allocator) void {
+            const watch = if (self.scene_watch) |*found| found else return;
+            if (self.play_mode.playing() or self.film.busy()) return;
+            const scene = if (self.open_scene) |*open| open else return;
+            var threaded: std.Io.Threaded = .init_single_threaded;
+            const io = threaded.io();
+            var changed: std.ArrayList([]const u8) = .empty;
+            watch.poll(io, arena, &changed) catch |err| {
+                std.log.warn("stopped watching for changed scenes: {t}", .{err});
+                watch.deinit();
+                self.scene_watch = null;
+                return;
+            };
+            var any = false;
+            var open_changed = false;
+            for (changed.items) |path| {
+                if (!std.mem.endsWith(u8, path, scene_file.extension) or !scene.changedOutside(io, path)) continue;
+                any = true;
+                if (scene.path) |open_path| open_changed = open_changed or std.mem.eql(u8, open_path, path);
+            }
+            if (!any) return;
+            if (!open_changed) return self.filesChanged();
+            const path = arena.dupe(u8, scene.path.?) catch return;
+            if (self.sceneUnsaved()) {
+                std.log.info("{s} changed on disk; keeping the unsaved changes here", .{path});
+                self.workspace.toast("The scene changed on disk; your unsaved changes here are kept");
+                return self.filesChanged();
+            }
+            self.replaceSceneStep(.{ .open = path }) catch |err| std.log.err("cannot reload {s}: {t}", .{ path, err });
         }
 
         /// Whether the world has changes its scene file doesn't (or, with no scene open, has any
@@ -4257,6 +4300,7 @@ test {
     _ = @import("entities/entities.zig");
     _ = @import("page_style.zig");
     _ = @import("projects/source_stamp.zig");
+    _ = @import("file_watch.zig");
     _ = @import("terminal_view.zig");
     _ = @import("console_log.zig");
     _ = @import("console.zig");
