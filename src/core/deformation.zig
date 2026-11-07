@@ -1,6 +1,6 @@
 //! Poses the models entities animate: for each `Drawable` whose `Animator` plays something, works
 //! out the model's pose (its model clips, and the `model:` tracks of its authored clips, faded
-//! by `blendTo`), deforms the model's corners on the CPU (bones, blend shapes, baked frames) into
+//! by `blendTo`, with its weighted states over them), deforms the model's corners on the CPU (bones, blend shapes, baked frames) into
 //! that entity's own vertex buffer, and measures the box round them for culling.
 //!
 //! Each entity has one buffer per frame in flight, written by `prepare` and read by every pass of
@@ -177,7 +177,10 @@ pub const Deformation = struct {
 };
 
 /// The pose `animator` gives `model` (`path` is its key): its imported and authored clips at
-/// their time, the previous ones faded out as `blendTo` fades them. Allocates in `arena`.
+/// their time, the previous ones faded out as `blendTo` fades them, then its whole-body states,
+/// each by its share of their weight (what they leave below 1 is the clips', when it has any),
+/// then its layers
+/// on their bones. Allocates in `arena`.
 /// `report`, when given, logs once each name a clip has that the model doesn't.
 pub fn posed(arena: std.mem.Allocator, model: *const assets.Model, path: []const u8, animator: Animator, clips: ?*ClipCache, report: ?*Deformation) !assets.rig.Pose {
     var current = try assets.rig.Pose.init(arena, model.*);
@@ -188,6 +191,32 @@ pub fn posed(arena: std.mem.Allocator, model: *const assets.Model, path: []const
         layer(report, &current, model, path, clips, animator.previous_model_clip.key(), animator.previous_clip.key(), animator.previous_time_s, animator.repeat, 1);
     }
     layer(report, &current, model, path, clips, animator.model_clip.key(), animator.clip.key(), animator.time_s, animator.repeat, if (fading) weight else 1);
+
+    // Each state eases the pose its share of the way so far, which averages them by weight.
+    // Below a total of 1 the clips show through; without clips the states share the whole
+    // pose, so the rest pose (a T-pose, often) never shows mid-fade.
+    const cache = clips orelse return current;
+    const model_id = assets.id.parse(path) catch 0;
+    const under_clips = animator.model_clip.len > 0 or animator.clip.len > 0;
+    var so_far: f32 = if (under_clips) @max(1 - animation.states.shownWeight(animator.states), 0) else 0;
+    for (animator.states) |state| {
+        if (!state.used() or !(state.weight > 0) or state.bone.len > 0) continue;
+        so_far += state.weight;
+        const clip = cache.importedFor(state.clip.key(), model_id, model.*) orelse continue;
+        assets.rig.applyRooted(&current, model.*, clip.*, animation.clipTime(state.time_s, clip.duration_s, state.repeat), state.weight / so_far, state.root_motion);
+    }
+
+    // Layers then move their own branch of bones over that, each its weight of the way.
+    for (animator.states) |state| {
+        if (!state.used() or !(state.weight > 0) or state.bone.len == 0) continue;
+        const clip = cache.importedFor(state.clip.key(), model_id, model.*) orelse continue;
+        const bone = model.rig.node(state.bone.text()) orelse {
+            if (report) |found| found.reportOnce(state.bone.text(), "{s} has no bone named {s}", .{ path, state.bone.text() });
+            continue;
+        };
+        const branch = try assets.rig.onlyBelow(arena, model.*, clip.*, bone);
+        assets.rig.applyRooted(&current, model.*, branch, animation.clipTime(state.time_s, clip.duration_s, state.repeat), state.weight, state.root_motion);
+    }
     return current;
 }
 
@@ -235,7 +264,7 @@ fn layer(report: ?*Deformation, pose_: *assets.rig.Pose, model: *const assets.Mo
 
 /// Whether `animator` asks for anything that moves a model.
 fn plays(animator: Animator) bool {
-    return animator.clip.len > 0 or animator.model_clip.len > 0 or animator.previous_clip.len > 0 or animator.previous_model_clip.len > 0;
+    return animator.clip.len > 0 or animator.model_clip.len > 0 or animator.previous_clip.len > 0 or animator.previous_model_clip.len > 0 or animation.states.any(animator.states);
 }
 
 fn key(drawable: mesh.Drawable) u64 {
@@ -269,4 +298,78 @@ test "a quaternion from degrees turns as a Transform does" {
         const wanted: [4]f32 = column;
         for (wanted, mine) |a, b| try std.testing.expectApproxEqAbs(a, b, 1e-4);
     }
+}
+
+/// Imported clips by id for tests: each holds the node "hips" at x = its id, from model 99.
+const HeldClips = struct {
+    fn read(_: *anyopaque, gpa: std.mem.Allocator, clip_key: []const u8) ![:0]u8 {
+        const x: f32 = @floatFromInt(try assets.id.parse(clip_key));
+        var times = [_]f32{0};
+        var values = [_]f32{ x, 0, 0 };
+        var tracks = [_]assets.model.Track{.{ .channel = .translation, .target = 0, .stride = 3, .times = &times, .values = &values }};
+        var bytes: std.Io.Writer.Allocating = .init(gpa);
+        defer bytes.deinit();
+        try assets.imported_clip.write(&bytes.writer, .{ .source_model = 99, .node_names = &.{"hips"}, .clip = .{ .name = "hold", .duration_s = 1, .tracks = &tracks } });
+        return gpa.dupeSentinel(u8, bytes.written(), 0);
+    }
+    fn model(_: *anyopaque, _: std.mem.Allocator, _: []const u8) !assets.Model {
+        return error.Unsupported;
+    }
+    fn image(_: *anyopaque, _: std.mem.Allocator, _: []const u8) !assets.Texture {
+        return error.Unsupported;
+    }
+};
+
+test "states mix by weight over the rest pose, on a model with the clips' bone names" {
+    const gpa = std.testing.allocator;
+    var context: u8 = 0;
+    var cache = ClipCache{ .gpa = gpa, .resources = .from(&context, HeldClips.read, HeldClips.model, HeldClips.image) };
+    defer cache.deinit();
+    var nodes = [_]assets.model.Node{ .{ .name = "root" }, .{ .name = "hips", .parent = 0 } };
+    const model = assets.Model{ .vertices = &.{}, .indices = &.{}, .parts = &.{}, .textures = &.{}, .rig = .{ .nodes = &nodes } };
+    var arena = std.heap.ArenaAllocator.init(gpa);
+    defer arena.deinit();
+    const refs = @import("refs.zig");
+
+    // Two states at full weight share the pose evenly: x = 2 and x = 4 make 3.
+    var animator = Animator{};
+    try animation.states.set(&animator.states, refs.AssetRef(.animation).fromId(2), 1, 0, .{});
+    try animation.states.set(&animator.states, refs.AssetRef(.animation).fromId(4), 1, 0, .{});
+    const both = try posed(arena.allocator(), &model, "000000000000002a", animator, &cache, null);
+    try std.testing.expectApproxEqAbs(@as(f32, 3), both.translation[1][0], 1e-5);
+
+    // One at half weight, mid-fade, still makes the whole pose: the rest pose never shows.
+    animator.states = @splat(.{});
+    try animation.states.set(&animator.states, refs.AssetRef(.animation).fromId(2), 0.5, 0, .{});
+    const half = try posed(arena.allocator(), &model, "000000000000002a", animator, &cache, null);
+    try std.testing.expectApproxEqAbs(@as(f32, 2), half.translation[1][0], 1e-5);
+
+    // Over a model clip (x = 8), it leaves the other half to the clip.
+    animator.model_clip = refs.AssetRef(.animation).fromId(8);
+    const over = try posed(arena.allocator(), &model, "000000000000002a", animator, &cache, null);
+    try std.testing.expectApproxEqAbs(@as(f32, 5), over.translation[1][0], 1e-5);
+}
+
+test "a layer on a bone moves that branch over the body's states" {
+    const gpa = std.testing.allocator;
+    var context: u8 = 0;
+    var cache = ClipCache{ .gpa = gpa, .resources = .from(&context, HeldClips.read, HeldClips.model, HeldClips.image) };
+    defer cache.deinit();
+    // HeldClips move "hips"; here the hips sit below the spine, which the layer is on.
+    var nodes = [_]assets.model.Node{ .{ .name = "root" }, .{ .name = "spine", .parent = 0 }, .{ .name = "hips", .parent = 1 } };
+    const model = assets.Model{ .vertices = &.{}, .indices = &.{}, .parts = &.{}, .textures = &.{}, .rig = .{ .nodes = &nodes } };
+    var arena = std.heap.ArenaAllocator.init(gpa);
+    defer arena.deinit();
+    const refs = @import("refs.zig");
+
+    var animator = Animator{};
+    try animation.states.set(&animator.states, refs.AssetRef(.animation).fromId(2), 1, 0, .{});
+    try animation.states.set(&animator.states, refs.AssetRef(.animation).fromId(6), 0.5, 0, .{ .bone = "spine" });
+    const layered = try posed(arena.allocator(), &model, "000000000000002a", animator, &cache, null);
+    try std.testing.expectApproxEqAbs(@as(f32, 4), layered.translation[2][0], 1e-5);
+
+    // Hips outside the spine's branch keep the body's pose.
+    nodes[2].parent = 0;
+    const apart = try posed(arena.allocator(), &model, "000000000000002a", animator, &cache, null);
+    try std.testing.expectApproxEqAbs(@as(f32, 2), apart.translation[2][0], 1e-5);
 }

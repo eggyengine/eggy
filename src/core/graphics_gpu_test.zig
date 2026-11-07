@@ -486,6 +486,7 @@ fn importedAnimation(_: *anyopaque, gpa: std.mem.Allocator, key: []const u8) ![:
     defer bytes.deinit();
     try assets.imported_clip.write(&bytes.writer, .{
         .source_model = 42,
+        .node_names = &.{"root"},
         .clip = .{ .name = "slide", .duration_s = 1, .tracks = &tracks },
     });
     return gpa.dupeSentinel(u8, bytes.written(), 0);

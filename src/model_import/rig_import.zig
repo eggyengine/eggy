@@ -25,8 +25,10 @@ pub fn isAnimated(scene: *const c.struct_aiScene) bool {
 
 /// `scene` (already triangulated, with smooth normals) as a rigged model, sizes `scale` times
 /// the file's, textures from the folder `dir`. The result is whole (`Model.isWhole`) or an error.
+/// A file with clips and no meshes (a skeleton's animation, as Mixamo exports it without skin)
+/// imports as nodes and clips alone, for playing on a model with the same bones.
 pub fn import(scene: *const c.struct_aiScene, dir: []const u8, scale: f32) Error!assets.Model {
-    const meshes = if (scene.mMeshes) |list| list[0..scene.mNumMeshes] else return error.NoMeshes;
+    const mesh_count: usize = if (scene.mMeshes != null) scene.mNumMeshes else 0;
     const root = scene.mRootNode orelse return error.NoMeshes;
     var builder = Builder{ .scale = scale };
     errdefer builder.deinit();
@@ -35,7 +37,7 @@ pub fn import(scene: *const c.struct_aiScene, dir: []const u8, scale: f32) Error
 
     // The node tree, parents first, then each mesh where a node places it.
     try builder.addNode(root, null);
-    const skin_of = try gpa.alloc(?u32, meshes.len);
+    const skin_of = try gpa.alloc(?u32, mesh_count);
     defer gpa.free(skin_of);
     @memset(skin_of, null);
     for (builder.sources.items, 0..) |node, node_index| {
@@ -43,9 +45,8 @@ pub fn import(scene: *const c.struct_aiScene, dir: []const u8, scale: f32) Error
             try builder.addPart(scene, &textures, mesh_index, @intCast(node_index), skin_of);
         }
     }
-    if (builder.parts.items.len == 0) return error.NoMeshes;
-
     try builder.addClips(scene);
+    if (builder.parts.items.len == 0 and builder.clips.items.len == 0) return error.NoMeshes;
 
     const skinned = for (builder.parts.items) |part| {
         if (part.skin != null) break true;

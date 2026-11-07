@@ -284,6 +284,66 @@ pub const Pose = struct {
     }
 };
 
+/// What a clip does with its root bone (the top node it translates), where the game moves the
+/// body itself.
+pub const RootMotion = enum {
+    /// It moves as the clip moves it.
+    keep,
+    /// Its drift along x and z (from its first key to its last) is taken out, its sway and bob
+    /// kept: a walk cycle walks on the spot.
+    in_place,
+    /// It stays at its first key: a jump that lifts the hips leaves the lifting to the game.
+    pinned,
+};
+
+/// `pose.apply(model, clip, time_s, weight)`, with the root bone's travel taken out as
+/// `root_motion` says.
+pub fn applyRooted(pose: *Pose, model: Model, clip: Clip, time_s: f32, weight: f32, root_motion: RootMotion) void {
+    pose.apply(model, clip, time_s, weight);
+    if (root_motion == .keep) return;
+    // Parents come before children, so the lowest translated node is the root.
+    var root: ?*const Track = null;
+    for (clip.tracks) |*track| {
+        if (track.channel != .translation) continue;
+        if (root == null or track.target < root.?.target) root = track;
+    }
+    const track = root orelse return;
+    var moved: [3]f32 = undefined;
+    sample(track.*, time_s, &moved);
+    const first = track.values[0..3].*;
+    const wanted: [3]f32 = switch (root_motion) {
+        .keep => unreachable,
+        .pinned => first,
+        .in_place => blk: {
+            const last = track.values[track.values.len - 3 ..][0..3].*;
+            const span = track.times[track.times.len - 1] - track.times[0];
+            const along = if (span > 0) std.math.clamp((time_s - track.times[0]) / span, 0, 1) else 0;
+            break :blk .{ moved[0] - (last[0] - first[0]) * along, moved[1], moved[2] - (last[2] - first[2]) * along };
+        },
+    };
+    // `apply` eased the node `weight` of the way to `moved`; ease it to `wanted` instead.
+    for (&pose.translation[track.target], wanted, moved) |*value, to, from| value.* += (to - from) * weight;
+}
+
+/// `clip` cut down to the tracks that move node `bone` of `model` or a node below it, for a
+/// layer over part of the body. The tracks are borrowed; free only the result's `tracks`.
+pub fn onlyBelow(gpa: std.mem.Allocator, model: Model, clip: Clip, bone: u32) !Clip {
+    const nodes = model.rig.nodes;
+    const inside = try gpa.alloc(bool, nodes.len);
+    defer gpa.free(inside);
+    // Parents come before children, so one pass marks the whole branch.
+    for (nodes, inside, 0..) |node, *mark, index| {
+        mark.* = index == bone or if (node.parent) |parent| inside[parent] else false;
+    }
+    var tracks: std.ArrayList(Track) = .empty;
+    errdefer tracks.deinit(gpa);
+    for (clip.tracks) |track| {
+        if (track.channel == .vertex_cache or track.target >= nodes.len or !inside[track.target]) continue;
+        try tracks.append(gpa, track);
+    }
+    return .{ .name = clip.name, .duration_s = clip.duration_s, .tracks = try tracks.toOwnedSlice(gpa) };
+}
+
 /// Places a model's nodes and deforms its parts, reusing its scratch space between calls.
 pub const Deformer = struct {
     world: []Mat,
@@ -646,4 +706,46 @@ test "baked frames replace the corners and ease into the next" {
     try std.testing.expectEqualSlices(f32, &.{ 1, 0, 0.5 }, &out[1].position);
     // Every baked frame lies inside the model's box.
     try std.testing.expect(model.bounds().max[2] >= 2);
+}
+
+test "root motion walks a clip on the spot or pins its root, and leaves children moving" {
+    var times = [_]f32{ 0, 1, 2 };
+    var hips = [_]f32{ 0, 1, 0, 0.5, 1.2, 1, 0, 1, 2 };
+    var hand = [_]f32{ 0, 0, 0, 0, 0, 2, 0, 0, 4 };
+    var tracks = [_]Track{
+        .{ .channel = .translation, .target = 1, .stride = 3, .times = &times, .values = &hand },
+        .{ .channel = .translation, .target = 0, .stride = 3, .times = &times, .values = &hips },
+    };
+    var nodes = [_]model_zig.Node{ .{ .name = "hips" }, .{ .name = "hand", .parent = 0 } };
+    const model = Model{ .vertices = &.{}, .indices = &.{}, .parts = &.{}, .textures = &.{}, .rig = .{ .nodes = &nodes } };
+    const clip = Clip{ .name = "walk", .duration_s = 2, .tracks = &tracks };
+    var pose = try Pose.init(std.testing.allocator, model);
+    defer pose.deinit(std.testing.allocator);
+
+    // Halfway, the hips have walked 1 m forward and swayed 0.5 m; in place keeps only the sway and bob.
+    applyRooted(&pose, model, clip, 1, 1, .in_place);
+    try std.testing.expectEqual([3]f32{ 0.5, 1.2, 0 }, pose.translation[0]);
+    try std.testing.expectEqual([3]f32{ 0, 0, 2 }, pose.translation[1]);
+    applyRooted(&pose, model, clip, 1, 1, .pinned);
+    try std.testing.expectEqual([3]f32{ 0, 1, 0 }, pose.translation[0]);
+    applyRooted(&pose, model, clip, 1, 1, .keep);
+    try std.testing.expectEqual([3]f32{ 0.5, 1.2, 1 }, pose.translation[0]);
+}
+
+test "a clip cut to a bone keeps the tracks of that bone and those below it" {
+    var times = [_]f32{0};
+    var values = [_]f32{ 0, 0, 0 };
+    var tracks = [_]Track{
+        .{ .channel = .translation, .target = 0, .stride = 3, .times = &times, .values = &values },
+        .{ .channel = .translation, .target = 1, .stride = 3, .times = &times, .values = &values },
+        .{ .channel = .translation, .target = 2, .stride = 3, .times = &times, .values = &values },
+        .{ .channel = .translation, .target = 3, .stride = 3, .times = &times, .values = &values },
+    };
+    var nodes = [_]model_zig.Node{ .{ .name = "hips" }, .{ .name = "spine", .parent = 0 }, .{ .name = "leg", .parent = 0 }, .{ .name = "arm", .parent = 1 } };
+    const model = Model{ .vertices = &.{}, .indices = &.{}, .parts = &.{}, .textures = &.{}, .rig = .{ .nodes = &nodes } };
+    const upper = try onlyBelow(std.testing.allocator, model, .{ .name = "draw", .duration_s = 1, .tracks = &tracks }, 1);
+    defer std.testing.allocator.free(upper.tracks);
+    try std.testing.expectEqual(@as(usize, 2), upper.tracks.len);
+    try std.testing.expectEqual(@as(u32, 1), upper.tracks[0].target);
+    try std.testing.expectEqual(@as(u32, 3), upper.tracks[1].target);
 }

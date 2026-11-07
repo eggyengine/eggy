@@ -448,7 +448,9 @@ pub const ProjectAssets = struct {
         } else return error.FileNotFound;
         var bytes: std.Io.Writer.Allocating = .init(gpa);
         defer bytes.deinit();
-        try assets.imported_clip.write(&bytes.writer, .{ .source_model = assets.id.model(source.id), .clip = imported.rig.clips[index] });
+        const node_names = try assets.imported_clip.nodeNames(gpa, imported.rig.nodes);
+        defer gpa.free(node_names);
+        try assets.imported_clip.write(&bytes.writer, .{ .source_model = assets.id.model(source.id), .node_names = node_names, .clip = imported.rig.clips[index] });
         return gpa.dupeSentinel(u8, bytes.written(), 0);
     }
 

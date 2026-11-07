@@ -22,10 +22,28 @@ pub const Loaded = union(enum) {
     }
 };
 
-/// An imported clip, and whether it was last found to fit the model it is played on.
+/// An imported clip, and how it fits each model it has been played on.
 pub const Imported = struct {
     file: assets.imported_clip.File,
-    checked: ?struct { model_id: assets.Id, fits: bool } = null,
+    fits: std.ArrayList(Fit) = .empty,
+
+    fn deinit(self: *Imported, gpa: std.mem.Allocator) void {
+        for (self.fits.items) |fit| switch (fit.clip) {
+            .retargeted => |clip| gpa.free(clip.tracks),
+            .none, .own => {},
+        };
+        self.fits.deinit(gpa);
+        self.file.deinit(gpa);
+    }
+};
+
+/// How an imported clip plays on one model: as made, for its source model; retargeted by bone
+/// name, for another; or not at all. Kept by model id and node count, so a reloaded model with
+/// other nodes is fitted again.
+pub const Fit = struct {
+    model_id: assets.Id,
+    node_count: usize,
+    clip: union(enum) { none, own, retargeted: assets.model.Clip },
 };
 
 pub const ClipCache = struct {
@@ -65,22 +83,33 @@ pub const ClipCache = struct {
         };
     }
 
-    /// The imported clip with this `key`, if it fits the model `model_id` (the id of the mesh's
-    /// model) with its nodes, parts and blend shapes in `model`. The first failure to fit is
-    /// logged; the answer is remembered until the clip or the model id changes.
+    /// The imported clip with this `key` as it plays on the model `model_id` (the id of the
+    /// mesh's model), whose nodes, parts and blend shapes are `model`'s. A clip made from
+    /// another model plays on the bones of the same names (a Mixamo animation on its
+    /// character); one that fits nothing is logged once. Remembered until the clip is
+    /// forgotten or the model's nodes change.
     pub fn importedFor(self: *ClipCache, key: []const u8, model_id: assets.Id, model: assets.Model) ?*const assets.model.Clip {
         const loaded = self.find(key) orelse return null;
         const imported = switch (loaded.*) {
             .imported => |*found| found,
             .authored => return null,
         };
-        if (imported.checked) |known| if (known.model_id == model_id) return if (known.fits) &imported.file.clip else null;
-        const fits = if (imported.file.validateFor(model_id, model)) true else |err| blk: {
-            std.log.warn("animation {s} doesn't fit its model: {t}", .{ key, err });
-            break :blk false;
+        const fit = for (imported.fits.items) |*known| {
+            if (known.model_id == model_id and known.node_count == model.rig.nodes.len) break known;
+        } else added: {
+            const made = fitTo(self.gpa, imported.file, key, model_id, model);
+            imported.fits.append(self.gpa, made) catch |err| {
+                if (made.clip == .retargeted) self.gpa.free(made.clip.retargeted.tracks);
+                std.log.err("cannot keep how animation {s} fits its model: {t}", .{ key, err });
+                return null;
+            };
+            break :added &imported.fits.items[imported.fits.items.len - 1];
         };
-        imported.checked = .{ .model_id = model_id, .fits = fits };
-        return if (fits) &imported.file.clip else null;
+        return switch (fit.clip) {
+            .none => null,
+            .own => &imported.file.clip,
+            .retargeted => |*clip| clip,
+        };
     }
 
     /// Use the authored `clip` (a copy is made) for `key` from now on, whatever the project
@@ -131,7 +160,7 @@ pub const ClipCache = struct {
         const owned = clip orelse return;
         switch (owned.*) {
             .authored => |authored_clip| authored_clip.deinit(self.gpa),
-            .imported => |imported| imported.file.deinit(self.gpa),
+            .imported => |*imported| imported.deinit(self.gpa),
         }
         self.gpa.destroy(owned);
     }
@@ -149,6 +178,30 @@ pub const ClipCache = struct {
         return loaded;
     }
 };
+
+/// How `file` (the clip `key`) fits the model `model_id` with `model`'s nodes, logging why not.
+fn fitTo(gpa: std.mem.Allocator, file: assets.imported_clip.File, key: []const u8, model_id: assets.Id, model: assets.Model) Fit {
+    var fit = Fit{ .model_id = model_id, .node_count = model.rig.nodes.len, .clip = .none };
+    if (file.source_model == model_id) {
+        file.validateFor(model_id, model) catch |err| {
+            std.log.warn("animation {s} doesn't fit its model: {t}", .{ key, err });
+            return fit;
+        };
+        fit.clip = .own;
+        return fit;
+    }
+    const clip = file.retarget(gpa, model) catch |err| {
+        std.log.err("cannot fit animation {s} to model {x}: {t}", .{ key, model_id, err });
+        return fit;
+    };
+    if (clip.tracks.len == 0 or !model.clipIsWhole(clip)) {
+        gpa.free(clip.tracks);
+        std.log.warn("animation {s} moves no bone that model {x} has", .{ key, model_id });
+        return fit;
+    }
+    fit.clip = .{ .retargeted = clip };
+    return fit;
+}
 
 const test_clip_key = refs.AssetRef(.animation).init("walk.clip.zon").key();
 
@@ -181,14 +234,14 @@ const Source = struct {
     }
 };
 
-test "an imported clip loads from its binary, and only fits the model it was made for" {
+test "an imported clip loads from its binary, and plays on models with its bones" {
     const gpa = std.testing.allocator;
     var times = [_]f32{ 0, 1 };
     var values = [_]f32{ 0, 0, 0, 1, 2, 3 };
     var tracks = [_]assets.model.Track{.{ .channel = .translation, .target = 0, .stride = 3, .times = &times, .values = &values }};
     var bytes: std.Io.Writer.Allocating = .init(gpa);
     defer bytes.deinit();
-    try assets.imported_clip.write(&bytes.writer, .{ .source_model = 42, .clip = .{ .name = "walk", .duration_s = 1, .tracks = &tracks } });
+    try assets.imported_clip.write(&bytes.writer, .{ .source_model = 42, .node_names = &.{"root"}, .clip = .{ .name = "walk", .duration_s = 1, .tracks = &tracks } });
 
     var source = Source{ .bytes = bytes.written() };
     var cache = ClipCache{ .gpa = gpa, .resources = Resources.from(&source, Source.read, Source.model, Source.image) };
@@ -199,5 +252,12 @@ test "an imported clip loads from its binary, and only fits the model it was mad
     try std.testing.expectEqual(@as(f32, 1), cache.get(test_clip_key).?.duration_s());
     try std.testing.expect(cache.authored(test_clip_key) == null);
     try std.testing.expectEqualStrings("walk", cache.importedFor(test_clip_key, 42, skeleton).?.name);
-    try std.testing.expect(cache.importedFor(test_clip_key, 43, skeleton) == null);
+
+    // Another model plays it on its bone of the same name, and not at all without one.
+    const other_nodes = [_]assets.model.Node{ .{ .name = "armature", .parent = null }, .{ .name = "root", .parent = 0 } };
+    const other = assets.Model{ .vertices = &.{}, .indices = &.{}, .parts = &.{}, .textures = &.{}, .rig = .{ .nodes = @constCast(&other_nodes) } };
+    try std.testing.expectEqual(@as(u32, 1), cache.importedFor(test_clip_key, 43, other).?.tracks[0].target);
+    const stranger_nodes = [_]assets.model.Node{.{ .name = "tail", .parent = null }};
+    const stranger = assets.Model{ .vertices = &.{}, .indices = &.{}, .parts = &.{}, .textures = &.{}, .rig = .{ .nodes = @constCast(&stranger_nodes) } };
+    try std.testing.expect(cache.importedFor(test_clip_key, 44, stranger) == null);
 }

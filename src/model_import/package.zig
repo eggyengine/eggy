@@ -76,6 +76,7 @@ fn packageFile(gpa: std.mem.Allocator, arena: std.mem.Allocator, io: std.Io, pro
                 if (child.clip_index) |index| {
                     try writePayload(io, output, child.id, assets.imported_clip, assets.imported_clip.File{
                         .source_model = geometry,
+                        .node_names = try assets.imported_clip.nodeNames(arena, model.rig.nodes),
                         .clip = model.rig.clips[index],
                     });
                 }

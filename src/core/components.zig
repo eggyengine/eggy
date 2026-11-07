@@ -23,6 +23,7 @@ const std = @import("std");
 const zon_file = @import("eggy_assets").zon;
 const ecs = @import("clutch");
 const refs = @import("refs.zig");
+const Name = @import("name.zig").Name;
 pub const max_field_bytes = 4096;
 
 /// How the Inspector edits a field: references (`refs.zig`) take what is dragged onto them.
@@ -364,10 +365,11 @@ pub fn editableType(comptime T: type) bool {
 }
 
 /// `T` as scenes and the Inspector write it: each reference (anywhere inside) as what it points
-/// at, `null` or an entity for an `EntityRef`, a path for an `AssetRef`.
+/// at, `null` or an entity for an `EntityRef`, a path for an `AssetRef`, and a `Name` as its text.
 fn Stored(comptime T: type) type {
     // Every component of a project is walked in one evaluation; the default runs out with many.
     @setEvalBranchQuota(100_000);
+    if (T == Name) return []const u8;
     if (refs.refKind(T)) |kind| return switch (kind) {
         .entity => ?ecs.EntityId,
         .asset => []const u8,
@@ -399,7 +401,7 @@ fn mathVectorLen(comptime T: type) ?u32 {
 /// something else.
 fn needsStoring(comptime T: type) bool {
     @setEvalBranchQuota(100_000);
-    if (refs.refKind(T) != null or mathVectorLen(T) != null) return true;
+    if (T == Name or refs.refKind(T) != null or mathVectorLen(T) != null) return true;
     return switch (@typeInfo(T)) {
         .array => |info| needsStoring(info.child),
         .optional => |info| needsStoring(info.child),
@@ -412,6 +414,7 @@ fn needsStoring(comptime T: type) bool {
 
 /// `value` as `Stored(T)`; an asset path points into `value`, so it must outlive the result.
 fn store(comptime T: type, value: *const T) Stored(T) {
+    if (T == Name) return value.text();
     if (comptime refs.refKind(T)) |kind| return switch (kind) {
         .entity => value.entity,
         .asset => value.key(),
@@ -457,7 +460,7 @@ fn parseFieldValue(comptime T: type, text: [:0]const u8) error{ ParseZon, OutOfM
 /// try validateSnapshot(Health, &Health{});
 /// ```
 pub fn validateSnapshot(comptime T: type, value: *const T) !void {
-    if (T == @import("name.zig").Name) return;
+    if (T == Name) return;
     // ponytail: fields have a 4 KiB text/16 KiB parse budget, add sized field reads to the ABI before accepting larger snapshots.
     const info = @typeInfo(T).@"struct";
     inline for (info.field_names, info.field_types) |name, Member| {
@@ -495,7 +498,7 @@ test "typed snapshots preflight the actual field size and parse budget" {
 /// const same = try valuesEqual(gpa, Health, &Health{}, &Health{ .value = 75 });
 /// ```
 pub fn valuesEqual(gpa: std.mem.Allocator, comptime T: type, a: *const T, b: *const T) !bool {
-    if (T == @import("name.zig").Name) return std.mem.eql(u8, a.text(), b.text());
+    if (T == Name) return std.mem.eql(u8, a.text(), b.text());
     var left: std.Io.Writer.Allocating = .init(gpa);
     defer left.deinit();
     var right: std.Io.Writer.Allocating = .init(gpa);
@@ -507,6 +510,7 @@ pub fn valuesEqual(gpa: std.mem.Allocator, comptime T: type, a: *const T, b: *co
 
 /// `stored` back as a `T`. Fails with `error.ParseZon` for an invalid `AssetRef`.
 fn restore(comptime T: type, stored: Stored(T)) error{ParseZon}!T {
+    if (T == Name) return Name.init(stored);
     if (comptime refs.refKind(T)) |kind| switch (kind) {
         .entity => return .init(stored),
         .asset => {
@@ -589,6 +593,8 @@ fn partsOf(comptime T: type, comptime name: [:0]const u8) []const Part {
 
 /// `T`'s part, without its children; `name` is the field's (or struct field's) name.
 fn describePart(comptime T: type, comptime name: []const u8) Part {
+    // ponytail: a Name inside a component shows as its text, read-only; give the Inspector a text box when one needs editing there.
+    if (T == Name) return .{ .kind = .other };
     if (refs.refKind(T)) |kind| return switch (kind) {
         .entity => .{ .kind = .entity, .requires = if (T.Required == void) "" else shortName(T.Required) },
         .asset => .{ .kind = .asset, .accepts = T.accepts },
@@ -833,4 +839,14 @@ test "adding a component adds what it depends on" {
     const entity = try world.spawn(.{});
     try Components.add(&world, entity, 0);
     try std.testing.expect(Components.has(&world, entity, 1));
+}
+
+test "a Name inside a component is stored as its text and reads back" {
+    const Layer = struct { bone: Name = .init("mixamorig:Spine") };
+    var text: [64]u8 = undefined;
+    var writer: std.Io.Writer = .fixed(&text);
+    try std.zon.stringify.serialize(store(Layer, &Layer{}), .{ .whitespace = false }, &writer);
+    try std.testing.expectEqualStrings(".{.bone=\"mixamorig:Spine\"}", writer.buffered());
+    const read = try parseFieldValue(Name, "\"hips\"");
+    try std.testing.expectEqualStrings("hips", read.text());
 }

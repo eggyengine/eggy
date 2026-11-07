@@ -4,17 +4,22 @@ const s2s = @import("s2s");
 const model = @import("model.zig");
 
 pub const magic = "EGGYCLIP".*;
-pub const format_version: u32 = 1;
+pub const format_version: u32 = 2;
 
 pub const File = struct {
     signature: [8]u8 = magic,
     version: u32 = format_version,
     /// The geometry/skeleton asset this clip's node, part and morph indices belong to.
     source_model: u64,
+    /// The source model's node names, by node index (`nodeNames`): what lets `retarget` play
+    /// the clip on another model whose bones have the same names.
+    node_names: []const []const u8,
     clip: model.Clip,
 
     /// Release a file returned by `read`; borrowed source-model clips must not be freed here.
     pub fn deinit(self: File, gpa: std.mem.Allocator) void {
+        for (self.node_names) |name| gpa.free(name);
+        gpa.free(self.node_names);
         gpa.free(self.clip.name);
         for (self.clip.tracks) |track| {
             gpa.free(track.times);
@@ -42,6 +47,7 @@ pub const File = struct {
                     (index > 0 and time < track.times[index - 1])) return error.InvalidClip;
             }
             for (track.values) |value| if (!std.math.isFinite(value)) return error.InvalidClip;
+            if (movesNode(track.channel) and track.target >= self.node_names.len) return error.InvalidClip;
         }
     }
 
@@ -51,7 +57,41 @@ pub const File = struct {
         if (self.source_model != model_id) return error.IncompatibleAnimationModel;
         if (!skeleton.clipIsWhole(self.clip)) return error.InvalidClip;
     }
+
+    /// The clip's node tracks for `target`, a model whose nodes share names with the source
+    /// model's: each moved to `target`'s node of the same name. Blend-shape and baked-frame
+    /// tracks, and bones `target` lacks, are left out. The tracks borrow this file's keys; free
+    /// only the returned clip's `tracks`, before the file.
+    pub fn retarget(self: File, gpa: std.mem.Allocator, target: model.Model) !model.Clip {
+        var tracks: std.ArrayList(model.Track) = .empty;
+        errdefer tracks.deinit(gpa);
+        for (self.clip.tracks) |track| {
+            switch (track.channel) {
+                .translation, .rotation, .scale => {},
+                .morph_weights, .vertex_cache => continue,
+            }
+            var moved = track;
+            moved.target = target.rig.node(self.node_names[track.target]) orelse continue;
+            try tracks.append(gpa, moved);
+        }
+        return .{ .name = self.clip.name, .duration_s = self.clip.duration_s, .tracks = try tracks.toOwnedSlice(gpa) };
+    }
 };
+
+/// Whether tracks of `channel` target a node (rather than a part).
+fn movesNode(channel: model.Channel) bool {
+    return switch (channel) {
+        .translation, .rotation, .scale, .morph_weights => true,
+        .vertex_cache => false,
+    };
+}
+
+/// Every node's name in `nodes`, for `File.node_names`; the names stay borrowed, free the slice.
+pub fn nodeNames(gpa: std.mem.Allocator, nodes: []const model.Node) ![]const []const u8 {
+    const names = try gpa.alloc([]const u8, nodes.len);
+    for (names, nodes) |*name, node| name.* = node.name;
+    return names;
+}
 
 /// Write a validated clip; its source model and channel arrays remain borrowed.
 pub fn write(writer: *std.Io.Writer, file: File) !void {
@@ -71,7 +111,7 @@ test "imported clips roundtrip independently of model geometry" {
     var times = [_]f32{ 0, 1 };
     var values = [_]f32{ 0, 0, 0, 1, 2, 3 };
     var tracks = [_]model.Track{.{ .channel = .translation, .target = 0, .stride = 3, .times = &times, .values = &values }};
-    const source = File{ .source_model = 42, .clip = .{ .name = "walk", .duration_s = 1, .tracks = &tracks } };
+    const source = File{ .source_model = 42, .node_names = &.{"hips"}, .clip = .{ .name = "walk", .duration_s = 1, .tracks = &tracks } };
     var bytes: std.Io.Writer.Allocating = .init(std.testing.allocator);
     defer bytes.deinit();
     try write(&bytes.writer, source);
@@ -81,10 +121,11 @@ test "imported clips roundtrip independently of model geometry" {
     try std.testing.expectEqual(@as(u64, 42), result.source_model);
     try std.testing.expectEqualStrings("walk", result.clip.name);
     try std.testing.expectEqualSlices(f32, &values, result.clip.tracks[0].values);
+    try std.testing.expectEqualStrings("hips", result.node_names[0]);
 }
 
 test "imported clips reject malformed channels and incompatible source models" {
-    const file = File{ .source_model = 42, .clip = .{ .name = "walk", .duration_s = 1, .tracks = &.{} } };
+    const file = File{ .source_model = 42, .node_names = &.{"hips"}, .clip = .{ .name = "walk", .duration_s = 1, .tracks = &.{} } };
     const empty = model.Model{ .vertices = &.{}, .indices = &.{}, .parts = &.{}, .textures = &.{} };
     try std.testing.expectError(error.IncompatibleAnimationModel, file.validateFor(43, empty));
     var invalid = file;
@@ -93,7 +134,7 @@ test "imported clips reject malformed channels and incompatible source models" {
     var times = [_]f32{ 0, 0 };
     var values = [_]f32{ 0, 0, 0, 1, 0, 0 };
     var tracks = [_]model.Track{.{ .channel = .translation, .target = 0, .stride = 3, .times = &times, .values = &values }};
-    const repeated = File{ .source_model = 42, .clip = .{ .name = "step", .duration_s = 1, .tracks = &tracks } };
+    const repeated = File{ .source_model = 42, .node_names = &.{"hips"}, .clip = .{ .name = "step", .duration_s = 1, .tracks = &tracks } };
     try repeated.validate();
     try std.testing.expectError(error.InvalidClip, repeated.validateFor(42, empty));
     times[1] = -1;
@@ -101,4 +142,23 @@ test "imported clips reject malformed channels and incompatible source models" {
     times[1] = 1;
     tracks[0].stride = 4;
     try std.testing.expectError(error.InvalidClip, repeated.validate());
+}
+
+test "a clip retargets to another model's bones by name, leaving out bones it lacks" {
+    var times = [_]f32{0};
+    var lift = [_]f32{ 0, 1, 0 };
+    var turn = [_]f32{ 0, 0, 0, 1 };
+    var tracks = [_]model.Track{
+        .{ .channel = .translation, .target = 1, .stride = 3, .times = &times, .values = &lift },
+        .{ .channel = .rotation, .target = 2, .stride = 4, .times = &times, .values = &turn },
+    };
+    const file = File{ .source_model = 42, .node_names = &.{ "root", "hips", "tail" }, .clip = .{ .name = "walk", .duration_s = 1, .tracks = &tracks } };
+    try file.validate();
+    var nodes = [_]model.Node{ .{ .name = "armature" }, .{ .name = "spine", .parent = 0 }, .{ .name = "hips", .parent = 0 } };
+    const other = model.Model{ .vertices = &.{}, .indices = &.{}, .parts = &.{}, .textures = &.{}, .rig = .{ .nodes = &nodes } };
+    const moved = try file.retarget(std.testing.allocator, other);
+    defer std.testing.allocator.free(moved.tracks);
+    try std.testing.expectEqual(@as(usize, 1), moved.tracks.len);
+    try std.testing.expectEqual(@as(u32, 2), moved.tracks[0].target);
+    try std.testing.expect(other.clipIsWhole(moved));
 }

@@ -1,4 +1,5 @@
-//! Animation: the `Animator` component, the `app.animation()` controls, and the step that plays
+//! Animation: the `Animator` component, the `app.animation()` controls (playing a clip, fading
+//! between two, and the weighted states of `animation_states.zig`), and the step that plays
 //! authored clips (`.clip.zon`) on entities' transforms, and on what a cutscene drives besides:
 //! cameras' fields of view, UI scenes' text and visibility, sprite frames, sounds and named
 //! events (`Event`, heard through the `animationEvent` plugin hook). Imported model clips (bones,
@@ -21,6 +22,7 @@ const Camera = @import("camera.zig").Camera;
 const SpriteAnimator = @import("sprite_animator.zig").SpriteAnimator;
 const ui_scenes = @import("ui_scenes/ui_scenes.zig");
 const ClipCache = @import("clip_cache.zig").ClipCache;
+pub const states = @import("animation_states.zig");
 
 pub const support: api.Support = .available;
 
@@ -29,8 +31,8 @@ pub const support: api.Support = .available;
 ///
 /// Two kinds of clip can play together, both `AssetRef(.animation)`: an authored clip (`clip`,
 /// a `.clip.zon` that moves entities and model nodes) and an imported one (`model_clip`, made
-/// from a model file: bones, blend shapes or baked frames, for that model only). `previous_*`
-/// is the clip being faded out by `blendTo`.
+/// from a model file: bones, blend shapes or baked frames). `previous_*` is the clip being faded
+/// out by `blendTo`. Over them, `states` mixes more imported clips by weight.
 pub const Animator = struct {
     /// Marks it in the editor (nf-md-animation_play).
     pub const icon = "\u{f093a}";
@@ -58,6 +60,9 @@ pub const Animator = struct {
     /// nothing is fading.
     blend_duration_s: f32 = 0,
     blend_elapsed_s: f32 = 0,
+    /// Imported clips mixed by weight over `model_clip`, each on its own clock: set them with
+    /// `app.animation().setState`, `fadeToState` or `blendAlong`.
+    states: states.States = @splat(.{}),
 
     /// How far the fade has got, from 0 (all previous) to 1 (all current); 1 when not fading.
     pub fn blendWeight(self: Animator) f32 {
@@ -71,7 +76,7 @@ pub const Animator = struct {
     }
 };
 
-pub const Repeat = enum { once, loop };
+pub const Repeat = states.Repeat;
 
 pub const Takeover = enum {
     nothing,
@@ -128,14 +133,15 @@ pub const PlayOptions = struct {
 };
 
 pub const Error = error{ InvalidEntity, NoAnimator, InvalidClip, InvalidTime, InvalidSpeed, ModelMismatch };
+pub const StateError = Error || states.Error;
 
 /// Borrowed access to this world's animators; obtain it from `app.animation()`.
 /// Calls change an entity's `Animator` and take effect when the next `step` and frame run.
 pub const Animation = struct {
     world: *ecs.World,
 
-    /// Start `clip` on `entity` now, replacing what was playing and adding an `Animator` if it
-    /// has none.
+    /// Start `clip` on `entity` now, replacing what was playing (states too) and adding an
+    /// `Animator` if it has none.
     /// `error.InvalidClip` when `clip` sets neither an authored nor an imported clip;
     /// `error.ModelMismatch` when `clip.model` isn't the model `entity` draws. An imported clip
     /// made for another model is logged by the renderer and plays nothing.
@@ -173,6 +179,7 @@ pub const Animation = struct {
             .previous_model_clip = if (fading) old.model_clip else .{},
             .previous_time_s = old.time_s,
             .blend_duration_s = if (fading) duration_s else 0,
+            .states = old.states,
         };
         self.world.markChanged(entity, Animator);
     }
@@ -214,10 +221,11 @@ pub const Animation = struct {
         self.world.markChanged(entity, Animator);
     }
 
-    /// Go back to the first pose and hold it, ending any fade.
+    /// Go back to the first pose and hold it, ending any fade and every state.
     pub fn stop(self: Animation, entity: ecs.EntityId) Error!void {
         const found = try self.animator(entity);
         found.* = withoutFade(found.*);
+        found.states = @splat(.{});
         found.time_s = 0;
         found.playing = false;
         self.world.markChanged(entity, Animator);
@@ -244,6 +252,73 @@ pub const Animation = struct {
     pub fn setRepeat(self: Animation, entity: ecs.EntityId, repeat: Repeat) Error!void {
         (try self.animator(entity)).repeat = repeat;
         self.world.markChanged(entity, Animator);
+    }
+
+    /// Ease the imported clip `clip` toward `weight` (0 to 1) of `entity`'s pose over `fade_s`
+    /// seconds, alongside its other states, adding an `Animator` if it has none. The states'
+    /// weights are shared out when they add up to more than 1; below 1, `model_clip` shows
+    /// through (without one, they share the whole pose, so the rest pose never shows). `clip` may come from another model with the same bone
+    /// names, such as a Mixamo animation of the character. See `states.set`.
+    ///
+    /// ```zig
+    /// try app.animation().setState(mesh, .init("resources/hero/wave.fbx/mixamo.com"), 0.5, 0.2, .{});
+    /// ```
+    pub fn setState(self: Animation, entity: ecs.EntityId, clip: AssetRef(.animation), weight: f32, fade_s: f32, options: states.Options) StateError!void {
+        const found = try self.animatorFor(entity);
+        try states.set(&found.states, clip, weight, fade_s, options);
+        self.world.markChanged(entity, Animator);
+    }
+
+    /// Fade `entity` into the state `clip` alone over `fade_s`, every other state out: a move
+    /// between discrete states, such as into a jump. Called each frame without `start_s`, it
+    /// carries on.
+    ///
+    /// ```zig
+    /// if (jumped) try app.animation().fadeToState(mesh, jump, 0.1, .{ .start_s = 0, .repeat = .once });
+    /// ```
+    pub fn fadeToState(self: Animation, entity: ecs.EntityId, clip: AssetRef(.animation), fade_s: f32, options: states.Options) StateError!void {
+        const found = try self.animatorFor(entity);
+        try states.fadeTo(&found.states, clip, fade_s, options);
+        self.world.markChanged(entity, Animator);
+    }
+
+    /// A 1D blend space on `entity`: `points`' clips along an axis, mixed by where `value` falls
+    /// (a speed, say); every other state fades out. Call it each frame with the new value.
+    ///
+    /// ```zig
+    /// try app.animation().blendAlong(mesh, &.{
+    ///     .{ .clip = idle, .at = 0 },
+    ///     .{ .clip = walk, .at = 1.7 },
+    /// }, ground_speed_m_per_s, 0.2, .{ .root_motion = .in_place });
+    /// ```
+    pub fn blendAlong(self: Animation, entity: ecs.EntityId, points: []const states.Point, value: f32, fade_s: f32, options: states.Options) StateError!void {
+        const found = try self.animatorFor(entity);
+        try states.along(&found.states, points, value, fade_s, options);
+        self.world.markChanged(entity, Animator);
+    }
+
+    /// How much of `entity`'s pose the state `clip` makes now, 0 to 1 (before sharing out); 0
+    /// when it isn't playing.
+    pub fn stateWeight(self: Animation, entity: ecs.EntityId, clip: AssetRef(.animation)) f32 {
+        const found = self.animator(entity) catch return 0;
+        return (states.find(&found.states, clip) orelse return 0).weight;
+    }
+
+    /// Whether the `once` state `clip` on `entity` has played to its end (or isn't playing):
+    /// when to go back from an action, such as drawing a gun, to what came before. A looping
+    /// one never ends.
+    pub fn stateEnded(self: Animation, entity: ecs.EntityId, clip: AssetRef(.animation), clips: *ClipCache) bool {
+        const found = self.animator(entity) catch return true;
+        const state = states.find(&found.states, clip) orelse return true;
+        if (state.repeat == .loop) return false;
+        const loaded = clips.get(clip.key()) orelse return true;
+        return state.time_s >= loaded.duration_s();
+    }
+
+    fn animatorFor(self: Animation, entity: ecs.EntityId) Error!*Animator {
+        if (!self.world.isAlive(entity)) return error.InvalidEntity;
+        if (self.world.get(entity, Animator) == null) self.world.addComponent(entity, Animator{}) catch return error.InvalidEntity;
+        return self.world.get(entity, Animator).?;
     }
 
     fn animator(self: Animation, entity: ecs.EntityId) Error!*Animator {
@@ -323,6 +398,7 @@ pub fn inProgress(animator: Animator, clips: *ClipCache) bool {
 /// Move the clock of `animator` along, and finish a fade that has run its course.
 fn advance(animator: *Animator, delta_s: f32) void {
     if (!animator.playing or !std.math.isFinite(delta_s)) return;
+    states.advance(&animator.states, delta_s);
     const moved = delta_s * animator.speed;
     animator.time_s += moved;
     if (!animator.isBlending()) return;
@@ -756,4 +832,10 @@ test "a track's target text reaches an entity below the animator or from the top
     try std.testing.expect(inScene(&world, "garden/gate").?.eql(gate));
     try std.testing.expect(inScene(&world, "gate") == null);
     try std.testing.expect(below(&world, intro, "prop").?.eql(prop));
+}
+
+test "an Animator with states saves into a scene and reads back" {
+    var animator = Animator{};
+    try states.set(&animator.states, AssetRef(.animation).fromId(0x51), 1, 0, .{ .bone = "mixamorig:Spine" });
+    try @import("components.zig").validateSnapshot(Animator, &animator);
 }

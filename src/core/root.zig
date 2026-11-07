@@ -167,6 +167,7 @@ test {
     _ = @import("clip_cache.zig");
     _ = @import("deformation.zig");
     _ = animation;
+    _ = @import("animation_states.zig");
     _ = animation_preview;
     _ = cutscene;
     _ = camera_cuts;
