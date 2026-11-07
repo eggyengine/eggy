@@ -161,6 +161,10 @@ pub const FieldEditor = struct {
     color: ?ColorPopup = null,
     /// The format each turning field is shown in, by its key, once one is picked.
     rotation_formats: std.AutoHashMapUnmanaged(u64, RotationFormat) = .empty,
+    /// Groups (a struct's fields) folded away, by their key.
+    folded: std.AutoHashMapUnmanaged(u64, void) = .empty,
+    /// The documented label the pointer rests on, timing its tooltip.
+    doc_hover: DocHover = .{},
     /// The drop targets built last frame, with what each sets; in `slot_arena`.
     slots: std.ArrayList(Slot) = .empty,
     slot_arena: std.heap.ArenaAllocator,
@@ -184,6 +188,7 @@ pub const FieldEditor = struct {
     /// ```
     pub fn deinit(self: *FieldEditor) void {
         self.rotation_formats.deinit(self.gpa);
+        self.folded.deinit(self.gpa);
         self.slots.deinit(self.gpa);
         self.slot_arena.deinit();
     }
@@ -195,6 +200,7 @@ pub const FieldEditor = struct {
     /// fields.newFrame(); // Existing FieldEditor, before this frame's fieldRows calls.
     /// ```
     pub fn newFrame(self: *FieldEditor) void {
+        self.doc_hover.newFrame();
         self.slots.clearRetainingCapacity();
         _ = self.slot_arena.reset(.retain_capacity);
     }
@@ -322,7 +328,8 @@ const Draw = struct {
         const context = self.context;
         const this = self.parts[index];
         const width = self.control_width;
-        labelledRow(context, label, depth);
+        const folded = this.kind == .@"struct" and self.foldRow(index, label, key, depth);
+        if (this.kind != .@"struct") documentedRow(context, label, std.mem.span(this.doc), key, depth, &self.editor.doc_hover);
         switch (this.kind) {
             .bool => {
                 var on = std.mem.eql(u8, self.value.text(node), "true");
@@ -364,6 +371,7 @@ const Draw = struct {
         endRow(context, width);
 
         // What it holds, a row each, further in.
+        if (folded) return;
         switch (this.kind) {
             .@"struct" => for (this.children(self.parts), 0..) |inner, i| {
                 const name = std.mem.span(inner.name);
@@ -378,6 +386,31 @@ const Draw = struct {
             .@"union" => self.unionPayload(index, node, key, depth),
             else => {},
         }
+    }
+
+    /// A group's row, opened as `labelledRow` opens one: its label after a chevron, folding its
+    /// fields away or back when pressed. Returns whether they are folded away.
+    fn foldRow(self: *Draw, index: usize, label: []const u8, key: u64, depth: u32) bool {
+        const context = self.context;
+        const editor = self.editor;
+        const b = context.builder();
+        context.begin(.row);
+        const id = context.idFor(std.fmt.allocPrint(self.scratch(), "fold {x}", .{key}) catch "fold");
+        if (context.activated(id)) {
+            if (!editor.folded.remove(key)) editor.folded.put(editor.gpa, key, {}) catch {};
+        }
+        const folded = editor.folded.contains(key);
+        const row = b.node(id, .{ .direction = .row, .gap = 4, .align_items = .center, .grow = 1, .padding = .{ .left = indent * @as(f32, @floatFromInt(depth)) } }, .none, &.{
+            b.node(0, .{ .width = 12, .height = 12 }, .{ .icon = if (folded) .chevron_right else .chevron_down }, &.{}) catch return folded,
+            b.node(0, .{}, .{ .text = .{ .value = label, .size = 13 } }, &.{}) catch return folded,
+        }) catch return folded;
+        row.cursor = .pointer;
+        row.accessibility = .{ .role = .button, .label = label, .expanded = !folded };
+        context.element(row);
+        const doc = std.mem.span(self.parts[index].doc);
+        if (doc.len > 0) docTip(context, doc, key, &editor.doc_hover);
+        context.begin(.column);
+        return folded;
     }
 
     /// A union: a dropdown of its variants (taking a drop when a variant is a reference), then
@@ -718,11 +751,71 @@ const Draw = struct {
 
 /// Open a row for a part: its label, `depth` in, then its control's column (`endRow` closes both).
 pub fn labelledRow(context: *ui.Context, label: []const u8, depth: u32) void {
+    documentedRow(context, label, "", 0, depth, null);
+}
+
+/// `labelledRow`, its label showing `doc` (what the field's `///` comment says) once the pointer
+/// has rested on it a while, timed by `hover`; `key` names the row among those shown.
+fn documentedRow(context: *ui.Context, label: []const u8, doc: []const u8, key: u64, depth: u32, hover: ?*DocHover) void {
     context.begin(.row);
     context.text(label);
     page_style.smallText(context, 13);
+    if (hover) |timer| if (doc.len > 0) docTip(context, doc, key, timer);
     restyle(context, .{ .grow = 1, .padding = .{ .left = indent * @as(f32, @floatFromInt(depth)) } });
     context.begin(.column);
+}
+
+/// How long the pointer rests on a documented label before its doc shows.
+const doc_delay_ms = 1500;
+
+/// Which documented label the pointer rests on, and since when.
+const DocHover = struct {
+    key: u64 = 0,
+    since_ms: u64 = 0,
+    /// Whether the pointer was over it in the frame being built; one it left is forgotten.
+    seen: bool = false,
+    resting: bool = false,
+
+    /// The pointer is over label `key` at `now_ms`: whether it has been long enough.
+    fn over(self: *DocHover, key: u64, now_ms: u64) bool {
+        if (!self.resting or self.key != key) self.* = .{ .key = key, .since_ms = now_ms, .resting = true };
+        self.seen = true;
+        return now_ms -| self.since_ms >= doc_delay_ms;
+    }
+
+    fn newFrame(self: *DocHover) void {
+        if (!self.seen) self.resting = false;
+        self.seen = false;
+    }
+};
+
+test "a doc shows only once the pointer has rested on its label, and starts over when it leaves" {
+    var hover: DocHover = .{};
+    try std.testing.expect(!hover.over(7, 1000));
+    hover.newFrame();
+    try std.testing.expect(hover.over(7, 2500));
+    hover.newFrame();
+    // A frame away from it, then back: the wait starts again.
+    hover.newFrame();
+    try std.testing.expect(!hover.over(7, 2600));
+}
+
+/// Show `doc` under the element added last once the pointer has rested on it (`hover` timing
+/// it), wrapped; one without an id takes one from `key`, for the pointer to be found over it.
+fn docTip(context: *ui.Context, doc: []const u8, key: u64, hover: *DocHover) void {
+    const anchor = context.last_added orelse return;
+    if (anchor.id == 0) anchor.id = @as(u32, @truncate(std.hash.Wyhash.hash(key, "doc"))) | 1;
+    const bounds = context.last_bounds.get(anchor.id) orelse return;
+    if (!bounds.rect.contains(context.pointer.x, context.pointer.y)) return;
+    if (!hover.over(key, context.time_ms)) return;
+    context.tooltip(doc);
+    const tip = context.last_added orelse return;
+    if (tip == anchor) return;
+    tip.style.max_width = 280;
+    for (tip.children) |child| if (child.paint_kind == .text) {
+        child.paint_kind.text.wrap = true;
+    };
+    context.last_added = anchor;
 }
 
 /// Close the row `labelledRow` opened.

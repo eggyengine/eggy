@@ -4,6 +4,7 @@
 const std = @import("std");
 const eggy = @import("eggy");
 const project = @import("eggy_project");
+const field_docs = @import("eggy_field_docs");
 const api = @import("game_api.zig");
 
 /// The project's asset catalog (`eggy.asset_catalog`), which this library also hands the editor.
@@ -141,13 +142,34 @@ const component_types = blk: {
             var options: [source.options.len][*:0]const u8 = undefined;
             for (&options, source.options) |*option, name| option.* = name.ptr;
             const frozen_options = options;
-            field.* = .{ .name = source.name.ptr, .kind = @backingInt(source.kind), .options = &frozen_options, .option_count = frozen_options.len, .editable = source.editable, .requires = source.requires.ptr, .accepts = @backingInt(source.accepts), .parts = source.parts.ptr, .part_count = source.parts.len };
+            const parts = documented(std.mem.span(info.name.ptr), source.name, source.parts);
+            field.* = .{ .name = source.name.ptr, .kind = @backingInt(source.kind), .options = &frozen_options, .option_count = frozen_options.len, .editable = source.editable, .requires = source.requires.ptr, .accepts = @backingInt(source.accepts), .parts = parts.ptr, .part_count = parts.len };
         }
         const frozen_fields = fields;
         component_type.* = .{ .name = info.name.ptr, .owner = info.owner.ptr, .fields = &frozen_fields, .field_count = frozen_fields.len, .addable = info.addable, .dependencies = info.dependencies.ptr, .dependency_count = info.dependencies.len, .icon = info.icon.ptr, .category = info.category.ptr };
     }
     break :blk types;
 };
+
+/// `parts` of field `field` of component `component`, with their `///` docs: the field's on its
+/// own part, and each struct's or union's on what it holds.
+fn documented(comptime component: []const u8, comptime field: []const u8, comptime parts: []const eggy.components.Part) []const eggy.components.Part {
+    @setEvalBranchQuota(100_000);
+    var copy = parts[0..parts.len].*;
+    if (copy.len > 0) copy[0].doc = docOf(component, field);
+    for (copy) |holder| {
+        const type_name = std.mem.span(holder.type_name);
+        if (type_name.len == 0) continue;
+        for (copy[holder.first..][0..holder.count]) |*inner| inner.doc = docOf(type_name, std.mem.span(inner.name));
+    }
+    const frozen = copy;
+    return &frozen;
+}
+
+fn docOf(comptime type_name: []const u8, comptime field: []const u8) [:0]const u8 {
+    const key = type_name ++ "." ++ field;
+    return if (@hasDecl(field_docs, key)) @field(field_docs, key) else "";
+}
 
 const plugin_keys = blk: {
     var list: [project.plugin_keys.len][*:0]const u8 = undefined;

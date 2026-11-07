@@ -102,6 +102,12 @@ pub const Part = extern struct {
     /// An entity reference's required component (empty for any), an asset reference's kind of file.
     requires: [*:0]const u8 = "",
     accepts: refs.AssetKind = .any,
+    /// A struct's or union's type, by its short name (`Transform`); empty otherwise. Its
+    /// children's docs are found by it.
+    type_name: [*:0]const u8 = "",
+    /// What its `///` comment says, for a tooltip; empty without one. The game library fills
+    /// it in (`components.zig` can't read doc comments).
+    doc: [*:0]const u8 = "",
 
     /// Borrow this part's immediate children from its original flat `parts` list.
     /// `first` and `count` must be valid for that list; no recursive descendants are copied.
@@ -603,8 +609,8 @@ fn describePart(comptime T: type, comptime name: []const u8) Part {
             break :blk .{ .kind = .@"enum", .options = &frozen, .option_count = frozen.len };
         },
         .void => .{ .kind = .none },
-        .@"struct" => |info| if (info.field_names.len > 0 and editableType(T)) .{ .kind = .@"struct" } else .{ .kind = .other },
-        .@"union" => |info| if (info.tag_type != null and editableType(T)) .{ .kind = .@"union" } else .{ .kind = .other },
+        .@"struct" => |info| if (info.field_names.len > 0 and editableType(T)) .{ .kind = .@"struct", .type_name = shortName(T) } else .{ .kind = .other },
+        .@"union" => |info| if (info.tag_type != null and editableType(T)) .{ .kind = .@"union", .type_name = shortName(T) } else .{ .kind = .other },
         .array => |info| if (editableType(info.child)) .{ .kind = .array, .len = info.len } else .{ .kind = .other },
         .optional => |info| if (editableType(info.child)) .{ .kind = .optional } else .{ .kind = .other },
         else => .{ .kind = .other },

@@ -13,6 +13,7 @@ const sdk_setup = @import("src/build/sdk_setup.zig");
 const android_build = @import("src/build/android.zig");
 const web_build = @import("src/build/web.zig");
 const game_plugins = @import("src/build/game_plugins.zig");
+const field_docs = @import("src/build/field_docs.zig");
 const shared_libraries = @import("src/build/shared_libraries.zig");
 const mingw_fortify = @import("src/build/mingw_fortify.zig");
 const builtin_plugins = @import("src/build/builtin_plugins.zig");
@@ -87,7 +88,7 @@ pub fn build(b: *std.Build) void {
         // Hot reload, for real: load the empty game's library, run it, swap it, and unload it.
         const library_options = b.addOptions();
         const fixture = @import("src/build/api_checks.zig").project(b, target, optimize, engine.eggy);
-        const fixture_library = addGameLibrary(b, b, target, optimize, fixture, "eggy_api_test");
+        const fixture_library = addGameLibrary(b, b, target, optimize, fixture, &.{}, "eggy_api_test");
         library_options.addOptionPath("path", fixture_library.getEmittedBin());
         const hot_reload_tests = &b.addRunArtifact(b.addTest(.{ .root_module = b.createModule(.{
             .root_source_file = b.path("src/editor/hot_reload_test.zig"),
@@ -325,7 +326,11 @@ fn addProject(b: *std.Build, engine: *std.Build, emscripten: Emscripten, target:
     // The editor, desktop only. It loads the game and its plugins from a library of their own,
     // and swaps in a rebuilt one when their code changes, so its project module has the name only.
     // Eggy's own editor is the launcher, which loads no game.
-    const game_library = if (launcher) null else addGameLibrary(b, engine, target, optimize, project, options.name);
+    // Its components' docs come from Eggy's sources, Humpty's, the game's and its plugins'.
+    var doc_sources: std.ArrayList(*std.Build.Module) = .empty;
+    doc_sources.appendSlice(b.allocator, &.{ eggy, eggy.import_table.get("humpty").?, options.game }) catch @panic("OOM");
+    doc_sources.appendSlice(b.allocator, all_modules.items) catch @panic("OOM");
+    const game_library = if (launcher) null else addGameLibrary(b, engine, target, optimize, project, doc_sources.items, options.name);
     const library_options = b.addOptions();
     library_options.addOption([]const u8, "file_name", if (game_library) |library| library.out_filename else "");
     const editor_project = b.createModule(.{
@@ -450,7 +455,8 @@ fn addPreferenceFiles(b: *std.Build, project_source: []const u8) std.Build.LazyP
 
 /// The game and its plugins (`project`) as a shared library for the editor, which loads it and
 /// swaps in a rebuilt one while it runs (see `src/editor/hot_reload`).
-fn addGameLibrary(b: *std.Build, engine: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builtin.Optimize, project: *std.Build.Module, name: []const u8) *std.Build.Step.Compile {
+/// `sources` are the modules whose field docs the Inspector shows (`src/build/field_docs.zig`).
+fn addGameLibrary(b: *std.Build, engine: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builtin.Optimize, project: *std.Build.Module, sources: []const *std.Build.Module, name: []const u8) *std.Build.Step.Compile {
     const module = b.createModule(.{
         .root_source_file = engine.path("src/editor/hot_reload/library.zig"),
         .target = target,
@@ -460,6 +466,7 @@ fn addGameLibrary(b: *std.Build, engine: *std.Build, target: std.Build.ResolvedT
         .imports = &.{
             .{ .name = "eggy", .module = engine.modules.get("eggy").? },
             .{ .name = "eggy_project", .module = project },
+            .{ .name = "eggy_field_docs", .module = field_docs.module(b, sources) },
         },
     });
     return b.addLibrary(.{ .linkage = .dynamic, .name = b.fmt("{s}_game", .{name}), .root_module = module, .use_llvm = true });
