@@ -116,9 +116,10 @@ To make a map a different size, change `width` and `height` in its file and give
 that many entries, row by row from the top. 0 is an empty cell and `n` is tileset frame
 `n - 1`.
 
+Physics runs in 2D in a 2D scene: give sprites a **Collider** and a **RigidBody**, as in
+[Physics](physics.md).
+
 ## What's not there yet
 
 - Sprites are cut out, not blended: pixels are either drawn or not, so soft edges look hard.
-- There is no 2D physics yet. Move things in `update`, or use 3D physics with your sprites
-  standing on the XY plane.
 - The 2D Scene panel selects one entity at a time.
