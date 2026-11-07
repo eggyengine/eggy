@@ -47,6 +47,8 @@ pub const Config = struct {
     dev_console: bool = true,
     /// Shipped graphics defaults; a user's graphics preferences override them.
     graphics: @import("render_settings.zig").Settings = .{},
+    /// How the game's physics computes.
+    physics: Physics = .{},
     /// The plugins installed from the editor's Plugins window, which `addGame` builds the game
     /// with after those its `build.zig` lists.
     plugins: []const plugin_manifest.Installed = &.{},
@@ -77,6 +79,13 @@ pub const Metadata = struct {
     pub const Entry = struct { name: []const u8, value: []const u8 };
 };
 
+/// The project's physics. Plain data here, so `build.zig` can read it; `eggy.physics` turns
+/// `precision` into humpty's.
+pub const Physics = struct {
+    /// What physics computes in: `f64` for worlds far bigger than a few kilometres.
+    precision: enum { f32, f64 } = .f32,
+};
+
 /// `config` as an `eggy.zon`, with its comments.
 /// Borrows strings and writes escaped ZON without opening a file; writer errors propagate.
 ///
@@ -92,6 +101,7 @@ pub fn write(writer: *std.Io.Writer, config: Config) std.Io.Writer.Error!void {
     if (config.icon) |icon| try writer.print("    // The project's icon.\n    .icon = \"{f}\",\n", .{std.zig.fmtString(icon)});
     if (config.orientation != .landscape) try writer.print("    // Which way up phones and tablets show the game.\n    .orientation = .{t},\n", .{config.orientation});
     if (!config.dev_console) try writer.writeAll("    // Players can't open the dev console.\n    .dev_console = false,\n");
+    if (config.physics.precision != .f32) try writer.print("    // What physics computes in.\n    .physics = .{{ .precision = .{t} }},\n", .{config.physics.precision});
     try writer.writeAll("    .graphics = ");
     try std.zon.stringify.serialize(config.graphics, .{}, writer);
     try writer.writeAll(",\n");

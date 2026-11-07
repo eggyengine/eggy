@@ -81,6 +81,11 @@ pub const App = struct {
     storage: @import("storage.zig").Storage = .{},
     localization: @import("localization.zig").Localization = .{},
     debug_draw: @import("debug_draw.zig").DebugDraw = .{},
+    /// The scalar physics computes in, as the project's `eggy.zon` says; a world takes it when
+    /// physics first runs in it.
+    physics_precision: @import("physics.zig").Precision = .f32,
+    /// Whether every collider is drawn as a wireframe each frame (`physics debug` in the console).
+    physics_debug: bool = false,
     profiling: @import("profiling.zig").Profiling = .{},
     graphics_options: graphics_control.State = .{},
     /// The motion sensors and vibrator `mobile()` has opened.
@@ -471,7 +476,7 @@ pub const App = struct {
         try self.world.insertResource(self.time);
         // Physics runs as its own stage after Update, reading meshes through the resources.
         try self.world.insertResource(self.resource_provider);
-        try @import("physics.zig").install(&self.world, self.world.allocator);
+        try @import("physics.zig").install(&self.world, self.world.allocator, self.physics_precision);
         try ui_scenes.publish(&self.world, &self.ui_scenes);
         inline for (.{ .PreUpdate, .Update, .PostUpdate }) |stage| try self.world.runStage(stage);
         // Clips play after the game's systems, by the game's (scaled, pause-held) time; a
@@ -488,6 +493,7 @@ pub const App = struct {
         try self.particles.draw(&self.draw2d);
         // Sound sources and the listener follow where their entities ended up.
         audio_zig.step(&self.world, self.audio());
+        if (self.physics_debug) try @import("physics.zig").drawDebug(&self.world, self.world.allocator, &self.debug_draw);
         self.world.tick();
         if (self.scene_transition.pending != null) if (self.sceneAccess()) |access| {
             if (try self.scene_transition.apply(&self.world, access, self.sceneInstances())) self.input.cancel();

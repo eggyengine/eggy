@@ -74,6 +74,7 @@ pub fn Runtime(comptime project: type) type {
             errdefer app.deinit();
             app.storage = try eggy.storage.Storage.init(gpa, process_init.io, project.name);
             if (@hasDecl(project, "dev_console")) app.dev_console.setEnabled(project.dev_console);
+            if (@hasDecl(project, "physics_precision")) app.physics_precision = project.physics_precision;
             if (@hasDecl(project, "input_bindings")) try app.input_backend.?.state.readOverrides(project.input_bindings);
             // Model and image files, and scenes, as packaging made them.
             const data: ?*packaged_assets.Data = packaged_assets.Data.open(gpa, process_init.io) catch |err| blk: {

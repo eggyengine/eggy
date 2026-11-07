@@ -7,7 +7,7 @@ const vit = @import("vitellus");
 const math = @import("eggenvector");
 const transform = @import("transform.zig");
 pub const support: @import("support.zig").Support = .available;
-pub const max_lines = 1024;
+pub const max_lines = 4096;
 pub const max_labels = 128;
 
 pub const Line = struct { from_m: math.Vec3, to_m: math.Vec3, color: [4]f32 };

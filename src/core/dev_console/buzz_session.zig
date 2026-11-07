@@ -33,10 +33,15 @@ const Unavailable = struct {
     }
 };
 
-/// The natives every session declares before its first line.
+/// The natives every session declares before its first line, and the functions over them
+/// (`physicsDebug(on)` draws every collider or stops).
 const prelude =
     \\extern fun print(value: str) > void;
     \\extern fun run(command: str) > bool;
+    \\fun physicsDebug(on: bool) > bool {
+    \\    if (on) { return run("physics debug on"); }
+    \\    return run("physics debug off");
+    \\}
 ;
 /// The script name Eggy's natives are looked up under (`native_name` in Buzz's parser).
 const natives_script = "eggy";
@@ -332,6 +337,11 @@ test "scripts reach the console through print and run" {
     try std.testing.expectEqualStrings("hello", captured.printed.items);
     try std.testing.expectEqualStrings("known", captured.ran.items);
     try std.testing.expectEqualStrings("true\n", out.written());
+
+    // The prelude's functions are console commands underneath.
+    captured.ran.clearRetainingCapacity();
+    try session.run("physicsDebug(true)", line_name, captured.host(), &out.writer);
+    try std.testing.expectEqualStrings("physics debug on", captured.ran.items);
 }
 
 test "a script file runs whole, and what it declares stays for later lines" {
