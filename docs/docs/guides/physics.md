@@ -33,6 +33,10 @@ entity's origin, for a character whose origin is at its feet.
 the bouncier one wins and their frictions are combined. A **Sensor** collider pushes nothing but
 still reports what it overlaps: a trigger zone.
 
+The two mesh shapes take the entity's own **Mesh**. On an entity without one, such as a player
+whose model is a child, drag the entity holding the mesh from the Hierarchy onto **Mesh From**;
+the shape is made where that entity sits.
+
 A collider under a moving parent goes where the parent takes it, so a door's collider can be a
 child of the door.
 

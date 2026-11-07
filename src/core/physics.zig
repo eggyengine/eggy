@@ -88,9 +88,12 @@ pub const Host = struct {
                 const resources = world.getResource(Resources) orelse return error.NoResources;
                 var model = try resources.loadModel(gpa, file);
                 defer model.deinit(gpa);
-                const positions = try gpa.alloc([3]f32, model.vertices.len);
+                // A rigged model's stored corners are in its bones' space; collide with it as drawn at rest.
+                const rest = try @import("eggy_assets").rig.restVertices(gpa, model);
+                defer gpa.free(rest);
+                const positions = try gpa.alloc([3]f32, rest.len);
                 errdefer gpa.free(positions);
-                for (positions, model.vertices) |*p, v| p.* = v.position;
+                for (positions, rest) |*p, v| p.* = v.position;
                 const indices = try gpa.alloc([3]u32, model.indices.len / 3);
                 for (indices, 0..) |*triangle, i| triangle.* = model.indices[i * 3 ..][0..3].*;
                 break :blk .{ .triangles = .{ .positions = positions, .indices = indices } };

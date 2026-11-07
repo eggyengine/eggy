@@ -312,6 +312,7 @@ pub const EntityInspector = struct {
             return action;
         };
         if (!folded) for (component.info.fields, component.values, 0..) |field, value, index| {
+            if (!fieldApplies(details, component, field)) continue;
             const shown = if (index < component.shown.len) component.shown[index] else null;
             if (component.disabled or !field.editable or field.parts.len == 0 or value == null) {
                 readOnlyRow(context, field, shown orelse value orelse "", field_control);
@@ -335,6 +336,14 @@ pub const EntityInspector = struct {
         context.end();
         restyle(context, .{ .gap = 8, .padding = .{ .left = 12, .right = 12, .top = 10, .bottom = 10 } });
         return action;
+    }
+
+    /// Whether `field` of `component` means anything on this entity: a `Collider` takes its
+    /// mesh from another entity (`mesh_from`) only while it has no `Mesh` of its own.
+    fn fieldApplies(details: Details, component: Details.Component, field: components.Field) bool {
+        if (!std.mem.eql(u8, component.info.name, "Collider") or !std.mem.eql(u8, field.name, "mesh_from")) return true;
+        for (details.components) |other| if (std.mem.eql(u8, other.info.name, "Mesh")) return false;
+        return true;
     }
 
     /// A card's title: a scene setting reads as what it sets ("Physics" for `PhysicsSettings`).

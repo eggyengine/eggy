@@ -177,7 +177,7 @@ list and save them; in 2D only x and y are read, and bodies turn about z.
 
 | Component | What it is |
 | --- | --- |
-| `Collider` | `shape` (sizes in metres before the entity's scale), `offset_m`, `restitution`, `friction`, `sensor` |
+| `Collider` | `shape` (sizes in metres before the entity's scale), `offset_m`, `restitution`, `friction`, `sensor`, `mesh_from` (another entity whose mesh the mesh shapes take, where it sits; the collider's own when unset) |
 | `RigidBody` | `kind`, `mass_kg`, damping, `gravity_scale`, `rotation` |
 | `LinearVelocity`, `AngularVelocity` | Read to see how a body moves; set to change it |
 | `CollidingEntities` | Kept listing the entities its collider touches |
