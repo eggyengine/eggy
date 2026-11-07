@@ -26,8 +26,8 @@
             .hash = "clutch-0.1.0-gpdHb6kfAgA7WgAGO251ESX_fPv9AiTHfi_Fyzd-IaYN",
         },
         .weeoui = .{
-            .url = "git+https://git.tirbo.fish/eggy/weeoui#00fa7d29bdb22207c2a625c20318b0c266827919",
-            .hash = "weeoui-0.0.1-A8JXQT-OFADjiGsnTMqwpcTDfziN-t3K8ufM1cuc6hg4",
+            .url = "git+https://git.tirbo.fish/eggy/weeoui#b0a6bf1c29b34b019347e3c320a74e8023f4fb68",
+            .hash = "weeoui-0.0.1-A8JXQT-OFADPU9bBya-lJyZoJ-kp2sd8KETTcy1pmVsm",
         },
         .eggenvector = .{
             .url = "git+https://git.tirbo.fish/eggy/eggenvector#67b5b202495539bb34aec9941aec3ad24b5752ec",
