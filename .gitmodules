@@ -1,16 +1,16 @@
 [submodule "src/vitellus"]
 	path = src/vitellus
-	url = https://github.com/eggyengine/vitellus.git
+	url = https://git.tirbo.fish/eggy/vitellus.git
 	branch = main
 [submodule "src/humpty"]
 	path = src/humpty
-	url = https://github.com/eggyengine/humpty.git
+	url = https://git.tirbo.fish/eggy/humpty.git
 	branch = main
 [submodule "src/weeoui"]
 	path = src/weeoui
-	url = https://github.com/eggyengine/weeoui.git
+	url = https://git.tirbo.fish/eggy/weeoui.git
 	branch = main
 [submodule "src/clutch"]
 	path = src/clutch
-	url = https://github.com/eggyengine/clutch.git
+	url = https://git.tirbo.fish/eggy/clutch.git
 	branch = main

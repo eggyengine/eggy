@@ -83,8 +83,8 @@ Creation uses the same bundled engine and template as **File > New Project**, th
 builds the project's editor. Without `--open`, it finishes in the terminal.
 
 Without an editor binary,
-`curl -fsSL https://raw.githubusercontent.com/eggyengine/eggy/main/scripts/get-started.sh | bash`
-(or `irm https://raw.githubusercontent.com/eggyengine/eggy/main/scripts/get-started.ps1 | iex`
+`curl -fsSL https://git.tirbo.fish/eggy/eggy/raw/branch/main/scripts/get-started.sh | bash`
+(or `irm https://git.tirbo.fish/eggy/eggy/raw/branch/main/scripts/get-started.ps1 | iex`
 from PowerShell on Windows) installs Zig 0.17 and the editor first; see
 [Set up a project](../how-to/set-up-project.md).
 

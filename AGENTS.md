@@ -30,7 +30,7 @@ Code both executables need belongs in `eggy`, free of editor-only dependencies. 
 
 ## Submodules
 
-`build.zig.zon` pins Vitellus, weeoui, humpty and clutch by git URL and commit; `src/<name>` are submodules for local work (`--fork=src/<name>`). Commit and push in their own repositories, re-pin with `zig fetch --save=<name> git+https://github.com/eggyengine/<name>#<commit>`, and point the submodule at the same commit. weeoui must pin Eggy's Vitellus commit, and humpty Eggy's clutch package hash, or forks fail with duplicate packages.
+`build.zig.zon` pins Vitellus, weeoui, humpty and clutch by git URL and commit; `src/<name>` are submodules for local work (`--fork=src/<name>`). Commit and push in their own repositories, re-pin with `zig fetch --save=<name> git+https://git.tirbo.fish/eggy/<name>#<commit>`, and point the submodule at the same commit. weeoui must pin Eggy's Vitellus commit, and humpty Eggy's clutch package hash, or forks fail with duplicate packages.
 
 ## README Files
 
@@ -47,7 +47,7 @@ Every `README.md` here and in submodules is off limits to agents, except the pul
 - `zig build test` runs every test; `test-core`, `test-runtime`, `test-editor` one part's. `EGGY_GPU_TEST=1` adds the GPU tests.
 - Add `--fork=src/vitellus --fork=src/weeoui --fork=src/humpty --fork=src/clutch` to build against local submodules.
 - `zig build update-submodules` fetches submodule branches; review pointers before committing.
-- `scripts/get-started.sh` / `get-started.ps1` install Zig and the launcher from GitHub Releases (the latest release or the `nightly` prerelease, which `.github/workflows/nightly.yml` publishes), for the user or system-wide.
+- `scripts/get-started.sh` / `get-started.ps1` install Zig and the launcher from the releases on git.tirbo.fish/eggy/eggy (the latest release or the `nightly` prerelease, which `.github/workflows/nightly.yml` publishes), for the user or system-wide.
 
 ## Coding Style
 

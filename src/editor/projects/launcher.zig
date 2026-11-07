@@ -237,7 +237,7 @@ const Page = struct {
         page_style.restyle(context, .{ .width = inner_width, .height = 36 });
         context.begin(.row);
         if (context.buttonVariant("Documentation", .link)) page.chosen = .{ .url = help_menu.documentation_url };
-        if (context.buttonVariant("GitHub", .link)) page.chosen = .{ .url = "https://github.com/eggyengine/eggy" };
+        if (context.buttonVariant("Source", .link)) page.chosen = .{ .url = "https://git.tirbo.fish/eggy/eggy" };
         context.end();
         page_style.restyle(context, .{ .gap = 16 });
         context.end();

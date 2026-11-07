@@ -9,7 +9,7 @@
 //!         .module = "eggy_frame_stats", // the module its package publishes with `addPlugin`
 //!         .version = "0.1.0", // semver
 //!         .description = "Frames per second in a corner of the game.",
-//!         .repository = "https://github.com/eggyengine/eggy", // where it is hosted
+//!         .repository = "https://git.tirbo.fish/eggy/eggy", // where it is hosted
 //!         .fingerprint = 0x634131700cbdf8dd, // its package's build.zig.zon fingerprint
 //!     } }
 //!

@@ -109,7 +109,7 @@ fn drawHeart(_: *const anyopaque, canvas: *ui.Canvas, rect: ui.Rect) !void {
 
 const links = [_]struct { label: []const u8, url: [:0]const u8 }{
     .{ .label = "Documentation", .url = @import("help_menu.zig").documentation_url },
-    .{ .label = "GitHub", .url = "https://github.com/eggyengine/eggy" },
+    .{ .label = "Source", .url = "https://git.tirbo.fish/eggy/eggy" },
 };
 
 const Glyph = struct { egg: *const icon.Pixels, cracks: u8, hatch: f32 };

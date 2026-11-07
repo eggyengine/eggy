@@ -6,7 +6,7 @@ const sdl3 = eggy.sdl_adapter.sdl;
 const file_manager = @import("file_manager.zig");
 
 pub const documentation_url = "https://eggyengine.github.io/eggy";
-pub const issues_url = "https://github.com/eggyengine/eggy/issues/new";
+pub const issues_url = "https://git.tirbo.fish/eggy/eggy/issues/new";
 
 /// Open `url` in the browser; a failure is logged.
 pub fn openUrl(url: [:0]const u8) void {
