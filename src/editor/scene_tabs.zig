@@ -1,6 +1,7 @@
 //! Which scene each 3D tab shows, by its Scene copy (`panels.Live.scene`): the editor has one
 //! world, so the live copy's scene is the open one, and the others are kept as the world was when
-//! their tab was left (unsaved edits and all) until it is shown again. Which file each tab shows
+//! their tab was left (unsaved edits and all) until it is shown again. A tab with no scene of its
+//! own shows an empty world, never another tab's. Which file each tab shows
 //! is kept in the project's `.eggy/scene_tabs.zon`, so the tabs show them again when it reopens.
 const std = @import("std");
 const zon_file = @import("eggy").assets.zon;
@@ -20,6 +21,7 @@ const Saved = struct {
 /// A scene put aside: the world's text as its tab left it, the hash it was saved with, and
 /// whether that text has changes the file doesn't.
 pub const Kept = struct {
+    /// Its file; empty for a world never saved.
     path: []u8,
     text: []u8,
     saved_hash: ?u64,
@@ -31,15 +33,18 @@ pub const Kept = struct {
     }
 };
 
-/// What a 3D tab shows when it is shown: its scene's file, or the world it left.
+/// What a 3D tab shows when it is shown: its scene's file, the world it left, or, for a tab with
+/// none of its own, an empty world.
 pub const Waiting = union(enum) {
     file: []u8,
     kept: Kept,
+    empty,
 
     pub fn deinit(self: Waiting, gpa: std.mem.Allocator) void {
         switch (self) {
             .file => |path| gpa.free(path),
             .kept => |kept| kept.deinit(gpa),
+            .empty => {},
         }
     }
 };
@@ -47,6 +52,8 @@ pub const Waiting = union(enum) {
 pub const SceneTabs = struct {
     /// The Scene copy whose scene is open now.
     applied: u8 = 0,
+    /// Whether `applied` is known; until then the first copy followed takes the open scene.
+    settled: bool = false,
     /// Each other copy's scene, waiting for its tab to be shown.
     waiting: [panels.max_copies]?Waiting = @splat(null),
 
@@ -62,20 +69,20 @@ pub const SceneTabs = struct {
         self.waiting[copy] = .{ .file = owned };
     }
 
-    /// The live copy is `live` now: when it is another than the one applied and has a scene of
-    /// its own waiting, put the open one aside as `leaving` (owned, or null with none open) and
-    /// return what to show instead, the caller's to free. Null leaves the open scene to the new
-    /// copy too, and frees `leaving`.
+    /// The live copy is `live` now: when it is another than the one applied, put the open world
+    /// aside for its copy as `leaving` (owned; null for an empty one) and return what `live`
+    /// shows instead, the caller's to free: its own scene, or `.empty`. Null when `live` is
+    /// already applied, freeing `leaving`.
     pub fn follow(self: *SceneTabs, gpa: std.mem.Allocator, live: u8, leaving: ?Kept) ?Waiting {
+        if (!self.settled) {
+            self.settled = true;
+            self.applied = live;
+        }
         if (live == self.applied) {
             if (leaving) |kept| kept.deinit(gpa);
             return null;
         }
-        const next = self.waiting[live] orelse {
-            if (leaving) |kept| kept.deinit(gpa);
-            self.applied = live;
-            return null;
-        };
+        const next = self.waiting[live] orelse .empty;
         self.waiting[live] = null;
         if (self.waiting[self.applied]) |old| old.deinit(gpa);
         self.waiting[self.applied] = if (leaving) |kept| .{ .kept = kept } else null;
@@ -91,7 +98,8 @@ pub const SceneTabs = struct {
         for (&saved.files, self.waiting) |*file, entry| if (entry) |found| {
             file.* = switch (found) {
                 .file => |path| path,
-                .kept => |kept| kept.path,
+                .kept => |kept| if (kept.path.len == 0) null else kept.path,
+                .empty => null,
             };
         };
         saved.files[self.applied] = open_path;
@@ -106,8 +114,9 @@ pub const SceneTabs = struct {
 
     /// Read what `save` kept in `project`: the copy saved as applied is applied again (the editor
     /// reopens its scene itself), and every other copy's file waits for its tab. Call before the
-    /// first `follow`. A missing file changes nothing; an unreadable one is logged, and files
-    /// that are gone or outside the project are left out.
+    /// first `follow`. Without a readable file, the first copy `follow` sees takes the scene the
+    /// editor reopens; an unreadable file is logged, and files that are gone or outside the
+    /// project are left out.
     pub fn load(self: *SceneTabs, gpa: std.mem.Allocator, io: std.Io, project: std.Io.Dir) void {
         const source = project.readFileAllocOptions(io, tabs_path, gpa, .limited(64 * 1024), .of(u8), 0) catch return;
         defer gpa.free(source);
@@ -117,6 +126,7 @@ pub const SceneTabs = struct {
         if (saved.applied >= panels.max_copies) return;
         self.deinit(gpa);
         self.applied = saved.applied;
+        self.settled = true;
         for (saved.files, 0..) |file, copy| {
             const path = file orelse continue;
             if (copy == saved.applied or !scene_file.isProjectPath(path)) continue;
@@ -125,14 +135,14 @@ pub const SceneTabs = struct {
         }
     }
 
-    /// Whether a scene is waiting on copy `copy`'s tab, so the open one must be put aside.
+    /// Whether `live` is another copy than the applied one, so the open world must be put aside.
     pub fn changing(self: *const SceneTabs, live: u8) bool {
-        return live != self.applied and self.waiting[live] != null;
+        return self.settled and live != self.applied;
     }
 
     /// The Scene copies among `closing` whose unsaved changes closing them throws away: a kept
-    /// world's, and the open world's (`open_unsaved`) when its copy closes and `live_after`, the
-    /// copy shown next, has a scene of its own to show instead. The editor asks before those go.
+    /// world's, and the open world's (`open_unsaved`) when its copy closes and another copy,
+    /// `live_after`, is shown next. The editor asks before those go.
     pub fn lostByClosing(self: *const SceneTabs, closing: [panels.max_copies]bool, live_after: ?u8, open_unsaved: bool) [panels.max_copies]bool {
         var lost: [panels.max_copies]bool = @splat(false);
         for (closing, self.waiting, &lost) |goes, entry, *gone| {
@@ -140,8 +150,8 @@ pub const SceneTabs = struct {
                 gone.* = found.kept.unsaved;
             };
         }
-        // Another tab sharing the open scene shows it on, so only a scene of its own replaces it.
-        const replaced = if (live_after) |next| next != self.applied and self.waiting[next] != null else false;
+        // Whatever the next copy shows, its own scene or an empty world, replaces the open one.
+        const replaced = if (live_after) |next| next != self.applied else false;
         if (closing[self.applied] and open_unsaved and replaced) lost[self.applied] = true;
         return lost;
     }
@@ -158,7 +168,7 @@ pub const SceneTabs = struct {
 
 test "a tab's scene waits for it to be shown, and the scene it replaces waits on the tab left" {
     const gpa = std.testing.allocator;
-    var tabs = SceneTabs{};
+    var tabs = SceneTabs{ .settled = true };
     defer tabs.deinit(gpa);
     try tabs.assign(gpa, 1, "resources/scene/garden.scene.zon");
     try std.testing.expect(tabs.changing(1));
@@ -176,15 +186,17 @@ test "a tab's scene waits for it to be shown, and the scene it replaces waits on
     try std.testing.expectEqualStrings("resources/scene/main.scene.zon", back.kept.path);
     try std.testing.expectEqual(@as(?u64, 7), back.kept.saved_hash);
 
-    // A copy with nothing waiting shares the open scene.
-    try std.testing.expect(!tabs.changing(2));
-    try std.testing.expect(tabs.follow(gpa, 2, null) == null);
+    // A copy with nothing of its own shows an empty world, not tab 0's scene, which waits.
+    try std.testing.expect(tabs.changing(2));
+    const leaving_again = Kept{ .path = try gpa.dupe(u8, "resources/scene/main.scene.zon"), .text = try gpa.dupe(u8, ".{}"), .saved_hash = 7, .unsaved = false };
+    try std.testing.expect(tabs.follow(gpa, 2, leaving_again).? == .empty);
     try std.testing.expectEqual(@as(u8, 2), tabs.applied);
+    try std.testing.expectEqualStrings("resources/scene/main.scene.zon", tabs.waiting[0].?.kept.path);
 }
 
-test "closing loses a kept world's changes, and the open one's only when another scene replaces it" {
+test "closing loses a kept world's changes, and the open one's when another tab is shown" {
     const gpa = std.testing.allocator;
-    var tabs = SceneTabs{};
+    var tabs = SceneTabs{ .settled = true };
     defer tabs.deinit(gpa);
     // Copy 1 waits with unsaved changes, copy 2 with a saved world, copy 3 for its file.
     tabs.waiting[1] = .{ .kept = .{ .path = try gpa.dupe(u8, "a.scene.zon"), .text = try gpa.dupe(u8, ".{}"), .saved_hash = 1, .unsaved = true } };
@@ -201,8 +213,8 @@ test "closing loses a kept world's changes, and the open one's only when another
     try std.testing.expectEqual(only(&.{1}), tabs.lostByClosing(only(&.{ 1, 2 }), 0, true));
     // The open world (copy 0) is lost when copy 3's scene opens in its place...
     try std.testing.expectEqual(only(&.{0}), tabs.lostByClosing(only(&.{0}), 3, true));
-    // ...but not when the copy shown next shares it, none is left, or nothing changed.
-    try std.testing.expectEqual(only(&.{}), tabs.lostByClosing(only(&.{0}), 4, true));
+    // ...or an empty world does, but not when no tab is left, or nothing changed.
+    try std.testing.expectEqual(only(&.{0}), tabs.lostByClosing(only(&.{0}), 4, true));
     try std.testing.expectEqual(only(&.{}), tabs.lostByClosing(only(&.{0}), null, true));
     try std.testing.expectEqual(only(&.{}), tabs.lostByClosing(only(&.{0}), 3, false));
 }
@@ -229,4 +241,14 @@ test "each tab's scene file comes back for its own tab, the open one's left to t
     try std.testing.expectEqualStrings("resources/scene/garden.scene.zon", after.waiting[0].?.file);
     try std.testing.expect(after.waiting[2] == null);
     try std.testing.expect(after.waiting[3] == null);
+}
+
+test "without saved tabs, the first tab shown keeps the scene the editor reopened" {
+    const gpa = std.testing.allocator;
+    var tabs = SceneTabs{};
+    defer tabs.deinit(gpa);
+    try std.testing.expect(!tabs.changing(2));
+    try std.testing.expect(tabs.follow(gpa, 2, null) == null);
+    try std.testing.expectEqual(@as(u8, 2), tabs.applied);
+    try std.testing.expect(tabs.changing(0));
 }

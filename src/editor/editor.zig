@@ -1109,8 +1109,7 @@ pub fn Editor(comptime project: type) type {
             const first = std.mem.indexOfScalar(bool, &lost, true) orelse return true;
             const name = if (first == applied)
                 if (self.open_scene) |*scene| scene.name() else null
-            else
-                std.fs.path.basename(self.scene_tabs.waiting[first].?.kept.path);
+            else if (self.scene_tabs.waiting[first].?.kept.path.len == 0) null else std.fs.path.basename(self.scene_tabs.waiting[first].?.kept.path);
             const doing = if (close.target == .tab) "closing the tab" else "closing the Scene";
             self.save_prompt = save_prompt_zig.SavePrompt.open(self.gpa, &self.app.graphics, self.ui.font, self.app.window.window, name, doing) catch |err| {
                 // Without the prompt, keep the changes rather than lose them.
@@ -1135,6 +1134,8 @@ pub fn Editor(comptime project: type) type {
                         continue;
                     }
                     const kept = &self.scene_tabs.waiting[copy].?.kept;
+                    // ponytail: a world never saved has no file to write here; give it a Save As once tabs can be saved unshown.
+                    if (kept.path.len == 0) return self.workspace.toast("Show that tab and save its scene first");
                     const scene = if (self.open_scene) |*open| open else return;
                     self.saveTextOverwriting(scene, kept.path, kept.text) catch |err| {
                         if (err == error.ChangedOnDisk) return self.workspace.toast("Not saved: the scene changed on disk");
@@ -1565,9 +1566,9 @@ pub fn Editor(comptime project: type) type {
             };
         }
 
-        /// What `replaceSceneStep` puts in the world: a scene file, a new one in a folder, or a
-        /// world a 3D tab kept (borrowed).
-        const SceneSource = union(enum) { open: []const u8, create: []const u8, kept: scene_tabs.Kept, recovered: struct { path: []const u8, text: [:0]const u8 } };
+        /// What `replaceSceneStep` puts in the world: a scene file, a new one in a folder, a
+        /// world a 3D tab kept (borrowed), or nothing, for a tab with no scene of its own.
+        const SceneSource = union(enum) { open: []const u8, create: []const u8, kept: scene_tabs.Kept, recovered: struct { path: []const u8, text: [:0]const u8 }, empty };
 
         /// Replace the world with `source`, as one step to undo; see `openSceneStep`.
         fn replaceSceneStep(self: *Self, source: SceneSource) !void {
@@ -1593,7 +1594,13 @@ pub fn Editor(comptime project: type) type {
                     var world = try eggy.scene.Scene.parse(self.gpa, text);
                     defer world.deinit();
                     game.restart(&self.app, &world, self.plugin_switches.off(), .discard);
-                    try scene.reopenAs(kept.path, kept.saved_hash);
+                    try scene.reopenAs(if (kept.path.len == 0) null else kept.path, kept.saved_hash);
+                },
+                .empty => {
+                    var world = try eggy.scene.Scene.parse(self.gpa, ".{ .entities = .{} }");
+                    defer world.deinit();
+                    game.restart(&self.app, &world, self.plugin_switches.off(), .discard);
+                    try scene.reopenAs(null, null);
                 },
                 // Its file first, for what it holds now, then the world as it was unsaved.
                 .recovered => |found| {
@@ -1611,7 +1618,7 @@ pub fn Editor(comptime project: type) type {
                 .from = from,
                 .from_world = from_world,
                 .from_saved = from_saved,
-                .to = try self.gpa.dupe(u8, scene.path.?),
+                .to = if (scene.path) |path| try self.gpa.dupe(u8, path) else null,
                 .to_world = to_world,
                 .to_saved = scene.saved_hash,
                 .created = source == .create,
@@ -2096,11 +2103,11 @@ pub fn Editor(comptime project: type) type {
                     if (change.created) if (back) {
                         if (change.trashed) |old| self.gpa.free(old);
                         change.trashed = null;
-                        change.trashed = try file_ops.trash(self.gpa, io, files, change.to);
-                        self.assetsMoved(change.to, change.trashed.?);
+                        change.trashed = try file_ops.trash(self.gpa, io, files, change.to.?);
+                        self.assetsMoved(change.to.?, change.trashed.?);
                     } else if (change.trashed) |trashed| {
-                        try file_ops.restore(io, files, trashed, change.to);
-                        self.assetsMoved(trashed, change.to);
+                        try file_ops.restore(io, files, trashed, change.to.?);
+                        self.assetsMoved(trashed, change.to.?);
                         self.gpa.free(trashed);
                         change.trashed = null;
                     };
@@ -3994,8 +4001,9 @@ pub fn Editor(comptime project: type) type {
                 _ = self.scene_tabs.follow(self.gpa, live, null);
                 return;
             }
-            const leaving: ?scene_tabs.Kept = if (self.open_scene) |*scene| if (scene.path) |path| if (self.sceneText()) |text| blk: {
-                const kept_path = self.gpa.dupe(u8, path) catch {
+            // The open world waits for its tab: a scene's, or one never saved that holds something.
+            const leaving: ?scene_tabs.Kept = if (self.open_scene) |*scene| if (scene.path != null or self.app.world.entityCount() > 0) if (self.sceneText()) |text| blk: {
+                const kept_path = self.gpa.dupe(u8, scene.path orelse "") catch {
                     self.gpa.free(text);
                     break :blk null;
                 };
@@ -4007,6 +4015,7 @@ pub fn Editor(comptime project: type) type {
             const shown = switch (next) {
                 .file => |path| self.replaceSceneStep(.{ .open = path }),
                 .kept => |kept| self.replaceSceneStep(.{ .kept = kept }),
+                .empty => self.replaceSceneStep(.empty),
             };
             shown catch |err| {
                 std.log.err("cannot open the tab's scene: {t}", .{err});
