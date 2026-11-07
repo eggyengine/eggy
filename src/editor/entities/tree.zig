@@ -119,6 +119,12 @@ fn addSubtree(arena: std.mem.Allocator, rows: *std.ArrayList(Row), world: *ecs.W
         }
         if (eggy.scene_instance.typeIndex(through.types())) |component| instance = through.has(world, entity, component);
     }
+    // An instanced scene's own root holds only that scene's settings: its children stand in for it.
+    if (from_instance) if (access) |through| if (eggy.scene_root.typeIndex(through.types())) |component| if (through.has(world, entity, component)) {
+        var lifted = world.children(entity);
+        while (lifted.next()) |child| try addSubtree(arena, rows, world, access, child, depth, true);
+        return;
+    };
     var children = world.children(entity);
     const has_children = children.next() != null;
     try rows.append(arena, .{ .entity = entity, .name = name, .depth = depth, .has_parent = world.getParent(entity) != null, .has_children = has_children, .components = names.items, .from_instance = from_instance });
@@ -172,9 +178,9 @@ test "rows come in tree order, and a filter keeps matches with their ancestors" 
     try std.testing.expectEqualSlices(bool, &.{ false, false }, all[2].lines);
 }
 
-test "a scene instance's entities are listed under it, marked as made from its file" {
+test "a scene instance's entities are listed under it, marked as made from its file, without its scene's root" {
     const gpa = std.testing.allocator;
-    const access = eggy.scene.registryAccess(eggy.components.Registry(&.{ eggy.Transform, eggy.SceneInstance }, &.{ "eggy", "eggy" }));
+    const access = eggy.scene.registryAccess(eggy.components.Registry(&.{ eggy.Transform, eggy.SceneInstance, eggy.physics.PhysicsSettings, eggy.SceneRoot }, &.{ "eggy", "eggy", "eggy", "eggy" }));
     var world = ecs.World.init(gpa);
     defer world.deinit();
     const player_entity = try world.spawn(.{ eggy.Transform{}, eggy.SceneInstance{} });
@@ -182,6 +188,9 @@ test "a scene instance's entities are listed under it, marked as made from its f
     try world.setParent(player, player_entity);
     const hat = try world.spawn(.{});
     try world.setParent(hat, player);
+    // The instanced scene's own root isn't listed.
+    const instanced_root = try world.spawn(.{eggy.SceneRoot{}});
+    try world.setParent(instanced_root, player_entity);
 
     var arena = std.heap.ArenaAllocator.init(gpa);
     defer arena.deinit();
