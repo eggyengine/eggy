@@ -1,8 +1,5 @@
 # eggy
 
-> [!NOTE]
-> This repository has migrated to [git.tirbo.fish/eggy/eggy](https://git.tirbo.fish/eggy/eggy).
-
 _eggy_ is a game engine written in Zig. more info at [eggyengine.github.io](https://eggyengine.github.io). 
 
 since the editor is compiled with the runtime, create a project with this script (which bootstraps everything):
