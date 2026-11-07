@@ -238,6 +238,8 @@ pub fn Editor(comptime project: type) type {
         camera_preview: eggy.SceneTexture,
         /// The model the Asset Preview panel shows, made the first time one is shown.
         model_view: ?eggy.SceneTexture = null,
+        /// The Asset Preview model's bones, drawn over `model_view`.
+        preview_bones: eggy.debug_draw.DebugDraw = .{},
         /// The world seen flat in the 2D Scene panel, made the first time it is shown, and the
         /// meshes it draws.
         scene_2d_view: ?eggy.SceneTexture = null,
@@ -593,6 +595,7 @@ pub fn Editor(comptime project: type) type {
             self.camera_preview.deinit();
             self.scene_view.deinit();
             if (self.model_view) |*view| view.deinit();
+            self.preview_bones.deinit(self.gpa);
             if (self.scene_2d_view) |*view| view.deinit();
             self.scene_2d.brush.deinit(self.gpa);
             self.gpa.free(self.drawables);
@@ -2394,7 +2397,7 @@ pub fn Editor(comptime project: type) type {
                 }
             }
 
-            const model_px = if (drawn.asset_preview_at != null) try self.renderModelPreview(frame.cmd, viewport, frame.extent) else null;
+            const model_px = if (drawn.asset_preview_at != null) try self.renderModelPreview(frame.cmd, surface, viewport, frame.extent) else null;
             const flat_px = if (drawn.page_starts[panels.scene_2d_page] != null) try self.renderScene2d(frame.cmd, viewport, frame.extent, scene_px != null) else null;
 
             // The UI, with each texture drawn in where its panel was painted (the scene after
@@ -2442,8 +2445,8 @@ pub fn Editor(comptime project: type) type {
         }
 
         /// Render the model the Asset Preview panel shows, if any, alone under the default
-        /// light; returns where in the window's pixels it goes.
-        fn renderModelPreview(self: *Self, cmd: eggy.vit.CommandBuffer, viewport: ui.Rect, extent: eggy.vit.Extent2D) !?ui.Rect {
+        /// light, with a skinned model's bones over it; returns where in the window's pixels it goes.
+        fn renderModelPreview(self: *Self, cmd: eggy.vit.CommandBuffer, surface: *eggy.Surface, viewport: ui.Rect, extent: eggy.vit.Extent2D) !?ui.Rect {
             const shot = self.asset_preview.model.shot() orelse return null;
             const rect = eggy.game_ui.pixelRect(shot.rect, viewport, extent);
             if (self.model_view == null) self.model_view = try eggy.SceneTexture.init(&self.app.graphics);
@@ -2461,6 +2464,22 @@ pub fn Editor(comptime project: type) type {
             graphics.ui_billboards = null;
             graphics.world_draw = null;
             try self.model_view.?.render(graphics, cmd, pixelSize(rect), @as(*[1]eggy.mesh.Drawable, shot.drawable), shot.view, &.{}, false);
+
+            self.preview_bones.clear();
+            self.asset_preview.model.bones(&self.app, &self.preview_bones) catch |err| std.log.warn("cannot draw the previewed model's bones: {t}", .{err});
+            if (self.preview_bones.line_count != 0) {
+                const draw_context = eggy.DrawContext{
+                    .cmd = cmd,
+                    .target = try self.model_view.?.beginOverlay(cmd),
+                    .extent_px = pixelSize(rect),
+                    .viewport = .{ .x = 0, .y = 0, .w = shot.rect.w, .h = shot.rect.h },
+                    .color_format = graphics.color_format,
+                    .frame_owner = surface,
+                    .frame_slot = surface.slot,
+                };
+                try self.preview_bones.render(self.gpa, graphics.device, graphics.queue, draw_context, shot.view);
+                try self.model_view.?.endOverlay(cmd);
+            }
             return rect;
         }
 

@@ -53,13 +53,30 @@ pub const Skeleton = struct {
         const drawable = for (drawn) |found| {
             if (found.entity_id == chosen.id and found.entity_generation == chosen.generation) break found;
         } else return;
-        const animator = drawable.animator orelse return;
-        const path = drawable.modelFile() orelse return;
-        const gpu = app.graphics.models.get(path, &app.graphics.textures) orelse return;
-        const model = gpu.rig orelse return;
-        if (model.rig.nodes.len == 0) return;
-        self.pose(app, model, path, animator.*, math.fromArray(f32, 4, 4, drawable.model), view, scene) catch return;
-        self.entity = chosen;
+        if (drawable.animator == null) return;
+        if (self.show(app, drawable, view, scene)) self.entity = chosen;
+    }
+
+    /// Pose the skeleton of `drawable`'s model as it is drawn (its `Animator`'s clips, else at
+    /// rest), seen through `view` in `scene`. False, with no joints, when its model has no nodes.
+    pub fn show(self: *Skeleton, app: *eggy.App, drawable: eggy.mesh.Drawable, view: eggy.camera.View, scene: ui.Rect) bool {
+        _ = self.arena.reset(.retain_capacity);
+        self.joints = &.{};
+        const path = drawable.modelFile() orelse return false;
+        const gpu = app.graphics.models.get(path, &app.graphics.textures) orelse return false;
+        const model = gpu.rig orelse return false;
+        if (model.rig.nodes.len == 0) return false;
+        const animator: eggy.animation.Animator = if (drawable.animator) |found| found.* else .{};
+        self.pose(app, model, path, animator, math.fromArray(f32, 4, 4, drawable.model), view, scene) catch return false;
+        return true;
+    }
+
+    /// Record a line for each bone, from its joint to its parent's, in `debug`.
+    pub fn lines(self: *const Skeleton, debug: *eggy.debug_draw.DebugDraw) !void {
+        for (self.joints) |joint| {
+            const parent = joint.parent orelse continue;
+            try debug.line(origin(self.joints[parent].world), origin(joint.world), bone_color);
+        }
     }
 
     fn pose(self: *Skeleton, app: *eggy.App, model: *const eggy.assets.Model, path: []const u8, animator: eggy.animation.Animator, placed: math.Mat4, view: eggy.camera.View, scene: ui.Rect) !void {
@@ -170,4 +187,20 @@ test "the joint nearest the pointer is picked, within reach" {
     skeleton.joints = &joints;
     try std.testing.expectEqual(@as(?u32, 1), skeleton.jointAt(.{ .x = 105, .y = 101 }));
     try std.testing.expectEqual(@as(?u32, null), skeleton.jointAt(.{ .x = 130, .y = 100 }));
+}
+
+test "each bone becomes one line from its parent's joint to its own" {
+    const hips = math.translation4x4(f32, 0, 1, 0);
+    var joints = [_]Joint{
+        .{ .name = "root", .parent = null, .world = math.identity(f32, 4), .screen = null, .local = .{ .zero, .zero, .one } },
+        .{ .name = "hips", .parent = 0, .world = hips, .screen = null, .local = .{ .zero, .zero, .one } },
+    };
+    var skeleton = Skeleton.init(std.testing.allocator);
+    defer skeleton.deinit();
+    skeleton.joints = &joints;
+    var debug = eggy.debug_draw.DebugDraw{};
+    try skeleton.lines(&debug);
+    try std.testing.expectEqual(@as(usize, 1), debug.line_count);
+    try std.testing.expectEqual(@as(f32, 0), debug.lines[0].from_m.y);
+    try std.testing.expectEqual(@as(f32, 1), debug.lines[0].to_m.y);
 }

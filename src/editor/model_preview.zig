@@ -9,6 +9,7 @@ const ui = eggy.ui;
 const ui_scenes = eggy.ui_scenes;
 const ProjectAssets = @import("assets/project_assets.zig").ProjectAssets;
 const page_style = @import("page_style.zig");
+const Skeleton = @import("scene_view/skeleton.zig").Skeleton;
 
 /// What `build` reads from, borrowed for the call.
 pub const Request = struct {
@@ -103,12 +104,15 @@ pub const ModelPreview = struct {
     /// Where its viewport was laid out last frame, and whether it was built this frame.
     area: ui.Rect = .{ .x = 0, .y = 0, .w = 0, .h = 0 },
     shown: bool = false,
+    /// A skinned model's bones, posed as it is drawn.
+    skeleton: Skeleton,
 
     pub fn init(gpa: std.mem.Allocator) ModelPreview {
-        return .{ .gpa = gpa, .arena = .init(gpa) };
+        return .{ .gpa = gpa, .arena = .init(gpa), .skeleton = .init(gpa) };
     }
 
     pub fn deinit(self: *ModelPreview) void {
+        self.skeleton.deinit();
         self.arena.deinit();
         self.asked_clip.deinit(self.gpa);
     }
@@ -123,6 +127,15 @@ pub const ModelPreview = struct {
     pub fn shot(self: *ModelPreview) ?Shot {
         if (!self.shown or self.area.w < 1 or self.area.h < 1) return null;
         return .{ .rect = self.area, .view = self.view, .drawable = &self.drawable };
+    }
+
+    /// Record the shown model's bones in `debug`, posed as it is drawn this frame; nothing for a
+    /// model without a skin.
+    pub fn bones(self: *ModelPreview, app: *eggy.App, debug: *eggy.debug_draw.DebugDraw) !void {
+        const summary = self.summary orelse return;
+        if (!self.shown or summary.bones == 0) return;
+        if (!self.skeleton.show(app, self.drawable, self.view, self.area)) return;
+        try self.skeleton.lines(debug);
     }
 
     /// Drag to turn the model, scroll to zoom, double-click to look again from the start.
