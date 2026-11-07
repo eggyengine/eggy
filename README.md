@@ -1,19 +1,16 @@
 # eggy
 
-> [!NOTE]
-> This repository has migrated to [git.tirbo.fish/eggy/eggy](https://git.tirbo.fish/eggy/eggy).
-
 _eggy_ is a game engine written in Zig. more info at [eggyengine.github.io](https://eggyengine.github.io). 
 
 since the editor is compiled with the runtime, create a project with this script (which bootstraps everything):
 
 ```bash
-curl -fsSL https://git.tirbo.fish/eggy/eggy/raw/branch/main/scripts/get-started.sh | bash
+curl -fsSL https://raw.githubusercontent.com/eggyengine/eggy/main/scripts/get-started.sh | bash
 ```
 
 or on windows:
 ```pwsh
-irm https://git.tirbo.fish/eggy/eggy/raw/branch/main/scripts/get-started.ps1 | iex
+irm https://raw.githubusercontent.com/eggyengine/eggy/main/scripts/get-started.ps1 | iex
 ```
 
 ## make a game
@@ -38,7 +35,7 @@ everything else (SDL3, nvdialog, AccessKit) is fetched and linked by `zig build`
 clone the repository, then run the editor as such:
 
 ```bash
-git clone --recursive https://git.tirbo.fish/eggy/eggy
+git clone --recursive https://github.com/eggyengine/eggy
 cd eggy
 zig build run
 ```

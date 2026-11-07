@@ -1,18 +1,17 @@
 #!/usr/bin/env bash
-# Install Eggy: Zig 0.17 if it is missing, then the launcher, from Eggy's releases.
+# Install Eggy: Zig 0.17 if it is missing, then the launcher, from GitHub Releases.
 #
-#   curl -fsSL https://git.tirbo.fish/eggy/eggy/raw/branch/main/scripts/get-started.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/eggyengine/eggy/main/scripts/get-started.sh | bash
 #
 # On Windows, from PowerShell:
 #
-#   irm https://git.tirbo.fish/eggy/eggy/raw/branch/main/scripts/get-started.ps1 | iex
+#   irm https://raw.githubusercontent.com/eggyengine/eggy/main/scripts/get-started.ps1 | iex
 #
 # It asks for the latest release or the nightly, and whether to install just for you
 # (~/.local/share/eggy/launcher, linked as ~/.local/bin/eggy) or for everyone (/opt/eggy, linked
 # as /usr/local/bin/eggy, through sudo). Running it again replaces the installed launcher.
 # Prompts are read from the terminal, so this still works when the script arrives on stdin.
-# EGGY_GIT and EGGY_REPO override the Gitea server and repository (owner/name) the launcher is
-# downloaded from.
+# EGGY_REPO overrides the GitHub repository the launcher is downloaded from (owner/name).
 # EGGY_GET_STARTED_TEST=1 loads the functions and returns, for the script's own check.
 if [ -z "${BASH_VERSION:-}" ]; then
     echo "get-started needs bash." >&2
@@ -20,14 +19,13 @@ if [ -z "${BASH_VERSION:-}" ]; then
 fi
 set -euo pipefail
 
-EGGY_GIT="${EGGY_GIT:-https://git.tirbo.fish}"
-EGGY_REPO="${EGGY_REPO:-eggy/eggy}"
+EGGY_REPO="${EGGY_REPO:-eggyengine/eggy}"
 ZIG_RELEASE="0.17.1"
 
 case "$(uname -s 2>/dev/null || true)" in
     MINGW* | MSYS* | CYGWIN*)
         echo "On Windows, run this from PowerShell:" >&2
-        echo "  irm https://git.tirbo.fish/eggy/eggy/raw/branch/main/scripts/get-started.ps1 | iex" >&2
+        echo "  irm https://raw.githubusercontent.com/eggyengine/eggy/main/scripts/get-started.ps1 | iex" >&2
         exit 1
         ;;
 esac
@@ -241,27 +239,25 @@ platform_name() {
         Linux/x86_64 | Linux/amd64) echo linux-x86_64 ;;
         Darwin/arm64 | Darwin/aarch64) echo macos-aarch64 ;;
         *)
-            echo "Eggy has no launcher build for $os on $arch yet. Build it from source: ${EGGY_GIT}/${EGGY_REPO}" >&2
+            echo "Eggy has no launcher build for $os on $arch yet. Build it from source: https://github.com/${EGGY_REPO}" >&2
             return 1
             ;;
     esac
 }
 
-# Where a channel's asset downloads from. `releases/latest` skips prereleases, so it never serves
-# the nightly; nightlies are tagged by day (`nightly-<yyyy-mm-dd>`), and Gitea lists the newest first.
+# Where a channel's asset downloads from. `latest` skips prereleases, so it never serves the nightly;
+# nightlies are tagged by day (`nightly-<yyyy-mm-dd>`), and GitHub lists the newest first.
 asset_url() {
-    local channel=$1 platform=$2 releases tag
+    local channel=$1 platform=$2 tag
     case "$channel" in
-        release)
-            releases=$(curl -fsSL "${EGGY_GIT}/api/v1/repos/${EGGY_REPO}/releases/latest") || return 1
-            tag=$(grep -o '"tag_name": *"[^"]*"' <<<"$releases" | head -n1 | grep -o '"[^"]*"$' | tr -d '"') || return 1
-            ;;
+        release) echo "https://github.com/${EGGY_REPO}/releases/latest/download/eggy-${platform}.tar.gz" ;;
         nightly)
-            releases=$(curl -fsSL "${EGGY_GIT}/api/v1/repos/${EGGY_REPO}/releases?limit=30") || return 1
-            tag=$(grep -o '"tag_name": *"nightly-[0-9-]*"' <<<"$releases" | head -n1 | grep -o 'nightly-[0-9-]*') || return 1
+            local releases
+            releases=$(curl -fsSL "https://api.github.com/repos/${EGGY_REPO}/releases?per_page=30") || return 1
+            tag=$(grep -o -m1 '"tag_name": *"nightly-[0-9-]*"' <<<"$releases" | grep -o 'nightly-[0-9-]*') || return 1
+            echo "https://github.com/${EGGY_REPO}/releases/download/${tag}/eggy-${platform}.tar.gz"
             ;;
     esac
-    echo "${EGGY_GIT}/${EGGY_REPO}/releases/download/${tag}/eggy-${platform}.tar.gz"
 }
 
 # Download `channel`'s launcher into `archive`; a failure returns, so the caller can offer another channel.
@@ -354,7 +350,7 @@ main() {
     archive="$stage/eggy-${platform}.tar.gz"
     if ! download "$channel" "$platform" "$archive"; then
         if [[ "$channel" == nightly ]]; then
-            echo "Could not download the nightly from ${EGGY_GIT}/${EGGY_REPO}/releases." >&2
+            echo "Could not download the nightly from https://github.com/${EGGY_REPO}/releases." >&2
             exit 1
         fi
         reply=$(ask "There is no release for ${platform} yet. Install the nightly instead?" "Y")

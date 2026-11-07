@@ -19,7 +19,7 @@ The [project setup guide](../how-to/set-up-project.md) covers setup separately.
 Get Eggy and start its editor:
 
 ```bash
-git clone https://git.tirbo.fish/eggy/eggy
+git clone https://github.com/eggyengine/eggy
 cd eggy
 zig build run
 ```

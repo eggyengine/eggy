@@ -18,7 +18,7 @@ export default {
       {
         docs: {
           routeBasePath: '/',
-          editUrl: `https://git.tirbo.fish/eggy/eggy/_edit/${process.env.DOCS_BRANCH ?? 'main'}/docs/`,
+          editUrl: `https://github.com/eggyengine/eggy/edit/${process.env.DOCS_BRANCH ?? 'main'}/docs/`,
         },
         blog: false,
       },
@@ -34,7 +34,7 @@ export default {
         // `zig build docs --prefix docs/static` makes it; the docs workflow does before building.
         { to: 'pathname:///api/', label: 'API reference', position: 'left' },
         { href: 'https://eggyengine.github.io/weeoui/', label: 'Weeoui', position: 'left' },
-        { href: 'https://git.tirbo.fish/eggy/eggy', label: 'Source', position: 'right' },
+        { href: 'https://github.com/eggyengine/eggy', label: 'GitHub', position: 'right' },
       ],
     },
     prism: { additionalLanguages: ['zig', 'bash'] },

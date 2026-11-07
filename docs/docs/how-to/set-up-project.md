@@ -20,13 +20,13 @@ executable when it is not on `PATH`.
 To install the editor, run:
 
 ```sh
-curl -fsSL https://git.tirbo.fish/eggy/eggy/raw/branch/main/scripts/get-started.sh | bash
+curl -fsSL https://raw.githubusercontent.com/eggyengine/eggy/main/scripts/get-started.sh | bash
 ```
 
 On Windows, from PowerShell:
 
 ```powershell
-irm https://git.tirbo.fish/eggy/eggy/raw/branch/main/scripts/get-started.ps1 | iex
+irm https://raw.githubusercontent.com/eggyengine/eggy/main/scripts/get-started.ps1 | iex
 ```
 
 The script installs Zig 0.17 if it is missing, asking before it installs zvm (when zvm is

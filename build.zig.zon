@@ -5,40 +5,40 @@
     .minimum_zig_version = "0.17.0",
     .dependencies = .{
         .android = .{
-            .url = "git+https://git.tirbo.fish/eggy/zig-android-sdk?ref=zig-0.17#319734de5f43d9c478ead4ff35ebe564b588be7c",
+            .url = "git+https://github.com/eggyengine/zig-android-sdk?ref=zig-0.17#319734de5f43d9c478ead4ff35ebe564b588be7c",
             .hash = "android-0.3.0-7iz7Qn5MAgCPmeMnCCYhLLHkxY5r8gTy_vKmrATmrnEB",
             .lazy = true,
         },
         .sdl3 = .{
-            .url = "git+https://git.tirbo.fish/eggy/zig-sdl3#fd0ca1f7a9d2613befc6d06b3d076cb4323b2759",
+            .url = "git+https://github.com/eggyengine/zig-sdl3#fd0ca1f7a9d2613befc6d06b3d076cb4323b2759",
             .hash = "sdl3-0.2.3-NmT1Q1cGKgACt9YvCpObQdbLLFCy6FOSyHUoa_tgj14_",
         },
         .vitellus = .{
-            .url = "git+https://git.tirbo.fish/eggy/vitellus#5d7621e14c6a34ac05a2711c6ca1e72155a40a0f",
+            .url = "git+https://github.com/eggyengine/vitellus#5d7621e14c6a34ac05a2711c6ca1e72155a40a0f",
             .hash = "vitellus-0.1.0-JC2CjMKtDAC91zNlyD7pc7Z__Krnn_XPOvp2LqCXmZeR",
         },
         .humpty = .{
-            .url = "git+https://git.tirbo.fish/eggy/humpty#6a1c69607dc720759ff42a50a8fad9c3d5a1ea1a",
+            .url = "git+https://github.com/eggyengine/humpty#6a1c69607dc720759ff42a50a8fad9c3d5a1ea1a",
             .hash = "humpty-0.1.0-h_J637xaAgCiVKiwSxlHlaCf_lU9mo01ncyFyzmN4nzN",
         },
         .clutch = .{
-            .url = "git+https://git.tirbo.fish/eggy/clutch#6ddafbde77be00628000913e7abc9cf3e516e989",
+            .url = "git+https://github.com/eggyengine/clutch#6ddafbde77be00628000913e7abc9cf3e516e989",
             .hash = "clutch-0.1.0-gpdHb6kfAgA7WgAGO251ESX_fPv9AiTHfi_Fyzd-IaYN",
         },
         .weeoui = .{
-            .url = "git+https://git.tirbo.fish/eggy/weeoui#b0a6bf1c29b34b019347e3c320a74e8023f4fb68",
+            .url = "git+https://github.com/eggyengine/weeoui#b0a6bf1c29b34b019347e3c320a74e8023f4fb68",
             .hash = "weeoui-0.0.1-A8JXQT-OFADPU9bBya-lJyZoJ-kp2sd8KETTcy1pmVsm",
         },
         .eggenvector = .{
-            .url = "git+https://git.tirbo.fish/eggy/eggenvector#67b5b202495539bb34aec9941aec3ad24b5752ec",
+            .url = "git+https://github.com/eggyengine/eggenvector#67b5b202495539bb34aec9941aec3ad24b5752ec",
             .hash = "eggenvector-0.0.0-UyZb9BwkAgBS9Aa5WxM4mo9UPk19qgXX44kkfEmyNxt3",
         },
         .better_dynlib = .{
-            .url = "git+https://git.tirbo.fish/eggy/better-dynlib#8d45e065337f486d32ce7d63dd0a18fd4363e481",
+            .url = "git+https://github.com/eggyengine/better-dynlib#8d45e065337f486d32ce7d63dd0a18fd4363e481",
             .hash = "better_dynlib-0.1.0-_pGZeoIZAACBUt3s3UMPTXcMVplZO8XbzJOjrShycqFJ",
         },
         .s2s = .{
-            .url = "git+https://git.tirbo.fish/eggy/s2s#7b544e0f970d2203f69620717e2fb66326358aa2",
+            .url = "git+https://github.com/eggyengine/s2s#7b544e0f970d2203f69620717e2fb66326358aa2",
             .hash = "s2s-0.0.1-qt8ajXV-AACo6hh6oy_Vx_W9h6otkL7MJ-BOmG9rT4X2",
         },
         .assimp = .{

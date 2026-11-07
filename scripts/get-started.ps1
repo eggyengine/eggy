@@ -1,19 +1,17 @@
-# Install Eggy on Windows: Zig 0.17 if it is missing, then the launcher, from Eggy's releases.
+# Install Eggy on Windows: Zig 0.17 if it is missing, then the launcher, from GitHub Releases.
 #
-#   irm https://git.tirbo.fish/eggy/eggy/raw/branch/main/scripts/get-started.ps1 | iex
+#   irm https://raw.githubusercontent.com/eggyengine/eggy/main/scripts/get-started.ps1 | iex
 #
 # Asks in the current PowerShell session. If Zig 0.17 is missing, a yes installs zvm (when it is
 # not already installed) and then Zig. Then it asks for the latest release or the nightly, and
 # whether to install just for you (%LOCALAPPDATA%\Programs\Eggy) or for everyone
 # (%ProgramFiles%\Eggy, from an administrator PowerShell), adds its bin folder to PATH and the
 # Start menu, and replaces the launcher installed there before.
-# EGGY_GIT and EGGY_REPO override the Gitea server and repository (owner/name) the launcher is
-# downloaded from.
+# EGGY_REPO overrides the GitHub repository the launcher is downloaded from (owner/name).
 # EGGY_GET_STARTED_TEST=1 defines the functions and returns, for this script's own check.
 # Do not call exit: this file is invoked inside the caller's session.
 
-$EggyGit = if ($env:EGGY_GIT) { $env:EGGY_GIT } else { 'https://git.tirbo.fish' }
-$EggyRepo = if ($env:EGGY_REPO) { $env:EGGY_REPO } else { 'eggy/eggy' }
+$EggyRepo = if ($env:EGGY_REPO) { $env:EGGY_REPO } else { 'eggyengine/eggy' }
 $ZigRelease = '0.17.1'
 $Platform = 'windows-x86_64'
 
@@ -176,17 +174,16 @@ function Write-Egg {
 '@
 }
 
-# Where a channel's asset downloads from. `releases/latest` skips prereleases, so it never serves
-# the nightly; nightlies are tagged by day (`nightly-<yyyy-mm-dd>`), and Gitea lists the newest first.
+# Where a channel's asset downloads from. `latest` skips prereleases, so it never serves the nightly;
+# nightlies are tagged by day (`nightly-<yyyy-mm-dd>`), and GitHub lists the newest first.
 function Get-AssetUrl([string]$Channel) {
     if ($Channel -eq 'nightly') {
-        $releases = Invoke-RestMethod -UseBasicParsing -Uri "$EggyGit/api/v1/repos/$EggyRepo/releases?limit=30"
+        $releases = Invoke-RestMethod -UseBasicParsing -Uri "https://api.github.com/repos/$EggyRepo/releases?per_page=30"
         $tag = ($releases | Where-Object { $_.tag_name -like 'nightly-*' } | Select-Object -First 1).tag_name
         if (-not $tag) { throw 'No nightly release found.' }
-    } else {
-        $tag = (Invoke-RestMethod -UseBasicParsing -Uri "$EggyGit/api/v1/repos/$EggyRepo/releases/latest").tag_name
+        return "https://github.com/$EggyRepo/releases/download/$tag/eggy-$Platform.tar.gz"
     }
-    return "$EggyGit/$EggyRepo/releases/download/$tag/eggy-$Platform.tar.gz"
+    return "https://github.com/$EggyRepo/releases/latest/download/eggy-$Platform.tar.gz"
 }
 
 # Download `Channel`'s launcher to `Archive`. $false when it is not there, so the caller can offer another.
@@ -253,7 +250,7 @@ function Install-Eggy {
         return
     }
     if ($env:PROCESSOR_ARCHITECTURE -ne 'AMD64') {
-        Write-Error "Eggy has no launcher build for $env:PROCESSOR_ARCHITECTURE Windows yet. Build it from source: $EggyGit/$EggyRepo"
+        Write-Error "Eggy has no launcher build for $env:PROCESSOR_ARCHITECTURE Windows yet. Build it from source: https://github.com/$EggyRepo"
         return
     }
     if (-not (Install-ZigIfNeeded)) { return }
@@ -294,14 +291,14 @@ function Install-Eggy {
         $archive = Join-Path $stage "eggy-$Platform.tar.gz"
         if (-not (Get-Launcher $channel $archive)) {
             if ($channel -eq 'nightly') {
-                Write-Error "Could not download the nightly from $EggyGit/$EggyRepo/releases."
+                Write-Error "Could not download the nightly from https://github.com/$EggyRepo/releases."
                 return
             }
             $reply = Read-Answer "There is no release for $Platform yet. Install the nightly instead?" 'Y'
             if (-not (Test-Yes $reply)) { return }
             $channel = 'nightly'
             if (-not (Get-Launcher $channel $archive)) {
-                Write-Error "Could not download the nightly from $EggyGit/$EggyRepo/releases."
+                Write-Error "Could not download the nightly from https://github.com/$EggyRepo/releases."
                 return
             }
         }

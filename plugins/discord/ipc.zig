@@ -17,7 +17,7 @@ const max_payload = 8 * 1024;
 /// The picture beside the status: the Eggy icon among the application's Rich Presence art assets.
 const large_image = "eggy_icon_1_";
 /// The status's one button, to Eggy's repository. Discord shows it to others, not to you.
-const repository_button = .{ .label = "Eggy source code", .url = "https://git.tirbo.fish/eggy/eggy" };
+const repository_button = .{ .label = "Eggy on GitHub", .url = "https://github.com/eggyengine/eggy" };
 
 /// What a frame is: the kind of message it carries.
 pub const Opcode = enum(u32) { handshake = 0, frame = 1, close = 2, ping = 3, pong = 4, _ };
@@ -247,7 +247,7 @@ test "a status without a second line leaves state out" {
     var writer: Io.Writer = .fixed(&bytes);
     try writeSetActivity(&writer, 42, 7, &describe("bees", "", .editing), 1700000000);
     try std.testing.expectEqualStrings(
-        \\{"cmd":"SET_ACTIVITY","nonce":"7","args":{"pid":42,"activity":{"details":"Editing bees","timestamps":{"start":1700000000},"assets":{"large_image":"eggy_icon_1_","large_text":"Eggy"},"buttons":[{"label":"Eggy source code","url":"https://git.tirbo.fish/eggy/eggy"}]}}}
+        \\{"cmd":"SET_ACTIVITY","nonce":"7","args":{"pid":42,"activity":{"details":"Editing bees","timestamps":{"start":1700000000},"assets":{"large_image":"eggy_icon_1_","large_text":"Eggy"},"buttons":[{"label":"Eggy on GitHub","url":"https://github.com/eggyengine/eggy"}]}}}
     , writer.buffered());
 }
 

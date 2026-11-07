@@ -5,7 +5,7 @@
         .version = "0.1.0",
         .description = "Stage, commit, pull and push the project from the editor.",
         .dev = true,
-        .repository = "https://git.tirbo.fish/eggy/eggy",
+        .repository = "https://github.com/eggyengine/eggy",
         // Eggy's own build.zig.zon fingerprint: this plugin ships inside Eggy.
         .fingerprint = 0x634131700cbdf8dd,
         .package = "eggy",

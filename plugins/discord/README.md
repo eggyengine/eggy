@@ -7,7 +7,7 @@ says you're playing Eggy, with:
 - the scene you have open,
 - how long the editor has been open.
 
-Others see an **Eggy source code** button on it too. Discord has to be running on the same
+Others see an **Eggy on GitHub** button on it too. Discord has to be running on the same
 computer; open it at any time and the status appears within a few seconds.
 
 ## Preferences

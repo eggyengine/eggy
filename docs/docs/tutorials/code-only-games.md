@@ -24,7 +24,7 @@ If you created the package with the editor, keep its build files. A plugin in
 For an existing Zig package, fetch Eggy and use the following `build.zig`:
 
 ```sh
-zig fetch --save=eggy git+https://git.tirbo.fish/eggy/eggy
+zig fetch --save=eggy git+https://github.com/eggyengine/eggy
 ```
 
 ```zig

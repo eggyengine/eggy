@@ -5,13 +5,13 @@ sidebar_position: 6
 
 humpty is the rigid-body physics under Eggy's [Physics](../guides/physics.md), in 2D or 3D and
 `f32` or `f64`, after Rapier and Avian. It doesn't import Eggy, so any Zig 0.17 project can use
-it: on its own as a physics world, or inside a [clutch](https://git.tirbo.fish/eggy/clutch)
+it: on its own as a physics world, or inside a [clutch](https://github.com/eggyengine/clutch)
 ECS world as a plugin. Its only dependencies are clutch and the eggenvector maths library.
 
 ## Add it to a project
 
 ```sh
-zig fetch --save git+https://git.tirbo.fish/eggy/humpty
+zig fetch --save git+https://github.com/eggyengine/humpty
 ```
 
 ```zig
