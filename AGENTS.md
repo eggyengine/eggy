@@ -38,7 +38,7 @@ Every `README.md` here and in submodules is off limits to agents, except the pul
 
 ## Documentation
 
-`docs/` is the Docusaurus site (`.github/workflows/docs.yml` publishes it). Guides go in `docs/docs/guides/`, written for people making games with Eggy. In `docs/`: `npm ci`, `npm run start` to preview, `npm run build` to check (broken links fail it).
+`docs/` is the Docusaurus site (`.github/workflows-disabled/docs.yml` published it before the move to Gitea). Guides go in `docs/docs/guides/`, written for people making games with Eggy. In `docs/`: `npm ci`, `npm run start` to preview, `npm run build` to check (broken links fail it).
 
 ## Commands
 
@@ -47,7 +47,7 @@ Every `README.md` here and in submodules is off limits to agents, except the pul
 - `zig build test` runs every test; `test-core`, `test-runtime`, `test-editor` one part's. `EGGY_GPU_TEST=1` adds the GPU tests.
 - Add `--fork=src/vitellus --fork=src/weeoui --fork=src/humpty --fork=src/clutch` to build against local submodules.
 - `zig build update-submodules` fetches submodule branches; review pointers before committing.
-- `scripts/get-started.sh` / `get-started.ps1` install Zig and the launcher from the releases on git.tirbo.fish/eggy/eggy (the latest release or the `nightly` prerelease, which `.github/workflows/nightly.yml` publishes), for the user or system-wide.
+- `scripts/get-started.sh` / `get-started.ps1` install Zig and the launcher from the releases on git.tirbo.fish/eggy/eggy (the latest release or the `nightly` prerelease, which `.github/workflows-disabled/nightly.yml` published before the move to Gitea), for the user or system-wide.
 
 ## Coding Style
 
