@@ -123,9 +123,10 @@ pub const Plugin = struct {
 ```
 
 Replace `{ ... }` with your implementation and mark unused hook parameters with `_`.
-Fields may be bools, integers, floats, or enums. Edit > Settings shows the controls: a
-switch, a number field (a name ending in `_seconds` or `_ms` shows that unit), and for an
-enum, its choices side by side when there are four or fewer.
+Fields may be bools, integers, floats, enums, or strings (`[]const u8`, without quotes or
+backslashes). Edit > Settings shows the controls: a switch, a number field (a name ending in
+`_seconds` or `_ms` shows that unit), a text field, and for an enum, its choices side by side
+when there are four or fewer.
 Read settings where you use them to follow changes; values cached in `init` are refreshed
 only when the instance restarts.
 

@@ -12,28 +12,39 @@
 //!         pub const descriptions = .{ .volume = "How loud the game is, 0 to 1." };
 //!         // Optional: which fields share a card there, in order; unlisted ones come last.
 //!         pub const groups = .{ .{ "volume", "difficulty" }, .{"show_gizmos"} };
+//!         // Optional: fields only the global layer sets, which a project can't override.
+//!         pub const global_only = .{"update_source"};
 //!     };
 //!
 //!     const prefs = app.preferences(Preferences);
 //!
-//! Fields are bools, integers, floats or enums, each with a default.
+//! Fields are bools, integers, floats, enums or strings (`[]const u8`), each with a default.
 const std = @import("std");
 const zon_file = @import("eggy_assets").zon;
 
 /// A field's kind, as the Settings window edits it.
-pub const Kind = enum(u8) { bool, int, float, @"enum" };
+pub const Kind = enum(u8) { bool, int, float, @"enum", string };
+
+/// Which layers may set a field.
+pub const Scope = enum(u8) {
+    /// The global layer, overridden by the project's.
+    any,
+    /// The global layer alone: a value the project's layer gives it is ignored.
+    global_only,
+};
 
 /// What the Settings window needs to show and edit one field.
 pub const Field = struct {
     name: [:0]const u8,
     kind: Kind,
-    /// The default, as a ZON literal (`0.8`, `true`, `.normal`).
+    /// The default, as a ZON literal (`0.8`, `true`, `.normal`, `"main"`).
     default: [:0]const u8,
     /// An enum's values, in order; empty otherwise.
     options: []const [:0]const u8 = &.{},
     description: [:0]const u8 = "",
     /// Which card it shares in the Settings window: its index in the struct's `groups`.
     group: u8 = 0,
+    scope: Scope = .any,
 };
 
 /// The preferences a plugin declares: its key and fields. The key names whose they are, and their
@@ -45,7 +56,7 @@ pub const Manifest = struct {
 };
 
 /// The manifest of `T`, a `Preferences` struct, kept under `key`.
-/// Host-only metadata: fields must be defaulted bools, integers, floats or enums.
+/// Host-only metadata: fields must be defaulted bools, integers, floats, enums or strings.
 /// The returned names/literals have static lifetime and require no allocator.
 ///
 /// ```zig
@@ -84,12 +95,16 @@ fn fieldsOf(comptime T: type) []const Field {
                 field.default = "." ++ @tagName(default);
                 field.options = enum_info.field_names;
             },
-            else => @compileError("preference `" ++ name ++ "` must be a bool, integer, float or enum"),
+            else => if (FieldType == []const u8) {
+                field.kind = .string;
+                field.default = std.fmt.comptimePrint("\"{f}\"", .{std.zig.fmtString(default)});
+            } else @compileError("preference `" ++ name ++ "` must be a bool, integer, float, enum or []const u8"),
         }
         if (@hasDecl(T, "descriptions") and @hasField(@TypeOf(T.descriptions), name)) {
             field.description = @field(T.descriptions, name);
         }
         field.group = groupOf(T, name);
+        field.scope = scopeOf(T, name);
     }
     const frozen = fields;
     return &frozen;
@@ -103,6 +118,13 @@ fn groupOf(comptime T: type, comptime name: []const u8) u8 {
         inline for (group) |member| if (comptime std.mem.eql(u8, member, name)) return index;
     }
     return T.groups.len;
+}
+
+/// Whether `T.global_only` lists `name`.
+fn scopeOf(comptime T: type, comptime name: []const u8) Scope {
+    if (!@hasDecl(T, "global_only")) return .any;
+    inline for (T.global_only) |member| if (comptime std.mem.eql(u8, member, name)) return .global_only;
+    return .any;
 }
 
 /// One file's values: field name to its ZON literal.
@@ -163,9 +185,10 @@ pub const Store = struct {
         self.keys.clearRetainingCapacity();
     }
 
-    /// `T`'s values: its defaults, overridden by the global layer, then the project's. A value
-    /// that doesn't parse as its field's type keeps the lower layer's value (or default).
-    /// A type never registered gets all defaults. Returns a value, not borrowed store text.
+    /// `T`'s values: its defaults, overridden by the global layer, then the project's (except
+    /// for fields `T.global_only` lists). A value that doesn't parse as its field's type keeps the
+    /// lower layer's value (or default). A type never registered gets all defaults. String
+    /// fields borrow the store's text, valid until `deinit`.
     /// Games normally use `app.preferences(T)` instead.
     ///
     /// ```zig
@@ -180,6 +203,7 @@ pub const Store = struct {
     /// `T`'s values kept under `key`, as `get` finds them, for a type with a known key (the
     /// editor's own) rather than a registered one.
     /// Host-only: invalid literals leave lower-layer values unchanged; does not register `T`.
+    /// String fields borrow the store's text, valid until `deinit`.
     ///
     /// ```zig
     /// const Settings = struct { volume: f32 = 0.8 };
@@ -187,10 +211,13 @@ pub const Store = struct {
     /// ```
     pub fn getKeyed(self: *const Store, comptime T: type, key: []const u8) T {
         var result: T = .{};
-        for (self.layers) |layer| {
+        for (self.layers, 0..) |layer, index| {
             const values = layer.get(key) orelse continue;
             inline for (@typeInfo(T).@"struct".field_names) |name| if (values.get(name)) |text| {
-                if (parseField(T, name, text)) |value| @field(result, name) = value;
+                const ignored = index == @backingInt(Layer.project) and comptime scopeOf(T, name) == .global_only;
+                if (!ignored) if (parseField(T, name, text)) |value| {
+                    @field(result, name) = value;
+                };
             };
         }
         return result;
@@ -276,14 +303,23 @@ pub const Store = struct {
     }
 };
 
-/// `literal` parsed as field `name` of `T`; null if it isn't one.
+/// `literal` parsed as field `name` of `T`; null if it isn't one. A string borrows `literal`.
 fn parseField(comptime T: type, comptime name: []const u8, literal: []const u8) ?@FieldType(T, name) {
+    if (@FieldType(T, name) == []const u8) return stringValue(literal);
     var source_buffer: [512]u8 = undefined;
     const source = std.fmt.bufPrintSentinel(&source_buffer, ".{{ .{f} = {s} }}", .{ std.zig.fmtId(name), literal }, 0) catch return null;
     var scratch: [16 * 1024]u8 = undefined;
     var fba = std.heap.FixedBufferAllocator.init(&scratch);
     const parsed = zon_file.parse(T, fba.allocator(), source, .{}) catch return null;
     return @field(parsed, name);
+}
+
+/// The text of `literal`, a ZON string, borrowed from it; null for anything else.
+/// ponytail: strings with escapes are refused, as unescaping needs memory `getKeyed` has none of; store the unescaped text if a preference ever needs quotes or backslashes.
+pub fn stringValue(literal: []const u8) ?[]const u8 {
+    if (literal.len < 2 or literal[0] != '"' or literal[literal.len - 1] != '"') return null;
+    const text = literal[1 .. literal.len - 1];
+    return if (std.mem.indexOfAny(u8, text, "\\\"\n") == null) text else null;
 }
 
 const Example = struct {
@@ -350,4 +386,27 @@ test "values written out read back the same" {
     defer again.deinit();
     try again.read(.project, "game", written);
     try std.testing.expectEqualStrings(".easy", again.literal(.project, "game", "difficulty").?);
+}
+
+test "string fields default and read as text, and global-only ones ignore the project" {
+    const Sources = struct {
+        update_source: []const u8 = "https://example.com/eggy#main",
+        mirror: []const u8 = "",
+        pub const global_only = .{"update_source"};
+    };
+    const m = manifest(Sources, "sources");
+    try std.testing.expectEqual(Kind.string, m.fields[0].kind);
+    try std.testing.expectEqualStrings("\"https://example.com/eggy#main\"", m.fields[0].default);
+    try std.testing.expectEqual(Scope.global_only, m.fields[0].scope);
+    try std.testing.expectEqual(Scope.any, m.fields[1].scope);
+
+    var store = Store.init(std.testing.allocator);
+    defer store.deinit();
+    try store.read(.global, "sources", ".{ .update_source = \"https://mine.example/eggy#dev\", .mirror = \"a\" }");
+    try store.read(.project, "sources", ".{ .update_source = \"https://other.example/eggy\", .mirror = \"b\" }");
+    const values = store.getKeyed(Sources, "sources");
+    try std.testing.expectEqualStrings("https://mine.example/eggy#dev", values.update_source);
+    try std.testing.expectEqualStrings("b", values.mirror);
+    try std.testing.expect(stringValue("\"a\\\\b\"") == null);
+    try std.testing.expect(stringValue(".main") == null);
 }

@@ -1,6 +1,7 @@
 //! One manifest's preferences as rows to change, in cards by the struct's groups: a control for
 //! each field, where an inherited value comes from, and a reset, each change saved and recorded
-//! for undo. Settings shows one per page, and Edit > Plugins the chosen plugin's.
+//! for undo. Settings shows one per page, and Edit > Plugins the chosen plugin's. A global-only
+//! field always shows and sets the global layer, whichever layer the form is on.
 const std = @import("std");
 const eggy = @import("eggy");
 const sdl3 = eggy.sdl_adapter.sdl;
@@ -16,9 +17,10 @@ const SettingRows = setting_rows.SettingRows;
 const restyle = page_style.restyle;
 const log = std.log.scoped(.preferences);
 
-/// The most number fields a form shows.
+/// The most fields a form shows.
 pub const max_fields = 64;
-const NumberEdit = ui.TextEdit(64);
+/// A number or string field's text.
+const FieldEdit = ui.TextEdit(256);
 
 /// Where a form's values live and its changes go, for a frame.
 pub const Target = struct {
@@ -33,8 +35,8 @@ pub const Target = struct {
 };
 
 pub const PreferenceForm = struct {
-    /// The number fields' text, filled from the values shown for `synced`.
-    edits: [max_fields]NumberEdit = undefined,
+    /// The number and string fields' text, filled from the values shown for `synced`.
+    edits: [max_fields]FieldEdit = undefined,
     synced: ?Synced = null,
     capturing_stop_key: bool = false,
     captured_stop_key: ?eggy.Key = null,
@@ -69,11 +71,13 @@ pub const PreferenceForm = struct {
     /// ```
     pub fn build(self: *PreferenceForm, context: *ui.Context, manifest: prefs.Manifest, query_text: []const u8, target: Target) void {
         const fields = manifest.fields[0..@min(manifest.fields.len, max_fields)];
-        // The number fields start from the values shown, for each manifest and layer.
+        // The text fields start from the values shown, for each manifest and layer.
         const showing = Synced{ .key_hash = std.hash.Wyhash.hash(0, manifest.key), .layer = target.layer };
         if (self.synced == null or !std.meta.eql(self.synced.?, showing)) {
             for (fields, 0..) |field, i| {
-                self.edits[i] = NumberEdit.init(current(target.store, target.layer, manifest.key, field)) catch NumberEdit.init("") catch unreachable;
+                const literal = current(target.store, layerOf(target.layer, field), manifest.key, field);
+                const text = if (field.kind == .string) prefs.stringValue(literal) orelse "" else literal;
+                self.edits[i] = FieldEdit.init(text) catch FieldEdit.init("") catch unreachable;
             }
             self.synced = showing;
         }
@@ -99,8 +103,10 @@ pub const PreferenceForm = struct {
     /// One preference as a row: its name and description on the left, its control on the right
     /// with, under it, where an inherited or overridden value is from, and a reset beside it
     /// when this layer sets it.
-    fn fieldRow(self: *PreferenceForm, context: *ui.Context, rows: *SettingRows, target: Target, key: []const u8, field: prefs.Field, edit: *NumberEdit) void {
+    fn fieldRow(self: *PreferenceForm, context: *ui.Context, rows: *SettingRows, form_target: Target, key: []const u8, field: prefs.Field, edit: *FieldEdit) void {
         const arena = context.builder().allocator;
+        var target = form_target;
+        target.layer = layerOf(form_target.layer, field);
         const store = target.store;
         const layer = target.layer;
         const unit = unitOf(field.name);
@@ -141,6 +147,15 @@ pub const PreferenceForm = struct {
                 const text = std.mem.trim(u8, edit.text(), " ");
                 const valid = if (field.kind == .int) !std.meta.isError(std.fmt.parseInt(i128, text, 10)) else !std.meta.isError(std.fmt.parseFloat(f64, text));
                 break :blk if (valid) text else null;
+            },
+            .string => blk: {
+                const typed = context.textInput(hidden, edit, prefs.stringValue(field.default) orelse "");
+                restyle(context, .{ .width = 320 });
+                if (!typed) break :blk null;
+                // Kept as a plain ZON string, which `prefs.stringValue` reads back.
+                const text = std.mem.trim(u8, edit.text(), " ");
+                if (std.mem.indexOfAny(u8, text, "\\\"") != null) break :blk null;
+                break :blk std.fmt.allocPrint(arena, "\"{s}\"", .{text}) catch null;
             },
         };
         if (changed) |literal| apply(target, key, field.name, literal);
@@ -217,7 +232,16 @@ fn valueLabel(arena: std.mem.Allocator, key: []const u8, field: prefs.Field, lit
             const unit = unitOf(field.name);
             break :blk if (unit.label.len > 0) std.fmt.allocPrint(arena, "{s} {s}", .{ literal, unit.label }) catch literal else literal;
         },
+        .string => blk: {
+            const text = prefs.stringValue(literal) orelse literal;
+            break :blk if (text.len == 0) "empty" else text;
+        },
     };
+}
+
+/// The layer a form on `layer` shows and sets `field` in: the global one for a global-only field.
+fn layerOf(layer: Store.Layer, field: prefs.Field) Store.Layer {
+    return if (field.scope == .global_only) .global else layer;
 }
 
 /// What `field` of `key` is in `layer`: its own value, else (for the project) the global one,
@@ -249,4 +273,13 @@ test "number fields show their unit, and enum values their names" {
     try std.testing.expectEqualStrings("Warnings", optionLabel(arena.allocator(), files.editor_key, "log_level", "warn"));
     const field = prefs.Field{ .name = "autosave_seconds", .kind = .int, .default = "60" };
     try std.testing.expectEqualStrings("60 seconds", valueLabel(arena.allocator(), files.editor_key, field, "60"));
+}
+
+test "a global-only field is shown and set in the global layer from either scope" {
+    const field = prefs.Field{ .name = "eggy_source", .kind = .string, .default = "\"a\"", .scope = .global_only };
+    try std.testing.expectEqual(Store.Layer.global, layerOf(.project, field));
+    try std.testing.expectEqual(Store.Layer.project, layerOf(.project, .{ .name = "volume", .kind = .float, .default = "1" }));
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    try std.testing.expectEqualStrings("https://x/eggy#main", valueLabel(arena.allocator(), "editor", field, "\"https://x/eggy#main\""));
 }
