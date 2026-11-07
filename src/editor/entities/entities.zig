@@ -44,6 +44,8 @@ pub const EntityEditor = struct {
     pending_visibility: ?ecs.EntityId = null,
     /// The selection waits to be brought into view in the Scene panels.
     pending_frame: bool = false,
+    /// The scene root's Inspector asked for Edit > Settings > Physics.
+    pending_physics_settings: bool = false,
     view_state: ViewState,
     /// The scene whose folds `view_state` keeps (a project path; "" for one not saved yet), once
     /// read from the project's file.
@@ -205,11 +207,9 @@ pub const EntityEditor = struct {
         // The scene's root goes by its scene's name, and stays the root.
         const scene_root = self.hierarchy.isSceneRoot(entity);
         if (scene_root) {
-            details.fixed_name = true;
             details.name = self.hierarchy.nameOf(entity);
-            for (@constCast(details.components)) |*component| {
-                if (std.mem.eql(u8, component.info.name, "SceneRoot") and std.mem.eql(u8, component.info.owner, "eggy")) component.needed_by = "the scene";
-            }
+            details.scene_root = sceneRootOf(details.components);
+            if (details.scene_root) |*root| root.path = if (self.view_scene) |kept| kept.items else "";
         }
         if (self.inspector.build(context, details)) |action| switch (action) {
             .rename => |name| if (!scene_root) loaded.writeName(app, entity, name),
@@ -222,6 +222,7 @@ pub const EntityEditor = struct {
             .remove_component => |component| if (neededBy(arena, app, loaded, entity, component).len > 0) {
                 log.warn("{s} can't be removed while another component needs it", .{loaded.component_types[component].name});
             } else loaded.removeComponent(app, entity, component),
+            .open_physics_settings => self.pending_physics_settings = true,
         };
         instanceNote(context, app, loaded, entity);
         return true;
@@ -620,8 +621,18 @@ pub const EntityEditor = struct {
         self.pending_extract = null;
         self.pending_visibility = null;
         self.pending_frame = false;
+        self.pending_physics_settings = false;
     }
 };
+
+/// The scene root's page details from its `components`: where its `SceneRoot` is. Null without
+/// one (a game built before scene roots).
+fn sceneRootOf(components: []const inspector_zig.Details.Component) ?inspector_zig.Details.SceneRoot {
+    for (components) |component| {
+        if (std.mem.eql(u8, component.info.name, "SceneRoot") and std.mem.eql(u8, component.info.owner, "eggy")) return .{ .component = component.index };
+    }
+    return null;
+}
 
 /// What the Inspector shows of `entity`, read through `game`, in `arena`. Components of the
 /// plugins keyed in `off` are disabled, and not offered to add.

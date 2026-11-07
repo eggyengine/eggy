@@ -27,8 +27,9 @@ const displayName = field_editor.displayName;
 pub const Details = struct {
     entity: ecs.EntityId,
     name: []const u8,
-    /// Whether `name` is shown as it is, not typed into (the scene's root, named by its file).
-    fixed_name: bool = false,
+    /// Set for the scene's root: it is the scene, not an entity, so its page shows the scene's
+    /// name (`name`), type and settings, and nothing is added or removed.
+    scene_root: ?SceneRoot = null,
     components: []const Component,
     /// The component types it doesn't have and can be given, as `(index, label)`.
     addable: []const Addable,
@@ -38,6 +39,14 @@ pub const Details = struct {
     assets: ?*ProjectAssets = null,
     /// Draws a plugin's own Inspector for components that have one (`Component.custom`).
     custom_ui: ?CustomUi = null,
+
+    /// The scene root's `SceneRoot` component, whose `dimension` the page's 2D/3D switch sets.
+    /// Where its `SceneRoot` is among `components`, which the page leaves out.
+    pub const SceneRoot = struct {
+        component: usize,
+        /// The scene's file in the project; empty until it is saved.
+        path: []const u8 = "",
+    };
 
     /// A plugin's Inspector for a component, drawn by the host in place of its fields.
     pub const CustomUi = struct {
@@ -76,11 +85,16 @@ pub const Details = struct {
     };
 };
 
+/// Whether a card is an entity's component, or one of a scene's settings (on its root).
+const CardRole = enum { entity, setting };
+
 pub const Action = union(enum) {
     rename: []const u8,
     set_field: struct { component: usize, field: usize, text: []const u8 },
     add_component: usize,
     remove_component: usize,
+    /// The scene root's Physics card asks for Edit > Settings > Physics.
+    open_physics_settings,
 };
 
 const SearchEdit = ui.TextEdit(64);
@@ -202,16 +216,15 @@ pub const EntityInspector = struct {
         var action: ?Action = null;
         var focused: ?u32 = null;
         self.values.newFrame();
+        if (details.scene_root) |root| return self.sceneRootPage(context, details, root);
 
         // The name, typed into directly; "Entity N" until it has one.
-        if (details.fixed_name) context.heading(3, details.name) else {
-            if (self.focused != name_key) self.name = NameEdit.init(details.name) catch NameEdit.init("") catch unreachable;
-            const placeholder = std.fmt.allocPrint(arena, "Entity {d}", .{details.entity.id}) catch "Entity";
-            if (context.textInput("##entity name", &self.name, placeholder)) action = .{ .rename = arena.dupe(u8, self.name.text()) catch "" };
-            if (context.last_added) |input| if (context.focus == input.id) {
-                focused = name_key;
-            };
-        }
+        if (self.focused != name_key) self.name = NameEdit.init(details.name) catch NameEdit.init("") catch unreachable;
+        const placeholder = std.fmt.allocPrint(arena, "Entity {d}", .{details.entity.id}) catch "Entity";
+        if (context.textInput("##entity name", &self.name, placeholder)) action = .{ .rename = arena.dupe(u8, self.name.text()) catch "" };
+        if (context.last_added) |input| if (context.focus == input.id) {
+            focused = name_key;
+        };
         context.muted(std.fmt.allocPrint(arena, "Entity {d} · {d} component{s}", .{ details.entity.id, details.components.len, if (details.components.len == 1) "" else "s" }) catch "");
         page_style.smallText(context, 12);
 
@@ -223,15 +236,43 @@ pub const EntityInspector = struct {
             page_style.smallText(context, 13);
         }
         const field_control = std.math.clamp(width * control_share, min_control_width, max_control_width);
-        for (details.components) |component| if (self.componentCard(context, details, component, field_control)) |card_action| {
+        for (details.components) |component| if (self.componentCard(context, details, component, field_control, .entity)) |card_action| {
             action = card_action;
         };
         self.focused = focused;
         return action;
     }
 
-    /// A card for one component: a header (fold, name, owner, Remove), then its fields.
-    fn componentCard(self: *EntityInspector, context: *ui.Context, details: Details, component: Details.Component, field_control: f32) ?Action {
+    /// The scene root's page: the scene's name and size, whether it is 2D or 3D, and a card per
+    /// setting it has (`PhysicsSettings`), none of them removable, with nothing to add.
+    fn sceneRootPage(self: *EntityInspector, context: *ui.Context, details: Details, root: Details.SceneRoot) ?Action {
+        const b = context.builder();
+        const arena = b.allocator;
+        var action: ?Action = null;
+
+        // Its icon on a tinted tile, beside the scene's name and file.
+        const marker = for (details.components) |component| {
+            if (component.index == root.component) break component.info;
+        } else null;
+        const tile = b.node(0, .{ .width = 40, .height = 40 }, if (marker) |info| component_icons.tile(arena, info) catch .none else .none, &.{}) catch return null;
+        const name = b.node(0, .{}, .{ .text = .{ .value = details.name, .size = 20 } }, &.{}) catch return null;
+        const file = b.node(0, .{}, .{ .text = .{ .value = root.path, .size = 12, .tone = .muted, .wrap = true } }, &.{}) catch return null;
+        const title = b.node(0, .{ .gap = 2, .grow = 1 }, .none, if (root.path.len == 0) &.{name} else &.{ name, file }) catch return null;
+        title.children[0].accessibility = .{ .role = .heading, .label = details.name };
+        context.element(b.node(0, .{ .direction = .row, .gap = 12, .align_items = .center }, .none, &.{ tile, title }) catch return null);
+
+        // Whether it is 2D or 3D comes from the tab it was made in, so it isn't shown here.
+        const field_control = std.math.clamp(context.contentWidth() * control_share, min_control_width, max_control_width);
+        for (details.components) |component| {
+            if (component.index == root.component) continue;
+            if (self.componentCard(context, details, component, field_control, .setting)) |card_action| action = card_action;
+        }
+        return action;
+    }
+
+    /// A card for one component: a header (fold, name, owner, Remove), then its fields. As a
+    /// scene's `setting`, the header is its name alone, as it can't be removed.
+    fn componentCard(self: *EntityInspector, context: *ui.Context, details: Details, component: Details.Component, field_control: f32, role: CardRole) ?Action {
         const arena = context.builder().allocator;
         const b = context.builder();
         var action: ?Action = null;
@@ -248,15 +289,15 @@ pub const EntityInspector = struct {
             b.node(0, .{ .width = 14, .height = 14 }, .{ .icon = if (folded) .chevron_right else .chevron_down }, &.{}) catch return null,
             b.node(0, .{ .width = 18, .height = 18 }, component_icons.paint(arena, component.info) catch .none, &.{}) catch return null,
             b.node(0, .{ .grow = 1, .gap = 1 }, .none, &.{
-                b.node(0, .{}, .{ .text = .{ .value = component.info.name, .size = 14, .wrap = true } }, &.{}) catch return null,
-                b.node(0, .{}, .{ .text = .{ .value = std.fmt.allocPrint(arena, "{s}from {s}{s}{s}{s}{s}", .{ if (component.disabled) "Disabled: its plugin is off · " else "", component.info.owner, if (component.needs.len > 0) " · needs " else "", component.needs, if (component.needed_by.len > 0) " · needed by " else "", component.needed_by }) catch "", .size = 11, .tone = .muted, .wrap = true } }, &.{}) catch return null,
+                b.node(0, .{}, .{ .text = .{ .value = cardTitle(component.info.name, role), .size = 14, .wrap = true } }, &.{}) catch return null,
+                if (role == .setting) b.node(0, .{}, .none, &.{}) catch return null else b.node(0, .{}, .{ .text = .{ .value = std.fmt.allocPrint(arena, "{s}from {s}{s}{s}{s}{s}", .{ if (component.disabled) "Disabled: its plugin is off · " else "", component.info.owner, if (component.needs.len > 0) " · needs " else "", component.needs, if (component.needed_by.len > 0) " · needed by " else "", component.needed_by }) catch "", .size = 11, .tone = .muted, .wrap = true } }, &.{}) catch return null,
             }) catch return null,
         }) catch return null;
         header.cursor = .pointer;
-        header.accessibility = .{ .role = .button, .label = component.info.name, .expanded = !folded };
+        header.accessibility = .{ .role = .button, .label = cardTitle(component.info.name, role), .expanded = !folded };
         context.element(header);
         // Removable unless another of its components depends on it (the line under its name says which).
-        if (component.needed_by.len == 0) if (context.buttonVariant(std.fmt.allocPrint(arena, "Remove##remove {d}", .{component.index}) catch return null, .ghost)) {
+        if (role == .entity and component.needed_by.len == 0) if (context.buttonVariant(std.fmt.allocPrint(arena, "Remove##remove {d}", .{component.index}) catch return null, .ghost)) {
             action = .{ .remove_component = component.index };
         };
         context.end();
@@ -286,10 +327,20 @@ pub const EntityInspector = struct {
                 .assets = details.assets,
             })) |text| action = .{ .set_field = .{ .component = component.index, .field = index, .text = text } };
         };
+        // Precision is the project's, not the scene's, so the scene's physics points there.
+        if (!folded and role == .setting and std.mem.eql(u8, component.info.name, "PhysicsSettings")) {
+            if (context.buttonVariant("Physics precision in Settings##physics precision", .link)) action = .open_physics_settings;
+        }
 
         context.end();
         restyle(context, .{ .gap = 8, .padding = .{ .left = 12, .right = 12, .top = 10, .bottom = 10 } });
         return action;
+    }
+
+    /// A card's title: a scene setting reads as what it sets ("Physics" for `PhysicsSettings`).
+    fn cardTitle(name: []const u8, role: CardRole) []const u8 {
+        if (role == .setting and std.mem.endsWith(u8, name, "Settings") and name.len > "Settings".len) return name[0 .. name.len - "Settings".len];
+        return name;
     }
 
     /// A field of a disabled component: its name, and its value as text, not to be changed.

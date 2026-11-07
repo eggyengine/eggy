@@ -7,7 +7,7 @@ const std = @import("std");
 const eggy = @import("eggy");
 
 /// Bumped whenever these types change, so an editor refuses a library built for another.
-pub const version: u32 = 46;
+pub const version: u32 = 47;
 
 /// The library's one exported function: `fn () callconv(.c) *const Game`.
 pub const entry_symbol = "eggy_game";
@@ -241,6 +241,9 @@ pub const Game = extern struct {
     gather_meshes: *const fn (world: *anyopaque, out: [*]eggy.mesh.Drawable, capacity: usize) callconv(.c) usize,
     /// Gather authored lights using library-local component types; false on a logged error.
     gather_lights: *const fn (world: *anyopaque, out: *eggy.lighting.Frame) callconv(.c) bool,
+    /// Draw the colliders of `count` entities into `app`'s (an `*eggy.App`) debug lines
+    /// (`eggy.physics.drawColliders`).
+    draw_colliders: *const fn (app: *anyopaque, entities: [*]const Entity, count: usize) callconv(.c) void,
     /// Find this frame's UI screens and billboards in `app`'s world (an `*eggy.App`), into its
     /// `ui_scenes`, drawing plugins' widgets through the library (`Set.gatherUiScenes`).
     gather_ui_scenes: *const fn (state: *anyopaque, app: *anyopaque) callconv(.c) void,

@@ -12,6 +12,7 @@ fn iconFor(name: []const u8, owner: []const u8) Icon {
         .{ "Mesh", Icon.mesh },
         .{ "Camera", Icon.camera },
         .{ "SceneInstance", Icon.scene },
+        .{ "SceneRoot", Icon.scene },
         .{ "Material", Icon.material },
         .{ "SceneLight", Icon.light },
     };
@@ -24,6 +25,19 @@ pub fn paint(arena: std.mem.Allocator, component: eggy.components.Info) !ui.Layo
     const icon = try arena.create(Icon);
     icon.* = iconFor(component.name, component.owner);
     return .{ .custom = .{ .context = icon, .draw = draw } };
+}
+
+/// The component's icon on a rounded tile tinted with the theme's primary colour, for a page's
+/// header (the scene root's).
+pub fn tile(arena: std.mem.Allocator, component: eggy.components.Info) !ui.Layout.Paint {
+    const icon = try arena.create(Icon);
+    icon.* = iconFor(component.name, component.owner);
+    return .{ .custom = .{ .context = icon, .draw = drawTile } };
+}
+
+fn drawTile(context: *const anyopaque, canvas: *ui.Canvas, bounds: ui.Rect) anyerror!void {
+    try canvas.roundRectAlpha(bounds, canvas.theme.primary, 10, 0.22);
+    try draw(context, canvas, bounds);
 }
 
 fn draw(context: *const anyopaque, canvas: *ui.Canvas, bounds: ui.Rect) anyerror!void {

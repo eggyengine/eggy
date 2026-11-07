@@ -767,19 +767,45 @@ fn shortNumber(arena: std.mem.Allocator, number: f64, this: Part) []const u8 {
 }
 
 /// `turns_per_second` as "Turns per second". In `arena`.
-/// Editor label helper: replaces underscores and capitalizes the first ASCII letter.
+/// Editor label helper: replaces underscores, capitalizes the first ASCII letter, and writes a
+/// rate's unit suffix as its symbol (`gravity_mps2` reads "Gravity m/s²").
 /// Allocation failure returns the original borrowed name unchanged.
 ///
 /// ```zig
 /// const label = displayName(arena, "turns_per_second"); // Existing arena allocator.
 /// ```
 pub fn displayName(arena: std.mem.Allocator, name: []const u8) []const u8 {
-    const label = arena.dupe(u8, name) catch return name;
-    for (label) |*char| if (char.* == '_') {
+    var stem = name;
+    var unit: []const u8 = "";
+    for (unit_suffixes) |suffix| if (std.mem.endsWith(u8, name, suffix[0]) and name.len > suffix[0].len) {
+        stem = name[0 .. name.len - suffix[0].len];
+        unit = suffix[1];
+        break;
+    };
+    const label = std.mem.concat(arena, u8, &.{ stem, unit }) catch return name;
+    for (label[0..stem.len]) |*char| if (char.* == '_') {
         char.* = ' ';
     };
     if (label.len > 0) label[0] = std.ascii.toUpper(label[0]);
     return label;
+}
+
+/// Field name endings that are units, and how a label writes them; longer endings first.
+const unit_suffixes = [_][2][]const u8{
+    .{ "_deg_per_s", " °/s" },
+    .{ "_m_per_s", " m/s" },
+    .{ "_mps2", " m/s²" },
+    .{ "_mps", " m/s" },
+    .{ "_per_s", " /s" },
+};
+
+test "a label writes a unit suffix as its symbol" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    try std.testing.expectEqualStrings("Gravity m/s²", displayName(arena.allocator(), "gravity_mps2"));
+    try std.testing.expectEqualStrings("Walk speed m/s", displayName(arena.allocator(), "walk_speed_m_per_s"));
+    try std.testing.expectEqualStrings("Steps per second", displayName(arena.allocator(), "steps_per_second"));
+    try std.testing.expectEqualStrings("Mass kg", displayName(arena.allocator(), "mass_kg"));
 }
 
 /// Quaternion `q` (x, y, z, w) as turns about x, then y, then z, in degrees.

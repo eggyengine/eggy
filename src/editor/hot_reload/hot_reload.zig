@@ -772,6 +772,15 @@ pub const HotGame = struct {
         _ = self.game.gather_lights(&app.world, out);
     }
 
+    /// Draw `entities`' colliders into `app.debug_draw`; nothing without a library.
+    pub fn drawColliders(self: *const HotGame, app: *eggy.App, entities: []const eggy.ecs.EntityId) void {
+        if (self.library == null or entities.len == 0) return;
+        var ids: [64]api.Entity = undefined;
+        const shown = @min(entities.len, ids.len);
+        for (ids[0..shown], entities[0..shown]) |*id, entity| id.* = entityOf(entity);
+        self.game.draw_colliders(app, &ids, shown);
+    }
+
     /// Find this frame's UI screens and billboards into `app.ui_scenes`; none without a running
     /// game.
     pub fn gatherUiScenes(self: *const HotGame, app: *eggy.App) void {

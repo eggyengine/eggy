@@ -200,7 +200,7 @@ test "the scene root comes first under the scene's name, the other top-level ent
     access.setName(&world, crate, "Crate");
     const lid = try world.spawn(.{});
     try world.setParent(lid, crate);
-    const root = (try eggy.scene_root.ensure(&world, access)).?;
+    const root = (try eggy.scene_root.ensure(&world, access, .three)).?;
 
     var arena = std.heap.ArenaAllocator.init(gpa);
     defer arena.deinit();

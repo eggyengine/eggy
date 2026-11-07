@@ -97,6 +97,7 @@ const tab_views = @import("tab_views.zig");
 const scene_tabs = @import("scene_tabs.zig");
 /// The Settings page File > Project Settings opens.
 const project_section = "General";
+const physics_section = "Physics";
 
 /// The editor for `project`, which declares `name` and `game_library` (the game library's
 /// `file_name`, beside the editor). The game and its plugins run as they do in the runtime,
@@ -353,6 +354,7 @@ pub fn Editor(comptime project: type) type {
                 };
                 _ = app.setGraphicsDefaults(wanted.graphics) catch |err| std.log.err("cannot use the project's graphics defaults: {t}", .{err});
                 app.dev_console.setEnabled(wanted.dev_console);
+                app.physics_precision = eggy.physics.precisionOf(wanted.physics);
             }
             // Every project has its resources and scene folders.
             if (opened_project) |opened| {
@@ -477,7 +479,8 @@ pub fn Editor(comptime project: type) type {
                 if (opened_project) |opened| {
                     open_scene = .{ .gpa = gpa, .project_dir = opened.dir };
                     loaded.instances = app.instanceHooks();
-                    open_scene.?.reopen(&app.world, loaded.sceneAccess());
+                    // Before the tabs are back, a scene without a root is taken as 3D.
+                    open_scene.?.reopen(.three, &app.world, loaded.sceneAccess());
                 }
             }
             const upgrades = Upgrades.init(gpa, if (opened_project) |opened| opened.dir else null, @import("build_options").source_dir);
@@ -712,6 +715,8 @@ pub fn Editor(comptime project: type) type {
             self.scene_2d.selected = self.entity_editor.selected;
             if (self.tileBrushEnv()) |env| self.scene_2d.brush.follow(env, self.entity_editor.selected) else self.scene_2d.brush.target = null;
             const look: scene_view.SceneView.Look = if (!self.play_mode.playing()) .editing else if (self.workspace.simulating) .simulating else .playing;
+            // The selection's colliders where they are now, so editing one shows its shape.
+            if (look != .playing) if (self.game) |*game| game.drawColliders(&self.app, self.entity_editor.selection.all.items);
             self.scene_view.update(self.sceneTarget(), if (self.workspace.placed.scene) |placed| placed.rect else null, look);
             self.scene_view.tools.plugin_tool_count = if (self.game) |game| @intCast(@min(game.scene_tools.len, std.math.maxInt(u8))) else 0;
             if (self.scene_view.tools.plugin_tool) |tool| if (tool >= self.scene_view.tools.plugin_tool_count) {
@@ -907,6 +912,7 @@ pub fn Editor(comptime project: type) type {
                     self.history.recordProjectSettings(change.before, change.after, self.workspace.time_ms);
                     self.setGraphicsDefaults(settings.saved_graphics);
                     self.app.dev_console.setEnabled(settings.dev_console);
+                    self.app.physics_precision = @fromBackingInt(@intCast(settings.precision));
                     self.refreshProjectIcon();
                 };
             }
@@ -1576,9 +1582,11 @@ pub fn Editor(comptime project: type) type {
             errdefer if (from) |path| self.gpa.free(path);
             const from_saved = scene.saved_hash;
 
+            // A scene made (or first given a root) from a 2D tab is a 2D scene, its physics flat too.
+            const dimension: eggy.scene_root.Dim = if (self.workspace.shownKind() == .scene_2d) .two else .three;
             switch (source) {
-                .open => |path| try scene.open(path, &self.app.world, game.sceneAccess()),
-                .create => |folder| try scene.create(folder, &self.app.world, game.sceneAccess()),
+                .open => |path| try scene.open(path, dimension, &self.app.world, game.sceneAccess()),
+                .create => |folder| try scene.create(folder, dimension, &self.app.world, game.sceneAccess()),
                 .kept => |kept| {
                     const text = try self.gpa.dupeSentinel(u8, kept.text, 0);
                     defer self.gpa.free(text);
@@ -1589,7 +1597,7 @@ pub fn Editor(comptime project: type) type {
                 },
                 // Its file first, for what it holds now, then the world as it was unsaved.
                 .recovered => |found| {
-                    try scene.open(found.path, &self.app.world, game.sceneAccess());
+                    try scene.open(found.path, dimension, &self.app.world, game.sceneAccess());
                     var world = try eggy.scene.Scene.parse(self.gpa, found.text);
                     defer world.deinit();
                     game.restart(&self.app, &world, self.plugin_switches.off(), .discard);
@@ -1792,9 +1800,13 @@ pub fn Editor(comptime project: type) type {
             return false;
         }
 
-        /// What the Hierarchy left for the host: framing the selection, and clipboard edits as
+        /// What the Hierarchy and Inspector left for the host: Settings > Physics, framing the selection, and clipboard edits as
         /// discrete undo steps, not part of a pending field edit.
         fn applyEntityCommands(self: *Self) void {
+            if (self.entity_editor.pending_physics_settings) {
+                self.entity_editor.pending_physics_settings = false;
+                self.showSettings(physics_section) catch |err| std.log.err("cannot open Settings: {t}", .{err});
+            }
             if (self.entity_editor.pending_frame) {
                 self.entity_editor.pending_frame = false;
                 self.frameSelected(.scene);
@@ -2032,6 +2044,7 @@ pub fn Editor(comptime project: type) type {
                     const applied = try project_settings_zig.appliedIn(self.gpa, change.value(direction));
                     self.setGraphicsDefaults(applied.graphics);
                     self.app.dev_console.setEnabled(applied.dev_console);
+                    self.app.physics_precision = eggy.physics.precisionOf(applied.physics);
                     self.refreshProjectIcon();
                 },
                 .plugins => |change| {
@@ -2175,12 +2188,17 @@ pub fn Editor(comptime project: type) type {
 
         /// File > Project Settings (and Export's button): Preferences on its Project section.
         fn showProjectSettings(self: *Self) !void {
+            try self.showSettings(project_section);
+        }
+
+        /// Edit > Settings on the open project's page titled `section_title`.
+        fn showSettings(self: *Self, section_title: []const u8) !void {
             if (self.project == null) return;
             self.openPreferences();
             const window = self.preferences_window orelse return;
             var arena = std.heap.ArenaAllocator.init(self.gpa);
             defer arena.deinit();
-            window.show(try self.preferenceSections(arena.allocator()), project_section);
+            window.show(try self.preferenceSections(arena.allocator()), section_title);
         }
 
         /// Open Edit > Settings, with the open project's `eggy.zon` for its Project section.
@@ -2225,6 +2243,7 @@ pub fn Editor(comptime project: type) type {
             // keep them.
             const opened = self.project orelse return sections.items;
             if (self.project_settings) |settings| try sections.append(arena, .{ .title = project_section, .group = opened.title, .content = .{ .project = settings } });
+            if (self.project_settings) |settings| try sections.append(arena, .{ .title = physics_section, .group = opened.title, .content = .{ .physics = settings } });
             try sections.append(arena, .{ .title = "Export", .group = opened.title, .content = .{ .link = .export_game } });
             const game = if (self.game) |*loaded| loaded else return sections.items;
             for (game.preference_manifests) |manifest| if (std.mem.eql(u8, manifest.key, "game")) {
@@ -3254,7 +3273,7 @@ pub fn Editor(comptime project: type) type {
                 if (self.project) |opened| {
                     if (self.open_scene == null) self.open_scene = .{ .gpa = self.gpa, .project_dir = opened.dir };
                     self.game.?.instances = self.app.instanceHooks();
-                    self.open_scene.?.reopen(&self.app.world, self.game.?.sceneAccess());
+                    self.open_scene.?.reopen(if (self.workspace.shownKind() == .scene_2d) .two else .three, &self.app.world, self.game.?.sceneAccess());
                 }
             }
             const game = &self.game.?;
@@ -3314,7 +3333,7 @@ pub fn Editor(comptime project: type) type {
             return .run;
         }
 
-        /// Write each tab's Scene camera and 2D view into the open project. Failures are logged:
+        /// Write each tab's Scene camera, 2D view and scene file into the open project. Failures are logged:
         /// a view not kept isn't worth stopping for.
         fn keepTabViews(self: *Self) void {
             const opened = self.project orelse return;
