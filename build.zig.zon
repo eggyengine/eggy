@@ -14,7 +14,7 @@
             .hash = "sdl3-0.2.3-NmT1Q1cGKgACt9YvCpObQdbLLFCy6FOSyHUoa_tgj14_",
         },
         .vitellus = .{
-            .url = "git+https://git.tirbo.fish/eggy/vitellus#2f07884da61e20cdb26e1bdb87e062a3e2f5eed1",
+            .url = "git+https://git.tirbo.fish/eggy/vitellus#5d7621e14c6a34ac05a2711c6ca1e72155a40a0f",
             .hash = "vitellus-0.1.0-JC2CjMKtDAC91zNlyD7pc7Z__Krnn_XPOvp2LqCXmZeR",
         },
         .humpty = .{
