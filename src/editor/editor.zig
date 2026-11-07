@@ -4196,6 +4196,7 @@ test {
     _ = @import("projects/engine.zig");
     _ = @import("projects/upgrades.zig");
     _ = @import("projects/eggy_source.zig");
+    _ = @import("projects/launcher_update.zig");
     _ = @import("file_manager.zig");
     _ = @import("build_window.zig");
     _ = @import("export/export.zig");

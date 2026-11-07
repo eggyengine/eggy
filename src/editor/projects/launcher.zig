@@ -13,6 +13,7 @@ const project_tile = @import("project_tile.zig");
 const engine = @import("engine.zig");
 const job = @import("job.zig");
 const PickedPaths = @import("../picked_paths.zig").PickedPaths;
+const launcher_update = @import("launcher_update.zig");
 
 /// What the launcher asked for this frame.
 pub const Action = union(enum) {
@@ -71,6 +72,8 @@ pub const Launcher = struct {
     /// A folder Open Project's picker chose; it may call back from another thread, so the next
     /// frame takes it from here.
     picked: PickedPaths = .{},
+    /// Looking for a newer release of this launcher; null when it can't tell (a local build).
+    update_check: ?*launcher_update.Check = null,
 
     /// Open the launcher's window, reading the list from `data_folder` (copied) and each listed
     /// project's title and logo. The result is on the heap, since the folder picker keeps a
@@ -100,6 +103,10 @@ pub const Launcher = struct {
             self.engines_dir = folders.engines_dir;
         } else |err| std.log.warn("cannot find Eggy's engines folder: {t}", .{err});
         self.developer_build = isCheckout(@import("build_options").source_dir);
+        self.update_check = launcher_update.Check.start(gpa, @import("build_options").commit) catch |err| blk: {
+            std.log.info("cannot check for a newer Eggy launcher: {t}", .{err});
+            break :blk null;
+        };
         self.load();
         return self;
     }
@@ -111,6 +118,7 @@ pub const Launcher = struct {
     /// ```
     pub fn close(self: *Launcher, graphics: *eggy.Graphics) void {
         self.picked.deinit();
+        if (self.update_check) |check| check.destroy();
         if (self.egg) |*egg| egg.deinit(self.gpa);
         self.arena.deinit();
         self.gpa.free(self.data_folder);
@@ -226,6 +234,11 @@ const Page = struct {
         context.muted(if (page.launcher.developer_build) "Version " ++ version ++ "  " ++ link_glyph else "Version " ++ version);
         if (page.launcher.developer_build) if (context.last_added) |line| {
             line.accessibility = .{ .role = .label, .label = "Version " ++ version ++ ", built from the Eggy codebase at " ++ @import("build_options").source_dir };
+        };
+        // A newer release, quietly, as a link to its page.
+        if (page.launcher.update_check) |check| if (check.take()) |newer| {
+            const label = std.fmt.allocPrint(context.builder().allocator, "{s} is out##launcher update", .{newer.name}) catch "A newer Eggy is out##launcher update";
+            if (context.buttonVariant(label, .link)) page.chosen = .{ .url = newer.url };
         };
         context.end();
         page_style.restyle(context, .{ .gap = 6 });
