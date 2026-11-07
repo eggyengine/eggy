@@ -37,8 +37,14 @@ const moving_steps = (static_steps & ~@as(c_uint, c.aiProcess_PreTransformVertic
 /// ```
 export fn eggy_import_model(path: [*:0]const u8, scale: f32, out: *Bytes) bool {
     failure = null;
+    // FBX pivots stay off: kept, they become helper nodes (`_$AssimpFbx$_Translation`...) under
+    // each bone, and a clip's key for the bone, which already holds the whole local transform,
+    // moves it a second time.
+    const properties = c.aiCreatePropertyStore() orelse return fail("out of memory");
+    defer c.aiReleasePropertyStore(properties);
+    c.aiSetImportPropertyInteger(properties, c.AI_CONFIG_IMPORT_FBX_PRESERVE_PIVOTS, 0);
     // Read it untouched, to see whether anything moves, then process it for what it is.
-    const scene: *const c.struct_aiScene = c.aiImportFile(path, 0) orelse return false;
+    const scene: *const c.struct_aiScene = c.aiImportFileExWithProperties(path, 0, null, properties) orelse return false;
     const dir = std.fs.path.dirname(std.mem.span(path)) orelse ".";
     const moves = rig_import.isAnimated(scene);
     const processed = c.aiApplyPostProcessing(scene, if (moves) moving_steps else static_steps) orelse return false;
