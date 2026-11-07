@@ -87,8 +87,8 @@ const plugin_command_first: u32 = first_id + 0x10000;
 pub const ProjectState = struct {
     /// Whether the editor has a project open.
     open: bool = false,
-    /// Whether a newer Eggy than the project's is unpacked (File > Upgrade Editor).
-    can_upgrade: bool = false,
+    /// Whether File > Upgrade Editor can look for a newer Eggy than the project's.
+    can_check_upgrade: bool = false,
     /// Whether the project can be linked to the Eggy codebase being developed.
     can_link: bool = false,
     /// Whether an Eggy codebase being developed is known, for Open Project with Developer Eggy.
@@ -173,7 +173,7 @@ pub const Menubar = struct {
             if (project.shift_held)
                 .{ .id = @backingInt(Command.link_developer), .label = "Link Developer Eggy...", .disabled = !project.can_link }
             else
-                .{ .id = @backingInt(Command.upgrade_editor), .label = "Upgrade Editor", .disabled = !project.can_upgrade },
+                .{ .id = @backingInt(Command.upgrade_editor), .label = "Upgrade Editor", .disabled = !project.can_check_upgrade },
             .{ .kind = .separator },
             .{ .id = @backingInt(Command.quit), .label = "Quit", .shortcut = "Ctrl+Q" },
         });

@@ -16,6 +16,7 @@ const icon = @import("icon.zig");
 const job_zig = @import("projects/job.zig");
 const Job = job_zig.Job;
 const Upgrades = @import("projects/upgrades.zig").Upgrades;
+const eggy_source = @import("projects/eggy_source.zig");
 const file_manager = @import("file_manager.zig");
 const BuildWindow = @import("build_window.zig").BuildWindow;
 const ExportWindow = @import("export/export.zig").ExportWindow;
@@ -483,7 +484,7 @@ pub fn Editor(comptime project: type) type {
                     open_scene.?.reopen(.three, &app.world, loaded.sceneAccess());
                 }
             }
-            const upgrades = Upgrades.init(gpa, if (opened_project) |opened| opened.dir else null, @import("build_options").source_dir);
+            const upgrades = Upgrades.init(gpa, if (opened_project) |opened| opened.dir else null, @import("build_options").source_dir, preferences.editor(&app.preference_values).eggy_source);
             const input_settings = if (opened_project) |opened| try InputSettings.open(gpa, &app.input_backend.?.state, opened.dir) else null;
             errdefer if (input_settings) |settings| settings.close();
             splash.step(.plugins);
@@ -764,7 +765,18 @@ pub fn Editor(comptime project: type) type {
                 self.watchLayout();
                 self.workspace.play_warning = self.playWarning();
             }
+            if (self.upgrades.poll()) |answer| switch (answer) {
+                .newer => {},
+                .up_to_date => self.workspace.toast("Eggy is up to date"),
+                .failed => |why| {
+                    std.log.warn("cannot check for a newer Eggy: {s}", .{why});
+                    self.workspace.toast("Couldn't check for a newer Eggy: see the Console");
+                },
+            };
             self.workspace.can_upgrade = self.upgrades.can_upgrade;
+            self.workspace.can_check_upgrade = self.upgrades.can_check;
+            self.workspace.checking_upgrade = self.upgrades.checking();
+            self.workspace.upgrade_label = self.upgrades.upgrade_label;
             self.workspace.can_link = self.upgrades.can_link;
             self.workspace.developer_known = self.upgrades.developer_dir != null;
             self.workspace.carrying_file = self.assets_panel.dragged() != null;
@@ -2791,7 +2803,8 @@ pub fn Editor(comptime project: type) type {
                         self.workspace.toast("Couldn't open the IDE: see the Console");
                     };
                 },
-                .upgrade_editor => if (self.upgrades.can_upgrade) try self.upgradeEditor() else self.upgrades.logUnavailable(.upgrade),
+                .upgrade_editor => if (self.upgrades.can_check) self.checkForUpgrade() else self.upgrades.logUnavailable(.upgrade),
+                .upgrade_now => try self.upgradeEditor(),
                 .toggle_devtools => self.toggleDevtools(),
                 .about => if (self.about_window == null) {
                     self.about_window = AboutWindow.open(self.gpa, &self.app.graphics, self.ui.font) catch |err| blk: {
@@ -2813,8 +2826,8 @@ pub fn Editor(comptime project: type) type {
             }
             if (curr_event == .window_focus_lost and self.focus_lost_ms == null) self.focus_lost_ms = sdl3.timer.getMillisecondsSinceInit();
             if (curr_event == .window_focus_gained and self.cameBack()) {
-                // Another editor may have unpacked a newer Eggy meanwhile.
-                self.upgrades.refresh();
+                // Another editor may have unpacked a newer Eggy meanwhile, or the Eggy source moved on.
+                self.upgrades.refresh(preferences.editor(&self.app.preference_values).eggy_source);
                 if (self.input_settings) |settings| settings.reload() catch |err| std.log.err("cannot reload controls.zon: {t}; keeping active mappings", .{err});
                 // Files may have changed outside: models and images import again, and the catalog catches up.
                 self.app.graphics.forgetAssets();
@@ -2998,13 +3011,22 @@ pub fn Editor(comptime project: type) type {
             try self.startBuild(.rebuild);
         }
 
-        /// File > Upgrade Editor: point the project at the newest Eggy and build it, replacing a
-        /// rebuild under way. Once built, Reload opens the upgraded editor.
+        /// File > Upgrade Editor: look at the Eggy source again; the status bar spins until it
+        /// answers, then offers the upgrade or says Eggy is up to date.
+        fn checkForUpgrade(self: *Self) void {
+            self.upgrades.checkNow(preferences.editor(&self.app.preference_values).eggy_source) catch |err| {
+                std.log.warn("cannot check for a newer Eggy: {s}", .{eggy_source.describe(err)});
+                self.workspace.toast("Couldn't check for a newer Eggy: see the Console");
+            };
+        }
+
+        /// The status bar's Upgrade button: point the project at the newest Eggy and build it,
+        /// replacing a rebuild under way. Once built, Reload opens the upgraded editor.
         fn upgradeEditor(self: *Self) !void {
             const opened = self.project orelse return;
             self.cancelBuild();
             std.log.info("upgrading {s} to the newest Eggy", .{opened.title});
-            try self.startBuild(.upgrade);
+            try self.startBuild(.{ .upgrade = self.upgrades.sourceCommit() });
         }
 
         /// File > Link Developer Eggy: once confirmed, link the project to the Eggy codebase being
@@ -4173,6 +4195,7 @@ test {
     _ = @import("projects/flow.zig");
     _ = @import("projects/engine.zig");
     _ = @import("projects/upgrades.zig");
+    _ = @import("projects/eggy_source.zig");
     _ = @import("file_manager.zig");
     _ = @import("build_window.zig");
     _ = @import("export/export.zig");

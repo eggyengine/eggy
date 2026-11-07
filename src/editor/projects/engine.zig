@@ -1,7 +1,7 @@
 //! Which Eggy a project builds against: the engines unpacked into the user's data folder (one
 //! directory per version, named by the hash of its `eggy.tar`) and which of them is the newest,
-//! the Eggy codebase being developed on this machine, and pointing a project's `build.zig.zon`
-//! at one of those.
+//! the Eggy codebase being developed on this machine, the commit each engine was made from, and
+//! pointing a project's `build.zig.zon` at one of those.
 const std = @import("std");
 const zon_file = @import("eggy").assets.zon;
 
@@ -9,6 +9,12 @@ const zon_file = @import("eggy").assets.zon;
 /// codebase being developed on this machine (see `markDeveloper`).
 const latest_file = "latest";
 const developer_file = "developer";
+/// The file in an engine's directory naming the Eggy commit it was made from (see `markCommit`).
+const commit_file = ".eggy-commit";
+
+/// An engine a packaged project could move to: its directory's name in the engines folder, and
+/// the commit it was made from, when known.
+pub const Engine = struct { name: []const u8, commit: ?[]const u8 = null };
 
 /// Which Eggy a project builds against. Text lives in the caller's arena.
 pub const ProjectEngine = union(enum) {
@@ -20,19 +26,22 @@ pub const ProjectEngine = union(enum) {
     /// Fetched by URL: its `build.zig.zon` picks the version.
     fetched,
 
-    /// Whether the project could move to `latest` (see `latest`): only packaged engines upgrade.
-    /// Editor-only: compares recorded directory ids, not semantic versions or source contents.
-    /// Null newest, linked/fetched engines and identical ids all return false.
+    /// Whether the project, made from commit `own_commit` when known, could move to `newest`:
+    /// only packaged engines upgrade, to one made from another commit, or (when either commit is
+    /// unknown) in another directory.
+    /// Editor-only: compares commits and directory names, not semantic versions or contents.
     ///
     /// ```zig
-    /// const available = (ProjectEngine{ .packaged = "aaaa" }).canUpgrade("bbbb");
+    /// const available = (ProjectEngine{ .packaged = "aaaa" }).canUpgrade(null, .{ .name = "bbbb" });
     /// ```
-    pub fn canUpgrade(self: ProjectEngine, newest: ?[]const u8) bool {
-        const version = switch (self) {
-            .packaged => |version| version,
+    pub fn canUpgrade(self: ProjectEngine, own_commit: ?[]const u8, newest: ?Engine) bool {
+        const name = switch (self) {
+            .packaged => |name| name,
             .linked, .fetched => return false,
         };
-        return if (newest) |other| !std.mem.eql(u8, version, other) else false;
+        const other = newest orelse return false;
+        if (own_commit != null and other.commit != null) return !std.mem.eql(u8, own_commit.?, other.commit.?);
+        return !std.mem.eql(u8, name, other.name);
     }
 
     /// Whether the project could be linked to the Eggy codebase `developer` (see `developer`).
@@ -137,6 +146,27 @@ pub fn markDeveloper(io: std.Io, engines_dir: []const u8, source_dir: []const u8
     source.access(io, ".git", .{}) catch return;
     try std.Io.Dir.cwd().createDirPath(io, engines_dir);
     try writeRecord(io, engines_dir, developer_file, source_dir);
+}
+
+/// The commit the engine in `engine_dir` (absolute) was made from, in `arena`; null when it has
+/// no record of one, as an engine unpacked from an editor built outside a Git checkout.
+///
+/// ```zig
+/// const commit = commitOf(arena, io, "/home/you/.local/share/eggy/eggy/engines/0123456789abcdef");
+/// ```
+pub fn commitOf(arena: std.mem.Allocator, io: std.Io, engine_dir: []const u8) ?[]const u8 {
+    return readRecord(arena, io, engine_dir, commit_file) catch null;
+}
+
+/// Record `commit` as the one the engine in `engine_dir` (absolute, existing) was made from.
+/// Empty `commit` records nothing. Filesystem errors propagate.
+///
+/// ```zig
+/// try markCommit(io, engine_dir, "c2e4dc9e78c1222331c8b062d3a77169906145d4");
+/// ```
+pub fn markCommit(io: std.Io, engine_dir: []const u8, commit: []const u8) !void {
+    if (commit.len == 0) return;
+    try writeRecord(io, engine_dir, commit_file, commit);
 }
 
 /// Whether `dir` holds a package (a `build.zig.zon`): null when it doesn't.
@@ -272,11 +302,31 @@ test "a project's Eggy version is read from the Eggy its path points at" {
 }
 
 test "only a packaged engine upgrades, and only to a different one" {
-    try std.testing.expect((ProjectEngine{ .packaged = "aaaa" }).canUpgrade("bbbb"));
-    try std.testing.expect(!(ProjectEngine{ .packaged = "aaaa" }).canUpgrade("aaaa"));
-    try std.testing.expect(!(ProjectEngine{ .packaged = "aaaa" }).canUpgrade(null));
-    try std.testing.expect(!(ProjectEngine{ .linked = "/src/eggy" }).canUpgrade("bbbb"));
-    try std.testing.expect(!(ProjectEngine{ .fetched = {} }).canUpgrade("bbbb"));
+    const packaged = ProjectEngine{ .packaged = "aaaa" };
+    try std.testing.expect(packaged.canUpgrade(null, .{ .name = "bbbb" }));
+    try std.testing.expect(!packaged.canUpgrade(null, .{ .name = "aaaa" }));
+    try std.testing.expect(!packaged.canUpgrade(null, null));
+    try std.testing.expect(!(ProjectEngine{ .linked = "/src/eggy" }).canUpgrade(null, .{ .name = "bbbb" }));
+    try std.testing.expect(!(ProjectEngine{ .fetched = {} }).canUpgrade(null, .{ .name = "bbbb" }));
+    // The same commit in another directory (unpacked by another editor) is no upgrade.
+    try std.testing.expect(!packaged.canUpgrade("c1", .{ .name = "bbbb", .commit = "c1" }));
+    try std.testing.expect(packaged.canUpgrade("c1", .{ .name = "aaaa", .commit = "c2" }));
+    // An engine with no commit recorded moves to the source's commit.
+    try std.testing.expect(packaged.canUpgrade(null, .{ .name = "cccc", .commit = "c2" }));
+}
+
+test "an engine's commit is recorded beside its package" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const io = std.testing.io;
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const dir = try tmp.dir.realPathFileAlloc(io, ".", arena.allocator());
+    try std.testing.expect(commitOf(arena.allocator(), io, dir) == null);
+    try markCommit(io, dir, "");
+    try std.testing.expect(commitOf(arena.allocator(), io, dir) == null);
+    try markCommit(io, dir, "c2e4dc9e");
+    try std.testing.expectEqualStrings("c2e4dc9e", commitOf(arena.allocator(), io, dir).?);
 }
 
 test "a project links to a developer codebase it isn't linked to yet" {

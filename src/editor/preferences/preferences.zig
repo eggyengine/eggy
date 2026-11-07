@@ -24,6 +24,8 @@ pub const Editor = struct {
     autosave_seconds: u32 = 60,
     rebuild_on_focus: bool = true,
     update_plugins: bool = true,
+    /// Where File > Upgrade Editor gets newer Eggy from (see `projects/eggy_source.zig`).
+    eggy_source: []const u8 = @import("../projects/eggy_source.zig").default,
     stop_play_key: eggy.Key = .escape,
     /// In `std.log.Level`'s order.
     log_level: enum { err, warn, info, debug } = .info,
@@ -32,10 +34,13 @@ pub const Editor = struct {
     /// The Settings window's cards: how it looks, how it works, Play, and logging.
     pub const groups = .{
         .{ "theme", "assets_view", "code_editor" },
-        .{ "autosave_seconds", "rebuild_on_focus", "update_plugins" },
+        .{ "autosave_seconds", "rebuild_on_focus", "update_plugins", "eggy_source" },
         .{"stop_play_key"},
         .{ "log_level", "show_debug_logs" },
     };
+
+    /// Which Eggy to upgrade to is the user's, not one project's.
+    pub const global_only = .{"eggy_source"};
 
     pub const descriptions = .{
         .code_editor = "What opens code files from Assets.",
@@ -43,6 +48,7 @@ pub const Editor = struct {
         .theme = "System follows your desktop.",
         .rebuild_on_focus = "When you come back after changing the project's code.",
         .update_plugins = "Asks before installing each update.",
+        .eggy_source = "A Git repository's https address, with # and a branch, tag or commit.",
         .show_debug_logs = "In the Console, from the start.",
         .log_level = "For the terminal and log file. The Console keeps every message.",
         .stop_play_key = "Stops Play or Simulate and frees the mouse.",
@@ -254,13 +260,15 @@ test "the registry lists each plugin, whether it is on, and its preferences" {
 }
 
 test "the editor's preferences have a manifest" {
-    try std.testing.expectEqual(@as(usize, 9), editor_manifest.fields.len);
+    try std.testing.expectEqual(@as(usize, 10), editor_manifest.fields.len);
     try std.testing.expectEqualStrings("system", editor_manifest.fields[0].options[0]);
     try std.testing.expectEqualStrings("vscode", editor_manifest.fields[2].default[1..]);
-    try std.testing.expectEqualStrings(".escape", editor_manifest.fields[6].default);
-    try std.testing.expectEqualStrings(".info", editor_manifest.fields[7].default);
+    try std.testing.expectEqualStrings("\"https://github.com/eggyengine/eggy#main\"", editor_manifest.fields[6].default);
+    try std.testing.expectEqual(prefs.Scope.global_only, editor_manifest.fields[6].scope);
+    try std.testing.expectEqualStrings(".escape", editor_manifest.fields[7].default);
+    try std.testing.expectEqualStrings(".info", editor_manifest.fields[8].default);
     // The struct's groups put them in cards: logging last.
-    try std.testing.expectEqual(@as(u8, 3), editor_manifest.fields[8].group);
+    try std.testing.expectEqual(@as(u8, 3), editor_manifest.fields[9].group);
 }
 
 test "the stop key defaults to Escape and follows preference scopes" {

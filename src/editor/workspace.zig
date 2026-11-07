@@ -20,6 +20,8 @@ const simulate_button = @import("simulate_button.zig");
 const scene_view = @import("scene_view/scene_view.zig");
 const hit_test = eggy.ui_hit_test;
 const reload_button = @import("reload_button.zig");
+/// The status bar's Upgrade button, beside the title bar buttons' ids.
+const upgrade_button_id: u32 = 0x5000_0005;
 const workspace_tabs = @import("workspace_tabs.zig");
 const tab_bar = @import("tab_bar.zig");
 const tab_drag = @import("tab_drag.zig");
@@ -94,8 +96,10 @@ pub const Outcome = union(enum) {
     open_in_file_manager,
     /// File > Open in > IDE: open the project's folder in the code editor people chose.
     open_in_ide,
-    /// File > Upgrade Editor: move the project to the newest Eggy.
+    /// File > Upgrade Editor: look for a newer Eggy than the project's.
     upgrade_editor,
+    /// The status bar's Upgrade button: move the project to the newer Eggy found.
+    upgrade_now,
     /// File > Link Developer Eggy (Upgrade Editor with Shift held): link the project to the
     /// Eggy codebase being developed.
     link_developer,
@@ -222,8 +226,10 @@ pub const Workspace = struct {
     /// The rebuild's state, shown in the status bar; its text must last until `draw`.
     build_state: BuildState = .idle,
     /// Which Eggy this editor was built with, for the status bar: a packaged engine's short
-    /// version or the codebase it is linked to. Its text belongs to the editor.
+    /// commit or the codebase it is linked to. Its text belongs to the editor.
     engine_label: ?[]const u8 = null,
+    /// The short commit File > Upgrade Editor moves to, when known; its text belongs to the editor.
+    upgrade_label: ?[]const u8 = null,
     /// The open scene's file name, for the status bar; null with none open. Its text belongs to
     /// the editor.
     scene_name: ?[]const u8 = null,
@@ -236,8 +242,12 @@ pub const Workspace = struct {
     toast_buffer: [96]u8 = undefined,
     toast_len: usize = 0,
     toast_until_ms: u64 = 0,
-    /// Whether a newer engine than the project's is unpacked, for File > Upgrade Editor.
+    /// Whether a newer Eggy than the project's is known: the status bar offers to upgrade.
     can_upgrade: bool = false,
+    /// Whether File > Upgrade Editor can look for a newer Eggy.
+    can_check_upgrade: bool = false,
+    /// Whether the look File > Upgrade Editor started is under way: the status bar spins.
+    checking_upgrade: bool = false,
     /// Whether the project can be linked to the Eggy codebase being developed.
     can_link: bool = false,
     /// Whether an Eggy codebase being developed is known, for Open Project with Developer Eggy.
@@ -504,7 +514,7 @@ pub const Workspace = struct {
             // ponytail: estimates the left-hand window buttons' width; measure them if menus overlap on macOS.
             if (button != null) menu_room -= 32;
         };
-        const project_state = menus.ProjectState{ .open = self.project != null, .can_upgrade = self.can_upgrade, .can_link = self.can_link, .developer_known = self.developer_known, .shift_held = self.shift_held };
+        const project_state = menus.ProjectState{ .open = self.project != null, .can_check_upgrade = self.can_check_upgrade, .can_link = self.can_link, .developer_known = self.developer_known, .shift_held = self.shift_held };
         // How the plugins' entries look, as the editor found them this frame.
         const bar_states = if (self.bar_states.matches(self.plugin_bars)) self.bar_states else try plugin_bars.States.declared(b.allocator, self.plugin_bars);
         self.bar_states = bar_states;
@@ -651,7 +661,21 @@ pub const Workspace = struct {
         else
             "Eggy " ++ eggy_version;
         try children.append(b.allocator, try text(b, version, .muted));
-        if (self.can_upgrade) try children.append(b.allocator, try text(b, "Upgrade available: File > Upgrade Editor", .foreground));
+        if (self.checking_upgrade) {
+            const phase = @as(f32, @floatFromInt(self.time_ms % 1000)) / 1000;
+            const spinner = try b.node(0, .{ .width = 14, .height = 14 }, .{ .spinner = phase }, &.{});
+            spinner.accessibility = .{ .role = .status, .label = "Checking for a newer Eggy" };
+            try children.append(b.allocator, spinner);
+            try children.append(b.allocator, try text(b, "Checking for a newer Eggy", .muted));
+        } else if (self.can_upgrade) {
+            const label = if (self.upgrade_label) |commit|
+                try std.fmt.allocPrint(b.allocator, "Upgrade to Eggy {s}", .{commit})
+            else
+                "Upgrade Eggy";
+            const button = try b.node(upgrade_button_id, .{ .height = status_height - 4 }, .{ .button = .{ .label = label, .variant = .default, .size = .sm } }, &.{});
+            button.accessibility = .{ .role = .button, .label = label };
+            try children.append(b.allocator, button);
+        }
         const bar = try b.node(0, .{ .width = width, .height = status_height, .direction = .row, .align_items = .center, .gap = 10, .padding = .{ .left = 10, .right = 10 } }, .{ .surface = .sidebar }, children.items);
         bar.accessibility = .{ .role = .group, .label = "Status" };
         return bar;
@@ -869,6 +893,7 @@ pub const Workspace = struct {
                 if (slot == main_slot) {
                     if (titlebarButton(id)) |button| return .{ .window = button };
                     if (id == reload_button.id) return .reload;
+                    if (id == upgrade_button_id and self.can_upgrade and !self.checking_upgrade) return .upgrade_now;
                     if (id == play_button.id) {
                         self.playing = !self.playing;
                         self.simulating = false;

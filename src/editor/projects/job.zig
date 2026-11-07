@@ -10,6 +10,8 @@ const std = @import("std");
 const eggy = @import("eggy");
 const template = @import("template.zig");
 const engine = @import("engine.zig");
+const eggy_source = @import("eggy_source.zig");
+const build_options = @import("build_options");
 const log = std.log.scoped(.projects);
 const build_output = @import("build_output.zig");
 const build_steps = @import("build_steps.zig");
@@ -36,8 +38,9 @@ pub const Action = union(enum) {
     rebuild,
     /// Make the project first, in `dir` (which must not exist yet, or be empty).
     create: Create,
-    /// Point the project in `dir` at the newest Eggy unpacked.
-    upgrade,
+    /// Point the project in `dir` at the commit of an Eggy source, fetched first if it isn't
+    /// unpacked yet; with none, at the newest Eggy unpacked.
+    upgrade: ?SourceCommit,
     /// Point the project in `dir` at this Eggy codebase (absolute) for good: see
     /// `engine.ProjectEngine.linked`.
     link: []const u8,
@@ -67,6 +70,14 @@ pub fn editorFolders(gpa: std.mem.Allocator) !struct { resources_dir: []u8, engi
     return .{ .resources_dir = resources_dir, .engines_dir = try std.fs.path.join(gpa, &.{ pref, "engines" }) };
 }
 
+/// A commit of an Eggy source's repository (see `eggy_source`).
+pub const SourceCommit = struct {
+    /// The repository's http(s) address.
+    url: []const u8,
+    /// A full commit id.
+    commit: []const u8,
+};
+
 pub const Create = struct {
     /// What people see: any text.
     title: []const u8,
@@ -77,6 +88,7 @@ pub const Create = struct {
 pub const Stage = enum {
     reading_project,
     unpacking_engine,
+    downloading_engine,
     upgrading,
     linking,
     writing_files,
@@ -94,6 +106,7 @@ pub const Stage = enum {
         return switch (stage) {
             .reading_project => "Reading the project",
             .unpacking_engine => "Unpacking Eggy",
+            .downloading_engine => "Downloading Eggy",
             .upgrading => "Upgrading Eggy",
             .linking => "Linking Eggy",
             .writing_files => "Writing the project",
@@ -113,6 +126,7 @@ pub const Stage = enum {
         return switch (stage) {
             .reading_project => "Read the project",
             .unpacking_engine => "Unpacked Eggy",
+            .downloading_engine => "Downloaded Eggy",
             .upgrading => "Upgraded Eggy",
             .linking => "Linked Eggy",
             .writing_files => "Wrote the project",
@@ -223,6 +237,13 @@ pub const Job = struct {
                 self.name = try gpa.dupe(u8, create.name);
             },
             .link => |dir| self.action = .{ .link = try gpa.dupe(u8, dir) },
+            .upgrade => |from| if (from) |source| {
+                const url = try gpa.dupe(u8, source.url);
+                errdefer gpa.free(url);
+                self.action = .{ .upgrade = .{ .url = url, .commit = try gpa.dupe(u8, source.commit) } };
+            } else {
+                self.action = .{ .upgrade = null };
+            },
             .export_game => |args| {
                 const copies = try gpa.alloc([]const u8, args.len);
                 var copied: usize = 0;
@@ -276,6 +297,10 @@ pub const Job = struct {
         gpa.free(self.engines_dir);
         gpa.free(self.name);
         if (self.action == .link) gpa.free(self.action.link);
+        if (self.action == .upgrade) if (self.action.upgrade) |source| {
+            gpa.free(source.url);
+            gpa.free(source.commit);
+        };
         if (self.action == .export_game) {
             for (self.action.export_game) |arg| gpa.free(arg);
             gpa.free(self.action.export_game);
@@ -308,7 +333,7 @@ pub const Job = struct {
         defer self.mutex.unlock(self.io());
         const fraction: f32 = switch (self.stage) {
             .reading_project => 0.01,
-            .unpacking_engine, .upgrading, .linking => 0.02,
+            .unpacking_engine, .downloading_engine, .upgrading, .linking => 0.02,
             .writing_files => 0.08,
             .building, .exporting => 0.1 + 0.88 * self.build_fraction,
             .done => 1,
@@ -459,19 +484,31 @@ pub const Job = struct {
         self.name = try self.gpa.dupe(u8, config.name);
         self.say("Opening {s} ({s})", .{ config.title, self.dir });
         switch (self.action) {
-            .upgrade => try self.upgrade(project, arena.allocator()),
+            .upgrade => |from| try self.upgrade(project, arena.allocator(), from),
             .link => |codebase| try self.link(project, arena.allocator(), codebase),
             else => try self.checkEngine(project, arena.allocator()),
         }
     }
 
-    /// Point the project at the newest Eggy unpacked, which its next build uses.
-    fn upgrade(self: *Job, project: std.Io.Dir, arena: std.mem.Allocator) !void {
-        self.setStage(.upgrading, "");
+    /// Point the project at `from`'s commit, fetching it first, or without one at the newest
+    /// Eggy unpacked, which its next build uses.
+    fn upgrade(self: *Job, project: std.Io.Dir, arena: std.mem.Allocator, from: ?SourceCommit) !void {
         const io_ = self.io();
         // A linked project stays on its codebase.
         const path = try engine.dependencyPath(arena, io_, project) orelse return error.EngineNotAPath;
         if (!engine.isPackagedPath(path)) return error.ProjectIsLinked;
+        if (from) |source| {
+            self.setStage(.downloading_engine, source.url);
+            self.say("Fetching Eggy {s} from {s}", .{ source.commit, source.url });
+            try std.Io.Dir.cwd().createDirPath(io_, self.engines_dir);
+            const downloaded = eggy_source.download(self.gpa, io_, self.engines_dir, source.url, source.commit) catch |err| {
+                self.say("Couldn't fetch Eggy: {s}", .{eggy_source.describe(err)});
+                return err;
+            };
+            defer self.gpa.free(downloaded);
+            try engine.markLatest(io_, self.engines_dir, std.fs.path.basename(downloaded));
+        }
+        self.setStage(.upgrading, "");
         const version = try engine.latest(arena, io_, self.engines_dir) orelse return error.NoEngineToUpgradeTo;
         const engine_dir = try std.fs.path.join(arena, &.{ self.engines_dir, version });
         try engine.repoint(arena, io_, project, self.dir, engine_dir);
@@ -530,9 +567,11 @@ pub const Job = struct {
         defer gpa.free(manifest);
         if (cwd.access(io_, manifest, .{})) |_| {
             self.say("Using Eggy from {s}", .{dir});
-            // Engines unpacked before `latest` was kept still need one to be the newest.
             var arena = std.heap.ArenaAllocator.init(gpa);
             defer arena.deinit();
+            // Engines unpacked before commits were recorded learn theirs.
+            if (engine.commitOf(arena.allocator(), io_, dir) == null) try engine.markCommit(io_, dir, build_options.commit);
+            // Engines unpacked before `latest` was kept still need one to be the newest.
             if (try engine.latest(arena.allocator(), io_, self.engines_dir) == null) try engine.markLatest(io_, self.engines_dir, &version);
             return dir;
         } else |_| {}
@@ -546,6 +585,7 @@ pub const Job = struct {
         defer target.close(io_);
         var reader: std.Io.Reader = .fixed(tarball);
         try std.tar.extract(io_, target, &reader, .{});
+        try engine.markCommit(io_, partial, build_options.commit);
         try cwd.rename(partial, cwd, dir, io_);
         // ponytail: "newest" means most recently unpacked, so an older editor unpacking its Eggy after a cleanup takes over; compare versions if that bites.
         try engine.markLatest(io_, self.engines_dir, &version);
@@ -869,6 +909,7 @@ fn describe(err: anyerror) []const u8 {
         error.ProjectIsLinked => "The project is linked to an Eggy codebase, so it builds against that and doesn't upgrade.",
         error.LinkedEngineMissing => "The Eggy codebase the project is linked to is missing. Put it back, or change the eggy path in its build.zig.zon.",
         error.EngineNotAPath => "The project gets Eggy by URL, so its build.zig.zon picks the version.",
+        error.FetchFailed, error.NotAnEggy => "Couldn't fetch the newer Eggy. Its output is above.",
         error.AccessDenied, error.PermissionDenied => "Eggy isn't allowed to write there.",
         else => @errorName(err),
     };

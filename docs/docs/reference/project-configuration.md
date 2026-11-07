@@ -120,7 +120,8 @@ A copied editor without a matching source project opens as a standalone editor.
 
 ## Preferences
 
-Plugin `Preferences` structs accept defaulted bool, integer, float, or enum fields.
+Plugin `Preferences` structs accept defaulted bool, integer, float, enum, or string
+(`[]const u8`) fields.
 Read them with `app.preferences(Preferences)` or, in an editor hook,
 `editor.app.preferences(Preferences)`. Reads in `update` follow edits immediately;
 values cached during `init` apply at the next start.
@@ -133,7 +134,7 @@ values cached during `init` apply at the next start.
 
 | Project file | Contents |
 | --- | --- |
-| `.eggy/preferences.zon` | Editor settings overriding global values |
+| `.eggy/preferences.zon` | Editor settings overriding global values, except `eggy_source` (where File > Upgrade Editor gets newer Eggy, `https://github.com/eggyengine/eggy#main` by default), which is global only |
 | `.eggy/plugins/<published-name>.zon` | Plugin settings; the game's key is `game` |
 | `.eggy/plugins.zon` | Editor-written plugin inventory, enabled state, and preference declarations |
 | `controls.zon` | Developer input-mapping overrides, written by hand; not player preferences |

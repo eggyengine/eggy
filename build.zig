@@ -726,6 +726,8 @@ fn addEngine(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.buil
         build_options.addOption(u64, "fingerprint", @import("build.zig.zon").fingerprint);
         const source_dir = package_root.absolute(b);
         build_options.addOption([]const u8, "source_dir", source_dir);
+        // The commit this Eggy is, so File > Upgrade Editor can tell it from the Eggy source's.
+        build_options.addOption([]const u8, "commit", sourceCommit(b, source_dir));
         editor.addOptions("build_options", build_options);
         editor.addAnonymousImport("mono_font", .{ .root_source_file = b.path("resources/fonts/JetBrainsMono-Regular.ttf") });
         // Icons for private-use characters (Nerd Font glyphs) the UI and monospace faces lack
@@ -815,6 +817,22 @@ fn packTarball(b: *std.Build, engine: *std.Build, tool: *std.Build.Step.Compile,
 
     const install = &b.addInstallFileWithDir(tarball, .{ .custom = "resources" }, name).step;
     return install;
+}
+
+/// The commit Eggy at `source_dir` is: its checkout's HEAD, else what an engine fetched from an
+/// Eggy source records (`.eggy-commit`), else empty. Only a checkout's own `.git` counts, never
+/// a repository around it.
+fn sourceCommit(b: *std.Build, source_dir: []const u8) []const u8 {
+    const io = b.graph.io;
+    var dir = std.Io.Dir.cwd().openDir(io, source_dir, .{}) catch return "";
+    defer dir.close(io);
+    if (dir.access(io, ".git", .{})) |_| {
+        var code: u8 = 0;
+        const head = b.runAllowFail(&.{ "git", "-C", source_dir, "rev-parse", "HEAD" }, &code, .ignore) catch return "";
+        return std.mem.trim(u8, head, " \r\n");
+    } else |_| {}
+    const recorded = dir.readFileAlloc(io, ".eggy-commit", b.allocator, .limited(256)) catch return "";
+    return std.mem.trim(u8, recorded, " \r\n");
 }
 
 /// Whether directory `name` in `parent` is a Git submodule's checkout (it holds a `.git` file).
