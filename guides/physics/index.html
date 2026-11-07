@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="generator" content="Docusaurus v3.10.2">
 <title data-rh="true">Physics | Eggy</title><meta data-rh="true" name="viewport" content="width=device-width,initial-scale=1"><meta data-rh="true" name="twitter:card" content="summary_large_image"><meta data-rh="true" property="og:url" content="https://eggyengine.github.io/eggy/guides/physics"><meta data-rh="true" property="og:locale" content="en"><meta data-rh="true" name="docusaurus_locale" content="en"><meta data-rh="true" name="docsearch:language" content="en"><meta data-rh="true" name="docusaurus_version" content="current"><meta data-rh="true" name="docusaurus_tag" content="docs-default-current"><meta data-rh="true" name="docsearch:version" content="current"><meta data-rh="true" name="docsearch:docusaurus_tag" content="docs-default-current"><meta data-rh="true" property="og:title" content="Physics | Eggy"><meta data-rh="true" name="description" content="Eggy&#x27;s physics is humpty, built into every project. An entity with a"><meta data-rh="true" property="og:description" content="Eggy&#x27;s physics is humpty, built into every project. An entity with a"><link data-rh="true" rel="icon" href="/eggy/img/icon.svg"><link data-rh="true" rel="canonical" href="https://eggyengine.github.io/eggy/guides/physics"><link data-rh="true" rel="alternate" href="https://eggyengine.github.io/eggy/guides/physics" hreflang="en"><link data-rh="true" rel="alternate" href="https://eggyengine.github.io/eggy/guides/physics" hreflang="x-default"><script data-rh="true" type="application/ld+json">{"@context":"https://schema.org","@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"Physics","item":"https://eggyengine.github.io/eggy/guides/physics"}]}</script><link rel="stylesheet" href="/eggy/assets/css/styles.888f8311.css">
-<script src="/eggy/assets/js/runtime~main.4e09c843.js" defer="defer"></script>
+<script src="/eggy/assets/js/runtime~main.a99ed1e7.js" defer="defer"></script>
 <script src="/eggy/assets/js/main.517e6d15.js" defer="defer"></script>
 </head>
 <body>
@@ -29,6 +29,9 @@ entity&#x27;s origin, for a character whose origin is at its feet.</p>
 <p><strong>Restitution</strong> is bounce, 0 to 1. <strong>Friction</strong> is grip; 0 slides like ice. Where two meet,
 the bouncier one wins and their frictions are combined. A <strong>Sensor</strong> collider pushes nothing but
 still reports what it overlaps: a trigger zone.</p>
+<p>The two mesh shapes take the entity&#x27;s own <strong>Mesh</strong>. On an entity without one, such as a player
+whose model is a child, drag the entity holding the mesh from the Hierarchy onto <strong>Mesh From</strong>;
+the shape is made where that entity sits.</p>
 <p>A collider under a moving parent goes where the parent takes it, so a door&#x27;s collider can be a
 child of the door.</p>
 <h2 class="anchor anchorTargetStickyNavbar_Vzrq" id="bodies">Bodies<a href="#bodies" class="hash-link" aria-label="Direct link to Bodies" title="Direct link to Bodies" translate="no">​</a></h2>
