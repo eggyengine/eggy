@@ -51,6 +51,17 @@ pub const OpenScene = struct {
         return std.fs.path.basename(self.path orelse return null);
     }
 
+    /// Its name: the file name without `.scene.zon`, for the Hierarchy's root; null with none
+    /// open. Borrowed like `name`.
+    ///
+    /// ```zig
+    /// if (open_scene.title()) |title| context.text(title); // "main"
+    /// ```
+    pub fn title(self: *const OpenScene) ?[]const u8 {
+        const file = self.name() orelse return null;
+        return if (std.mem.endsWith(u8, file, extension)) file[0 .. file.len - extension.len] else file;
+    }
+
     /// Reopen the scene that was open last into `world`, if it still exists.
     /// Editor startup helper; `access` must match this world's game's component registry.
     /// Missing/invalid memory is ignored; open failures log. A successful open replaces entities.
@@ -91,6 +102,8 @@ pub const OpenScene = struct {
         world.clear();
         const made = try scene.instantiate(self.gpa, world, access, null);
         defer self.gpa.free(made.entities);
+        // A scene saved before scenes had roots gets one; it is saved with the next change.
+        _ = eggy.scene_root.ensure(world, access) catch |err| log.warn("cannot give {s} a root: {t}", .{ path, err });
         if (made.skipped > 0) log.warn("opened {s}: {d} entities, {d} components or fields left out (see above)", .{ path, made.entities.len, made.skipped }) else log.info("opened {s}: {d} entities", .{ path, made.entities.len });
         try self.setPath(path);
         self.saved_hash = hashOf(self.gpa, world, access) catch null;
@@ -202,6 +215,7 @@ pub const OpenScene = struct {
     pub fn create(self: *OpenScene, folder: []const u8, world: *eggy.ecs.World, access: eggy.scene.Access) !void {
         if (folder.len > 0 and !isProjectPath(folder)) return error.BadPathName;
         world.clear();
+        _ = try eggy.scene_root.ensure(world, access);
         const fresh = try self.freshPathIn(folder);
         defer self.gpa.free(fresh);
         try self.setPath(fresh);

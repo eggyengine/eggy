@@ -27,6 +27,8 @@ const displayName = field_editor.displayName;
 pub const Details = struct {
     entity: ecs.EntityId,
     name: []const u8,
+    /// Whether `name` is shown as it is, not typed into (the scene's root, named by its file).
+    fixed_name: bool = false,
     components: []const Component,
     /// The component types it doesn't have and can be given, as `(index, label)`.
     addable: []const Addable,
@@ -202,12 +204,14 @@ pub const EntityInspector = struct {
         self.values.newFrame();
 
         // The name, typed into directly; "Entity N" until it has one.
-        if (self.focused != name_key) self.name = NameEdit.init(details.name) catch NameEdit.init("") catch unreachable;
-        const placeholder = std.fmt.allocPrint(arena, "Entity {d}", .{details.entity.id}) catch "Entity";
-        if (context.textInput("##entity name", &self.name, placeholder)) action = .{ .rename = arena.dupe(u8, self.name.text()) catch "" };
-        if (context.last_added) |input| if (context.focus == input.id) {
-            focused = name_key;
-        };
+        if (details.fixed_name) context.heading(3, details.name) else {
+            if (self.focused != name_key) self.name = NameEdit.init(details.name) catch NameEdit.init("") catch unreachable;
+            const placeholder = std.fmt.allocPrint(arena, "Entity {d}", .{details.entity.id}) catch "Entity";
+            if (context.textInput("##entity name", &self.name, placeholder)) action = .{ .rename = arena.dupe(u8, self.name.text()) catch "" };
+            if (context.last_added) |input| if (context.focus == input.id) {
+                focused = name_key;
+            };
+        }
         context.muted(std.fmt.allocPrint(arena, "Entity {d} · {d} component{s}", .{ details.entity.id, details.components.len, if (details.components.len == 1) "" else "s" }) catch "");
         page_style.smallText(context, 12);
 

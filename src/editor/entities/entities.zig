@@ -109,20 +109,21 @@ pub const EntityEditor = struct {
         return self.root_order.of(world);
     }
 
-    /// Draw the Hierarchy page into `context`, and carry out what it asks.
+    /// Draw the Hierarchy page into `context`, and carry out what it asks; the scene's root is
+    /// listed as `scene_name` (null: its own name).
     /// Editor-only: call during UI construction with the App owning this game's world.
     /// May select/spawn/despawn/reparent/rename entities immediately; collection failures show
     /// an empty tree, and mutation failures are logged or ignored rather than propagated.
     ///
     /// ```zig
     /// // Given entities, building context, App pointer and optional loaded HotGame pointer:
-    /// entities.buildHierarchy(context, app, game);
+    /// entities.buildHierarchy(context, app, game, open_scene.title());
     /// ```
-    pub fn buildHierarchy(self: *EntityEditor, context: *ui.Context, app: *eggy.App, game: ?*const HotGame) void {
+    pub fn buildHierarchy(self: *EntityEditor, context: *ui.Context, app: *eggy.App, game: ?*const HotGame, scene_name: ?[]const u8) void {
         self.forgetDead(app);
         const access = if (game) |loaded| loaded.sceneAccess() else null;
         const arena = context.builder().allocator;
-        const all = tree.collect(arena, &app.world, self.roots(&app.world), access, self.hierarchy.filterText()) catch &.{};
+        const all = tree.collect(arena, &app.world, self.roots(&app.world), access, scene_name, self.hierarchy.filterText()) catch &.{};
         const rows = self.view_state.rows(arena, &app.world, all, self.hierarchy.filterText().len != 0) catch &.{};
         self.hierarchy.can_paste = self.clipboard.scene != null;
         self.hierarchy.also_selected = self.selection.all.items;
@@ -201,8 +202,17 @@ pub const EntityEditor = struct {
         details.dragging = dragging;
         details.assets = self.assets;
         details.custom_ui = custom_ui;
+        // The scene's root goes by its scene's name, and stays the root.
+        const scene_root = self.hierarchy.isSceneRoot(entity);
+        if (scene_root) {
+            details.fixed_name = true;
+            details.name = self.hierarchy.nameOf(entity);
+            for (@constCast(details.components)) |*component| {
+                if (std.mem.eql(u8, component.info.name, "SceneRoot") and std.mem.eql(u8, component.info.owner, "eggy")) component.needed_by = "the scene";
+            }
+        }
         if (self.inspector.build(context, details)) |action| switch (action) {
-            .rename => |name| loaded.writeName(app, entity, name),
+            .rename => |name| if (!scene_root) loaded.writeName(app, entity, name),
             .set_field => |change| {
                 const text = arena.dupeSentinel(u8, change.text, 0) catch return true;
                 // Text that doesn't parse yet is left until it does.
@@ -287,6 +297,27 @@ pub const EntityEditor = struct {
 
     fn apply(self: *EntityEditor, app: *eggy.App, game: ?*const HotGame, action: hierarchy_zig.Action) void {
         const world = &app.world;
+        // The scene's root stays as it is, and what goes in or beside it goes first in the scene.
+        const scene_root = if (game) |loaded| eggy.scene_root.find(world, loaded.sceneAccess()) else null;
+        const isRoot = struct {
+            fn check(root: ?ecs.EntityId, entity: ?ecs.EntityId) bool {
+                return root != null and entity != null and root.?.eql(entity.?);
+            }
+        }.check;
+        switch (action) {
+            .delete, .duplicate, .copy, .extract => |entity| if (isRoot(scene_root, entity)) return,
+            .rename => |change| if (isRoot(scene_root, change.entity)) return,
+            .move => |change| {
+                if (isRoot(scene_root, change.entity)) return;
+                const beside = switch (change.place) {
+                    .into, .before, .after => |other| other,
+                    .top_level => null,
+                };
+                if (isRoot(scene_root, beside)) return self.moveFirst(world, change.entity) catch |err| log.err("cannot move the entity: {t}", .{err});
+            },
+            .spawn => |parent| if (isRoot(scene_root, parent)) return self.apply(app, game, .{ .spawn = null }),
+            else => {},
+        }
         switch (action) {
             .select => |entity| {
                 // The rows in the order shown, for a Shift-click's range.
@@ -304,7 +335,7 @@ pub const EntityEditor = struct {
             .delete => |entity| {
                 // A selected row takes the rest of the selection with it.
                 if (self.selection.contains(entity)) {
-                    for (self.selection.all.items) |selected| if (world.isAlive(selected)) world.despawnRecursive(selected);
+                    for (self.selection.all.items) |selected| if (world.isAlive(selected) and !isRoot(scene_root, selected)) world.despawnRecursive(selected);
                 } else world.despawnRecursive(entity);
                 self.selected = null;
                 self.selection.all.clearRetainingCapacity();
@@ -321,7 +352,7 @@ pub const EntityEditor = struct {
                     const originals = self.gpa.dupe(ecs.EntityId, self.selection.all.items) catch return;
                     defer self.gpa.free(originals);
                     self.selection.all.clearRetainingCapacity();
-                    for (originals) |original| if (!hasSelectedAncestor(world, original, originals)) {
+                    for (originals) |original| if (!hasSelectedAncestor(world, original, originals) and !isRoot(scene_root, original)) {
                         const made = self.duplicateOne(world, loaded, original) orelse continue;
                         self.selection.all.append(self.gpa, made) catch {};
                         self.selected = made;
@@ -403,6 +434,14 @@ pub const EntityEditor = struct {
         defer text.deinit();
         try scene.write(&text.writer);
         return text.toOwnedSlice();
+    }
+
+    /// Move `entity` to the start of the top level.
+    fn moveFirst(self: *EntityEditor, world: *ecs.World, entity: ecs.EntityId) !void {
+        if (!world.isAlive(entity)) return;
+        _ = self.roots(world);
+        world.removeParent(entity);
+        try self.root_order.place(entity, 0);
     }
 
     /// Move `entity` to `place`: under a parent (last), beside a sibling, or to the end of the

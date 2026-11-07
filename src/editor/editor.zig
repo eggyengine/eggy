@@ -802,7 +802,7 @@ pub fn Editor(comptime project: type) type {
                         if (self.console.build(page_ui, if (self.project) |opened| opened.dir else null, command_line)) |source| self.openDiagnostic(source);
                     },
                     panels.hierarchy_page => {
-                        self.entity_editor.buildHierarchy(page_ui, &self.app, self.gamePtr());
+                        self.entity_editor.buildHierarchy(page_ui, &self.app, self.gamePtr(), if (self.open_scene) |*scene| scene.title() else null);
                         self.applyEntityCommands();
                     },
                     panels.assets_page => {

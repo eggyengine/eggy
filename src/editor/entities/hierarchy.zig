@@ -9,7 +9,9 @@
 //! children) letting go does nothing, and Escape cancels. A right-click opens a menu (rename, add
 //! a child, duplicate, move to the top level, delete); a double-click on a name renames (both
 //! clicks on its text, in the same spot), as does Ctrl+R, a double-click anywhere else on a row
-//! frames the entity in the Scene, and Delete deletes.
+//! frames the entity in the Scene, and Delete deletes. The scene's root, first, is none of
+//! these: it is only selected, to tune the scene's settings, and things dropped on it go first
+//! under it.
 //!
 //! The page doesn't change the world itself: `build`, `pointer` and `key` return the `Action` the
 //! user took, for the editor to carry out. The UI Designer's tree is the same page listing a UI
@@ -103,7 +105,7 @@ pub const Hierarchy = struct {
     /// The row being renamed, and its text.
     renaming: ?struct { entity: ecs.EntityId, edit: NameEdit, started: bool = false } = null,
     /// The right-click menu: where, and for which row (none: the empty space below the rows).
-    menu: ?struct { at: ui.Vec2, entity: ?ecs.EntityId, has_parent: bool, has_children: bool = false, collapsed: bool = false, self_hidden: bool = false } = null,
+    menu: ?struct { at: ui.Vec2, entity: ?ecs.EntityId, scene_root: bool = false, has_parent: bool, has_children: bool = false, collapsed: bool = false, self_hidden: bool = false } = null,
     /// The menu's scroll, when the page is too short to show it whole.
     menu_scroll: L.ScrollState = .{},
     /// A press on a row, which becomes a drag once it moves, and where it would drop.
@@ -228,6 +230,7 @@ pub const Hierarchy = struct {
                         self.menu = .{
                             .at = down.position,
                             .entity = if (row) |r| r.entity else null,
+                            .scene_root = if (row) |r| r.scene_root else false,
                             .has_parent = if (row) |r| r.has_parent else false,
                             .has_children = if (row) |r| r.has_children else false,
                             .collapsed = if (row) |r| r.collapsed else false,
@@ -247,8 +250,9 @@ pub const Hierarchy = struct {
                             if (down.position.x >= left and down.position.x < left + 18)
                                 return .{ .used = true, .action = .{ .toggle_collapse = pressed.entity } };
                         };
-                        // What a scene instance's file made isn't renamed or moved, only tuned.
-                        if (pressed.from_instance) {
+                        // What a scene instance's file made, and the scene's root, aren't renamed
+                        // or moved, only tuned.
+                        if (pressed.from_instance or pressed.scene_root) {
                             if (down.clicks >= 2) return .{ .used = true, .action = .{ .frame = pressed.entity } };
                             return .{ .used = false };
                         }
@@ -312,17 +316,17 @@ pub const Hierarchy = struct {
                 return .{ .used = true };
             },
             // ponytail: Weeoui has no F2 key yet; Ctrl+R renames until it does.
-            .r => if (key_down.modifiers.control) if (selected) |entity| if (self.renaming == null) {
+            .r => if (key_down.modifiers.control) if (selected) |entity| if (self.renaming == null and !self.isSceneRoot(entity)) {
                 self.startRename(entity, self.nameOf(entity));
                 return .{ .used = true };
             },
-            .c => if (key_down.modifiers.control and self.renaming == null) if (selected) |entity| {
+            .c => if (key_down.modifiers.control and self.renaming == null) if (selected) |entity| if (!self.isSceneRoot(entity)) {
                 return .{ .used = true, .action = .{ .copy = entity } };
             },
             .v => if (key_down.modifiers.control and self.renaming == null and self.can_paste) {
                 return .{ .used = true, .action = .{ .paste = selected } };
             },
-            .delete => if (selected) |entity| if (self.renaming == null) return .{ .used = true, .action = .{ .delete = entity } },
+            .delete => if (selected) |entity| if (self.renaming == null and !self.isSceneRoot(entity)) return .{ .used = true, .action = .{ .delete = entity } },
             else => {},
         }
         return .{ .used = false };
@@ -435,7 +439,12 @@ pub const Hierarchy = struct {
         const words = self.subject.words();
         var choices: std.ArrayList(ui.widgets.Choice) = .empty;
         const arena = context.builder().allocator;
-        if (menu.entity != null) {
+        if (menu.scene_root) {
+            // The scene's root is the scene itself: what is added there goes in the scene.
+            choices.append(arena, .{ .id = menuId(.add_entity), .label = words.add }) catch return null;
+            if (self.can_paste) choices.append(arena, .{ .id = menuId(.paste), .label = "Paste tree" }) catch return null;
+            if (menu.has_children) choices.append(arena, .{ .id = menuId(.collapse), .label = if (menu.collapsed) "Expand children" else "Collapse children" }) catch return null;
+        } else if (menu.entity != null) {
             choices.appendSlice(arena, &.{
                 .{ .id = menuId(.rename), .label = "Rename" },
                 .{ .id = menuId(.add_child), .label = "Add child" },
@@ -503,6 +512,8 @@ pub const Hierarchy = struct {
     fn targetAt(self: *const Hierarchy, context: *const ui.Context, dragged: ecs.EntityId, at: ui.Vec2) Target {
         if (self.rowAt(context, at)) |row| {
             if (row.entity.eql(dragged)) return .none;
+            // Anywhere on the scene's root puts it first in the scene.
+            if (row.scene_root) return .{ .place = .{ .after = row.entity } };
             if (self.isWithin(row.entity, dragged)) return .blocked;
             const bounds = context.last_bounds.get(row_id_base + row.entity.id).?.rect;
             const along = (at.y - bounds.y) / bounds.h;
@@ -526,6 +537,12 @@ pub const Hierarchy = struct {
             if (row.depth <= rows[start].depth) return false;
             if (row.entity.eql(entity)) return true;
         }
+        return false;
+    }
+
+    /// Whether `entity` is the scene's root, as last shown.
+    pub fn isSceneRoot(self: *const Hierarchy, entity: ecs.EntityId) bool {
+        for (self.rows.items) |row| if (row.entity.eql(entity)) return row.scene_root;
         return false;
     }
 
