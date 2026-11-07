@@ -76,6 +76,8 @@ pub const App = struct {
     /// UI scenes' caches, what code changed about them and their presses (see `uiScenes`).
     ui_scenes: ui_scenes.State = .{},
     particles: @import("particles.zig").Particles = .{},
+    /// The bodies `RigidBody` and `Collider` entities make, stepped with the world (see `physics.zig`).
+    physics: @import("physics.zig").Physics = .{},
     network: @import("network.zig").Network = .{},
     navigation: @import("navigation.zig").Navigation = .{},
     storage: @import("storage.zig").Storage = .{},
@@ -216,6 +218,7 @@ pub const App = struct {
         self.scene_transition.deinit();
         self.scene_stream.deinit(self.world.allocator);
         self.particles.deinit();
+        self.physics.deinit(self.world.allocator);
         if (self.instances) |*instances| instances.deinit();
         self.world.deinit();
         self.storage.deinit();
@@ -424,6 +427,7 @@ pub const App = struct {
         self.scene_transition.deinit();
         self.scene_stream.deinit(self.world.allocator);
         self.particles.deinit();
+        self.physics.deinit(self.world.allocator);
         if (self.instances) |*instances| instances.deinit();
         self.instances = null;
         self.scene_access = null;
@@ -480,6 +484,8 @@ pub const App = struct {
         if (self.cutscene.update(&self.world, &self.graphics.clips, self.time.unscaled_delta_s, effects)) self.input.cancel();
         audio_zig.startFromClips(&self.world, self.animation_sounds.items);
         @import("sprite_animator.zig").step(&self.world, self.time.delta_s);
+        // Bodies move after the game's systems, so what they set this frame is where they start.
+        try self.physics.step(self.world.allocator, &self.world, self.time.delta_s);
         // Particles move on game time too, and are drawn where they end up.
         self.particles.step(self.time.delta_s);
         try self.particles.draw(&self.draw2d);

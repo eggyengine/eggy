@@ -3,6 +3,8 @@
 // re-exports
 pub const math = @import("eggenvector");
 pub const ecs = @import("clutch");
+pub const physics = @import("physics.zig");
+pub const humpty = @import("humpty");
 pub const vit = @import("vitellus");
 pub const sdl_adapter = @import("vitellus_sdl3");
 pub const slangc = @import("vitellus_slangc");
@@ -151,6 +153,7 @@ test {
     _ = @import("mesh.zig");
     _ = sprite;
     _ = sprite_animator;
+    _ = physics;
     _ = tilemap;
     _ = @import("mesh_renderer.zig");
     _ = @import("model_cache.zig");

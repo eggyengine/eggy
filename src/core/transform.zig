@@ -72,6 +72,38 @@ pub const Transform = struct {
         self.position = self.position.add(offset);
     }
 
+    /// Its rotation as a quaternion: about x, then y, then z, as `matrix` turns.
+    ///
+    /// ```zig
+    /// const turn = (Transform{ .rotation_deg = .init(0, 90, 0) }).orientation();
+    /// ```
+    pub fn orientation(self: Transform) math.UnitQuat {
+        const radians = self.rotation_deg.scale(std.math.rad_per_deg);
+        const x = math.UnitQuat.fromAxisAngle(math.Vec3.unit_x, radians.x);
+        const y = math.UnitQuat.fromAxisAngle(math.Vec3.unit_y, radians.y);
+        const z = math.UnitQuat.fromAxisAngle(math.Vec3.unit_z, radians.z);
+        return z.mul(y.mul(x));
+    }
+
+    /// Sets `rotation_deg` to turn as `turn` does; the inverse of `orientation`. Near ±90° about
+    /// y, where x and z turn the same way, it puts the turn on z.
+    ///
+    /// ```zig
+    /// transform.setOrientation(body_pose.rotation);
+    /// ```
+    pub fn setOrientation(self: *Transform, turn: math.UnitQuat) void {
+        // Columns of the rotation matrix Rz·Ry·Rx, read back into its angles.
+        const col_x = turn.rotateVector(math.Vec3.unit_x);
+        const col_y = turn.rotateVector(math.Vec3.unit_y);
+        const col_z = turn.rotateVector(math.Vec3.unit_z);
+        const y = std.math.asin(std.math.clamp(-col_x.z, -1, 1));
+        const radians = if (@abs(col_x.z) < 0.9999)
+            math.Vec3.init(std.math.atan2(col_y.z, col_z.z), y, std.math.atan2(col_x.y, col_x.x))
+        else
+            math.Vec3.init(0, y, std.math.atan2(-col_y.x, col_y.y));
+        self.rotation_deg = radians.scale(std.math.deg_per_rad);
+    }
+
     /// `direction` turned by the rotation alone.
     fn axis(self: Transform, direction: math.Vec3) math.Vec3 {
         const turned = Transform{ .rotation_deg = self.rotation_deg };
@@ -110,6 +142,17 @@ test "a transform's inverse takes its points back" {
     const moved = math.transformPoint4x4(f32, transform.matrix(), .init(1, 2, 3));
     try std.testing.expect(math.transformPoint4x4(f32, back, moved).approxEql(.init(1, 2, 3), 0.001));
     try std.testing.expect(math.inverse4x4(f32, (Transform{ .scale = .init(0, 1, 1) }).matrix()) == null);
+}
+
+test "a transform's orientation turns as its matrix does, and reads back into the same angles" {
+    var transform = Transform{ .rotation_deg = .init(30, -40, 50) };
+    const direction = math.Vec3.init(0.3, -1, 2);
+    const by_matrix = math.transformDirection4x4(f32, transform.matrix(), direction);
+    try std.testing.expect(transform.orientation().rotateVector(direction).approxEql(by_matrix, 1e-4));
+    const turn = transform.orientation();
+    transform.rotation_deg = .zero;
+    transform.setOrientation(turn);
+    try std.testing.expect(transform.rotation_deg.approxEql(.init(30, -40, 50), 1e-3));
 }
 
 test "a transform scales, then turns, then moves" {

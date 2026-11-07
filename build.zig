@@ -610,6 +610,10 @@ fn addEngine(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.buil
     engine.addImport("vitellus_spirv", vitellus.module("vitellus_spirv"));
     engine.addImport("eggenvector", emath.module("eggenvector"));
     engine.addImport("clutch", b.dependency("clutch", .{ .target = target, .optimize = optimize }).module("clutch"));
+    // humpty's components are built in; it uses Eggy's eggenvector and clutch so their types match.
+    const humpty = b.dependency("humpty", .{ .target = target, .optimize = optimize }).module("humpty");
+    shared_libraries.share(b, engine, &.{humpty});
+    engine.addImport("humpty", humpty);
     engine.addImport("weeoui", weeoui.module("weeoui"));
     const assets = models.assetsModule(b, target, optimize);
     // Tools can import the formats without linking App, SDL, the renderer, or editor code.

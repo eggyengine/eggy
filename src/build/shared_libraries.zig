@@ -1,11 +1,11 @@
-//! The libraries Eggy's API is made of (Vitellus, Weeoui, Clutch and Eggenvector), given as
+//! The libraries Eggy's API is made of (Vitellus, Weeoui, Clutch, Eggenvector and Humpty), given as
 //! Eggy's own to every module a game builds with: a package that pins its own copy, to work
 //! without Eggy, uses Eggy's inside a game, so its types are Eggy's.
 const std = @import("std");
 const Module = std.Build.Module;
 
 /// The import names Eggy's own modules give these libraries.
-const names = [_][]const u8{ "vitellus", "weeoui", "clutch", "eggenvector" };
+const names = [_][]const u8{ "vitellus", "weeoui", "clutch", "eggenvector", "humpty" };
 
 /// Point every import named in `names`, in `roots` and every module they import, at `eggy`'s.
 /// Eggy's own modules are left as they are.
