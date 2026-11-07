@@ -54,6 +54,9 @@ pub const Mesh = struct {
     color: [3]f32 = .{ 0.8, 0.8, 0.8 },
     /// An image painted over the shape; none keeps a model's own textures, or plain colour.
     texture: AssetRef(.image) = .{},
+    /// Where the shape sits from the entity, within its `Transform`: moves, turns and scales a
+    /// model that wasn't made facing, sized or centred as the game wants it.
+    local_transform: Transform = .{},
 };
 
 /// One entity to draw: where (its model matrix's columns), in what colour, as what shape or
@@ -302,8 +305,7 @@ fn drawable(world: *ecs.World, entity: ecs.EntityId, mesh: *const Mesh) ?Drawabl
             result.material_file_len = material.file.len;
         } else result.applyMaterial(material);
     }
-    const model = transform_zig.worldMatrix(world, entity);
-    for (&result.model, model.data) |*column, data| column.* = data;
+    result.model = transform_zig.columns(math.mul(f32, 4, 4, 4, transform_zig.worldMatrix(world, entity), mesh.local_transform.matrix()));
     return result;
 }
 
@@ -523,6 +525,18 @@ test "a child's mesh is drawn where its parent's transform puts it" {
     try std.testing.expectEqual(Shape.sphere, drawn[0].shape);
     try std.testing.expect(drawn[0].entity().eql(child));
     try std.testing.expectEqualSlices(f32, &.{ 5, 2, 0, 1 }, &drawn[0].model[3]);
+}
+
+test "a mesh's local transform places it within its entity's" {
+    var world = ecs.World.init(std.testing.allocator);
+    defer world.deinit();
+    _ = try world.spawn(.{ Transform{ .position = .init(5, 0, 0), .scale = .init(2, 2, 2) }, Mesh{ .local_transform = .{ .position = .init(0, 1, 0), .rotation_deg = .init(0, 180, 0) } } });
+
+    var drawn: [1]Drawable = undefined;
+    try std.testing.expectEqual(@as(usize, 1), gather(&world, &drawn));
+    // Moved up a metre in the entity's (doubled) space, and facing back: its x axis is -2x.
+    try std.testing.expectEqualSlices(f32, &.{ 5, 2, 0, 1 }, &drawn[0].model[3]);
+    try std.testing.expectApproxEqAbs(@as(f32, -2), drawn[0].model[0][0], 1e-5);
 }
 
 test "a model's mesh is drawn as its file, and one with no file isn't drawn" {

@@ -77,6 +77,7 @@ pub const Host = struct {
     pub fn mesh(world: *ecs.World, entity: ecs.EntityId, gpa: std.mem.Allocator) !?humpty.ecs.MeshSource {
         const drawn = world.get(entity, Mesh) orelse return null;
         // Built-in shapes are unit sized: half a metre each way, flat ones a millimetre thick.
+        // ponytail: a built-in shape's collider ignores `local_transform`; make it a placed shape if games turn or move them.
         return switch (drawn.shape) {
             .cube => .{ .shape = .{ .cuboid = .{} } },
             .sphere => .{ .shape = .{ .ball = .{} } },
@@ -93,7 +94,12 @@ pub const Host = struct {
                 defer gpa.free(rest);
                 const positions = try gpa.alloc([3]f32, rest.len);
                 errdefer gpa.free(positions);
-                for (positions, rest) |*p, v| p.* = v.position;
+                // Collide with it where `local_transform` draws it.
+                const local = drawn.local_transform.matrix();
+                for (positions, rest) |*p, v| {
+                    const at = math.transformPoint4x4(f32, local, .init(v.position[0], v.position[1], v.position[2]));
+                    p.* = .{ at.x, at.y, at.z };
+                }
                 const indices = try gpa.alloc([3]u32, model.indices.len / 3);
                 for (indices, 0..) |*triangle, i| triangle.* = model.indices[i * 3 ..][0..3].*;
                 break :blk .{ .triangles = .{ .positions = positions, .indices = indices } };
