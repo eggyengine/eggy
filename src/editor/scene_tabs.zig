@@ -1,8 +1,21 @@
 //! Which scene each 3D tab shows, by its Scene copy (`panels.Live.scene`): the editor has one
 //! world, so the live copy's scene is the open one, and the others are kept as the world was when
-//! their tab was left (unsaved edits and all) until it is shown again.
+//! their tab was left (unsaved edits and all) until it is shown again. Which file each tab shows
+//! is kept in the project's `.eggy/scene_tabs.zon`, so the tabs show them again when it reopens.
 const std = @import("std");
+const zon_file = @import("eggy").assets.zon;
 const panels = @import("panels.zig");
+const scene_file = @import("scene_file.zig");
+const log = std.log.scoped(.tabs);
+
+/// Where in the project the tabs' scenes are kept.
+const tabs_path = ".eggy" ++ std.fs.path.sep_str ++ "scene_tabs.zon";
+
+/// The file's shape: the copy whose scene is the open one, and each copy's scene file.
+const Saved = struct {
+    applied: u8 = 0,
+    files: [panels.max_copies]?[]const u8 = @splat(null),
+};
 
 /// A scene put aside: the world's text as its tab left it, the hash it was saved with, and
 /// whether that text has changes the file doesn't.
@@ -68,6 +81,48 @@ pub const SceneTabs = struct {
         self.waiting[self.applied] = if (leaving) |kept| .{ .kept = kept } else null;
         self.applied = live;
         return next;
+    }
+
+    /// Write which scene file each copy shows to `project`'s `.eggy/scene_tabs.zon`: the applied
+    /// copy's is `open_path` (null: none open), the others' what waits for them. A kept world's
+    /// unsaved changes aren't written, only its file. Errors are the file's.
+    pub fn save(self: *const SceneTabs, gpa: std.mem.Allocator, io: std.Io, project: std.Io.Dir, open_path: ?[]const u8) !void {
+        var saved = Saved{ .applied = self.applied };
+        for (&saved.files, self.waiting) |*file, entry| if (entry) |found| {
+            file.* = switch (found) {
+                .file => |path| path,
+                .kept => |kept| kept.path,
+            };
+        };
+        saved.files[self.applied] = open_path;
+
+        var text: std.Io.Writer.Allocating = .init(gpa);
+        defer text.deinit();
+        try text.writer.writeAll("// The scene each 3D tab shows, opened again when the editor opens.\n");
+        try std.zon.stringify.serialize(saved, .{}, &text.writer);
+        try project.createDirPath(io, ".eggy");
+        try project.writeFile(io, .{ .sub_path = tabs_path, .data = text.written() });
+    }
+
+    /// Read what `save` kept in `project`: the copy saved as applied is applied again (the editor
+    /// reopens its scene itself), and every other copy's file waits for its tab. Call before the
+    /// first `follow`. A missing file changes nothing; an unreadable one is logged, and files
+    /// that are gone or outside the project are left out.
+    pub fn load(self: *SceneTabs, gpa: std.mem.Allocator, io: std.Io, project: std.Io.Dir) void {
+        const source = project.readFileAllocOptions(io, tabs_path, gpa, .limited(64 * 1024), .of(u8), 0) catch return;
+        defer gpa.free(source);
+        var arena = std.heap.ArenaAllocator.init(gpa);
+        defer arena.deinit();
+        const saved = zon_file.parse(Saved, arena.allocator(), source, .{ .ignore_unknown_fields = true }) catch |err| return log.warn("cannot read the tabs' scenes: {t}", .{err});
+        if (saved.applied >= panels.max_copies) return;
+        self.deinit(gpa);
+        self.applied = saved.applied;
+        for (saved.files, 0..) |file, copy| {
+            const path = file orelse continue;
+            if (copy == saved.applied or !scene_file.isProjectPath(path)) continue;
+            project.access(io, path, .{}) catch continue;
+            self.assign(gpa, @intCast(copy), path) catch return;
+        }
     }
 
     /// Whether a scene is waiting on copy `copy`'s tab, so the open one must be put aside.
@@ -150,4 +205,28 @@ test "closing loses a kept world's changes, and the open one's only when another
     try std.testing.expectEqual(only(&.{}), tabs.lostByClosing(only(&.{0}), 4, true));
     try std.testing.expectEqual(only(&.{}), tabs.lostByClosing(only(&.{0}), null, true));
     try std.testing.expectEqual(only(&.{}), tabs.lostByClosing(only(&.{0}), 3, false));
+}
+
+test "each tab's scene file comes back for its own tab, the open one's left to the editor" {
+    const gpa = std.testing.allocator;
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.createDirPath(io, "resources/scene");
+    for ([_][]const u8{ "resources/scene/garden.scene.zon", "resources/scene/basic.scene.zon" }) |path| try tmp.dir.writeFile(io, .{ .sub_path = path, .data = ".{}" });
+
+    var before = SceneTabs{};
+    defer before.deinit(gpa);
+    try before.assign(gpa, 0, "resources/scene/garden.scene.zon");
+    try before.assign(gpa, 3, "resources/scene/gone.scene.zon");
+    before.applied = 2;
+    try before.save(gpa, io, tmp.dir, "resources/scene/basic.scene.zon");
+
+    var after = SceneTabs{};
+    defer after.deinit(gpa);
+    after.load(gpa, io, tmp.dir);
+    try std.testing.expectEqual(@as(u8, 2), after.applied);
+    try std.testing.expectEqualStrings("resources/scene/garden.scene.zon", after.waiting[0].?.file);
+    try std.testing.expect(after.waiting[2] == null);
+    try std.testing.expect(after.waiting[3] == null);
 }

@@ -499,6 +499,7 @@ pub fn Editor(comptime project: type) type {
                     var project_dir = dir;
                     defer project_dir.close(views_io);
                     self.tab_views.load(gpa, views_io, project_dir, &self.scene_view, &self.scene_2d);
+                    self.scene_tabs.load(gpa, views_io, project_dir);
                 } else |_| {}
             }
             self.offerRecovery();
@@ -3322,6 +3323,8 @@ pub fn Editor(comptime project: type) type {
             var project_dir = std.Io.Dir.cwd().openDir(io, opened.dir, .{}) catch |err| return std.log.warn("cannot keep the tabs' views: {t}", .{err});
             defer project_dir.close(io);
             self.tab_views.save(self.gpa, io, project_dir, &self.scene_view, &self.scene_2d) catch |err| std.log.warn("cannot keep the tabs' views: {t}", .{err});
+            const open_path = if (self.open_scene) |*scene| scene.path else null;
+            self.scene_tabs.save(self.gpa, io, project_dir, open_path) catch |err| std.log.warn("cannot keep the tabs' scenes: {t}", .{err});
         }
 
         /// Save the dock's layout once it has changed and then held still for a second, so it
