@@ -84,17 +84,20 @@ pub const Prompt = struct {
         if (options.take_focus) context.focus = context.idFor(options.label);
         _ = context.textInput(options.label, &self.edit, options.placeholder);
         const field = context.last_added orelse return null;
+        if (field.paint_kind != .input) return null;
+        var input = &field.paint_kind.input;
         if (options.place) |place| {
             const height = field.style.height orelse 32;
             field.overlay = .{ .point = .init(place.x, place.y + place.h - height) };
             field.style.width = place.w;
             field.style.z_index = options.z_index + 1;
         }
-        if (options.palette) |palette| if (field.paint_kind == .input) {
+        if (options.palette) |palette| {
             const paint = arena.create(Field) catch return null;
-            paint.* = .{ .input = field.paint_kind.input, .palette = palette };
+            paint.* = .{ .input = input.*, .palette = palette };
             field.paint_kind = .{ .custom = .{ .context = paint, .draw = Field.draw } };
-        };
+            input = &paint.input;
+        }
         if (context.focus != field.id) {
             if (self.focused_in == context) self.focused_in = null;
             return null;
@@ -116,6 +119,11 @@ pub const Prompt = struct {
             else => {},
         };
         if (self.cycle) |cycle| if (cycle.left != std.hash.Wyhash.hash(0, self.edit.text())) self.endCycle(gpa);
+        // The field painted the text as it was declared, borrowed from `edit`, which Enter, the
+        // history and Tab have since changed: paint a copy of what they left.
+        input.value = arena.dupe(u8, self.edit.text()) catch "";
+        input.cursor = self.edit.cursor;
+        input.selection = self.edit.selection();
 
         // The candidates for the word at the caret, the one Tab is on lit.
         const shown, const lit = if (self.cycle) |cycle| .{ @as([]const []const u8, cycle.candidates), cycle.index } else blk: {
@@ -295,4 +303,22 @@ test "Up and Down walk back and forth through the lines run" {
     prompt.recall(gpa, .newer);
     prompt.recall(gpa, .newer);
     try std.testing.expectEqualStrings("", prompt.edit.text());
+}
+
+test "the field paints the line Enter left, not the one it declared" {
+    const gpa = std.testing.allocator;
+    var context = try ui.Context.init(gpa);
+    defer context.deinit();
+    context.newFrame(.{ .x = 0, .y = 0, .w = 600, .h = 400 });
+    context.handle(.{ .text = "help" });
+    context.handle(.{ .key_down = .{ .key = .enter, .modifiers = .{}, .repeat = false } });
+    var prompt = Prompt{};
+    defer prompt.deinit(gpa);
+    const none = Completer{ .context = undefined, .complete = struct {
+        fn complete(_: *anyopaque, _: std.mem.Allocator, _: []const u8, cursor: usize) anyerror!completion.Completion {
+            return .{ .start = cursor, .candidates = &.{} };
+        }
+    }.complete };
+    try std.testing.expectEqualStrings("help", prompt.build(gpa, &context, none, .{ .take_focus = true }).?);
+    try std.testing.expectEqualStrings("", context.last_added.?.paint_kind.input.value);
 }
