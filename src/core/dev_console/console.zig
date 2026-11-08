@@ -1,9 +1,8 @@
-//! The dev console's state: the lines typed into it, run as commands or as Buzz, and what they said.
+//! The dev console's state: the lines typed into it, run as commands, and what they said.
 const std = @import("std");
 const ui = @import("weeoui");
 const App = @import("../app.zig").App;
 const Key = @import("../input/input.zig").Key;
-const buzz_session = @import("buzz_session.zig");
 const builtin_commands = @import("builtin_commands.zig");
 const completion = @import("completion.zig");
 const prompt_zig = @import("prompt.zig");
@@ -12,14 +11,11 @@ const commands = @import("commands.zig");
 const Call = commands.Call;
 const Commands = commands.Commands;
 const Prompt = prompt_zig.Prompt;
-const scripting = buzz_session.available;
 
 const log = std.log.scoped(.console);
 
 /// The most lines of output kept; older ones are forgotten.
 const max_lines = 500;
-/// The largest script file `run` reads.
-const max_script_bytes = 4 * 1024 * 1024;
 
 /// A line of the console's output.
 pub const Line = struct {
@@ -52,16 +48,10 @@ pub const DevConsole = struct {
     /// How many lines the overlay is scrolled back from the newest.
     scrolled_back: usize = 0,
     prompt: Prompt = .{},
-    /// Started by the first line that runs as Buzz.
-    session: ?*buzz_session.Session = null,
-    session_failed: bool = false,
-    /// Buzz is running a line now, so its `run("...")` can't start a script inside it.
-    in_buzz: bool = false,
 
-    /// Free the output, the history and the Buzz session. `gpa` is the one lines were run with
+    /// Free the output and the history. `gpa` is the one lines were run with
     /// (`app.world.allocator`).
     pub fn deinit(self: *DevConsole, gpa: std.mem.Allocator) void {
-        if (self.session) |session| session.deinit();
         self.clear(gpa);
         self.lines.deinit(gpa);
         self.prompt.deinit(gpa);
@@ -96,7 +86,7 @@ pub const DevConsole = struct {
     }
 
     /// Run `line` as the user typed it, echoing it and keeping what it says: a command when its
-    /// first word names one (Eggy's first, then `game`'s), Buzz otherwise. Failures are shown,
+    /// first word names one (Eggy's first, then `game`'s). Failures are shown,
     /// never returned. Host-only, on the main thread.
     ///
     /// ```zig
@@ -117,7 +107,10 @@ pub const DevConsole = struct {
             self.say(gpa, .failure, @errorName(err));
             return;
         };
-        const said = ran orelse self.runBuzz(app, game, trimmed, buzz_session.line_name, &out.writer);
+        const said = ran orelse no_command: {
+            out.writer.print("{s}: no such command (type help)\n", .{trimmed[0 .. std.mem.indexOfAny(u8, trimmed, " \t") orelse trimmed.len]}) catch {};
+            break :no_command .failure;
+        };
         self.sayAll(gpa, said, out.written());
     }
 
@@ -130,7 +123,6 @@ pub const DevConsole = struct {
         inline for (@typeInfo(builtin_commands.Builtin).@"enum".field_names) |name| if (std.mem.eql(u8, words[0], name)) {
             switch (@field(builtin_commands.Builtin, name)) {
                 .clear => self.clear(app.world.allocator),
-                .run => return self.runScript(app, game, &call),
                 else => |builtin| try builtin_commands.run(builtin, app, &call, game.list),
             }
             return .output;
@@ -143,75 +135,15 @@ pub const DevConsole = struct {
         return null;
     }
 
-    /// Run the Buzz file `call` names, read from the working directory (the project's folder in
-    /// the editor, wherever the game was started from when built), in the session, so what it
-    /// declares stays for later lines. Not from inside Buzz: a script runs commands, not scripts.
-    fn runScript(self: *DevConsole, app: *App, game: Commands, call: *Call) Line.Kind {
-        const path = call.arg(0) orelse {
-            call.print("usage: run <path.buzz>", .{});
-            return .failure;
-        };
-        if (self.in_buzz) {
-            call.print("a script can't run another script", .{});
-            return .failure;
-        }
-        if (self.startSession(app) == null) {
-            call.print("Buzz can't run here, so neither can scripts", .{});
-            return .failure;
-        }
-        const source = std.Io.Dir.cwd().readFileAlloc(app.process_init.io, path, call.arena, .limited(max_script_bytes)) catch |err| {
-            call.print("can't read {s}: {t}", .{ path, err });
-            return .failure;
-        };
-        return self.runBuzz(app, game, source, path, call.out);
-    }
-
-    /// Run `source` in the Buzz session, named `name` in its errors, starting the session first
-    /// if this is the first Buzz it runs. Returns what kind of output it wrote to `out`.
-    fn runBuzz(self: *DevConsole, app: *App, game: Commands, source: []const u8, name: []const u8, out: *std.Io.Writer) Line.Kind {
-        const session = self.startSession(app) orelse {
-            out.print("{s}: no such command (type help)\n", .{source[0 .. std.mem.indexOfAny(u8, source, " \t") orelse source.len]}) catch {};
-            return .failure;
-        };
-        var host = ScriptHost{ .console = self, .app = app, .game = game, .out = out };
-        self.in_buzz = true;
-        defer self.in_buzz = false;
-        session.run(source, name, host.host(), out) catch |err| {
-            if (err != error.LineFailed) out.print("Buzz failed: {t}\n", .{err}) catch {};
-            return .failure;
-        };
-        return .output;
-    }
-
-    fn startSession(self: *DevConsole, app: *App) ?*buzz_session.Session {
-        if (self.session) |session| return session;
-        if (!scripting or self.session_failed) return null;
-        self.session = buzz_session.Session.init(app.world.allocator, app.process_init.*) catch |err| {
-            self.session_failed = true;
-            self.say(app.world.allocator, .failure, "Buzz couldn't start");
-            log.err("Buzz couldn't start: {t}", .{err});
-            return null;
-        };
-        return self.session;
-    }
-
     /// What the word at `cursor` in `line` could become (see `completion.complete`), in `arena`.
-    pub fn complete(self: *DevConsole, app: *App, game: Commands, arena: std.mem.Allocator, line: []const u8, cursor: usize) !completion.Completion {
+    pub fn complete(_: *const DevConsole, app: *App, game: Commands, arena: std.mem.Allocator, line: []const u8, cursor: usize) !completion.Completion {
         var names: std.ArrayList([]const u8) = .empty;
         for (builtin_commands.list) |command| try names.append(arena, command.name);
         for (game.list) |command| try names.append(arena, command.name);
-        var buzz_names: std.ArrayList([]const u8) = .empty;
-        if (scripting) {
-            try buzz_names.appendSlice(arena, buzz_session.keywords());
-            if (self.session) |session| try buzz_names.appendSlice(arena, try session.globalNames(arena));
-        }
         return completion.complete(arena, line, cursor, .{
             .commands = names.items,
-            .buzz = buzz_names.items,
             .entities = try builtin_commands.entityNames(arena, app),
             .fields = try builtin_commands.fieldPaths(arena, app.scene_access),
-            // Only walked for `run`, as Tab is pressed.
-            .scripts = if (std.mem.startsWith(u8, std.mem.trimStart(u8, line, " \t"), "run ")) try builtin_commands.scriptPaths(arena, app.process_init.io) else &.{},
         });
     }
 
@@ -266,64 +198,14 @@ pub const DevConsole = struct {
     }
 };
 
-/// What a line of Buzz reaches through `print` and `run`.
-const ScriptHost = struct {
-    console: *DevConsole,
-    app: *App,
-    game: Commands,
-    out: *std.Io.Writer,
-
-    fn host(self: *ScriptHost) buzz_session.Host {
-        return .{ .context = self, .print = print, .run = run };
-    }
-
-    fn print(context: *anyopaque, text: []const u8) void {
-        const self: *ScriptHost = @ptrCast(@alignCast(context));
-        self.out.print("{s}\n", .{text}) catch {};
-    }
-
-    /// Run `line` as a command, never as Buzz (a script runs commands, not more scripts).
-    fn run(context: *anyopaque, line: []const u8) bool {
-        const self: *ScriptHost = @ptrCast(@alignCast(context));
-        var arena = std.heap.ArenaAllocator.init(self.app.world.allocator);
-        defer arena.deinit();
-        const ran = self.console.runCommand(self.app, self.game, line, self.out, arena.allocator()) catch return false;
-        return ran == .output;
-    }
-};
-
-test "run runs a script file whose declarations stay, and a script can't run another" {
-    if (!scripting) return error.SkipZigTest;
+test "a line naming no command says so" {
     const gpa = std.testing.allocator;
-    var tmp = std.testing.tmpDir(.{});
-    defer tmp.cleanup();
-    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "mod.buzz", .data =
-        \\fun greet() > str {
-        \\    return "hi";
-        \\}
-        \\print("loaded");
-        \\run("run mod.buzz");
-    });
-    var process: buzz_session.TestProcess = undefined;
-    const init = process.init();
-    defer process.deinit();
     var app: App = undefined;
     app.world.allocator = gpa;
-    app.process_init = &init;
     var console = DevConsole{};
     defer console.deinit(gpa);
-
-    const line = try std.fmt.allocPrint(gpa, "run .zig-cache/tmp/{s}/mod.buzz", .{tmp.sub_path});
-    defer gpa.free(line);
-    console.submit(&app, .none, line);
-    console.submit(&app, .none, "greet()");
-    console.submit(&app, .none, "run missing.buzz");
-
-    var said: std.ArrayList(u8) = .empty;
-    defer said.deinit(gpa);
-    for (console.lines.items) |kept| try said.print(gpa, "{t} {s}\n", .{ kept.kind, kept.text });
-    try std.testing.expect(std.mem.indexOf(u8, said.items, "output loaded\n") != null);
-    try std.testing.expect(std.mem.indexOf(u8, said.items, "output a script can't run another script\n") != null);
-    try std.testing.expect(std.mem.indexOf(u8, said.items, "input greet()\noutput \"hi\"\n") != null);
-    try std.testing.expect(std.mem.indexOf(u8, said.items, "failure can't read missing.buzz: FileNotFound\n") != null);
+    console.submit(&app, .none, "fly faster");
+    try std.testing.expectEqual(@as(usize, 2), console.lines.items.len);
+    try std.testing.expectEqual(Line.Kind.failure, console.lines.items[1].kind);
+    try std.testing.expectEqualStrings("fly: no such command (type help)", console.lines.items[1].text);
 }

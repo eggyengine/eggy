@@ -11,7 +11,6 @@ const Line = @import("console.zig").Line;
 const Commands = @import("commands.zig").Commands;
 const prompt = @import("prompt.zig");
 const palette = @import("palette.zig").console;
-const scripting = @import("buzz_session.zig").available;
 
 const z_index = 400;
 const padding: f32 = 14;
@@ -28,7 +27,6 @@ const max_lines: usize = 6;
 const max_height: f32 = band_height + candidates_height + @as(f32, @floatFromInt(max_lines)) * line_height + padding;
 /// Where the text of a line starts, after the chevron.
 const chevron_width: f32 = 18;
-const status_width: f32 = 120;
 
 /// Route one SDL event: the toggle key shows and hides the console, and while it shows it takes
 /// every input event (the game gets none). Returns whether the event was used: the host then
@@ -114,7 +112,7 @@ pub fn draw(console: *DevConsole, app: *App, game: Commands, context: *ui.Contex
     // the keyboard while the console shows, even after a click elsewhere took it away.
     const field_x = viewport.x + padding + chevron_width - prompt.field_text_inset;
     console.buildPrompt(app, game, context, .{
-        .place = .{ .x = field_x, .y = top, .w = @max(0, viewport.x + viewport.w - padding - status_width - field_x), .h = height - 2 },
+        .place = .{ .x = field_x, .y = top, .w = @max(0, viewport.x + viewport.w - padding - field_x), .h = height - 2 },
         .z_index = z_index,
         .palette = palette,
         .take_focus = true,
@@ -140,8 +138,6 @@ const Panel = struct {
         try c.rectAlpha(bar, palette.band, 0.97);
         try c.rect(.{ .x = r.x, .y = bar.y, .w = r.w, .h = lip_height }, palette.yolk);
         try c.textIn(.{ .x = r.x + padding, .y = bar.y, .w = chevron_width, .h = bar.h }, "\u{203A}", 18, palette.yolk, .start);
-        const status = if (!scripting) "Commands only" else if (self.console.session_failed) "Buzz didn't start" else "Commands and Buzz";
-        try c.textIn(.{ .x = r.x + r.w - padding - status_width, .y = bar.y, .w = status_width, .h = bar.h }, status, 12, palette.dim, .end);
 
         // Scrolled back no further than the oldest line allows, keeping a row to say so.
         const lines = self.console.lines.items;
