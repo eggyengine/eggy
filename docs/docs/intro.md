@@ -26,8 +26,7 @@ New to Eggy? [Install it](getting-started/install.md), then make
     { type: 'link', label: 'Sound', href: '/audio', description: 'Sounds on entities and from code, in 3D or not.' },
     { type: 'link', label: 'Game UI', href: '/ui', description: 'HUDs, menus, in-world panels and translations.' },
     { type: 'link', label: 'Plugins', href: '/plugins', description: 'Install plugins, write your own, and extend the editor.' },
-    { type: 'link', label: 'Game code', href: '/game-code', description: 'Lifetimes, errors, saves and debugging.' },
-    { type: 'link', label: 'Buzz scripting', href: '/scripting', description: 'The dev console and script files.' },
+    { type: 'link', label: 'Game code', href: '/game-code', description: 'Lifetimes, errors, saves, debugging and the dev console.' },
     { type: 'link', label: 'Shipping', href: '/shipping', description: 'Export for desktop, the web and Android.' },
     { type: 'link', label: 'Reference', href: '/reference', description: 'Hooks, project files, the command line and platform support.' },
   ]}

@@ -46,7 +46,7 @@ See [Create reusable plugins](../plugins/create-plugins.md#using-plugins).
 | `icon` | `null` | Project-relative image: badged on the editor's icon, and the built game's window, Windows executable (PNG only) and Android launcher icon |
 | `metadata` | Empty fields | Executable metadata below |
 | `orientation` | `.landscape` | Which way up phones and tablets show the game: `.landscape`, `.portrait` or `.any` |
-| `dev_console` | `true` | Whether the [dev console](../scripting/scripting-api.md) opens over the game, in Play and the built game |
+| `dev_console` | `true` | Whether the [dev console](../game-code/dev-console.md) opens over the game, in Play and the built game |
 | `physics` | `.{ .precision = .f32 }` | What [physics](../physics/use-physics.md) computes in; `.f64` for worlds far bigger than a few kilometres |
 | `graphics` | Eggy's defaults | The graphics settings the game ships with, such as `.texture_filter = .nearest` for pixel art; a player's own graphics settings override them. See [graphics settings](../rendering/graphics-settings.md) |
 | `plugins` | Empty | Plugins installed from Edit > Plugins, which the game is built with |

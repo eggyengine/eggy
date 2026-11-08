@@ -4,6 +4,6 @@
   "link": {
     "type": "generated-index",
     "slug": "/game-code",
-    "description": "Lifetimes, errors, saves, and debugging the code you write."
+    "description": "Lifetimes, errors, saves, debugging, and the dev console."
   }
 }
