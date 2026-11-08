@@ -231,9 +231,7 @@ pub const Plugin = struct {
 
 ## Console commands
 
-The dev console opens as a bar along the bottom of the game with the ` key (in an exported game and in editor Play), and sits under the editor's Console panel. A line typed there runs Eggy's own commands (`help`, `clear`, `run`, `entities`, `get`, `set`, `timescale`), then the game's and its plugins', and runs anything else as [Buzz](https://buzz-lang.dev) in a session that keeps what earlier lines declared. Tab completes commands, entity names, `Component.field` paths and Buzz names.
-
-To learn Buzz scripting from the start, see [Your first Buzz script](../scripting/first-script.md).
+The [dev console](../game-code/dev-console.md) runs Eggy's commands (`help`, `clear`, `entities`, `get`, `set`, `timescale`, `physics`), then the game's and its plugins'. Declare yours in `console_commands` and run them in `consoleCommand`:
 
 ```zig
 pub const Game = struct {
@@ -265,11 +263,8 @@ pub const Game = struct {
 
 - A name is one word, and unique: two plugins can't declare the same one, nor take one of Eggy's. Both are compile errors.
 - An error returned from `consoleCommand` shows in the console as the command's failure.
-- Buzz reaches commands through `run("lives 9")`, which returns whether the command ran.
 - `app.dev_console` opens and closes the console from code (`open`, `close`, `toggle`), and its `toggle_key` changes or turns off the key.
-- `run <path.buzz>` runs a Buzz script file in the same session, so the functions and variables it declares stay for later lines, which makes it a simple way to load mods. Paths start from the working directory: the project's folder in the editor, and the folder the game was started from once built. Tab completes the paths of `.buzz` files there. A script can call `run("...")` for commands, but can't run another script.
 - The Dev console project setting (`.dev_console = false` in `eggy.zon`) turns the ` key off, in Play and the built game.
-- Buzz runs on desktop only. On the web and Android the console runs commands alone.
 - The console isn't sandboxed: a line can do anything the game can.
 
 ## Editor panels

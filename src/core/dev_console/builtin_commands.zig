@@ -8,13 +8,12 @@ const Command = commands.Command;
 const Call = commands.Call;
 
 /// Eggy's commands, in the order `help` lists them.
-pub const Builtin = enum { help, clear, run, entities, get, set, timescale, physics };
+pub const Builtin = enum { help, clear, entities, get, set, timescale, physics };
 
 /// What each `Builtin` is, as `help` shows it.
 pub const list = [_]Command{
     .{ .name = "help", .help = "List the commands, or say what one does", .usage = "[command]" },
     .{ .name = "clear", .help = "Clear the console" },
-    .{ .name = "run", .help = "Run a Buzz script file; what it declares stays for later lines", .usage = "<path.buzz>" },
     .{ .name = "entities", .help = "List the named entities, or those whose name holds some text", .usage = "[text]" },
     .{ .name = "get", .help = "Show a component's field as ZON", .usage = "<entity> <Component.field>" },
     .{ .name = "set", .help = "Set a component's field from ZON", .usage = "<entity> <Component.field> <zon>" },
@@ -22,12 +21,12 @@ pub const list = [_]Command{
     .{ .name = "physics", .help = "Show physics, or draw every collider and contact (debug on) or not", .usage = "[debug [on|off]]" },
 };
 
-/// Run `builtin` (all but `clear` and `run`, which the console carries out) on `app`. `game_commands` are
+/// Run `builtin` (all but `clear`, which the console carries out) on `app`. `game_commands` are
 /// the game's and plugins', for `help`. Bad words are reported in `call`, not returned.
 pub fn run(builtin: Builtin, app: *App, call: *Call, game_commands: []const Command) !void {
     switch (builtin) {
         .help => help(call, game_commands),
-        .clear, .run => {},
+        .clear => {},
         .entities => try listEntities(app, call),
         .get, .set => {
             const access = app.scene_access orelse return call.print("there is no game running to look into", .{});
@@ -85,11 +84,10 @@ fn help(call: *Call, game_commands: []const Command) void {
         };
         return call.print("there is no command {s}", .{name});
     }
-    // Eggy's, then the game's; anything else typed runs as Buzz.
+    // Eggy's, then the game's.
     for ([_][]const Command{ &list, game_commands }) |group| for (group) |command| {
         call.print("{s} {s}  {s}", .{ command.name, command.usage, command.help });
     };
-    call.print("Anything else runs as Buzz: print(\"hi\"), run(\"timescale 0.5\").", .{});
 }
 
 fn listEntities(app: *App, call: *Call) !void {
@@ -142,34 +140,6 @@ pub fn fieldPaths(arena: std.mem.Allocator, access: ?scene.Access) ![]const []co
     var paths: std.ArrayList([]const u8) = .empty;
     for (through.types()) |info| for (info.fields) |field| {
         try paths.append(arena, try std.fmt.allocPrint(arena, "{s}.{s}", .{ info.name, field.name }));
-    };
-    return paths.toOwnedSlice(arena);
-}
-
-/// Folders `run` doesn't look for scripts in: build output, caches and the editor's own.
-const unscripted = [_][]const u8{ "zig-out", ".zig-cache", ".git", ".eggy", "node_modules" };
-/// The most script paths offered to complete `run`.
-const max_scripts = 200;
-
-/// The `.buzz` files under the working directory, as `run` takes them, for completion, in
-/// `arena`. Unreadable folders are skipped.
-pub fn scriptPaths(arena: std.mem.Allocator, io: std.Io) ![]const []const u8 {
-    var dir = std.Io.Dir.cwd().openDir(io, ".", .{ .iterate = true }) catch return &.{};
-    defer dir.close(io);
-    var walker = try dir.walkSelectively(arena);
-    defer walker.deinit();
-    var paths: std.ArrayList([]const u8) = .empty;
-    while (walker.next(io) catch null) |entry| switch (entry.kind) {
-        .directory => {
-            for (unscripted) |name| {
-                if (std.mem.eql(u8, entry.basename, name)) break;
-            } else walker.enter(io, entry) catch {};
-        },
-        .file => if (std.mem.endsWith(u8, entry.basename, ".buzz")) {
-            try paths.append(arena, try arena.dupe(u8, entry.path));
-            if (paths.items.len == max_scripts) break;
-        },
-        else => {},
     };
     return paths.toOwnedSlice(arena);
 }

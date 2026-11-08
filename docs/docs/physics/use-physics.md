@@ -127,7 +127,7 @@ yellow a sensor.
 
 While playing, open the console with the backquote key and type `physics debug on` to draw
 every collider, and the points where they touch in red; `physics debug off` stops it, and
-`physics` alone shows what's set. From a Buzz script, `physicsDebug(true)` does the same.
+`physics` alone shows what's set.
 
 To draw them from code, for one frame:
 

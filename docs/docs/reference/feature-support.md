@@ -51,7 +51,7 @@ stages synchronous scene replacement for the end of the gameplay update.
 | [2D](../rendering/make-a-2d-game.md): `Sprite`, `SpriteAnimator`, `Tilemap` | 2D Scene panel with handles, sprite-sheet preview and tile painting | Same API |
 | [Physics](../physics/use-physics.md): `Collider`, `RigidBody`, `CollidingEntities` | 2D or 3D, `f32` or `f64`, at a fixed step; collider wireframes in the editor | Same API |
 | [Cutscenes](../animation/cutscenes.md) and rendering them to video | Camera cuts, letterbox, takeover; the Render menu writes PNG frames and, with ffmpeg, an MP4 | Cutscenes play; no Render menu |
-| [Dev console](../scripting/scripting-api.md) | Commands and [Buzz](https://buzz-lang.dev) scripts | Commands only |
+| [Dev console](../game-code/dev-console.md) | Eggy's commands and your own | Same |
 | Editor context, panels, commands, actions | Desktop only | Not run or linked |
 | Missing-backend contracts listed above | `NotImplemented` | `NotImplemented` |
 

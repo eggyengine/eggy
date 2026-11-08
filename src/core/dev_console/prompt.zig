@@ -260,7 +260,7 @@ const TestCompleter = struct {
         return .{ .context = undefined, .complete = complete };
     }
     fn complete(_: *anyopaque, arena: std.mem.Allocator, line: []const u8, cursor: usize) anyerror!completion.Completion {
-        return completion.complete(arena, line, cursor, .{ .commands = &.{ "get", "god" }, .buzz = &.{}, .entities = &.{}, .fields = &.{} });
+        return completion.complete(arena, line, cursor, .{ .commands = &.{ "get", "god" }, .entities = &.{}, .fields = &.{} });
     }
 };
 

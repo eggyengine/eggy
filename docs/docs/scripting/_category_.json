@@ -1,9 +1,0 @@
-{
-  "label": "Buzz scripting",
-  "position": 13,
-  "link": {
-    "type": "generated-index",
-    "slug": "/scripting",
-    "description": "Type Buzz into the dev console, run script files, and give scripts commands of your own."
-  }
-}
