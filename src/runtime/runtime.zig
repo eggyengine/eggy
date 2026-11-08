@@ -37,7 +37,9 @@ pub fn Runtime(comptime project: type) type {
         const Self = @This();
 
         // What the executable says about itself (`eggy.zon`'s metadata, from `addGame`), kept in
-        // a section of its own.
+        // a section of its own. Zig's own backend (Debug on x86_64) can't place an export in a
+        // section yet, so there it is only the `eggy_metadata` symbol; release builds use LLVM.
+        // ponytail: drop the backend check once the self-hosted backend implements `ExportOptions.section`.
         comptime {
             if (@hasDecl(project, "metadata_text")) {
                 const section: ?[]const u8 = switch (builtin.object_format) {
@@ -45,7 +47,8 @@ pub fn Runtime(comptime project: type) type {
                     .macho => "__DATA,__eggy_meta",
                     else => null,
                 };
-                if (section) |name| @export(&project.metadata_text, .{ .name = "eggy_metadata", .section = name });
+                const placed = if (builtin.zig_backend == .stage2_llvm) section else null;
+                if (section != null) @export(&project.metadata_text, .{ .name = "eggy_metadata", .section = placed });
             }
         }
 
