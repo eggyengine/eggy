@@ -2,6 +2,7 @@
 //! through it, and swapping in a rebuilt one while the editor keeps running. The game starts over
 //! on each swap, with an empty world, on the same window and GPU.
 const std = @import("std");
+const builtin = @import("builtin");
 const eggy = @import("eggy");
 const api = @import("game_api.zig");
 const log = std.log.scoped(.hot_reload);
@@ -447,7 +448,7 @@ pub const HotGame = struct {
         if (!self.game.export_args(state, platform, target.ptr, target.len, args)) return error.ExportArgsFailed;
     }
 
-    /// Copy the library and load the copy.
+    /// Link (or copy) the library under a name of its own and load that.
     fn open(self: *HotGame) !void {
         const gpa = self.gpa;
         var threaded: std.Io.Threaded = .init_single_threaded;
@@ -467,7 +468,14 @@ pub const HotGame = struct {
         defer gpa.free(copy_name);
         const copy_path = try std.fs.path.join(gpa, &.{ copies, copy_name });
         errdefer gpa.free(copy_path);
-        try std.Io.Dir.cwd().copyFile(self.path, std.Io.Dir.cwd(), copy_path, io, .{});
+        // A hard link costs nothing, where copying a Debug library writes hundreds of megabytes:
+        // the build installs a new file over the name rather than writing into this one. Windows
+        // can't replace a loaded library's name, so it copies.
+        if (builtin.os.tag == .windows) {
+            try std.Io.Dir.cwd().copyFile(self.path, std.Io.Dir.cwd(), copy_path, io, .{});
+        } else std.Io.Dir.cwd().hardLink(self.path, std.Io.Dir.cwd(), copy_path, io, .{}) catch {
+            try std.Io.Dir.cwd().copyFile(self.path, std.Io.Dir.cwd(), copy_path, io, .{});
+        };
         errdefer std.Io.Dir.cwd().deleteFile(io, copy_path) catch {};
 
         // Its game, if it was built for this editor.
