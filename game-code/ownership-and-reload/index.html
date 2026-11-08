@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="generator" content="Docusaurus v3.10.2">
 <title data-rh="true">Ownership, Play, and reload | Eggy</title><meta data-rh="true" name="viewport" content="width=device-width,initial-scale=1"><meta data-rh="true" name="twitter:card" content="summary_large_image"><meta data-rh="true" property="og:url" content="https://eggyengine.github.io/eggy/game-code/ownership-and-reload"><meta data-rh="true" property="og:locale" content="en"><meta data-rh="true" name="docusaurus_locale" content="en"><meta data-rh="true" name="docsearch:language" content="en"><meta data-rh="true" name="docusaurus_version" content="current"><meta data-rh="true" name="docusaurus_tag" content="docs-default-current"><meta data-rh="true" name="docsearch:version" content="current"><meta data-rh="true" name="docsearch:docusaurus_tag" content="docs-default-current"><meta data-rh="true" property="og:title" content="Ownership, Play, and reload | Eggy"><meta data-rh="true" name="description" content="What survives Play, Stop and a hot reload, and which pointers to keep."><meta data-rh="true" property="og:description" content="What survives Play, Stop and a hot reload, and which pointers to keep."><link data-rh="true" rel="icon" href="/eggy/img/icon.svg"><link data-rh="true" rel="canonical" href="https://eggyengine.github.io/eggy/game-code/ownership-and-reload"><link data-rh="true" rel="alternate" href="https://eggyengine.github.io/eggy/game-code/ownership-and-reload" hreflang="en"><link data-rh="true" rel="alternate" href="https://eggyengine.github.io/eggy/game-code/ownership-and-reload" hreflang="x-default"><script data-rh="true" type="application/ld+json">{"@context":"https://schema.org","@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"Game code","item":"https://eggyengine.github.io/eggy/game-code"},{"@type":"ListItem","position":2,"name":"Ownership, Play, and reload","item":"https://eggyengine.github.io/eggy/game-code/ownership-and-reload"}]}</script><link rel="stylesheet" href="/eggy/assets/css/styles.be64f67d.css">
-<script src="/eggy/assets/js/runtime~main.030b2706.js" defer="defer"></script>
+<script src="/eggy/assets/js/runtime~main.fd2ff430.js" defer="defer"></script>
 <script src="/eggy/assets/js/main.77ab3247.js" defer="defer"></script>
 </head>
 <body>
@@ -39,9 +39,11 @@ This keeps the transform, not all gameplay state.</p>
 <p>Pause suspends gameplay <code>update</code>, systems, and gameplay input dispatch. Drawing and
 game UI continue, while <code>editorUpdate</code> is available for tools.</p>
 <h2 class="anchor anchorTargetStickyNavbar_Vzrq" id="a-game-library-reload-restarts-plugin-state">A game-library reload restarts plugin state<a href="#a-game-library-reload-restarts-plugin-state" class="hash-link" aria-label="Direct link to A game-library reload restarts plugin state" title="Direct link to A game-library reload restarts plugin state" translate="no">​</a></h2>
-<p>When changed game code is detected on refocus, the editor builds a replacement library
-in its Build window. It preserves world entities as scene data and restores them for
-the new library.</p>
+<p>On Linux, the editor keeps Zig running beside it and rebuilds the game library as you save
+its code, swapping it in a moment later. Elsewhere, and after a change to <code>build.zig</code>,
+<code>build.zig.zon</code> or <code>eggy.zon</code>, it rebuilds when you come back to it, in its Build window.
+<strong>Rebuild</strong> in <strong>Edit &gt; Settings</strong> picks on save, on return, or off. Either way it preserves
+world entities as scene data and restores them for the new library.</p>
 <p>Old instances receive <code>deinit</code>; the new library creates instances with <code>init</code>.
 Plugin fields therefore start fresh and ECS systems must be registered again.
 Initialization should find the entities it needs instead of relying on old pointers.</p>

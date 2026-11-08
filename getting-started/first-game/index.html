@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="generator" content="Docusaurus v3.10.2">
 <title data-rh="true">Your first scene-based game | Eggy</title><meta data-rh="true" name="viewport" content="width=device-width,initial-scale=1"><meta data-rh="true" name="twitter:card" content="summary_large_image"><meta data-rh="true" property="og:url" content="https://eggyengine.github.io/eggy/getting-started/first-game"><meta data-rh="true" property="og:locale" content="en"><meta data-rh="true" name="docusaurus_locale" content="en"><meta data-rh="true" name="docsearch:language" content="en"><meta data-rh="true" name="docusaurus_version" content="current"><meta data-rh="true" name="docusaurus_tag" content="docs-default-current"><meta data-rh="true" name="docsearch:version" content="current"><meta data-rh="true" name="docsearch:docusaurus_tag" content="docs-default-current"><meta data-rh="true" property="og:title" content="Your first scene-based game | Eggy"><meta data-rh="true" name="description" content="Make Cube Runner in the editor: a scene, a component in Zig, and a camera that follows."><meta data-rh="true" property="og:description" content="Make Cube Runner in the editor: a scene, a component in Zig, and a camera that follows."><link data-rh="true" rel="icon" href="/eggy/img/icon.svg"><link data-rh="true" rel="canonical" href="https://eggyengine.github.io/eggy/getting-started/first-game"><link data-rh="true" rel="alternate" href="https://eggyengine.github.io/eggy/getting-started/first-game" hreflang="en"><link data-rh="true" rel="alternate" href="https://eggyengine.github.io/eggy/getting-started/first-game" hreflang="x-default"><script data-rh="true" type="application/ld+json">{"@context":"https://schema.org","@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"Get started","item":"https://eggyengine.github.io/eggy/getting-started"},{"@type":"ListItem","position":2,"name":"Your first game","item":"https://eggyengine.github.io/eggy/getting-started/first-game"}]}</script><link rel="stylesheet" href="/eggy/assets/css/styles.be64f67d.css">
-<script src="/eggy/assets/js/runtime~main.030b2706.js" defer="defer"></script>
+<script src="/eggy/assets/js/runtime~main.fd2ff430.js" defer="defer"></script>
 <script src="/eggy/assets/js/main.77ab3247.js" defer="defer"></script>
 </head>
 <body>
@@ -73,8 +73,9 @@ ahead as <code>-1</code>, <code>0</code>, or <code>1</code> in its <code>x</code
 Multiplying the speed by <code>app.time.delta_s</code> keeps it in metres per second as the
 frame rate changes. The mouse movement turns the cube while the right button is
 held. <code>eggy.findNamed</code> finds Camera so its transform can follow the player.</p>
-<p>Save the file and go back to the editor. It rebuilds your game in the Build progress window,
-then swaps it in without closing the editor. If the build fails, the Console says why.</p>
+<p>Save the file. The editor rebuilds your game and swaps it in without closing (on Linux as you
+save; elsewhere when you go back to it, in the Build progress window). If the build fails, the
+Console says why.</p>
 <h2 class="anchor anchorTargetStickyNavbar_Vzrq" id="make-the-cube-a-player">6. Add the player component and try the game<a href="#make-the-cube-a-player" class="hash-link" aria-label="Direct link to 6. Add the player component and try the game" title="Direct link to 6. Add the player component and try the game" translate="no">​</a></h2>
 <p>Select Player in the Hierarchy, press Add component, and add Player (under Game, or type its name). Its fields
 come from the struct, with their defaults. You can change them here:</p>
