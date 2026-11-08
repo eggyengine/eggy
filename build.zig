@@ -71,18 +71,18 @@ pub fn build(b: *std.Build) void {
     const core_tests = addCoreTests(b, engine);
     test_step.dependOn(core_tests);
     // The plugins inside Eggy, each on its own.
-    for (engine.plugins) |plugin| test_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = plugin, .use_llvm = true })).step);
+    for (engine.plugins) |plugin| test_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = plugin })).step);
     // The whole editor, which Eggy's own executable leaves out, still has to compile.
     if (b.top_level_steps.get("check-editor")) |check| test_step.dependOn(&check.step);
-    const runtime_tests = &b.addRunArtifact(b.addTest(.{ .root_module = b.modules.get("eggy_runtime").?, .use_llvm = true })).step;
+    const runtime_tests = &b.addRunArtifact(b.addTest(.{ .root_module = b.modules.get("eggy_runtime").? })).step;
     b.step("test-runtime", "Run eggy_runtime's tests").dependOn(runtime_tests);
     test_step.dependOn(runtime_tests);
     if (b.modules.get("eggy_editor")) |editor| {
-        const editor_tests = &b.addRunArtifact(b.addTest(.{ .root_module = editor, .use_llvm = true })).step;
+        const editor_tests = &b.addRunArtifact(b.addTest(.{ .root_module = editor })).step;
         b.step("test-editor", "Run eggy_editor's tests").dependOn(editor_tests);
         test_step.dependOn(editor_tests);
         // Importing models through `eggy_assimp`, for real.
-        if (editor.import_table.get("eggy_model_import")) |model_import| editor_tests.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = model_import, .use_llvm = true })).step);
+        if (editor.import_table.get("eggy_model_import")) |model_import| editor_tests.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = model_import })).step);
 
         // Hot reload, for real: load the empty game's library, run it, swap it, and unload it.
         const library_options = b.addOptions();
@@ -99,7 +99,7 @@ pub fn build(b: *std.Build) void {
                 .{ .name = "test_library", .module = library_options.createModule() },
                 .{ .name = "better_dynlib", .module = b.dependency("better_dynlib", .{ .target = target }).module("better_dynlib") },
             },
-        }), .use_llvm = true })).step;
+        }) })).step;
         editor_tests.dependOn(hot_reload_tests);
     }
 }
@@ -353,7 +353,7 @@ fn addProject(b: *std.Build, engine: *std.Build, emscripten: Emscripten, target:
     // editor is left out of it, but still compiles here against the empty project
     // (`check-editor`, part of `test`), so its errors surface without building a game.
     const editor_app = if (launcher) blk: {
-        const check = b.addExecutable(.{ .name = "eggy_project_editor", .root_module = editor_module, .use_llvm = true });
+        const check = b.addExecutable(.{ .name = "eggy_project_editor", .root_module = editor_module });
         b.step("check-editor", "Compile a project's editor against the empty project").dependOn(&check.step);
         const launcher_module = b.createModule(.{
             .root_source_file = engine.path("src/editor/launcher_main.zig"),
@@ -455,6 +455,9 @@ fn addPreferenceFiles(b: *std.Build, project_source: []const u8) std.Build.LazyP
 /// The game and its plugins (`project`) as a shared library for the editor, which loads it and
 /// swaps in a rebuilt one while it runs (see `src/editor/hot_reload`).
 /// `sources` are the modules whose field docs the Inspector shows (`src/build/field_docs.zig`).
+/// Zig picks the backend, as it does for the editor: the two must agree, since Eggy's types cross
+/// between them as pointers (a self-hosted library under an LLVM editor corrupts its allocator).
+/// In Debug on x86_64 that is the self-hosted backend, which `--watch -fincremental` needs.
 fn addGameLibrary(b: *std.Build, engine: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builtin.Optimize, project: *std.Build.Module, sources: []const *std.Build.Module, name: []const u8) *std.Build.Step.Compile {
     const module = b.createModule(.{
         .root_source_file = engine.path("src/editor/hot_reload/library.zig"),
@@ -468,7 +471,7 @@ fn addGameLibrary(b: *std.Build, engine: *std.Build, target: std.Build.ResolvedT
             .{ .name = "eggy_field_docs", .module = field_docs.module(b, sources) },
         },
     });
-    return b.addLibrary(.{ .linkage = .dynamic, .name = b.fmt("{s}_game", .{name}), .root_module = module, .use_llvm = true });
+    return b.addLibrary(.{ .linkage = .dynamic, .name = b.fmt("{s}_game", .{name}), .root_module = module });
 }
 
 /// The modules and dependencies Eggy's own tests need.
@@ -899,7 +902,7 @@ const DesktopApp = struct { install: *std.Build.Step.InstallArtifact, run: *std.
 /// Executable `name` from `root_module`: installed with `zig build` (with its `.pdb` on Windows
 /// when `with_pdb`), and runnable on its own.
 fn addDesktopApp(b: *std.Build, target: std.Build.ResolvedTarget, root_module: *std.Build.Module, name: []const u8, with_pdb: bool) DesktopApp {
-    const exe = b.addExecutable(.{ .name = name, .root_module = root_module, .use_llvm = true });
+    const exe = b.addExecutable(.{ .name = name, .root_module = root_module });
     const install = b.addInstallArtifact(exe, .{ .pdb_dir = if (with_pdb) .default else .disabled });
     b.getInstallStep().dependOn(&install.step);
 
@@ -914,7 +917,7 @@ fn addDesktopApp(b: *std.Build, target: std.Build.ResolvedTarget, root_module: *
 /// `zig build test-core`: the engine's tests, the 3D scene's, and the icon tool's.
 fn addCoreTests(b: *std.Build, engine: Engine) *std.Build.Step {
     const step = b.step("test-core", "Run eggy's core tests");
-    step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = engine.eggy, .use_llvm = true })).step);
+    step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = engine.eggy })).step);
     const viewport = b.createModule(.{
         .root_source_file = b.path("src/core/viewport3d.zig"),
         .target = engine.eggy.resolved_target,
@@ -931,10 +934,10 @@ fn addCoreTests(b: *std.Build, engine: Engine) *std.Build.Step {
             .{ .name = "eggy_assets", .module = engine.assets },
         },
     });
-    step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = viewport, .use_llvm = true })).step);
-    step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = engine.assets, .use_llvm = true })).step);
+    step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = viewport })).step);
+    step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = engine.assets })).step);
     // The build tool that makes a Windows game's executable icon.
     const ico = b.createModule(.{ .root_source_file = b.path("src/build/ico.zig"), .target = engine.eggy.resolved_target, .optimize = engine.eggy.optimize, .imports = &.{.{ .name = "eggy_assets", .module = engine.assets }} });
-    step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = ico, .use_llvm = true })).step);
+    step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = ico })).step);
     return step;
 }
