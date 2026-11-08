@@ -1,12 +1,11 @@
 ---
-slug: /guides/editor-cli
-sidebar_position: 3
 title: Editor CLI and build commands
+sidebar_position: 3
+sidebar_label: Command line
 ---
 
-# Editor CLI and build commands
-
-Run `eggy_editor`, or your game's `<name>_editor`, without arguments to open the GUI.
+Run `eggy_editor` (installed as `eggy` on Linux and macOS), or your game's `<name>_editor`,
+without arguments to open the GUI.
 `--project <directory>` explicitly opens a project in that GUI.
 The following subcommands run without a window or graphics device:
 
@@ -16,8 +15,8 @@ The following subcommands run without a window or graphics device:
 | `new` | Create a project and build its editor |
 | `export` | Package a `fast` runtime as a directory and ZIP |
 
-For a project-creation walkthrough, use [Set up a project](../how-to/set-up-project.md).
-For distribution steps, use [Build and distribute a game](../how-to/build-and-export.md).
+For a project-creation walkthrough, see [Install Eggy](../getting-started/install.md).
+For distribution steps, use [Build and distribute a game](../shipping/build-and-export.md).
 
 ## Prompts and automation
 
@@ -86,7 +85,7 @@ Without an editor binary,
 `curl -fsSL https://raw.githubusercontent.com/eggyengine/eggy/main/scripts/get-started.sh | bash`
 (or `irm https://raw.githubusercontent.com/eggyengine/eggy/main/scripts/get-started.ps1 | iex`
 from PowerShell on Windows) installs Zig 0.17 and the editor first; see
-[Set up a project](../how-to/set-up-project.md).
+[Install Eggy](../getting-started/install.md).
 
 ## `export` {#export-a-game}
 
@@ -132,7 +131,7 @@ Run these from the game's package directory. The package must call `eggy.addGame
 Export builds the runtime optimized for `fast` unless `-Dexport-optimize` says otherwise, and
 skips the ZIP with `-Dexport-zip=false`. It needs a scene from `-Dscene` or
 `eggy.zon`'s `.default_scene`; it does not use the editor's last-open scene.
-See [Startup scene selection](project-configuration.md#startup-scene-selection).
+See [Startup scene selection](./project-configuration.md#startup-scene-selection).
 
 ## Targets and SDKs
 
@@ -156,5 +155,5 @@ The CLI exposes no SDK flags: set `EMSDK`, `ANDROID_HOME`/`ANDROID_SDK_ROOT` and
 Eggy's own checkout accepts `-Demsdk` and `-Dandroid-sdk` overrides.
 macOS builds on a Mac use the SDK `xcrun` reports. Elsewhere they require `--sysroot`
 (or `-Dmacos-sdk` in Eggy's own checkout) and default to `~/SDKs`; that SDK is not downloaded.
-See [Android and Web export details](../how-to/build-and-export.md#export-for-web-or-android).
-See [Feature support](feature-support.md#capability-support) before choosing a web target.
+See [Android and Web export details](../shipping/build-and-export.md#export-for-web-or-android).
+See [Feature support](./feature-support.md#capability-support) before choosing a web target.

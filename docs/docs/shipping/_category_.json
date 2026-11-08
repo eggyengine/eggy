@@ -1,0 +1,9 @@
+{
+  "label": "Shipping",
+  "position": 14,
+  "link": {
+    "type": "generated-index",
+    "slug": "/shipping",
+    "description": "Build your game and export it for desktop, the web and Android."
+  }
+}

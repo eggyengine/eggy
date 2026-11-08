@@ -1,0 +1,9 @@
+{
+  "label": "Scenes and assets",
+  "position": 4,
+  "link": {
+    "type": "generated-index",
+    "slug": "/scenes",
+    "description": "Bring files into a project, load them from code, and place scenes inside scenes."
+  }
+}

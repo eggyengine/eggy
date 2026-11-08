@@ -1,0 +1,9 @@
+{
+  "label": "Game code",
+  "position": 12,
+  "link": {
+    "type": "generated-index",
+    "slug": "/game-code",
+    "description": "Lifetimes, errors, saves, and debugging the code you write."
+  }
+}

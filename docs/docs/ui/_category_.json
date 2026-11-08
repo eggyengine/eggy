@@ -1,0 +1,9 @@
+{
+  "label": "Game UI",
+  "position": 10,
+  "link": {
+    "type": "generated-index",
+    "slug": "/ui",
+    "description": "HUDs, menus and in-world panels, from code or the UI Designer, in any language."
+  }
+}

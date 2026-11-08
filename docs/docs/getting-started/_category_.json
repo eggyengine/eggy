@@ -1,0 +1,9 @@
+{
+  "label": "Get started",
+  "position": 2,
+  "link": {
+    "type": "generated-index",
+    "slug": "/getting-started",
+    "description": "Install Eggy, make a first game in the editor or in code, and see how a game runs."
+  }
+}

@@ -1,9 +1,8 @@
 ---
-sidebar_position: 1
 title: Plugin hooks and declarations
+sidebar_position: 1
+sidebar_label: Plugin hooks
 ---
-
-# Plugin hooks and declarations
 
 `Game` and `Plugin` have the same interface. Eggy finds public declarations by name
 with `@hasDecl`; omit any hook you do not need. Declare them inside `pub const Game`
@@ -52,7 +51,7 @@ pub const Plugin = struct {
 | `deinit` | Before a started instance is discarded, including shutdown, restarts, and reloads. Release the instance's resources; Eggy owns the App and world. |
 | `event` | Gameplay input not consumed by UI, plus platform/window events. In the editor, only while playing and not paused. |
 | `update` | Each running frame, before ECS Update systems and rendering. In the editor, only while playing and not paused. |
-| `animationEvent` | Once for each `event` key a playing clip passed this frame, after the ECS Update systems and the animation step, in the order passed. `event.name` is the key's text, `event.animator` the entity playing the clip and `event.target` the one the track names. The name belongs to the clip; copy it to keep it. In the editor, only while playing. See [Cutscenes](../guides/cutscenes.md). |
+| `animationEvent` | Once for each `event` key a playing clip passed this frame, after the ECS Update systems and the animation step, in the order passed. `event.name` is the key's text, `event.animator` the entity playing the clip and `event.target` the one the track names. The name belongs to the clip; copy it to keep it. In the editor, only while playing. See [Cutscenes](../animation/cutscenes.md). |
 | `draw` | After the scene and before `gameUi`, including paused editor Play. The borrowed target is outside a render pass; Eggy submits the frame. |
 | `gameUi` | After scene/custom drawing, including paused editor Play. Builds Weeoui game content. |
 | `uiEvent` | After built-in game UI, before gameplay. Return `true` to consume the event. Also runs during paused editor Play. |
@@ -86,7 +85,7 @@ order. `uiEvent` runs in reverse visual order and stops at the first `true`.
 If `init` fails, Eggy stops the instances that already started and aborts startup.
 An error ends the current hook dispatch, skipping later plugins in that dispatch.
 Uncaught runtime hook errors are fatal; the editor logs game-library hook errors and
-keeps running. See [Diagnose and handle errors](../how-to/handle-errors.md).
+keeps running. See [Diagnose and handle errors](../game-code/handle-errors.md).
 
 ## Optional declarations
 
@@ -142,7 +141,7 @@ component still needed by another. `Mesh`, `Camera`, `SceneLight`, `Sprite`, `Ti
 Reference slots accept matching entities/files by drag-and-drop; the x clears a slot.
 `EntityRef(T)` requires component `T`, `EntityRef(void)` accepts any entity, and
 `AssetRef(kind)` accepts the named file kind. Reference fields also work inside tagged
-unions. See [Find entities safely](../how-to/render-scene.md#find-entities-safely).
+unions. See [Find entities safely](../rendering/meshes-and-cameras.md#find-entities-safely).
 
 ## UI widgets
 
@@ -160,7 +159,7 @@ the widget's index and a borrowed `eggy.plugins.UiWidgetDraw`:
 
 It runs for screens, billboards and the designer's preview, including while the plugin is
 not playing. An error is logged once, and the node is left empty. A disabled plugin's widgets
-draw nothing. See [Build HUDs and billboards with UI scenes](../guides/ui-scenes.md).
+draw nothing. See [Build HUDs and billboards with UI scenes](../ui/ui-scenes.md).
 
 ## Top bar and status bar
 
@@ -234,7 +233,7 @@ pub const Plugin = struct {
 
 The dev console opens as a bar along the bottom of the game with the ` key (in an exported game and in editor Play), and sits under the editor's Console panel. A line typed there runs Eggy's own commands (`help`, `clear`, `run`, `entities`, `get`, `set`, `timescale`), then the game's and its plugins', and runs anything else as [Buzz](https://buzz-lang.dev) in a session that keeps what earlier lines declared. Tab completes commands, entity names, `Component.field` paths and Buzz names.
 
-To learn Buzz scripting from the start, see [Your first Buzz script](../guides/buzz/first-script.md).
+To learn Buzz scripting from the start, see [Your first Buzz script](../scripting/first-script.md).
 
 ```zig
 pub const Game = struct {
@@ -443,4 +442,4 @@ the name exists. Templates remain available when the plugin is disabled. File cr
 participates in Undo/Redo. Code/text files open in the configured editor; `.inmap.zon`
 opens Eggy's Input Map editor.
 
-For panel, command, and file-editing workflows, use [Extend the editor](../how-to/extend-editor.md).
+For panel, command, and file-editing workflows, use [Extend the editor](../plugins/extend-editor.md).

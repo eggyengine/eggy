@@ -1,0 +1,9 @@
+{
+  "label": "Plugins",
+  "position": 11,
+  "link": {
+    "type": "generated-index",
+    "slug": "/plugins",
+    "description": "Install plugins, write your own, and add tools to the editor."
+  }
+}

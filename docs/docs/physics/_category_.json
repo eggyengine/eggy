@@ -1,0 +1,9 @@
+{
+  "label": "Physics",
+  "position": 7,
+  "link": {
+    "type": "generated-index",
+    "slug": "/physics",
+    "description": "Colliders, rigid bodies and collisions, and humpty, the physics library under them."
+  }
+}

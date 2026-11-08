@@ -1,0 +1,9 @@
+{
+  "label": "The editor",
+  "position": 3,
+  "link": {
+    "type": "generated-index",
+    "slug": "/editor",
+    "description": "Find your way around the editor: tabs, the Scene panel and the Hierarchy."
+  }
+}

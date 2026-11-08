@@ -1,0 +1,99 @@
+---
+title: Install plugins from the editor
+sidebar_position: 1
+description: Find, read, install, update and remove plugins from Edit > Plugins.
+---
+
+Plugins add features to your game or to the editor. **Edit > Plugins...** finds them,
+shows their read-me, and installs them into your project. A new project starts with only
+**Player Controller** (see [First- and third-person players](../input/player-controller.md));
+nothing else is installed until you choose to.
+
+## Find a plugin
+
+The Plugins window has three pages:
+
+- **Installed** lists the plugins this project installed from the window, each with its
+  switch. Choosing one shows it beside the list: where it comes from, its preferences, and
+  its read-me. Plugins your `build.zig` adds by hand aren't listed.
+- **Made by Eggy** lists the plugins that ship with Eggy, such as **Git** (stage, commit,
+  pull and push from the editor), **Frame Stats** (frames per second in a corner of the
+  game) and **Discord** (what you're working on as your Discord status).
+- **From Elsewhere** fetches any plugin by its `eggy.zon`. Paste its address, or the
+  GitHub page of its folder, and press **Fetch**; or press **Folder...** and choose a
+  plugin's folder on your computer.
+
+The box above the pages keeps the plugins whose name or description has what you type.
+You can also drop a plugin's `eggy.zon` onto the editor: the Plugins window opens on that
+plugin.
+
+## Read it, then install it
+
+**Read Me** opens a plugin's read-me, with its version and the repository it comes from.
+A plugin without a read-me says "No README.md was provided." Press **Back** to return
+without installing anything.
+
+Press **Install** to add it. The editor fetches the plugin's package, checks it, saves it
+into your `build.zig.zon`, lists it in your `eggy.zon`, then rebuilds the game with it.
+A plugin from a folder on your computer isn't copied: your `build.zig.zon` points at its
+folder, so the game builds whatever is there, edits included. Edit > Undo takes the
+install back.
+
+When a newer version of a plugin you have is found, its button reads **Update to
+1.2.0**: choosing an installed plugin from an address reads it again from there.
+
+## Updates
+
+The editor checks plugins you installed from an address for updates. When your project
+opens, and every hour after, it reads each one's `eggy.zon` again from where you installed
+it. When its `.version` is higher, the editor asks before installing it, showing the new
+version and where it comes from, since whoever controls that address could publish anything.
+**Update** installs it, passing the same checks as an install, then rebuilds the game.
+**Skip** leaves the plugin as it is until a newer version comes out or the editor restarts.
+Edit > Undo takes an update back.
+
+Plugins installed from a folder on your computer are never updated for you: that folder is
+yours to change. Plugins made by Eggy update when you upgrade Eggy (File > Upgrade Editor).
+To stop the checks, turn off **Update plugins** in Edit > Settings.
+
+## Turn it off, or uninstall it
+
+**Disable** turns an installed plugin off without removing anything: the game runs
+without it until you press **Enable**. Settings > Plugins has the same switch.
+
+Once a plugin is off, **Uninstall** appears beside it. Uninstalling takes the plugin out of
+your `eggy.zon` and its package out of your `build.zig.zon`, then rebuilds the game. When
+other installed plugins come from the same package, the package stays for them; remove it
+from `build.zig.zon` yourself once you want none of them. Plugins made by Eggy ship inside
+Eggy, so uninstalling one only takes it off your project. Edit > Undo takes an uninstall
+back.
+
+## Why an install can be refused
+
+An Eggy plugin names the repository it is hosted in and its package's fingerprint (the
+`.fingerprint` in its `build.zig.zon`). The editor installs it only when:
+
+- the `eggy.zon` was read from inside that repository, so a copy hosted elsewhere can't
+  pose as it;
+- the package it fetched has that fingerprint, so a different package can't stand in for
+  it;
+- an update names the same repository and fingerprint as the version you installed.
+
+Once installed, Zig pins the package's exact contents in `build.zig.zon`, so a later
+change upstream can't slip into your build.
+
+:::caution
+
+These checks prove a plugin is the one its repository publishes, not that the code is safe:
+read what a plugin does before you install it.
+
+:::
+
+## Dev plugins
+
+Some plugins help you make the game rather than being part of it. Git is one. A plugin
+marked **Dev plugin** runs in the editor and in `zig build run-runtime`, but File > Export
+and `zig build export` leave it out of the game you ship. A plugin marked **Library
+plugin** is part of the game and ships with it.
+
+To make and publish your own, see [Create reusable plugins](./create-plugins.md#share-the-plugin).

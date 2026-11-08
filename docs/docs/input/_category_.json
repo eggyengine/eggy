@@ -1,0 +1,9 @@
+{
+  "label": "Input and time",
+  "position": 8,
+  "link": {
+    "type": "generated-index",
+    "slug": "/input",
+    "description": "Read devices, name your controls, time things, and drop in a first- or third-person player."
+  }
+}

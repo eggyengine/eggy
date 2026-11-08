@@ -1,9 +1,9 @@
 {
   "label": "Reference",
-  "position": 4,
+  "position": 99,
   "link": {
     "type": "generated-index",
     "slug": "/reference",
-    "description": "Look up plugin hooks, project files, CLI options, build commands, and feature support. Individual function contracts and examples are in API reference in the navigation bar."
+    "description": "Plugin hooks, project files, the editor's command line, and what each platform supports. Function contracts are in the API reference in the navigation bar."
   }
 }

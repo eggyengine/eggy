@@ -1,0 +1,9 @@
+{
+  "label": "Rendering",
+  "position": 5,
+  "link": {
+    "type": "generated-index",
+    "slug": "/rendering",
+    "description": "Meshes, cameras, materials, lights, post-processing, shaders, 2D and graphics settings."
+  }
+}

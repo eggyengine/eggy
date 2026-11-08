@@ -1,9 +1,8 @@
 ---
-sidebar_position: 2
 title: Project configuration and files
+sidebar_position: 2
+sidebar_label: Project files
 ---
-
-# Project configuration and files
 
 ## Package layout
 
@@ -21,7 +20,7 @@ title: Project configuration and files
 
 A package can have both a game and a reusable plugin. Their `addGame` and `addPlugin`
 calls must request Eggy with identical dependency arguments so they share one engine.
-See [Create reusable plugins](../how-to/create-plugins.md#using-plugins).
+See [Create reusable plugins](../plugins/create-plugins.md#using-plugins).
 
 ## `eggy.zon`
 
@@ -46,14 +45,17 @@ See [Create reusable plugins](../how-to/create-plugins.md#using-plugins).
 | `default_scene` | `null` | Project-relative startup scene; exports require this or an explicit scene |
 | `icon` | `null` | Project-relative image: badged on the editor's icon, and the built game's window, Windows executable (PNG only) and Android launcher icon |
 | `metadata` | Empty fields | Executable metadata below |
-| `graphics` | Eggy's defaults | The graphics settings the game ships with, such as `.texture_filter = .nearest` for pixel art; a player's own graphics settings override them. See [render quality](../how-to/render-quality.md) |
+| `orientation` | `.landscape` | Which way up phones and tablets show the game: `.landscape`, `.portrait` or `.any` |
+| `dev_console` | `true` | Whether the [dev console](../scripting/scripting-api.md) opens over the game, in Play and the built game |
+| `physics` | `.{ .precision = .f32 }` | What [physics](../physics/use-physics.md) computes in; `.f64` for worlds far bigger than a few kilometres |
+| `graphics` | Eggy's defaults | The graphics settings the game ships with, such as `.texture_filter = .nearest` for pixel art; a player's own graphics settings override them. See [graphics settings](../rendering/graphics-settings.md) |
 | `plugins` | Empty | Plugins installed from Edit > Plugins, which the game is built with |
-| `plugin` | `null` | This folder's plugin, for others to install; see [Share the plugin](../how-to/create-plugins.md#share-the-plugin) |
+| `plugin` | `null` | This folder's plugin, for others to install; see [Share the plugin](../plugins/create-plugins.md#share-the-plugin) |
 
 File > Project Settings opens the General page of Edit > Settings and edits
 this file, including the startup scene, the icon and the graphics defaults.
 
-### Installed plugins
+## Installed plugins
 
 The Plugins window writes each plugin it installs as an entry of `.plugins`:
 
@@ -82,7 +84,7 @@ The Plugins window writes each plugin it installs as an entry of `.plugins`:
 
 `addGame` builds these after the plugins its `.plugins` and `.dev_plugins` options name.
 
-### Executable metadata
+## Executable metadata
 
 | Field | Value |
 | --- | --- |
@@ -106,7 +108,7 @@ version information. Other builds keep Eggy's metadata in an executable section.
 
 The CLI validates that its selected scene exists under `resources/` and leaves
 `.default_scene` unchanged. The GUI export dialog saves its scene selection.
-See [Build and distribute a game](../how-to/build-and-export.md).
+See [Build and distribute a game](../shipping/build-and-export.md).
 
 ## Editor project discovery
 
@@ -145,7 +147,7 @@ module names identify plugins, independently of Zig type names. Disabled plugins
 not run, but their settings and component declarations remain known.
 
 Runtime builds embed project plugin preferences and enabled state. Preferences are
-configuration, not gameplay saves; keep progress in [game-save slots](../how-to/save-games.md).
+configuration, not gameplay saves; keep progress in [game-save slots](../game-code/save-games.md).
 
-See [Map player controls](../how-to/map-input.md) for input assets and overrides, and
-[Create reusable plugins](../how-to/create-plugins.md#preferences) for a preference declaration.
+See [Map player controls](../input/map-input.md) for input assets and overrides, and
+[Create reusable plugins](../plugins/create-plugins.md#preferences) for a preference declaration.
