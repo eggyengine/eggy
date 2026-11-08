@@ -264,8 +264,8 @@ in Edit > Plugins and that its declared components and settings appear in the
 Inspector and Edit > Settings. Press Play to run gameplay initialization and systems;
 entities spawned by `init` are gameplay entities, not saved scene content.
 
-Change plugin code and refocus the editor. It should rebuild the game library and start
-new plugin state. See [Ownership, Play, and reload](../game-code/ownership-and-reload.md)
+Change plugin code and save it (or refocus the editor, off Linux). It should rebuild the game
+library and start new plugin state. See [Ownership, Play, and reload](../game-code/ownership-and-reload.md)
 before retaining IDs or allocating resources in a plugin.
 
 ## Related reference

@@ -22,7 +22,9 @@ pub const Editor = struct {
     assets_view: enum { list, grid } = .list,
     code_editor: @import("../code_editor.zig").Choice = .vscode,
     autosave_seconds: u32 = 60,
-    rebuild_on_focus: bool = true,
+    /// When the game's code rebuilds: as it is saved (`hot_reload/watch_build.zig`, where
+    /// `supported`; elsewhere as `on_return`), when the editor comes back into focus, or never.
+    rebuild: enum { on_save, on_return, off } = .on_save,
     update_plugins: bool = true,
     /// Where File > Upgrade Editor gets newer Eggy from (see `projects/eggy_source.zig`).
     eggy_source: []const u8 = @import("../projects/eggy_source.zig").default,
@@ -34,7 +36,7 @@ pub const Editor = struct {
     /// The Settings window's cards: how it looks, how it works, Play, and logging.
     pub const groups = .{
         .{ "theme", "assets_view", "code_editor" },
-        .{ "autosave_seconds", "rebuild_on_focus", "update_plugins", "eggy_source" },
+        .{ "autosave_seconds", "rebuild", "update_plugins", "eggy_source" },
         .{"stop_play_key"},
         .{ "log_level", "show_debug_logs" },
     };
@@ -46,7 +48,7 @@ pub const Editor = struct {
         .code_editor = "What opens code files from Assets.",
         .autosave_seconds = "0 turns it off.",
         .theme = "System follows your desktop.",
-        .rebuild_on_focus = "When you come back after changing the project's code.",
+        .rebuild = "On save keeps Zig running beside the editor, which takes about 2 GB of memory. Linux only; elsewhere it rebuilds on return.",
         .update_plugins = "Asks before installing each update.",
         .eggy_source = "A Git repository's https address, with # and a branch, tag or commit.",
         .show_debug_logs = "In the Console, from the start.",
@@ -75,7 +77,7 @@ pub fn editor(store: *const Store) Editor {
 /// The result lives in `arena`; allocation failure propagates.
 ///
 /// ```zig
-/// const title = try displayName(arena, "rebuild_on_focus"); // Existing arena allocator.
+/// const title = try displayName(arena, "autosave_seconds"); // Existing arena allocator.
 /// ```
 pub fn displayName(arena: std.mem.Allocator, key: []const u8) ![]const u8 {
     const name = try arena.dupe(u8, key);

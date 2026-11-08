@@ -52,9 +52,11 @@ game UI continue, while `editorUpdate` is available for tools.
 
 ## A game-library reload restarts plugin state
 
-When changed game code is detected on refocus, the editor builds a replacement library
-in its Build window. It preserves world entities as scene data and restores them for
-the new library.
+On Linux, the editor keeps Zig running beside it and rebuilds the game library as you save
+its code, swapping it in a moment later. Elsewhere, and after a change to `build.zig`,
+`build.zig.zon` or `eggy.zon`, it rebuilds when you come back to it, in its Build window.
+**Rebuild** in **Edit > Settings** picks on save, on return, or off. Either way it preserves
+world entities as scene data and restores them for the new library.
 
 Old instances receive `deinit`; the new library creates instances with `init`.
 Plugin fields therefore start fresh and ECS systems must be registered again.

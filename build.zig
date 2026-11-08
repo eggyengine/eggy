@@ -385,6 +385,8 @@ fn addProject(b: *std.Build, engine: *std.Build, emscripten: Emscripten, target:
     editor_step.dependOn(&install_library.step);
     editor_app.run.step.dependOn(&install_library.step);
     all_step.dependOn(&install_library.step);
+    // The library alone, which the editor's hot-reload watcher rebuilds (`hot_reload/watch_build.zig`).
+    b.step("game-library", "Build the game library the editor loads").dependOn(&install_library.step);
     return library;
 }
 

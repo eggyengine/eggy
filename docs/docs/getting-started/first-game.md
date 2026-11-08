@@ -138,8 +138,9 @@ Multiplying the speed by `app.time.delta_s` keeps it in metres per second as the
 frame rate changes. The mouse movement turns the cube while the right button is
 held. `eggy.findNamed` finds Camera so its transform can follow the player.
 
-Save the file and go back to the editor. It rebuilds your game in the Build progress window,
-then swaps it in without closing the editor. If the build fails, the Console says why.
+Save the file. The editor rebuilds your game and swaps it in without closing (on Linux as you
+save; elsewhere when you go back to it, in the Build progress window). If the build fails, the
+Console says why.
 
 ## 6. Add the player component and try the game {#make-the-cube-a-player}
 

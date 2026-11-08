@@ -70,6 +70,16 @@ pub fn editorFolders(gpa: std.mem.Allocator) !struct { resources_dir: []u8, engi
     return .{ .resources_dir = resources_dir, .engines_dir = try std.fs.path.join(gpa, &.{ pref, "engines" }) };
 }
 
+/// The Zig cache every project's build shares, in the data folder beside `engines`: projects
+/// on one Eggy then compile its C libraries, shaders and build script once between them.
+/// Named `.zig-cache` so build output from it reads as cache paths, as a project's own would.
+/// ponytail: a `zig build` run by hand still uses the project's own `.zig-cache`; never pruned.
+/// `engines_dir` is the data folder's `engines` (`editorFolders`); null when it has no parent.
+pub fn sharedCache(arena: std.mem.Allocator, engines_dir: []const u8) !?[]const u8 {
+    const data_dir = std.fs.path.dirname(engines_dir) orelse return null;
+    return try std.fs.path.join(arena, &.{ data_dir, ".zig-cache" });
+}
+
 /// A commit of an Eggy source's repository (see `eggy_source`).
 pub const SourceCommit = struct {
     /// The repository's http(s) address.
@@ -665,7 +675,7 @@ pub const Job = struct {
         if (progress_fds == null) try argv.appendSlice(gpa, &.{ "zig", "build" });
         try argv.appendSlice(gpa, steps);
         try argv.appendSlice(gpa, &.{ "--color", "off", "--summary", "none" });
-        if (try self.sharedCache(arena)) |cache| try argv.appendSlice(gpa, &.{ "--cache-dir", cache });
+        if (try sharedCache(arena, self.engines_dir)) |cache| try argv.appendSlice(gpa, &.{ "--cache-dir", cache });
         const shown = try std.mem.join(gpa, " ", steps);
         defer gpa.free(shown);
         self.say("$ zig build {s} --summary none   (in {s})", .{ shown, self.dir });
@@ -719,7 +729,7 @@ pub const Job = struct {
         std.Io.Dir.cwd().createDirPath(io_, std.fs.path.dirname(file).?) catch return null;
         std.Io.Dir.cwd().deleteFile(io_, file) catch {};
         // The same cache as the build, so build.zig compiles once for both.
-        const cache_args: []const []const u8 = if (self.sharedCache(arena) catch null) |cache| &.{ "--cache-dir", cache } else &.{};
+        const cache_args: []const []const u8 = if (sharedCache(arena, self.engines_dir) catch null) |cache| &.{ "--cache-dir", cache } else &.{};
         const argv = std.mem.concat(arena, []const u8, &.{ &.{ "/bin/sh", "-c", "export EGGY_RUNNER_FILE=\"$1\"; shift; exec zig build --help \"$@\"", "sh", file }, cache_args }) catch return null;
         var process = export_process.Process.spawn(io_, .{
             .argv = argv,
@@ -740,15 +750,6 @@ pub const Job = struct {
         var lines = std.mem.tokenizeScalar(u8, text, '\n');
         while (lines.next()) |line| args.append(arena, line) catch return null;
         return if (args.items.len > 0) args.items else null;
-    }
-
-    /// The Zig cache every project's build shares, in the data folder beside `engines`: projects
-    /// on one Eggy then compile its C libraries, shaders and build script once between them.
-    /// Named `.zig-cache` so build output from it reads as cache paths, as a project's own would.
-    /// ponytail: a `zig build` run by hand still uses the project's own `.zig-cache`; never pruned.
-    fn sharedCache(self: *const Job, arena: std.mem.Allocator) !?[]const u8 {
-        const data_dir = std.fs.path.dirname(self.engines_dir) orelse return null;
-        return try std.fs.path.join(arena, &.{ data_dir, ".zig-cache" });
     }
 
     /// Say which process the worker is running (null once it is done with it), for `deinit` to kill.

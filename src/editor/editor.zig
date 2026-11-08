@@ -49,6 +49,7 @@ const ProjectFlow = @import("projects/flow.zig").ProjectFlow;
 const recent_projects = @import("projects/recent.zig");
 const PickedPaths = @import("picked_paths.zig").PickedPaths;
 const HotGame = @import("hot_reload/hot_reload.zig").HotGame;
+const watch_build = @import("hot_reload/watch_build.zig");
 const preferences = @import("preferences/preferences.zig");
 const entities = @import("entities/entities.zig");
 const extraction = @import("entities/extraction.zig");
@@ -284,6 +285,14 @@ pub fn Editor(comptime project: type) type {
         /// The project's sources as the last build (or the one that made this editor) saw them;
         /// refocusing rebuilds only once they change.
         built_sources: source_stamp.Stamp = .{},
+        /// What the save rebuild can't take in (`buildInputsNow`) as that build saw it.
+        built_inputs: source_stamp.Stamp = .{},
+        /// The build that rebuilds the game's library as its code is saved (`syncWatchBuild`), and
+        /// whether it stopped or couldn't start, which leaves rebuilding to refocusing.
+        watch_build: ?*watch_build.WatchBuild = null,
+        watch_build_ended: bool = false,
+        /// Whether it finished its first build, which starts from scratch.
+        watch_build_warm: bool = false,
         /// The linked Eggy codebase's commit when this editor started (null when it isn't one),
         /// the commit the person last agreed to rebuild onto, whether they skipped updating for
         /// the session, and the window asking, with what agreeing goes on to do.
@@ -524,6 +533,7 @@ pub fn Editor(comptime project: type) type {
             // The project goes to the top of the list Eggy's launcher shows.
             if (opened_project) |opened| recent_projects.remember(gpa, threaded.io(), preference_folders.global, opened.dir, std.Io.Clock.real.now(threaded.io()).toSeconds());
             self.built_sources = self.sourcesNow();
+            self.built_inputs = self.buildInputsNow();
             // ponytail: the commit at start stands for the one built from, so an editor opened long after its build misses commits made between; bake the commit in at build time if that bites.
             self.built_eggy_head = self.linkedEggyHead();
         }
@@ -576,6 +586,7 @@ pub fn Editor(comptime project: type) type {
             layout_file.save(self.gpa, self.preference_folders.global, &self.workspace.dock, &self.workspace.tabs, self.workspace.seen_plugin_panels.items);
             self.preference_folders.deinit(self.gpa);
             if (self.scene_watch) |*watch| watch.deinit();
+            if (self.watch_build) |watch| watch.deinit();
             if (self.open_scene) |*scene| scene.deinit();
             self.play_mode.deinit();
             self.history.deinit();
@@ -785,6 +796,7 @@ pub fn Editor(comptime project: type) type {
                 },
             };
             self.pickUpSceneChanges(frame_arena.allocator());
+            self.followWatchBuild();
             self.workspace.can_upgrade = self.upgrades.can_upgrade;
             self.workspace.can_check_upgrade = self.upgrades.can_check;
             self.workspace.checking_upgrade = self.upgrades.checking();
@@ -3064,9 +3076,11 @@ pub fn Editor(comptime project: type) type {
         fn rebuildOnFocus(self: *Self) !void {
             const opened = self.project orelse return;
             if (self.project_flow != null or self.build_window != null or self.buildRunning()) return;
-            if (!preferences.editor(&self.app.preference_values).rebuild_on_focus) return;
+            if (preferences.editor(&self.app.preference_values).rebuild == .off) return;
             // Nothing to build if no source changed since the last build.
             if (self.sourcesNow().eql(self.built_sources)) return;
+            // The save rebuild has the game's code; only build files and a linked Eggy need the editor rebuilt.
+            if (self.watch_build != null and self.buildInputsNow().eql(self.built_inputs)) return;
             if (!self.eggyUpdateAgreed(.rebuild)) return;
             self.cancelBuild(); // the last one's result
             std.log.info("rebuilding {s}", .{opened.title});
@@ -3122,6 +3136,7 @@ pub fn Editor(comptime project: type) type {
             const job = try Job.start(self.gpa, .{ .dir = opened.dir, .resources_dir = folders.resources_dir, .engines_dir = folders.engines_dir, .action = action });
             errdefer job.deinit();
             self.built_sources = sources;
+            self.built_inputs = self.buildInputsNow();
             if (self.build_window == null) self.build_window = try BuildWindow.open(self.gpa, &self.app.graphics, self.ui.font, self.mono, self.app.window.window, opened.title, opened.dir);
             self.rebuild = job;
             self.activity.builds += 1;
@@ -3193,6 +3208,77 @@ pub fn Editor(comptime project: type) type {
             defer arena.deinit();
             const head = eggy_update.head(arena.allocator(), self.app.process_init.io, current.linked) orelse return null;
             return self.gpa.dupe(u8, head) catch null;
+        }
+
+        /// The stamp of what the save rebuild can't take in: the open project's build files, and
+        /// the Eggy codebase it is linked to, whose types the editor shares with the library.
+        fn buildInputsNow(self: *Self) source_stamp.Stamp {
+            const opened = self.project orelse return .{};
+            var arena_state = std.heap.ArenaAllocator.init(self.gpa);
+            defer arena_state.deinit();
+            const arena = arena_state.allocator();
+            var paths: std.ArrayList([]const u8) = .empty;
+            for ([_][]const u8{ "build.zig", "build.zig.zon", "eggy.zon" }) |name| {
+                paths.append(arena, std.fs.path.join(arena, &.{ opened.dir, name }) catch return .{}) catch return .{};
+            }
+            if (self.upgrades.current) |current| if (current == .linked) paths.append(arena, current.linked) catch return .{};
+            var threaded: std.Io.Threaded = .init_single_threaded;
+            return source_stamp.take(self.gpa, threaded.io(), paths.items);
+        }
+
+        /// Keep the save rebuild running while a project is open and the preference asks for it.
+        fn syncWatchBuild(self: *Self) void {
+            const wanted = watch_build.supported and self.project != null and preferences.editor(&self.app.preference_values).rebuild == .on_save;
+            if (!wanted) {
+                if (self.watch_build) |watch| watch.deinit();
+                self.watch_build = null;
+                self.watch_build_ended = false;
+                return;
+            }
+            if (self.watch_build != null or self.watch_build_ended) return;
+            var arena_state = std.heap.ArenaAllocator.init(self.gpa);
+            defer arena_state.deinit();
+            const folders = job_zig.editorFolders(self.gpa) catch |err| return self.watchBuildEnded(err);
+            defer self.gpa.free(folders.resources_dir);
+            defer self.gpa.free(folders.engines_dir);
+            const cache = job_zig.sharedCache(arena_state.allocator(), folders.engines_dir) catch |err| return self.watchBuildEnded(err);
+            self.watch_build = watch_build.WatchBuild.start(self.gpa, self.project.?.dir, cache) catch |err| return self.watchBuildEnded(err);
+            self.watch_build_warm = false;
+        }
+
+        fn watchBuildEnded(self: *Self, err: anyerror) void {
+            std.log.warn("cannot rebuild the game as it is saved ({t}): it rebuilds when you come back", .{err});
+            self.watch_build_ended = true;
+        }
+
+        /// Swap in the library the save rebuild made, unless a build file or the linked Eggy changed
+        /// too: the library then needs a new editor, which refocusing builds.
+        fn followWatchBuild(self: *Self) void {
+            self.syncWatchBuild();
+            const watch = self.watch_build orelse return;
+            switch (watch.poll()) {
+                .none, .failed => {},
+                .built => {
+                    const first = !self.watch_build_warm;
+                    self.watch_build_warm = true;
+                    // A rebuild under way swaps the game in itself when it ends.
+                    if (self.rebuild != null) return;
+                    if (!self.buildInputsNow().eql(self.built_inputs)) return;
+                    // Its first build remakes the library this editor has, unless code changed meanwhile.
+                    if (first and self.sourcesNow().eql(self.built_sources)) {
+                        const library_path = libraryPath(self.gpa) catch return;
+                        defer self.gpa.free(library_path);
+                        self.game_modified = modifiedAt(library_path);
+                        return;
+                    }
+                    self.swapGameIfRebuilt();
+                },
+                .ended => {
+                    watch.deinit();
+                    self.watch_build = null;
+                    self.watchBuildEnded(error.WatchStopped);
+                },
+            }
         }
 
         /// The stamp of the open project's sources, and of the Eggy codebase it is linked to.
@@ -4294,6 +4380,7 @@ test {
     _ = @import("assets/legacy_refs.zig");
     _ = @import("window_placement.zig");
     _ = @import("hot_reload/hot_reload.zig");
+    _ = @import("hot_reload/watch_build.zig");
     _ = @import("preferences/preferences.zig");
     _ = @import("preferences/window.zig");
     _ = @import("preferences/preference_form.zig");

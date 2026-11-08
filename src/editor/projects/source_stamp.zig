@@ -19,10 +19,15 @@ pub const Stamp = struct {
     pub fn eql(a: Stamp, b: Stamp) bool {
         return a.newest_ns == b.newest_ns and a.files == b.files;
     }
+
+    fn add(self: *Stamp, stat: std.Io.File.Stat) void {
+        self.newest_ns = @max(self.newest_ns, stat.mtime.nanoseconds);
+        self.files += 1;
+    }
 };
 
-/// The stamp of every file under `dirs` (absolute), less the `ignored` folders. Unreadable files
-/// and folders are skipped.
+/// The stamp of every file at or under `paths` (absolute files and folders), less the `ignored`
+/// folders. Unreadable and missing files and folders are skipped.
 /// ponytail: walks the folders on each call; switch to OS file watching if projects grow large enough for it to lag.
 /// Editor-only: `gpa` backs temporary walkers; returned counters own no memory. I/O/allocation
 /// failures skip directories or end traversal, so an incomplete stamp is possible.
@@ -30,10 +35,13 @@ pub const Stamp = struct {
 /// ```zig
 /// const stamp = take(gpa, io, &.{project_dir}); // Existing allocator/I/O and absolute path.
 /// ```
-pub fn take(gpa: std.mem.Allocator, io: std.Io, dirs: []const []const u8) Stamp {
+pub fn take(gpa: std.mem.Allocator, io: std.Io, paths: []const []const u8) Stamp {
     var stamp = Stamp{};
-    for (dirs) |path| {
-        var dir = std.Io.Dir.cwd().openDir(io, path, .{ .iterate = true }) catch continue;
+    for (paths) |path| {
+        var dir = std.Io.Dir.cwd().openDir(io, path, .{ .iterate = true }) catch |err| {
+            if (err == error.NotDir) if (std.Io.Dir.cwd().statFile(io, path, .{})) |stat| stamp.add(stat) else |_| {};
+            continue;
+        };
         defer dir.close(io);
         var walker = dir.walkSelectively(gpa) catch continue;
         defer walker.deinit();
@@ -44,9 +52,7 @@ pub fn take(gpa: std.mem.Allocator, io: std.Io, dirs: []const []const u8) Stamp 
                 } else walker.enter(io, entry) catch {};
             },
             .file => {
-                const stat = entry.dir.statFile(io, entry.basename, .{}) catch continue;
-                stamp.newest_ns = @max(stamp.newest_ns, stat.mtime.nanoseconds);
-                stamp.files += 1;
+                stamp.add(entry.dir.statFile(io, entry.basename, .{}) catch continue);
             },
             else => {},
         };
@@ -71,4 +77,24 @@ test "a stamp changes when a source file is added, and ignores build output" {
     try tmp.dir.createDirPath(io, "src");
     try tmp.dir.writeFile(io, .{ .sub_path = "src/main.zig", .data = "" });
     try std.testing.expect(!before.eql(take(std.testing.allocator, io, &.{path})));
+}
+
+test "a stamp of a file changes when it is written, and skips a missing one" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const io = std.testing.io;
+    const gpa = std.testing.allocator;
+    try tmp.dir.writeFile(io, .{ .sub_path = "build.zig", .data = "" });
+    const dir = try tmp.dir.realPathFileAlloc(io, ".", gpa);
+    defer gpa.free(dir);
+    const file = try std.fs.path.join(gpa, &.{ dir, "build.zig" });
+    defer gpa.free(file);
+    const missing = try std.fs.path.join(gpa, &.{ dir, "eggy.zon" });
+    defer gpa.free(missing);
+
+    const before = take(gpa, io, &.{ file, missing });
+    try std.testing.expectEqual(@as(usize, 1), before.files);
+    try tmp.dir.writeFile(io, .{ .sub_path = "build.zig", .data = "pub fn build() void {}" });
+    const stat = try tmp.dir.statFile(io, "build.zig", .{});
+    try std.testing.expectEqual(stat.mtime.nanoseconds, take(gpa, io, &.{ file, missing }).newest_ns);
 }
