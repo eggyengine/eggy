@@ -56,7 +56,7 @@ Every `README.md` here and in submodules is off limits to agents, except the pul
 
 Run `zig fmt` on changed files. `PascalCase` types, `camelCase` functions, four-space indent. Keep platform code behind target checks; don't add an unconditional SDL dependency to Vitellus.
 
-- Make the smallest complete change: reuse before writing, no speculative options or wrappers, and finish callers, tests, docs and build files. Mark a known limit as `// ponytail: <the limit>, <when to upgrade>`.
+- Make the smallest complete change: reuse before writing, no speculative options or wrappers, and finish callers, docs and build files. Mark a known limit as `// ponytail: <the limit>, <when to upgrade>`.
 - Write every module and function to be reused: one job behind a small `pub` surface that takes what it needs as parameters (allocator, `Io`, paths, fonts, theme) instead of reaching into `App`, `Editor` or other host state, so another feature, plugin or tool can call it unchanged. Before writing a helper, look for one (`page_style.zig`, `icon.zig`, `eggy.assets`, Weeoui); when one nearly fits, generalize it in place rather than copying it, and when callers span modules, move it down to the lowest one they all import (`core` before `editor`, Weeoui or Vitellus for what isn't Eggy's). No near-duplicate code: a second copy is a cue to extract.
 - Organize by feature: one feature per file, stated in its `//!` comment in one sentence. Don't grow `app.zig`, `graphics.zig`, `editor.zig`, `runtime.zig`, `root.zig` or `build.zig` into catch-alls; `root.zig` holds only docs, re-exports and the test block. A multi-file feature gets a directory with an entry file of the same name.
 - Dependencies point one way (`editor`, `runtime` → `core`), with no cycles between feature files. Keep public surfaces small, with `///` contracts.
@@ -68,7 +68,7 @@ Run `zig fmt` on changed files. `PascalCase` types, `camelCase` functions, four-
 
 ## Testing
 
-Put `test "behavior"` blocks beside the code, named for what they check, with decisive inputs visible. Run `zig build test` for code changes; for windowing or graphics, also run the editor and runtime and look at the window.
+Don't write tests. Only when a behaviour is crucial and easy to break silently, add at most 3 `test "behavior"` blocks for a module, beside the code, named for what they check, with decisive inputs visible. Run `zig build test` for code changes; for windowing or graphics, also run the editor and runtime and look at the window.
 
 ## Commits
 
