@@ -39,7 +39,7 @@ const outline_width_px: f32 = 2.5;
 pub const Sources = struct {
     models: *ModelCache,
     textures: *TextureCache,
-    materials: *@import("material_cache.zig").MaterialCache,
+    materials: *@import("asset_cache.zig").MaterialCache,
     /// Project shaders: materials' surfaces and post passes.
     shaders: *@import("shader_cache.zig").ShaderCache,
     /// Seconds the game has run, for shaders.

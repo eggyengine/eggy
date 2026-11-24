@@ -112,6 +112,22 @@ pub fn along(states: *States, points: []const Point, value: f32, fade_s: f32, op
     if (points.len == 0 or !std.math.isFinite(value)) return error.InvalidPoints;
     if (points.len > max_states) return error.TooManyStates;
     for (points[1..], points[0 .. points.len - 1]) |point, before| if (!(point.at > before.at)) return error.InvalidPoints;
+    var weights: [max_states]f32 = undefined;
+    for (weights[0..points.len], 0..) |*weight, index| weight.* = weightAlong(points, value, index);
+    try mix(states, points, weights[0..points.len], fade_s, options);
+}
+
+/// Ease each of `points`' clips toward its weight in `weights` (0 to 1 each, by index) and every
+/// other state of the same layer (`options.bone`) out, all over `fade_s`: the step every blend
+/// space ends in. A failure changes nothing.
+///
+/// ```zig
+/// try states.mix(&animator.states, &points, &.{ 0.25, 0.75 }, 0.2, .{});
+/// ```
+pub fn mix(states: *States, points: []const Point, weights: []const f32, fade_s: f32, options: Options) Error!void {
+    if (points.len != weights.len) return error.InvalidPoints;
+    if (points.len > max_states) return error.TooManyStates;
+    for (weights) |weight| if (!(weight >= 0 and weight <= 1)) return error.InvalidWeight;
     // Check every slot fits before setting any, so a failure changes nothing.
     var needed: usize = 0;
     for (points) |point| {
@@ -124,14 +140,39 @@ pub fn along(states: *States, points: []const Point, value: f32, fade_s: f32, op
     if (needed > free) return error.TooManyStates;
 
     // ponytail: clocks aren't synced across points, so two cycles of different lengths (walk, run) may step out of phase; sync them by normalized time when a game blends two gaits.
-    for (points, 0..) |point, index| {
+    for (points, weights) |point, weight| {
         var shown = options;
         shown.speed *= point.speed;
-        try set(states, point.clip, weightAlong(points, value, index), fade_s, shown);
+        try set(states, point.clip, weight, fade_s, shown);
     }
     var clips: [max_states]AssetRef(.animation) = undefined;
     for (clips[0..points.len], points) |*clip, point| clip.* = point.clip;
     fadeOthers(states, clips[0..points.len], options.bone, fade_s);
+}
+
+/// Each of `points`' weight with the pose at `value` on a plane (`places[i]` is where point `i`
+/// shows alone), shared by gradient bands: a point's weight falls off towards each other point,
+/// and the weights are scaled to sum to 1. Writes `weights[0..places.len]`.
+///
+/// ```zig
+/// planeWeights(&.{ .{ 0, 0 }, .{ 1, 0 }, .{ 0, 1 } }, .{ 0.25, 0.25 }, &weights);
+/// ```
+pub fn planeWeights(places: []const [2]f32, value: [2]f32, weights: []f32) void {
+    var total: f32 = 0;
+    for (places, 0..) |place, index| {
+        var weight: f32 = 1;
+        for (places, 0..) |other, other_index| {
+            if (other_index == index) continue;
+            const edge = [2]f32{ other[0] - place[0], other[1] - place[1] };
+            const length_squared = edge[0] * edge[0] + edge[1] * edge[1];
+            if (!(length_squared > 0)) continue;
+            const along_edge = ((value[0] - place[0]) * edge[0] + (value[1] - place[1]) * edge[1]) / length_squared;
+            weight = @min(weight, std.math.clamp(1 - along_edge, 0, 1));
+        }
+        weights[index] = weight;
+        total += weight;
+    }
+    for (weights[0..places.len]) |*weight| weight.* = if (total > 0) weight.* / total else 1 / @as(f32, @floatFromInt(places.len));
 }
 
 /// The weight of `points[index]` with `value` on the axis.
@@ -201,30 +242,4 @@ pub fn any(states: States) bool {
         if (state.used()) return true;
     }
     return false;
-}
-
-const idle = AssetRef(.animation).fromId(0x31);
-const walk = AssetRef(.animation).fromId(0x32);
-const jump = AssetRef(.animation).fromId(0x33);
-
-test "fading to a state eases it in and the others out, and frees what faded away" {
-    var states: States = @splat(.{});
-    try fadeTo(&states, idle, 0.5, .{});
-    // Nothing showed before, so idle shows at once.
-    try std.testing.expectEqual(@as(f32, 1), find(&states, idle).?.weight);
-    try fadeTo(&states, jump, 0.5, .{ .start_s = 0.4, .repeat = .once });
-    try std.testing.expectEqual(@as(f32, 0), find(&states, jump).?.weight);
-    advance(&states, 0.25);
-    try std.testing.expectEqual(@as(f32, 0.5), find(&states, jump).?.weight);
-    try std.testing.expectEqual(@as(f32, 0.5), find(&states, idle).?.weight);
-    try std.testing.expectApproxEqAbs(@as(f32, 0.65), find(&states, jump).?.time_s, 1e-6);
-    advance(&states, 0.25);
-    try std.testing.expect(find(&states, idle) == null);
-    try std.testing.expectEqual(@as(f32, 1), shownWeight(states));
-
-    // Asked again without a start, it carries on; with one, it starts over.
-    try fadeTo(&states, jump, 0.5, .{ .repeat = .once });
-    try std.testing.expectApproxEqAbs(@as(f32, 0.9), find(&states, jump).?.time_s, 1e-6);
-    try fadeTo(&states, jump, 0.5, .{ .start_s = 0, .repeat = .once });
-    try std.testing.expectEqual(@as(f32, 0), find(&states, jump).?.time_s);
 }

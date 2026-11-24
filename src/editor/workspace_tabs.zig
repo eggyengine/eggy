@@ -19,6 +19,8 @@ pub const Kind = enum(u8) {
     panels,
     /// One file in an Asset Preview of its own: named after the file.
     asset,
+    /// The Animation Graph panel.
+    graph,
 
     /// The name of a tab of this kind (`.panels` tabs are named after a panel instead).
     pub fn title(kind: Kind) [:0]const u8 {
@@ -28,6 +30,7 @@ pub const Kind = enum(u8) {
             .ui => "UI",
             .panels => "Panels",
             .asset => "Asset",
+            .graph => "Graph",
         };
     }
 };

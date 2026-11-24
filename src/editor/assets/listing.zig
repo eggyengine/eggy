@@ -17,6 +17,8 @@ pub const Kind = enum {
     animation,
     /// A UI scene (`.ui.zon`), which the UI Designer opens.
     ui,
+    /// An animation graph (`.graph.zon`), which the graph editor opens.
+    animation_graph,
     /// A model file, which opens into its geometry and clips (`eggy.assets.subassets`).
     model,
     /// A TrueType or OpenType font, for UI scenes' text.
@@ -34,6 +36,7 @@ pub const Kind = enum {
         if (std.mem.endsWith(u8, name, ".material.zon")) return .material;
         if (std.mem.endsWith(u8, name, ".clip.zon")) return .animation;
         if (std.mem.endsWith(u8, name, eggy.assets.ui_scene.extension)) return .ui;
+        if (std.mem.endsWith(u8, name, eggy.assets.animation_graph.extension)) return .animation_graph;
         switch (eggy.assets.Kind.of(name)) {
             .model => return .model,
             .font => return .font,

@@ -69,6 +69,13 @@ const builtins = [_]Entry{
         .category = "Animation",
     } },
     .{ .file = .{
+        .key = "eggy/animation_graph",
+        .title = "Animation Graph",
+        .extension = eggy.assets.animation_graph.extension,
+        .contents = eggy.assets.animation_graph.template,
+        .category = "Animation",
+    } },
+    .{ .file = .{
         .key = "eggy/ui_scene",
         .title = "UI Scene",
         .extension = eggy.assets.ui_scene.extension,

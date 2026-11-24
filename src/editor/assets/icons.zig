@@ -34,7 +34,8 @@ pub const Icon = enum {
             .code => .code,
             .text, .input_map => .text,
             .image, .material => .image,
-            .animation => .clip,
+            // ponytail: graphs share the clip icon; give them their own when one is drawn.
+            .animation, .animation_graph => .clip,
             .ui => .ui,
             .font => .font,
             .model => .model,

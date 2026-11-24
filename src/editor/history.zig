@@ -59,6 +59,8 @@ pub const Step = union(enum) {
     animation_clip: struct { path: []u8, text: Texts },
     /// A UI scene (`.ui.zon`) was edited in the UI Designer: the file's text before and after.
     ui_scene: struct { path: []u8, text: Texts },
+    /// An animation graph (`.graph.zon`) was edited in the graph editor: its text before and after.
+    animation_graph: struct { path: []u8, text: Texts },
     /// A plugin rewrote a file (`eggy.editor.Context.writeFile`): its text before and after.
     file_text: struct { path: []u8, text: Texts },
     /// Tiles were painted in the 2D Scene panel: the `.tilemap.zon`'s text before and after.
@@ -121,7 +123,7 @@ pub const Step = union(enum) {
                 gpa.free(step.text.before);
                 gpa.free(step.text.after);
             },
-            inline .animation_clip, .ui_scene, .file_text, .tilemap => |step| {
+            inline .animation_clip, .ui_scene, .animation_graph, .file_text, .tilemap => |step| {
                 gpa.free(step.path);
                 gpa.free(step.text.before);
                 gpa.free(step.text.after);
@@ -185,6 +187,7 @@ pub const Step = union(enum) {
             .input_map => "an input map",
             .animation_clip => "an animation edit",
             .ui_scene => "a UI scene edit",
+            .animation_graph => "an animation graph edit",
             .file_text => "a file edit",
             .tilemap => "painting tiles",
             .open_scene => |step| if (step.created) "a new scene" else "opening a scene",
@@ -467,7 +470,7 @@ pub const History = struct {
     }
 
     /// A file an editor window saves as each edit is made, for `recordFileEdit`.
-    pub const FileEdit = enum { ui_scene, input_map };
+    pub const FileEdit = enum { ui_scene, input_map, animation_graph };
 
     /// Record that the `kind` file at `path` went from `before` to `after` (all three owned now,
     /// allocated with `self.gpa`). Typing edits it on every key, so a change to the same file

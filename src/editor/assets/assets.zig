@@ -47,6 +47,8 @@ pub const Action = union(enum) {
     open_input_map: []const u8,
     /// Open this UI scene in the UI Designer.
     open_ui_scene: []const u8,
+    /// Open this animation graph in the graph editor.
+    open_animation_graph: []const u8,
     rename: struct { path: []const u8, name: []const u8 },
     duplicate: []const u8,
     /// Move this into the project's trash.
@@ -569,6 +571,7 @@ pub const AssetsPanel = struct {
             .scene => .{ .used = true, .action = .{ .open_scene = entry.path } },
             .input_map => .{ .used = true, .action = .{ .open_input_map = entry.path } },
             .ui => .{ .used = true, .action = .{ .open_ui_scene = entry.path } },
+            .animation_graph => .{ .used = true, .action = .{ .open_animation_graph = entry.path } },
             .folder => blk: {
                 if (self.view == .grid and self.filter.text().len == 0) {
                     self.enter(entry.path);
@@ -767,6 +770,7 @@ pub const AssetsPanel = struct {
                     .scene => .{ .open_scene = menu.entry.?.path },
                     .input_map => .{ .open_input_map = menu.entry.?.path },
                     .ui => .{ .open_ui_scene = menu.entry.?.path },
+                    .animation_graph => .{ .open_animation_graph = menu.entry.?.path },
                     else => .{ .open_code = menu.entry.?.path },
                 },
                 .open_in_ide => .{ .open_code = if (menu.entry) |entry| entry.path else self.folder.items },

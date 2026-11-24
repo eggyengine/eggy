@@ -288,6 +288,11 @@ pub const App = struct {
         return &self.graphics.models.generated;
     }
 
+    /// Borrow the parameters of entities' animation graphs; do not retain across reset/reload.
+    pub fn animationGraphs(self: *App) @import("animation_graph.zig").Graphs {
+        return .{ .world = &self.world };
+    }
+
     /// Borrow sound controls: play sound files, placed in the world or not, and set bus gains.
     /// Every voice ends when the world resets. Do not retain across reset/reload.
     ///
@@ -495,6 +500,7 @@ pub const App = struct {
         self.animation_events.clearRetainingCapacity();
         self.animation_sounds.clearRetainingCapacity();
         const effects = animation_zig.Effects{ .ui = &self.ui_scenes, .events = &self.animation_events, .sounds = &self.animation_sounds, .gpa = self.world.allocator };
+        @import("animation_graph.zig").step(&self.world, &self.graphics.graphs, &self.graphics.clips, self.time.delta_s);
         animation_zig.step(&self.world, &self.graphics.clips, self.time.delta_s, effects);
         if (self.cutscene.update(&self.world, &self.graphics.clips, self.time.unscaled_delta_s, effects)) self.input.cancel();
         audio_zig.startFromClips(&self.world, self.animation_sounds.items);

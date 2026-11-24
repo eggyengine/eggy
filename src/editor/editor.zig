@@ -89,6 +89,7 @@ const input_map_asset = @import("input_map_asset/input_map_asset.zig");
 const animation_dock = @import("animation_dock/animation_dock.zig");
 const film_zig = @import("film/film.zig");
 const ui_designer = @import("ui_designer/ui_designer.zig");
+const graph_editor = @import("animation_graph/animation_graph.zig");
 const AssetPreview = @import("asset_preview.zig").AssetPreview;
 const AssetPreviewRequest = @import("asset_preview.zig").Request;
 const AssetPreviewAction = @import("asset_preview.zig").Action;
@@ -212,6 +213,9 @@ pub fn Editor(comptime project: type) type {
         ui_tree_ui: ui.Context,
         ui_properties_ui: ui.Context,
         ui_designer: ui_designer.Designer = .{},
+        /// The Animation Graph panel's UI and state.
+        graph_editor_ui: ui.Context,
+        graph_editor: graph_editor.GraphEditor = .{},
         asset_preview_ui: ui.Context,
         asset_preview: AssetPreview,
         scene_2d_ui: ui.Context,
@@ -405,6 +409,8 @@ pub fn Editor(comptime project: type) type {
             errdefer ui_properties_ui.deinit();
             var asset_preview_ui = ui.Context.initWithFont(gpa, context.font);
             errdefer asset_preview_ui.deinit();
+            var graph_editor_ui = ui.Context.initWithFont(gpa, context.font);
+            errdefer graph_editor_ui.deinit();
             var scene_2d_ui = ui.Context.initWithFont(gpa, context.font);
             errdefer scene_2d_ui.deinit();
             var asset_icons = AssetIcons.load(gpa, context.font);
@@ -506,7 +512,7 @@ pub fn Editor(comptime project: type) type {
             // What the scene shows loads as the first frame draws it.
             splash.step(.assets);
             if (project_assets) |loaders| loaders.loading = splash.detail;
-            self.* = .{ .gpa = gpa, .game = game, .game_modified = modifiedAt(library_path), .app = app, .ui = context, .mono = mono, .console_ui = console_ui, .hierarchy_ui = hierarchy_ui, .assets_ui = assets_ui, .assets_panel = .init(gpa), .animation_ui = animation_ui, .ui_designer_ui = ui_designer_ui, .ui_tree_ui = ui_tree_ui, .ui_properties_ui = ui_properties_ui, .asset_preview_ui = asset_preview_ui, .asset_preview = .init(gpa, mono), .scene_2d_ui = scene_2d_ui, .asset_icons = asset_icons, .entity_editor = .init(gpa), .console = console, .plugin_pages = plugin_pages, .workspace = workspace, .frame = frame, .scene = scene, .camera_preview = camera_preview, .drawables = drawables, .drawables_2d = drawables_2d, .overlay = overlay, .project = opened_project, .editor_modified = if (opened_project) |opened| editorModified(gpa, opened) else null, .upgrades = upgrades, .preference_folders = preference_folders, .open_scene = open_scene, .history = .{ .gpa = gpa }, .film = .{ .gpa = gpa }, .plugin_switches = plugin_switches, .project_assets = project_assets };
+            self.* = .{ .gpa = gpa, .game = game, .game_modified = modifiedAt(library_path), .app = app, .ui = context, .mono = mono, .console_ui = console_ui, .hierarchy_ui = hierarchy_ui, .assets_ui = assets_ui, .assets_panel = .init(gpa), .animation_ui = animation_ui, .ui_designer_ui = ui_designer_ui, .ui_tree_ui = ui_tree_ui, .ui_properties_ui = ui_properties_ui, .graph_editor_ui = graph_editor_ui, .asset_preview_ui = asset_preview_ui, .asset_preview = .init(gpa, mono), .scene_2d_ui = scene_2d_ui, .asset_icons = asset_icons, .entity_editor = .init(gpa), .console = console, .plugin_pages = plugin_pages, .workspace = workspace, .frame = frame, .scene = scene, .camera_preview = camera_preview, .drawables = drawables, .drawables_2d = drawables_2d, .overlay = overlay, .project = opened_project, .editor_modified = if (opened_project) |opened| editorModified(gpa, opened) else null, .upgrades = upgrades, .preference_folders = preference_folders, .open_scene = open_scene, .history = .{ .gpa = gpa }, .film = .{ .gpa = gpa }, .plugin_switches = plugin_switches, .project_assets = project_assets };
             self.workspace.close_guard = .{ .context = self, .mayClose = mayCloseScenes };
             self.input_settings = input_settings;
             self.entity_editor.assets = project_assets;
@@ -632,6 +638,8 @@ pub fn Editor(comptime project: type) type {
             self.ui_designer_ui.deinit();
             self.ui_tree_ui.deinit();
             self.ui_properties_ui.deinit();
+            self.graph_editor.deinit();
+            self.graph_editor_ui.deinit();
             self.asset_preview_ui.deinit();
             self.asset_preview.deinit();
             self.scene_2d_ui.deinit();
@@ -667,6 +675,7 @@ pub fn Editor(comptime project: type) type {
             self.app.beginDiagnosticsFrame();
             self.app.graphics.materials.resources = self.app.resources();
             self.app.graphics.clips.resources = self.app.resources();
+            self.app.graphics.graphs.resources = self.app.resources();
             const result = self.iterateFrame() catch |err| {
                 self.rescue();
                 return err;
@@ -876,6 +885,7 @@ pub fn Editor(comptime project: type) type {
                         if (asked) |action| self.applyPreviewAction(action);
                     } else page_ui.muted("Open a project to preview its files.") else page_ui.muted("Open a project to preview its files."),
                     panels.ui_properties_page => if (self.uiDesignerEnv()) |env| self.ui_designer.buildProperties(page_ui, env, self.dragging(page_ui.builder().allocator)) else page_ui.muted("Open a project to design UI."),
+                    panels.animation_graph_page => if (self.graphEditorEnv()) |env| self.graph_editor.build(page_ui, env) else page_ui.muted("Open a project to edit animation graphs."),
                     panels.scene_2d_page => self.scene_2d.build(page_ui, if (self.tileBrushEnv() != null) &self.app else null, self.gpa),
                     else => if (self.game) |*game| {
                         var editor_context = extensions.context(self);
@@ -1527,6 +1537,14 @@ pub fn Editor(comptime project: type) type {
                         return self.workspace.toast("Couldn't open the UI scene: see the Console");
                     };
                 },
+                .open_animation_graph => |path| {
+                    const env = self.graphEditorEnv() orelse return;
+                    self.workspace.showGraphEditor() catch |err| std.log.err("cannot show the Animation Graph: {t}", .{err});
+                    self.graph_editor.open(env, path) catch |err| {
+                        std.log.err("cannot open animation graph {s}: {t}", .{ path, err });
+                        return self.workspace.toast("Couldn't open the animation graph: see the Console");
+                    };
+                },
                 .open_input_map => |path| self.openInputMap(path) catch |err| {
                     std.log.err("cannot open input map {s}: {t}", .{ path, err });
                     self.workspace.toast("Couldn't open the input map: see the Console");
@@ -1739,6 +1757,7 @@ pub fn Editor(comptime project: type) type {
                     self.assetsMoved(change.path, renamed);
                     if (self.open_scene) |*scene| scene.moved(change.path, renamed);
                     self.ui_designer.moved(change.path, renamed);
+                    self.graph_editor.moved(change.path, renamed);
                     self.history.record(.{ .rename = .{ .from = try self.gpa.dupe(u8, change.path), .to = renamed } });
                     if (self.input_map_window) |window| try window.moved(change.path, renamed);
                 },
@@ -1778,6 +1797,7 @@ pub fn Editor(comptime project: type) type {
                     self.assetsMoved(change.path, moved);
                     if (self.open_scene) |*scene| scene.moved(change.path, moved);
                     self.ui_designer.moved(change.path, moved);
+                    self.graph_editor.moved(change.path, moved);
                     self.history.record(.{ .rename = .{ .from = try self.gpa.dupe(u8, change.path), .to = moved } });
                     if (self.input_map_window) |window| try window.moved(change.path, moved);
                 },
@@ -1788,6 +1808,7 @@ pub fn Editor(comptime project: type) type {
                     self.assetsMoved(path, trashed);
                     if (self.open_scene) |*scene| scene.deleted(path);
                     self.ui_designer.deleted(path);
+                    self.graph_editor.deleted(path);
                     self.history.record(.{ .delete = .{ .path = try self.gpa.dupe(u8, path), .trashed = trashed } });
                     var message: [96]u8 = undefined;
                     self.workspace.toast(std.fmt.bufPrint(&message, "Moved {s} to the trash", .{std.fs.path.basename(path)}) catch "Moved to the trash");
@@ -1835,6 +1856,18 @@ pub fn Editor(comptime project: type) type {
                 .assets = self.project_assets orelse return null,
                 .project_dir = opened.dir,
                 .drawables = self.drawables,
+            };
+        }
+
+        fn graphEditorEnv(self: *Self) ?graph_editor.Env {
+            const opened = self.project orelse return null;
+            return .{
+                .gpa = self.gpa,
+                .app = &self.app,
+                .assets = self.project_assets orelse return null,
+                .project_dir = opened.dir,
+                .history = &self.history,
+                .now_ms = self.workspace.time_ms,
             };
         }
 
@@ -2023,7 +2056,7 @@ pub fn Editor(comptime project: type) type {
             const io = threaded.io();
             var files = try std.Io.Dir.cwd().openDir(io, opened.dir, .{});
             defer files.close(io);
-            defer if (step.* == .input_map or step.* == .animation_clip or step.* == .ui_scene) self.assets_panel.refreshSoon() else if (step.* != .entity_visibility) self.filesChanged();
+            defer if (step.* == .input_map or step.* == .animation_clip or step.* == .ui_scene or step.* == .animation_graph) self.assets_panel.refreshSoon() else if (step.* != .entity_visibility) self.filesChanged();
             switch (step.*) {
                 .group => unreachable,
                 .entity_visibility => |change| {
@@ -2059,6 +2092,7 @@ pub fn Editor(comptime project: type) type {
                     self.assetsMoved(from, to);
                     if (self.open_scene) |*scene| scene.moved(from, to);
                     self.ui_designer.moved(from, to);
+                    self.graph_editor.moved(from, to);
                     if (self.input_map_window) |window| try window.moved(from, to);
                 },
                 .delete => |*change| if (back) {
@@ -2072,6 +2106,7 @@ pub fn Editor(comptime project: type) type {
                     change.trashed = trashed;
                     if (self.open_scene) |*scene| scene.deleted(change.path);
                     self.ui_designer.deleted(change.path);
+                    self.graph_editor.deleted(change.path);
                 },
                 .create => |*change| if (back) {
                     try self.beforeAssetRemoval(change.path);
@@ -2133,6 +2168,10 @@ pub fn Editor(comptime project: type) type {
                 .ui_scene => |change| {
                     const env = self.uiDesignerEnv() orelse return error.NoProject;
                     try self.ui_designer.restore(env, io, files, change.path, change.text.value(direction));
+                },
+                .animation_graph => |change| {
+                    const env = self.graphEditorEnv() orelse return error.NoProject;
+                    try self.graph_editor.restore(env, io, files, change.path, change.text.value(direction));
                 },
                 .file_text => |change| try files.writeFile(io, .{ .sub_path = change.path, .data = change.text.value(direction) }),
                 .tilemap => |change| {
@@ -3952,6 +3991,15 @@ pub fn Editor(comptime project: type) type {
                     };
                     if (used) continue;
                 };
+                // The Animation Graph's canvas: its nodes, arrows and Delete.
+                if (index == panels.animation_graph_page) if (self.graphEditorEnv()) |env| {
+                    const used = switch (input) {
+                        .key_down => |key| self.graph_editor.canvasKey(env, key, self.graph_editor_ui.wants_text),
+                        .pointer_down, .pointer_move, .pointer_up, .wheel => self.graph_editor.canvasPointer(env, input),
+                        else => false,
+                    };
+                    if (used) continue;
+                };
                 if (index == panels.inspector_page) weeoui_sdl3.handleEvent(&self.ui, curr_event) else self.page(index).handle(input);
             }
         }
@@ -4002,6 +4050,7 @@ pub fn Editor(comptime project: type) type {
             if (index == panels.ui_properties_page) return &self.ui_properties_ui;
             if (index == panels.asset_preview_page) return &self.asset_preview_ui;
             if (index == panels.scene_2d_page) return &self.scene_2d_ui;
+            if (index == panels.animation_graph_page) return &self.graph_editor_ui;
             return &self.plugin_pages[index - panels.first_plugin_page];
         }
 

@@ -10,7 +10,7 @@ const weeoui_vitellus = @import("weeoui_vitellus");
 const ModelCache = @import("model_cache.zig").ModelCache;
 const TextureCache = @import("texture_cache.zig").TextureCache;
 const Sources = @import("mesh_renderer.zig").Sources;
-const MaterialCache = @import("material_cache.zig").MaterialCache;
+const MaterialCache = @import("asset_cache.zig").MaterialCache;
 const ShaderCache = @import("shader_cache.zig").ShaderCache;
 const render = @import("render_settings.zig");
 const backend_config = @import("graphics_backend.zig");
@@ -43,6 +43,8 @@ pub const Graphics = struct {
     time_s: f32 = 0,
     /// The authored animation clips entities play, shared by every scene drawn; set its `resources`.
     clips: @import("clip_cache.zig").ClipCache,
+    /// The animation graphs `AnimationGraph`s run; set its `resources`.
+    graphs: @import("animation_graph.zig").GraphCache,
     lights: @import("lighting.zig").Frame = .{},
     stats: @import("mesh_renderer.zig").Stats = .{},
     world_draw: ?*const @import("draw2d.zig").Draw2d = null,
@@ -168,6 +170,7 @@ pub const Graphics = struct {
             .materials = .{ .gpa = allocator },
             .shaders = .{ .gpa = allocator, .device = device, .graveyard = graveyard, .shaderSource = viewport3d.shaderSource },
             .clips = .{ .gpa = allocator },
+            .graphs = .{ .gpa = allocator },
             .render_settings = settings,
             .cached_caps = caps,
         };
@@ -235,6 +238,7 @@ pub const Graphics = struct {
         self.materials.forgetAll();
         self.shaders.forgetAll();
         self.clips.forgetAll();
+        self.graphs.forgetAll();
         self.textures.forgetAll();
     }
 
@@ -285,6 +289,7 @@ pub const Graphics = struct {
         self.models.deinit(&self.textures);
         self.materials.deinit();
         self.clips.deinit();
+        self.graphs.deinit();
         self.preview.deinit();
         self.shaders.deinit();
         self.textures.deinit();

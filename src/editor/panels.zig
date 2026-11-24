@@ -1,5 +1,5 @@
 //! The editor's dock panels and what each shows. Scene marks where the editor draws the scene
-//! texture, with its gizmo and buttons floating over it; the "pages" (Inspector, Console, Hierarchy, Assets, Animation, the UI Designer's three, the Asset Preview, the 2D Scene and each plugin's `editor_panels`) mark
+//! texture, with its gizmo and buttons floating over it; the "pages" (Inspector, Console, Hierarchy, Assets, Animation, the UI Designer's three, the Asset Preview, the 2D Scene, the Animation Graph and each plugin's `editor_panels`) mark
 //! where it draws a `ui.Context` of their own.
 const std = @import("std");
 const eggy = @import("eggy");
@@ -24,6 +24,9 @@ pub const Panel = enum(u32) {
     asset_preview,
     /// The world seen flat, through an orthographic camera, for 2D games.
     scene_2d,
+    /// The open animation graph: its outline, its canvas and the selection's details. There is
+    /// one, in the Graph tab (`copyable` has no room for more).
+    animation_graph,
 
     /// Return a static, sentinel-terminated display title for a built-in editor panel.
     ///
@@ -44,6 +47,7 @@ pub const Panel = enum(u32) {
             .ui_properties => "UI Properties",
             .asset_preview => "Asset Preview",
             .scene_2d => "2D Scene",
+            .animation_graph => "Animation Graph",
         };
     }
 };
@@ -106,6 +110,7 @@ pub const Live = struct {
             .assets => &self.assets,
             .animation => &self.animation,
             .asset_preview => &self.asset_preview,
+            .animation_graph => null,
         };
     }
 
@@ -146,7 +151,8 @@ pub fn pluginId(panel: EditorPanel, index: usize) u32 {
 /// Pages: the Inspector (`inspector_page`), the Console (`console_page`), the Hierarchy
 /// (`hierarchy_page`), Assets (`assets_page`), Animation (`animation_page`), the UI Designer
 /// (`ui_designer_page`), its tree (`ui_tree_page`) and properties (`ui_properties_page`), the Asset
-/// Preview (`asset_preview_page`), the 2D Scene (`scene_2d_page`), then the plugin panels
+/// Preview (`asset_preview_page`), the 2D Scene (`scene_2d_page`), the Animation Graph
+/// (`animation_graph_page`), then the plugin panels
 /// (`first_plugin_page + i`).
 pub const max_pages = 32;
 pub const inspector_page = 0;
@@ -159,7 +165,8 @@ pub const ui_tree_page = 6;
 pub const ui_properties_page = 7;
 pub const asset_preview_page = 8;
 pub const scene_2d_page = 9;
-pub const first_plugin_page = 10;
+pub const animation_graph_page = 10;
+pub const first_plugin_page = 11;
 
 /// Page index of dock panel `id`, if it is a page.
 /// Borrows the current plugin declarations; Scene and unknown IDs return null.
@@ -179,6 +186,7 @@ pub fn pageOf(id: u32, plugin_panels: []const EditorPanel) ?usize {
     if (id == @backingInt(Panel.ui_properties)) return ui_properties_page;
     if (id == @backingInt(Panel.asset_preview)) return asset_preview_page;
     if (id == @backingInt(Panel.scene_2d)) return scene_2d_page;
+    if (id == @backingInt(Panel.animation_graph)) return animation_graph_page;
     for (plugin_panels, 0..) |panel, index| if (pluginId(panel, index) == id) return first_plugin_page + index;
     return null;
 }
@@ -260,7 +268,7 @@ pub const Provider = struct {
                 scene.accessibility = .{ .role = .image, .label = "Scene view" };
                 break :blk scene;
             },
-            .inspector, .console, .hierarchy, .assets, .animation, .ui_designer, .ui_tree, .ui_properties, .asset_preview, .scene_2d => unreachable, // pages
+            .inspector, .console, .hierarchy, .assets, .animation, .ui_designer, .ui_tree, .ui_properties, .asset_preview, .scene_2d, .animation_graph => unreachable, // pages
         };
     }
 };

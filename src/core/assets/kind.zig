@@ -27,10 +27,12 @@ pub const Kind = enum(u8) {
     tilemap,
     /// A Slang shader (`.slang`) that includes "eggy": a post pass, or a material's surface.
     shader,
+    /// An animation graph (`.graph.zon`): the state machines an `AnimationGraph` runs.
+    animation_graph,
 
     /// The kind of the file at `path`; `any` for a kind Eggy doesn't know.
     /// Does not inspect the filesystem or infer folders. Ordinary extensions ignore case;
-    /// the compound `.scene.zon`, `.inmap.zon`, `.material.zon`, `.clip.zon`, `.ui.zon` and `.tilemap.zon` suffixes are case-sensitive.
+    /// the compound `.scene.zon`, `.inmap.zon`, `.material.zon`, `.clip.zon`, `.ui.zon`, `.tilemap.zon` and `.graph.zon` suffixes are case-sensitive.
     ///
     /// ```zig
     /// const kind = Kind.of("resources/ship.GLB"); // .model
@@ -42,6 +44,7 @@ pub const Kind = enum(u8) {
         if (std.mem.endsWith(u8, path, ".clip.zon")) return .animation;
         if (std.mem.endsWith(u8, path, ".ui.zon")) return .ui;
         if (std.mem.endsWith(u8, path, ".tilemap.zon")) return .tilemap;
+        if (std.mem.endsWith(u8, path, ".graph.zon")) return .animation_graph;
         const extension = std.fs.path.extension(path);
         const kinds = [_]struct { []const []const u8, Kind }{
             .{ &.{".zig"}, .code },

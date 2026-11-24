@@ -1118,6 +1118,14 @@ pub const Workspace = struct {
         try self.newTab(.ui);
     }
 
+    /// Show the tab holding the Animation Graph, or open a Graph tab when it isn't docked.
+    pub fn showGraphEditor(self: *Workspace) !void {
+        const graph = @backingInt(Panel.animation_graph);
+        if (self.tabs.ofPanel(&self.dock, graph)) |tab| return self.tabs.show(&self.dock, tab);
+        if (self.dock.nodeOf(graph) != null) return;
+        try self.newTab(.graph);
+    }
+
     /// File > New Tab, the tab bar's "+" and Ctrl+T: a new tab of `kind`.
     fn openTab(self: *Workspace, kind: workspace_tabs.Kind) void {
         self.newTab(kind) catch |err| {
@@ -1146,6 +1154,10 @@ pub const Workspace = struct {
                 self.splitRatio(panels.copyId(.ui_tree, copy), 0.2);
                 try self.dock.add(panels.copyId(.ui_properties, copy), designer, .right);
                 self.splitRatio(panels.copyId(.ui_properties, copy), 0.72);
+            },
+            .graph => {
+                _ = try self.tabs.open(&self.dock, .graph);
+                try self.dock.add(@backingInt(Panel.animation_graph), null, .center);
             },
             .panels, .asset => {},
         }
@@ -1458,6 +1470,7 @@ pub const Workspace = struct {
             .ui_designer, .ui_tree, .ui_properties => return self.openTab(.ui),
             .scene_2d => return self.openTab(.scene_2d),
             .scene => return self.openTab(.scene_3d),
+            .animation_graph => return self.openTab(.graph),
             else => {},
         }
         // Where it was last closed; a plugin's panel never shown docks beside the Inspector.
