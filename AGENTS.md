@@ -68,7 +68,7 @@ Run `zig fmt` on changed files. `PascalCase` types, `camelCase` functions, four-
 
 ## Testing
 
-Don't write tests. Only when a behaviour is crucial and easy to break silently, add at most 3 `test "behavior"` blocks for a module, beside the code, named for what they check, with decisive inputs visible. Run `zig build test` for code changes; for windowing or graphics, also run the editor and runtime and look at the window.
+Don't write tests. Only when a behaviour is crucial and easy to break silently, add at most 3 `test "behavior"` blocks for a whole module, a broad area such as physics, audio, graphics or the editor's Assets panel, not a file, beside the code, named for what they check, with decisive inputs visible. Run `zig build test` for code changes; for windowing or graphics, also run the editor and runtime and look at the window.
 
 ## Commits
 
