@@ -6,7 +6,8 @@ description: Build ground from noise in code, draw it, stand on it, and change i
 
 Terrain made in code is a height for every point on the ground, turned into triangles and
 handed to `app.meshes()` under a name. A Mesh with the `.generated` shape draws those
-triangles, and a `mesh` Collider makes them solid.
+triangles, and a `mesh` Collider makes them solid. Ground that is one grid of heights can skip
+the triangles: a Terrain draws the grid on the GPU and a `heightfield` Collider stands on it.
 
 Start with the height. Any function of `x` and `z` will do; layered noise gives rolling hills.
 Eggy has no noise function of its own, so this one stands alone: `random` gives a fixed number
@@ -177,3 +178,58 @@ For a world without edges, make the chunks around `app.viewer()` in `update` and
 far from it with `app.meshes().remove(name)` and `app.world.despawn(entity)`. The viewer is
 where the frame is seen from, so it is the game's camera while playing and the Scene panel's
 own while you Simulate and fly around.
+
+`set` copies the vertices and indices, which `makeChunk` then frees. To hand them over instead,
+allocate them from `app.meshes().allocator()` and call `setOwned`: the mesh keeps them as they
+are and gives back the vertices of the chunk it replaces, to fill again or free with the same
+allocator. Null indices mean the vertices are the triangles in order, three by three. Either
+way, a name set again gets new GPU buffers, filled from a staging copy sent before the next
+frame is drawn; nothing waits for the GPU.
+
+```zig
+const meshes = app.meshes();
+const vertices = try meshes.allocator().alloc(eggy.generated_meshes.Vertex, side * side);
+errdefer meshes.allocator().free(vertices);
+const indices = try meshes.allocator().alloc(u32, cells * cells * 6);
+errdefer meshes.allocator().free(indices);
+fillChunk(vertices, indices, chunk_x, chunk_z); // makeChunk's loops
+if (try meshes.setOwned(name, vertices, indices)) |old| meshes.allocator().free(old);
+```
+
+Ground without overhangs or caves can be one grid of heights instead, with no triangles made on
+the CPU. Give the grid to `app.heightfields()`, then draw it with a Terrain and stand on it with
+a `heightfield` Collider, both naming it:
+
+```zig
+const side = 513;
+const heights = try gpa.alloc(f32, side * side);
+defer gpa.free(heights);
+for (0..side) |row| for (0..side) |column| {
+    heights[row * side + column] = height(@floatFromInt(column), @floatFromInt(row));
+};
+try app.heightfields().set("ground", heights, side, 1);
+_ = try app.world.spawn(.{
+    eggy.Name.init("ground"),
+    eggy.Transform{},
+    eggy.Terrain{ .heights = .init("ground") },
+    eggy.physics.Collider{ .shape = .{ .heightfield = .init("ground") } },
+});
+```
+
+The heights go row by row, `side` columns along X and rows along Z, 1 metre apart, the first
+corner at the entity. The Terrain lifts one flat patch of 32 by 32 cells to the heights on the
+GPU, drawn once for each part of the grid it needs: every corner near the viewer, fewer further
+off, skirts filling the cracks between the two, and nothing out of sight. Each face is flat and
+coloured by its own height and slope: rock where it tilts past `steep_normal_y`, silt below
+`low_below_m`, stone above `high_above_m`, moss between, and each a little lighter or darker
+than the next by `shade_variation`. A Terrain takes no Material or texture; for those, make mesh
+chunks.
+
+The collider's triangles are the ones drawn, and it tests only the cells under what touches it,
+so a grid of a million corners costs physics no more than a small one. Setting the name again
+uploads the new heights before the next frame and rebuilds the collider.
+
+Making the heights is most of the work, and the editor builds games in Debug, where it runs many
+times slower. A module's `.optimize` doesn't change that inside a Debug build; to keep `height`
+fast while you work, put it in a [fast library](../plugins/create-plugins.md#using-plugins) and
+call it through `extern fn`.
