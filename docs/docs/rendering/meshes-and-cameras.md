@@ -47,6 +47,7 @@ _ = try app.world.spawn(.{
 A vertex is an `eggy.GeneratedMeshes.Vertex` (position, normal and texture coordinate).
 A name is up to 64 bytes and can't be an asset key. `app.meshes().remove("terrain")` stops
 drawing it. A body whose collider is rebuilt starts again at rest.
+[Procedural terrain](./procedural-terrain.md) builds hills this way.
 
 ## Positions, directions, and parents
 
