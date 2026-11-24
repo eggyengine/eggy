@@ -40,7 +40,7 @@ try app.meshes().set("terrain", vertices, indices);
 _ = try app.world.spawn(.{
     eggy.Transform{},
     eggy.Mesh{ .shape = .{ .generated = .init("terrain") }, .color = .{ 0.35, 0.6, 0.3 } },
-    eggy.Collider{ .shape = .mesh },
+    eggy.physics.Collider{ .shape = .mesh },
 });
 ```
 

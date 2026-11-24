@@ -48,7 +48,7 @@ pub const GeneratedMeshes = struct {
     ///
     /// ```zig
     /// try app.meshes().set("terrain", vertices, indices);
-    /// _ = try app.world.spawn(.{ eggy.Transform{}, eggy.Mesh{ .shape = .{ .generated = .init("terrain") } }, eggy.Collider{ .shape = .mesh } });
+    /// _ = try app.world.spawn(.{ eggy.Transform{}, eggy.Mesh{ .shape = .{ .generated = .init("terrain") } }, eggy.physics.Collider{ .shape = .mesh } });
     /// ```
     pub fn set(self: *GeneratedMeshes, name: []const u8, vertices: []const Vertex, indices: []const u32) Error!void {
         if (name.len == 0 or name.len > Name.max_len) return error.InvalidName;
