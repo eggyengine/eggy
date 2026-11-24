@@ -79,7 +79,16 @@ pub const SettingRows = struct {
     /// default is, say) and, beside the control, a reset button when `resettable`, else room for
     /// one, so rows line up. `id` names the button uniquely on the page. Returns whether it was
     /// pressed.
-    pub fn endResettable(_: *SettingRows, context: *ui.Context, note: []const u8, resettable: bool, id: []const u8) bool {
+    pub fn endResettable(self: *SettingRows, context: *ui.Context, note: []const u8, resettable: bool, id: []const u8) bool {
+        const arena = context.builder().allocator;
+        const button_id = std.fmt.allocPrint(arena, "reset {s}", .{id}) catch "reset";
+        return self.endWithButton(context, note, if (resettable) .{ .glyph = reset_glyph, .label = "Reset to the default", .id = button_id } else null);
+    }
+
+    /// Close a row like `end`, with `note` under the control when it isn't empty and, beside
+    /// the control, `button` when given, else room for one, so rows line up. Returns whether
+    /// the button was pressed.
+    pub fn endWithButton(_: *SettingRows, context: *ui.Context, note: []const u8, button: ?RowButton) bool {
         if (note.len > 0) {
             context.muted(note);
             setTextSize(context, 12);
@@ -91,13 +100,13 @@ pub const SettingRows = struct {
             element.style.gap = 4;
         }
         var pressed = false;
-        if (resettable) {
+        if (button) |shown| {
             const arena = context.builder().allocator;
-            pressed = context.buttonVariant(std.fmt.allocPrint(arena, reset_glyph ++ "##reset {s}", .{id}) catch reset_glyph, .ghost);
-            if (context.last_added) |button| {
-                button.style.width = reset_width;
-                button.style.min_width = reset_width;
-                button.accessibility.label = "Reset to the default";
+            pressed = context.buttonVariant(std.fmt.allocPrint(arena, "{s}##{s}", .{ shown.glyph, shown.id }) catch shown.glyph, .ghost);
+            if (context.last_added) |element| {
+                element.style.width = reset_width;
+                element.style.min_width = reset_width;
+                element.accessibility.label = shown.label;
             }
         } else {
             const room = context.builder().node(0, .{ .width = reset_width, .height = 1 }, .none, &.{}) catch null;
@@ -161,6 +170,10 @@ pub const SettingRows = struct {
         self.count += 1;
     }
 };
+
+/// An icon button at the end of a row (`SettingRows.endWithButton`): a Nerd Font `glyph`,
+/// the `label` screen readers say, and an `id` unique on the page.
+pub const RowButton = struct { glyph: []const u8, label: []const u8, id: []const u8 };
 
 /// How `SettingRows.beginMarked` marks a row.
 pub const Mark = struct {

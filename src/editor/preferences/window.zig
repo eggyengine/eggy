@@ -87,7 +87,6 @@ const SearchEdit = ui.TextEdit(64);
 const scopes = [_][]const u8{ "All projects##scope", "This project##scope" };
 const graphics_scopes = [_][]const u8{ "This computer##graphics scope", "Shipped with the game##graphics scope" };
 const sidebar_width: f32 = 232;
-const nav_height: f32 = 32;
 const reset_glyph = "\u{f0e2}";
 const gear_glyph = "\u{f013}";
 const search_glyph = "\u{f002}";
@@ -291,12 +290,9 @@ pub const PreferencesWindow = struct {
             .link => |opening| self.action = .{ .open = opening },
             else => self.showSection(index),
         };
-        const nav = arena.create(Nav) catch return;
-        nav.* = .{ .id = id, .title = section.title, .on = self.section == index, .count = if (count > 0) std.fmt.allocPrint(arena, "{d}", .{count}) catch "" else "", .link = section.content == .link };
-        const row = context.builder().node(id, .{ .width = sidebar_width - 24, .height = nav_height }, .{ .custom = .{ .context = nav, .draw = Nav.draw } }, &.{}) catch return;
-        row.cursor = .pointer;
-        row.accessibility = .{ .role = .tab, .label = if (count > 0) std.fmt.allocPrint(arena, "{s}, {d} changed", .{ section.title, count }) catch section.title else section.title };
-        context.element(row);
+        const trailing: page_style.NavTrailing = if (section.content == .link) .link else if (count > 0) .{ .count = std.fmt.allocPrint(arena, "{d}", .{count}) catch "" } else .none;
+        const label = if (count > 0) std.fmt.allocPrint(arena, "{s}, {d} changed", .{ section.title, count }) catch section.title else section.title;
+        page_style.navItem(context, id, section.title, trailing, self.section == index, sidebar_width - 24, label);
     }
 
     /// The search's text, trimmed.
@@ -459,29 +455,6 @@ pub const PreferencesWindow = struct {
 };
 
 /// A sidebar row: its title, lit while shown or hovered, with a count of changes in a pill.
-const Nav = struct {
-    id: u32,
-    title: []const u8,
-    on: bool,
-    count: []const u8,
-    /// Opens another window rather than a page.
-    link: bool,
-
-    fn draw(context: *const anyopaque, c: *ui.Canvas, r: ui.Rect) anyerror!void {
-        const self: *const Nav = @ptrCast(@alignCast(context));
-        const t = c.theme;
-        if (self.on or c.hot_id == self.id) try c.roundRect(r, t.muted, t.radiusMd());
-        const size = t.text_size;
-        try c.textIn(.{ .x = r.x + 10, .y = r.y, .w = r.w - 20, .h = r.h }, self.title, size, t.foreground, .start);
-        if (self.link) try c.textIn(.{ .x = r.x + 10, .y = r.y, .w = r.w - 20, .h = r.h }, "\u{f08e}", 11, t.muted_foreground, .end);
-        if (self.count.len == 0) return;
-        const pill_w = @max(18, c.font.measure(self.count, 11) + 10);
-        const pill = ui.Rect{ .x = r.x + r.w - 8 - pill_w, .y = r.y + (r.h - 18) / 2, .w = pill_w, .h = 18 };
-        try c.roundRect(pill, t.primary, 9);
-        try c.textIn(pill, self.count, 11, t.primary_foreground, .center);
-    }
-};
-
 /// Whether `section` has `query` in its title or any of its rows; an empty query keeps all.
 fn sectionMatches(section: Section, query_text: []const u8) bool {
     if (setting_rows.matches(query_text, section.title, "")) return true;

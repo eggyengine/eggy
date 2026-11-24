@@ -287,7 +287,7 @@ pub const Designer = struct {
             env.gpa.free(change.after);
             return;
         };
-        env.history.recordUiScene(path, change.before, change.after, env.now_ms);
+        env.history.recordFileEdit(.ui_scene, path, change.before, change.after, env.now_ms);
         self.message_len = 0;
     }
 

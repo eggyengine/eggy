@@ -275,3 +275,60 @@ pub fn iconButtonNode(b: ui.Layout.Builder, id: u32, glyph: []const u8, label: [
 pub fn spacer(context: *ui.Context) void {
     context.element(context.builder().node(0, .{ .grow = 1 }, .none, &.{}) catch return);
 }
+
+/// What a `navItem` shows at its right end.
+pub const NavTrailing = union(enum) {
+    none,
+    /// It opens another window rather than a page: an arrow out.
+    link,
+    /// A number in a pill (how many settings changed, say).
+    count: []const u8,
+    /// Muted text (a control's value type, say).
+    detail: []const u8,
+};
+
+/// One row of a side rail with `id`: `title`, lit while `on`, `width` wide, and `trailing` at its
+/// end. `label` names it for screen readers. `context.activated(id)` says when it was pressed.
+/// Texts are borrowed for the frame.
+///
+/// ```zig
+/// const id = context.idFor("control jump");
+/// if (context.activated(id)) selected = 0;
+/// page_style.navItem(context, id, "jump", .{ .detail = "button" }, selected == 0, 184, "jump");
+/// ```
+pub fn navItem(context: *ui.Context, id: u32, title: []const u8, trailing: NavTrailing, on: bool, width: f32, label: []const u8) void {
+    const nav = context.builder().allocator.create(Nav) catch return;
+    nav.* = .{ .id = id, .title = title, .on = on, .trailing = trailing };
+    const row = context.builder().node(id, .{ .width = width, .height = nav_height }, .{ .custom = .{ .context = nav, .draw = Nav.draw } }, &.{}) catch return;
+    row.cursor = .pointer;
+    row.accessibility = .{ .role = .tab, .label = label };
+    context.element(row);
+}
+
+const nav_height: f32 = 32;
+
+const Nav = struct {
+    id: u32,
+    title: []const u8,
+    on: bool,
+    trailing: NavTrailing,
+
+    fn draw(context: *const anyopaque, c: *ui.Canvas, r: ui.Rect) anyerror!void {
+        const self: *const Nav = @ptrCast(@alignCast(context));
+        const t = c.theme;
+        if (self.on or c.hot_id == self.id) try c.roundRect(r, t.muted, t.radiusMd());
+        const inner = ui.Rect{ .x = r.x + 10, .y = r.y, .w = r.w - 20, .h = r.h };
+        try c.textIn(inner, self.title, t.text_size, t.foreground, .start);
+        switch (self.trailing) {
+            .none => {},
+            .link => try c.textIn(inner, "\u{f08e}", 11, t.muted_foreground, .end),
+            .detail => |text| try c.textIn(inner, text, 11, t.muted_foreground, .end),
+            .count => |text| {
+                const pill_w = @max(18, c.font.measure(text, 11) + 10);
+                const pill = ui.Rect{ .x = r.x + r.w - 8 - pill_w, .y = r.y + (r.h - 18) / 2, .w = pill_w, .h = 18 };
+                try c.roundRect(pill, t.primary, 9);
+                try c.textIn(pill, text, 11, t.primary_foreground, .center);
+            },
+        }
+    }
+};

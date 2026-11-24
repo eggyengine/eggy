@@ -990,12 +990,7 @@ pub fn Editor(comptime project: type) type {
             }
             self.updatePlugins();
             if (self.input_map_window) |window| {
-                const result = try window.update(&self.app.graphics, &self.ui, &self.history);
-                if (result.saved) self.assets_panel.refreshSoon();
-                if (result.close) {
-                    window.close(&self.app.graphics);
-                    self.input_map_window = null;
-                }
+                if (try window.update(&self.app.graphics, &self.ui, &self.history, self.workspace.time_ms)) self.assets_panel.refreshSoon();
             }
             if (self.input_settings) |settings| try settings.recordPending(&self.history);
             if (self.about_window) |window| if (!try window.update(&self.app.graphics, &self.ui)) {
@@ -1063,12 +1058,6 @@ pub fn Editor(comptime project: type) type {
         /// return .run; // Continue frames/events to service the save prompt.
         /// ```
         pub fn mayLeave(self: *Self, leaving: Leaving) bool {
-            if (self.input_map_window) |window| if (window.document.modified()) {
-                window.view.confirm_close = true;
-                window.window.popout.window.window.raise() catch |err| std.log.err("cannot focus the input map: {t}", .{err});
-                self.workspace.toast("Save or discard the input map, then try again");
-                return false;
-            };
             if (self.leave_approved) {
                 self.leave_approved = false;
                 // Saved or given up on: the next editor (a reload starts it before this one
@@ -1598,11 +1587,6 @@ pub fn Editor(comptime project: type) type {
             const opened = self.project orelse return error.NoProject;
             if (self.input_map_window) |window| {
                 if (std.mem.eql(u8, window.path, path)) return window.window.popout.window.window.raise();
-                if (window.document.modified()) {
-                    window.view.confirm_close = true;
-                    try window.window.popout.window.window.raise();
-                    return error.UnsavedInputMap;
-                }
                 window.close(&self.app.graphics);
                 self.input_map_window = null;
             }
@@ -1612,10 +1596,6 @@ pub fn Editor(comptime project: type) type {
         fn beforeAssetRemoval(self: *Self, path: []const u8) !void {
             const window = self.input_map_window orelse return;
             if (!window.affectedBy(path)) return;
-            if (window.document.modified()) {
-                window.view.confirm_close = true;
-                return error.UnsavedInputMap;
-            }
             window.close(&self.app.graphics);
             self.input_map_window = null;
         }
@@ -1751,11 +1731,7 @@ pub fn Editor(comptime project: type) type {
                     const path = try file_ops.createFile(self.gpa, io, files, creation.folder, creation.file_type);
                     self.assets_panel.renameNew(path);
                     self.history.record(.{ .create = .{ .path = path } });
-                    if (std.mem.endsWith(u8, path, eggy.input.asset.extension)) {
-                        if (self.input_map_window == null or !self.input_map_window.?.document.modified()) {
-                            try self.openInputMap(path);
-                        } else self.workspace.toast("Created input map; save or close the open map to edit it");
-                    }
+                    if (std.mem.endsWith(u8, path, eggy.input.asset.extension)) try self.openInputMap(path);
                 },
                 .rename => |change| {
                     try self.keepRefsValid(io, files);
@@ -2625,6 +2601,10 @@ pub fn Editor(comptime project: type) type {
                 if (window.handle(curr_event)) return self.toolWindowTook(curr_event);
             }
             if (self.input_map_window) |window| {
+                if (window.undoShortcut(curr_event)) |direction| {
+                    self.undoOrRedo(direction);
+                    return self.toolWindowTook(curr_event);
+                }
                 if (window.closeRequested(curr_event)) {
                     window.close(&self.app.graphics);
                     self.input_map_window = null;
@@ -4303,7 +4283,6 @@ pub fn Editor(comptime project: type) type {
 test {
     _ = cli;
     _ = splash;
-    _ = @import("input_mappings.zig");
     _ = @import("input_map_asset/input_map_asset.zig");
     _ = @import("animation_dock/animation_dock.zig");
     _ = @import("film/film.zig");

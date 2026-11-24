@@ -4,12 +4,14 @@ const eggy = @import("eggy");
 const File = eggy.input.asset.File;
 const Control = eggy.input.asset.Control;
 
+/// How the whole map starts and shares input with other maps.
+pub const MapSettings = struct { enabled: bool, priority: i32, consume: bool };
+
 pub const Document = struct {
     gpa: std.mem.Allocator,
     state: eggy.input_backend.State,
     revision: u64 = 0,
     saved_revision: u64 = 0,
-    saved_configuration: u64 = 0,
     const map_id = 1;
     const owner = "asset";
 
@@ -43,18 +45,16 @@ pub const Document = struct {
         self.state.deinit();
     }
 
-    /// Compare editor document/configuration revisions with the last `markSaved` baseline.
-    /// This is revision-based, not a comparison with disk or serialized bytes.
+    /// Whether an edit came after the last `markSaved`. Revision-based, not a comparison with disk.
     ///
     /// ```zig
-    /// const unsaved = document.modified(); // Existing input-map Document.
+    /// if (document.modified()) try window.save(&history, now_ms);
     /// ```
     pub fn modified(self: *const Document) bool {
-        return self.revision != self.saved_revision or self.state.configuration_revision != self.saved_configuration;
+        return self.revision != self.saved_revision;
     }
 
-    /// Accept current revisions as the editor's saved baseline without writing a file.
-    /// Call after a successful save or when initializing from already-saved content.
+    /// Accept the current revision as written, without writing a file.
     ///
     /// ```zig
     /// // After writing document successfully:
@@ -62,42 +62,49 @@ pub const Document = struct {
     /// ```
     pub fn markSaved(self: *Document) void {
         self.saved_revision = self.revision;
-        self.saved_configuration = self.state.configuration_revision;
     }
 
-    /// Set whether this editor map consumes overlapping lower-priority input and bump revision.
-    /// Requires an initialized document; even assigning the current value marks it modified.
+    /// The controls, in file order: names, kinds, triggers and bindings borrow the document
+    /// until its next edit.
     ///
     /// ```zig
-    /// document.setConsume(true); // Existing Document; applies only to edited defaults.
+    /// for (document.controls()) |control| std.log.info("{s}", .{control.name});
     /// ```
-    pub fn setConsume(self: *Document, value: bool) void {
-        self.state.owners.getPtr(map_id).?.consume = value;
-        self.revision +%= 1;
+    pub fn controls(self: *const Document) []const @TypeOf(self.state.controls.values()[0]) {
+        return self.state.controls.values();
     }
 
-    /// Snapshot effective editor values, not the temporary override representation.
-    /// Editor-only: the controls array lives in `arena`, but names, bindings and chord strings
-    /// borrow document state until its next mutation/deinit. Serialize/copy before editing again.
-    /// The snapshot owns no resolver; allocation errors propagate.
+    /// The map's startup state, priority and consumption.
+    ///
+    /// ```zig
+    /// const settings = document.mapSettings();
+    /// ```
+    pub fn mapSettings(self: *const Document) MapSettings {
+        const map = self.state.owners.get(map_id).?;
+        return .{ .enabled = map.defaults.enabled, .priority = map.defaults.priority, .consume = map.consume };
+    }
+
+    /// Snapshot the document as a file. The controls array lives in `arena`; names, bindings and
+    /// chord strings borrow document state until its next edit or deinit.
     ///
     /// ```zig
     /// const defaults = try document.file(arena); // Existing Document and scratch arena allocator.
     /// try defaults.write(writer); // Existing std.Io.Writer pointer.
     /// ```
     pub fn file(self: *const Document, arena: std.mem.Allocator) !File {
-        const controls = try arena.alloc(Control, self.state.controls.count());
-        for (controls, self.state.controls.values()) |*destination, control| destination.* = .{
+        const result = try arena.alloc(Control, self.state.controls.count());
+        for (result, self.state.controls.values()) |*destination, control| destination.* = .{
             .name = control.name,
             .kind = control.kind,
-            .trigger = self.state.overrides.getTrigger(control.key) orelse control.trigger,
-            .bindings = self.state.overrides.get(control.key) orelse control.defaults,
+            .trigger = control.trigger,
+            .bindings = control.defaults,
         };
-        const map = self.state.owners.get(map_id).?;
-        const defaults = self.state.overrides.maps.get(owner) orelse map.defaults;
-        return .{ .priority = defaults.priority, .enabled = defaults.enabled, .consume = map.consume, .controls = controls };
+        const settings = self.mapSettings();
+        return .{ .priority = settings.priority, .enabled = settings.enabled, .consume = settings.consume, .controls = result };
     }
 
+    /// Validate `replacement` and swap it in, copying what it borrows; a refusal leaves the
+    /// document as it was.
     fn replace(self: *Document, replacement: File) !void {
         try replacement.validate(self.gpa);
         var arena = std.heap.ArenaAllocator.init(self.gpa);
@@ -117,9 +124,16 @@ pub const Document = struct {
         self.revision +%= 1;
     }
 
-    /// Append an editor control with default trigger/empty bindings, copying its name.
-    /// Validates the complete replacement; duplicate/invalid names and allocation failures
-    /// propagate without changing the document. Successful replacement invalidates old borrows.
+    /// The document as a file whose controls array (in `arena`) can be changed before `replace`.
+    fn editable(self: *const Document, arena: std.mem.Allocator) !struct { file: File, controls: []Control } {
+        var snapshot = try self.file(arena);
+        const copy = try arena.dupe(Control, snapshot.controls);
+        snapshot.controls = copy;
+        return .{ .file = snapshot, .controls = copy };
+    }
+
+    /// Append a `kind` control with no bindings, copying its name.
+    /// Duplicate/invalid names and allocation failures leave the document unchanged.
     ///
     /// ```zig
     /// try document.addControl("move", .vector); // Existing Document without that control.
@@ -128,17 +142,31 @@ pub const Document = struct {
         var arena = std.heap.ArenaAllocator.init(self.gpa);
         defer arena.deinit();
         var snapshot = try self.file(arena.allocator());
-        const controls = try arena.allocator().alloc(Control, snapshot.controls.len + 1);
-        @memcpy(controls[0..snapshot.controls.len], snapshot.controls);
-        controls[snapshot.controls.len] = .{ .name = name, .kind = kind };
-        snapshot.controls = controls;
+        const grown = try arena.allocator().alloc(Control, snapshot.controls.len + 1);
+        @memcpy(grown[0..snapshot.controls.len], snapshot.controls);
+        grown[snapshot.controls.len] = .{ .name = name, .kind = kind };
+        snapshot.controls = grown;
         try self.replace(snapshot);
     }
 
-    /// Rename chord references together with their target.
-    /// Editor-only: `index` must be a valid zero-based control index. Copies `name` and validates
-    /// the replacement before swapping; failure leaves old state intact, success invalidates
-    /// previously borrowed control data.
+    /// `control`, or `control_2`, `control_3`... whichever no control has yet, in `buffer`.
+    ///
+    /// ```zig
+    /// var buffer: [32]u8 = undefined;
+    /// try document.addControl(document.freeName(&buffer), .button);
+    /// ```
+    pub fn freeName(self: *const Document, buffer: []u8) []const u8 {
+        var n: usize = 1;
+        while (true) : (n += 1) {
+            const name = if (n == 1) "control" else std.fmt.bufPrint(buffer, "control_{d}", .{n}) catch return "control";
+            for (self.state.controls.values()) |control| {
+                if (std.mem.eql(u8, control.name, name)) break;
+            } else return name;
+        }
+    }
+
+    /// Rename control `index` and the chords that name it. Invalid or taken names leave the
+    /// document unchanged.
     ///
     /// ```zig
     /// try document.renameControl(0, "jump"); // Existing Document with a first control.
@@ -146,21 +174,17 @@ pub const Document = struct {
     pub fn renameControl(self: *Document, index: usize, name: []const u8) !void {
         var arena = std.heap.ArenaAllocator.init(self.gpa);
         defer arena.deinit();
-        const snapshot = try self.file(arena.allocator());
-        const controls = try arena.allocator().dupe(Control, snapshot.controls);
-        const previous = controls[index].name;
-        controls[index].name = name;
-        for (controls) |*control| if (control.trigger == .chord and std.mem.eql(u8, control.trigger.chord, previous)) {
+        const edit = try self.editable(arena.allocator());
+        const previous = edit.controls[index].name;
+        edit.controls[index].name = name;
+        for (edit.controls) |*control| if (control.trigger == .chord and std.mem.eql(u8, control.trigger.chord, previous)) {
             control.trigger = .{ .chord = name };
         };
-        var replacement = snapshot;
-        replacement.controls = controls;
-        try self.replace(replacement);
+        try self.replace(edit.file);
     }
 
-    /// Refuse removal if another control still uses this control as its chord.
-    /// Editor-only: use a current zero-based control index. Replacement validation/allocation
-    /// failures leave the document intact; success invalidates old control borrows.
+    /// Remove control `index`; refused (`error.InvalidTrigger`) while another control chords
+    /// with it.
     ///
     /// ```zig
     /// try document.removeControl(0); // Existing Document; no remaining chord may reference it.
@@ -169,16 +193,14 @@ pub const Document = struct {
         var arena = std.heap.ArenaAllocator.init(self.gpa);
         defer arena.deinit();
         var snapshot = try self.file(arena.allocator());
-        var controls: std.ArrayList(Control) = .empty;
-        for (snapshot.controls, 0..) |control, i| if (i != index) try controls.append(arena.allocator(), control);
-        snapshot.controls = controls.items;
+        var kept: std.ArrayList(Control) = .empty;
+        for (snapshot.controls, 0..) |control, i| if (i != index) try kept.append(arena.allocator(), control);
+        snapshot.controls = kept.items;
         try self.replace(snapshot);
     }
 
-    /// Changing value type explicitly clears incompatible bindings and the trigger.
-    /// Editor-only: `index` must be valid; clears all bindings and sets an immediate trigger
-    /// even if the kind is unchanged. Validates/swaps transactionally; errors leave old state
-    /// intact, while success invalidates previous document borrows.
+    /// Change control `index`'s value type, which clears its bindings (they read another type)
+    /// and its trigger.
     ///
     /// ```zig
     /// try document.setKind(0, .axis); // Existing Document with a first control.
@@ -186,16 +208,54 @@ pub const Document = struct {
     pub fn setKind(self: *Document, index: usize, kind: eggy.input.Kind) !void {
         var arena = std.heap.ArenaAllocator.init(self.gpa);
         defer arena.deinit();
+        const edit = try self.editable(arena.allocator());
+        edit.controls[index] = .{ .name = edit.controls[index].name, .kind = kind };
+        try self.replace(edit.file);
+    }
+
+    /// Replace control `index`'s bindings with `bindings` (copied). Bindings of the wrong type
+    /// or with bad numbers leave the document unchanged.
+    ///
+    /// ```zig
+    /// try document.setBindings(0, &.{.{ .key = .space }});
+    /// ```
+    pub fn setBindings(self: *Document, index: usize, bindings: []const eggy.input.Binding) !void {
+        var arena = std.heap.ArenaAllocator.init(self.gpa);
+        defer arena.deinit();
+        const edit = try self.editable(arena.allocator());
+        edit.controls[index].bindings = bindings;
+        try self.replace(edit.file);
+    }
+
+    /// Set control `index`'s trigger. Chords must name another button control without a loop.
+    ///
+    /// ```zig
+    /// try document.setTrigger(0, .{ .hold = 0.3 });
+    /// ```
+    pub fn setTrigger(self: *Document, index: usize, trigger: eggy.input.Trigger) !void {
+        var arena = std.heap.ArenaAllocator.init(self.gpa);
+        defer arena.deinit();
+        const edit = try self.editable(arena.allocator());
+        edit.controls[index].trigger = trigger;
+        try self.replace(edit.file);
+    }
+
+    /// Set how the map starts and shares input.
+    ///
+    /// ```zig
+    /// try document.setMapSettings(.{ .enabled = true, .priority = 2, .consume = false });
+    /// ```
+    pub fn setMapSettings(self: *Document, settings: MapSettings) !void {
+        var arena = std.heap.ArenaAllocator.init(self.gpa);
+        defer arena.deinit();
         var snapshot = try self.file(arena.allocator());
-        const controls = try arena.allocator().dupe(Control, snapshot.controls);
-        controls[index].kind = kind;
-        controls[index].bindings = &.{};
-        controls[index].trigger = .immediate;
-        snapshot.controls = controls;
+        snapshot.enabled = settings.enabled;
+        snapshot.priority = settings.priority;
+        snapshot.consume = settings.consume;
         try self.replace(snapshot);
     }
 
-    /// Validate and serialize effective editor defaults as ZON to a borrowed writer.
+    /// Validate and serialize the document as ZON to a borrowed writer.
     /// Does not flush, save a file or mark the document saved; validation/allocation/writer
     /// failures propagate and the writer can contain a partial result.
     ///
@@ -226,32 +286,49 @@ test "asset controls can be added, renamed with their chords, and removed transa
     try std.testing.expect(!document.modified());
     try document.renameControl(0, "modifier");
     try std.testing.expect(document.modified());
-    try std.testing.expectEqualStrings("modifier", document.state.controls.values()[1].trigger.chord);
+    try std.testing.expectEqualStrings("modifier", document.controls()[1].trigger.chord);
     try std.testing.expectError(error.InvalidTrigger, document.removeControl(0));
-    try std.testing.expectEqual(@as(usize, 2), document.state.controls.count());
+    try std.testing.expectEqual(@as(usize, 2), document.controls().len);
     try std.testing.expectError(error.DuplicateControls, document.addControl("dash", .button));
+    var buffer: [32]u8 = undefined;
+    try std.testing.expectEqualStrings("control", document.freeName(&buffer));
+    try document.addControl("control", .button);
+    try std.testing.expectEqualStrings("control_2", document.freeName(&buffer));
     try document.addControl("move", .vector);
+    try document.removeControl(2);
     try document.removeControl(1);
     try document.removeControl(0);
-    try std.testing.expectEqualStrings("move", document.state.controls.values()[0].name);
-    try std.testing.expectEqual(eggy.input.Kind.vector, document.state.controls.values()[0].kind);
+    try std.testing.expectEqualStrings("move", document.controls()[0].name);
+    try std.testing.expectEqual(eggy.input.Kind.vector, document.controls()[0].kind);
 }
 
-test "asset serialization folds binding and map edits into full defaults" {
-    var document = try Document.init(std.testing.allocator, ".{ .controls = .{ .{ .name = \"jump\", .bindings = .{ .{ .key = .space } } } } }");
+test "binding, trigger and map edits round-trip, and bad ones change nothing" {
+    const gpa = std.testing.allocator;
+    var document = try Document.init(gpa, ".{ .controls = .{ .{ .name = \"jump\", .bindings = .{ .{ .key = .space } } }, .{ .name = \"move\", .kind = .vector } } }");
     defer document.deinit();
-    const id = document.state.controls.keys()[0];
-    try document.state.setMappings(id, &.{.{ .key = .j }}, .{ .hold = 0.3 });
-    try document.state.setMapDefaults(1, .{ .priority = 8, .enabled = false });
-    try std.testing.expect(document.modified());
-    var text: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    try document.setBindings(0, &.{ .{ .key = .j }, .{ .controller = .{ .button = .south } } });
+    try document.setTrigger(0, .{ .hold = 0.3 });
+    try document.setMapSettings(.{ .enabled = false, .priority = 8, .consume = false });
+    try std.testing.expectError(error.WrongControlKind, document.setBindings(1, &.{.{ .key = .w }}));
+    try std.testing.expectError(error.InvalidTrigger, document.setTrigger(0, .{ .chord = "jump" }));
+    try std.testing.expectError(error.InvalidTrigger, document.setTrigger(0, .{ .chord = "move" }));
+    var text: std.Io.Writer.Allocating = .init(gpa);
     defer text.deinit();
     try document.write(&text.writer);
-    var reopened = try Document.init(std.testing.allocator, text.written());
+    var reopened = try Document.init(gpa, text.written());
     defer reopened.deinit();
-    try std.testing.expectEqual(eggy.Key.j, reopened.state.controls.values()[0].defaults[0].key);
-    try std.testing.expectEqual(@as(f32, 0.3), reopened.state.controls.values()[0].trigger.hold);
-    try std.testing.expectEqual(@as(i32, 8), reopened.state.owners.get(1).?.priority);
-    try std.testing.expect(!reopened.state.owners.get(1).?.enabled);
-    try std.testing.expect(!reopened.modified());
+    try std.testing.expectEqual(eggy.Key.j, reopened.controls()[0].defaults[0].key);
+    try std.testing.expectEqual(@as(usize, 2), reopened.controls()[0].defaults.len);
+    try std.testing.expectEqual(@as(f32, 0.3), reopened.controls()[0].trigger.hold);
+    try std.testing.expectEqual(MapSettings{ .enabled = false, .priority = 8, .consume = false }, reopened.mapSettings());
+    try std.testing.expectEqual(@as(usize, 0), reopened.controls()[1].defaults.len);
+}
+
+test "changing a control's type clears its bindings and trigger" {
+    var document = try Document.init(std.testing.allocator, ".{ .controls = .{ .{ .name = \"jump\", .trigger = .{ .tap = 0.2 }, .bindings = .{ .{ .key = .space } } } } }");
+    defer document.deinit();
+    try document.setKind(0, .axis);
+    try std.testing.expectEqual(eggy.input.Kind.axis, document.controls()[0].kind);
+    try std.testing.expectEqual(@as(usize, 0), document.controls()[0].defaults.len);
+    try std.testing.expect(document.controls()[0].trigger == .immediate);
 }

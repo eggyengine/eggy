@@ -21,11 +21,12 @@ In Assets, choose New > Input > Input Map (or right-click a folder and choose th
 submenu). Rename the new file to something like `player.inmap.zon`. Double-click it
 to open the Input Map editor.
 
-Add named controls, choose button, axis, or vector, then add their input
-bindings. Keys and controller buttons can be captured; scales, dead zones, normalized
-movement, and hold/tap/chord triggers each have their own controls.
-Apply each binding or trigger edit, then press Save file. Set map priority, startup
-activation, and consumption here too if the map needs them.
+The map's controls are listed down the left. Add control makes one; pick it to
+name it, choose button, axis, or vector, and add bindings from the buttons under
+its bindings. Click a key to capture the next key you press (Escape cancels);
+scales, dead zones, normalized movement, and hold, tap, or chord triggers sit
+beside each binding. The map's own entry at the top of the list sets its startup
+state, priority, and whether it consumes inputs it shares with other maps.
 
 Use separate `.inmap.zon` files for contexts such as player movement and menus.
 Each file owns its defaults. Editing one does not modify the running game; saved
@@ -36,9 +37,9 @@ For the asset example below, save `resources/input/player.inmap.zon` with a
 button, and `move` to WASD and the left stick. Create
 `resources/input/menu.inmap.zon` with `accept` and `back` buttons too.
 
-Saved changes support Undo/Redo. Closing an unsaved map asks whether to save or
-discard it. Revert reads the file again, and Save refuses to overwrite changes
-made outside the editor.
+Each change saves to the file as you make it, and Ctrl+Z and Ctrl+Shift+Z undo
+and redo it, from this window or the main one. If the file changed outside the
+editor, the change is not saved and the file is read again.
 
 ## 2. Register the map and read its controls {#use-asset-maps-in-a-game-or-plugin}
 

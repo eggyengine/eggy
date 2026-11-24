@@ -466,22 +466,34 @@ pub const History = struct {
         self.preference_at_ms = now_ms;
     }
 
-    /// Record that the UI scene at `path` went from `before` to `after` (all three owned now,
+    /// A file an editor window saves as each edit is made, for `recordFileEdit`.
+    pub const FileEdit = enum { ui_scene, input_map };
+
+    /// Record that the `kind` file at `path` went from `before` to `after` (all three owned now,
     /// allocated with `self.gpa`). Typing edits it on every key, so a change to the same file
     /// within `typing_pause_ms` of the last one, when that was one too, joins it.
-    pub fn recordUiScene(self: *History, path: []u8, before: []u8, after: []u8, now_ms: u64) void {
-        if (self.group == null and self.undo_steps.items.len > 0 and self.redo_steps.items.len == 0 and now_ms -| self.preference_at_ms < typing_pause_ms) {
-            const last = &self.undo_steps.items[self.undo_steps.items.len - 1];
-            if (last.* == .ui_scene and std.mem.eql(u8, last.ui_scene.path, path)) {
-                self.gpa.free(last.ui_scene.text.after);
-                last.ui_scene.text.after = after;
-                self.gpa.free(before);
-                self.gpa.free(path);
-                self.preference_at_ms = now_ms;
-                return;
-            }
+    ///
+    /// ```zig
+    /// history.recordFileEdit(.input_map, owned_path, owned_before, owned_after, now_ms);
+    /// ```
+    pub fn recordFileEdit(self: *History, kind: FileEdit, path: []u8, before: []u8, after: []u8, now_ms: u64) void {
+        switch (kind) {
+            inline else => |tag| {
+                const name = @tagName(tag);
+                if (self.group == null and self.undo_steps.items.len > 0 and self.redo_steps.items.len == 0 and now_ms -| self.preference_at_ms < typing_pause_ms) {
+                    const last = &self.undo_steps.items[self.undo_steps.items.len - 1];
+                    if (last.* == @field(std.meta.Tag(Step), name) and std.mem.eql(u8, @field(last, name).path, path)) {
+                        self.gpa.free(@field(last, name).text.after);
+                        @field(last, name).text.after = after;
+                        self.gpa.free(before);
+                        self.gpa.free(path);
+                        self.preference_at_ms = now_ms;
+                        return;
+                    }
+                }
+                self.record(@unionInit(Step, name, .{ .path = path, .text = .{ .before = before, .after = after } }));
+            },
         }
-        self.record(.{ .ui_scene = .{ .path = path, .text = .{ .before = before, .after = after } } });
         self.preference_at_ms = now_ms;
     }
 

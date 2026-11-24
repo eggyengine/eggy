@@ -1,138 +1,164 @@
-//! The standalone `.inmap.zon` editor opened from Assets.
+//! The standalone `.inmap.zon` editor opened from Assets: the map and its controls in a rail,
+//! the chosen one's settings beside it, each change saved as it is made.
 const std = @import("std");
 const eggy = @import("eggy");
 const ui = eggy.ui;
 const ToolWindow = @import("../tool_window.zig").ToolWindow;
-const MappingsView = @import("../input_mappings.zig").View;
 const history_zig = @import("../history.zig");
 const page_style = @import("../page_style.zig");
 const restyle = page_style.restyle;
-const endSection = page_style.endSection;
-const endRow = page_style.endRow;
+const setting_rows = eggy.setting_rows;
+const SettingRows = setting_rows.SettingRows;
+const control_page = @import("control_page.zig");
 pub const Document = @import("document.zig").Document;
 
-const kinds = std.meta.fieldNames(eggy.input.Kind);
-const Action = enum { none, save, revert, save_close, discard_close, cancel_close };
+const rail_width: f32 = 208;
+const add_height: f32 = 40;
+const plus_glyph = "\u{f067}";
 
-/// Window-independent UI for an input-map asset, built on the shared binding/trigger controls.
+/// What the page shows: the whole map's settings, or one control by its index.
+pub const Selection = union(enum) { map, control: usize };
+
+/// Window-independent UI for an input-map asset.
 pub const View = struct {
-    mappings: MappingsView = .{ .source = .asset },
-    scroll: ui.Layout.ScrollState = .{},
-    new_name: ui.TextEdit(128) = .{},
-    new_kind: usize = 0,
-    control_name: ui.TextEdit(128) = .{},
-    control_kind: usize = 0,
-    loaded_control: ?usize = null,
-    confirm_close: bool = false,
+    selection: Selection = .map,
+    rail_scroll: ui.Layout.ScrollState = .{},
+    page_scroll: ui.Layout.ScrollState = .{},
+    control: control_page.ControlPage = .{},
+    priority: ui.TextEdit(32) = .{},
+    priority_filled: bool = false,
+    /// Why the last save or edit failed.
     last_error: ?anyerror = null,
 
-    fn resetMappings(self: *View, index: usize) void {
-        self.mappings = .{ .source = .asset, .control_index = index };
-        self.loaded_control = null;
-        self.last_error = null;
+    /// Fill every field from the document again, as after an undo, keeping what is selected.
+    pub fn forget(self: *View) void {
+        self.control.forget();
+        self.priority_filled = false;
     }
 
-    /// Build the editor input-map page, mutating only the independent document and view state.
-    /// `path` is a display/project-relative asset path; context must be building a UI frame.
-    /// Returns a save/revert/close intent for the window host, not a disk write. UI errors
-    /// propagate; invalid control edits are retained as `last_error` and leave the document intact.
+    fn select(self: *View, selection: Selection) void {
+        if (std.meta.eql(self.selection, selection)) return;
+        self.selection = selection;
+        self.control.forget();
+        self.page_scroll = .{};
+    }
+
+    /// Build the editor page for `document`, editing it as fields change. `path` is the asset's
+    /// project-relative path. UI allocation errors propagate; refused edits show on the page.
     ///
     /// ```zig
-    /// // Given View, building UI context and initialized Document:
-    /// const action = try view.build(context, &document, "resources/player.inmap.zon");
+    /// try view.build(context, &document, "resources/player.inmap.zon");
     /// ```
-    pub fn build(self: *View, context: *ui.Context, document: *Document, path: []const u8) !Action {
-        // The file: its path and state, and saving it.
-        context.begin(.row);
-        context.text(try context.builder().allocator.dupe(u8, path));
-        restyle(context, .{ .grow = 1 });
-        if (document.modified()) context.badge("Unsaved", .outline);
-        var action: Action = .none;
-        if (!self.confirm_close) {
-            if (context.buttonVariant("Revert", .ghost)) action = .revert;
-            if (context.buttonVariant("Save", .default)) action = .save;
-        }
-        endRow(context);
-        if (!std.mem.startsWith(u8, path, "resources/")) context.alert("Not in resources/", "Move this file under resources/ to include it in runtime builds.", false);
-        if (self.last_error) |err| context.alert("The file was not overwritten", @errorName(err), true);
-        if (self.confirm_close) {
-            context.alert("Unsaved changes", "Save this input map before closing?", false);
-            context.begin(.row);
-            if (context.buttonVariant("Save and close", .default)) action = .save_close;
-            if (context.buttonVariant("Discard and close", .destructive)) action = .discard_close;
-            if (context.buttonVariant("Keep editing", .ghost)) action = .cancel_close;
-            endRow(context);
-            return action;
-        }
-        if (action != .none) return action;
+    pub fn build(self: *View, context: *ui.Context, document: *Document, path: []const u8) !void {
+        if (self.selection == .control and self.selection.control >= document.controls().len) self.select(.map);
 
-        context.begin(.card);
-        var consume = document.state.owners.get(1).?.consume;
-        if (context.checkbox("Consume overlapping lower-priority input", &consume)) document.setConsume(consume);
-        endSection(context);
-
-        // Controls: add one, then rename, retype or remove the selected one.
-        context.begin(.card);
+        // Two panes the window's height, each scrolling on its own.
+        const height = page_style.pageHeight(context);
         context.begin(.row);
-        _ = context.textInput("New control name", &self.new_name, "jump, move, look...");
-        restyle(context, .{ .grow = 1 });
-        _ = context.select("New control value", kinds, &self.new_kind);
-        const add = context.buttonVariant("Add control", .outline);
-        endRow(context);
-        if (add) self.addControl(document);
-        if (document.state.controls.count() != 0) try self.editSelected(context, document);
-        endSection(context);
-        try self.mappings.build(context, &document.state);
-        return .none;
+        try self.rail(context, document, path, height);
+        context.beginScroll(&self.page_scroll, height);
+        if (!std.mem.startsWith(u8, path, "resources/")) context.alert("Not in resources/", "Move this file under resources/ to include it in builds.", false);
+        if (self.last_error) |err| context.alert("Couldn't save the input map", describe(err), true);
+        switch (self.selection) {
+            .map => try self.mapPage(context, document),
+            .control => |index| if (try self.control.build(context, document, index) == .removed) {
+                const count = document.controls().len;
+                self.select(if (count == 0) .map else .{ .control = @min(index, count - 1) });
+            },
+        }
+        context.end();
+        restyle(context, .{ .grow = 1, .gap = 14, .padding = .{ .left = 24, .right = 16, .top = 8, .bottom = 24 } });
+        context.end();
+        restyle(context, .{ .direction = .row, .gap = 0, .align_items = .start });
     }
 
-    /// Add the control the new-control row describes; a refusal shows as `last_error`.
-    fn addControl(self: *View, document: *Document) void {
-        document.addControl(self.new_name.text(), @fromBackingInt(@intCast(self.new_kind))) catch |err| {
-            self.last_error = err;
-            return;
-        };
-        self.new_name.set("") catch {};
-        self.resetMappings(document.state.controls.count() - 1);
+    /// The map, then each control with its value type, and Add control at the bottom.
+    fn rail(self: *View, context: *ui.Context, document: *Document, path: []const u8, height: f32) !void {
+        const arena = context.builder().allocator;
+        const item_width = rail_width - 24;
+        context.begin(.column);
+        context.beginScroll(&self.rail_scroll, @max(1, height - add_height));
+        const map_id = context.idFor("map settings");
+        if (context.activated(map_id)) self.select(.map);
+        page_style.navItem(context, map_id, mapTitle(path), .none, self.selection == .map, item_width, "Map settings");
+        context.element(try context.builder().node(0, .{ .height = 8 }, .none, &.{}));
+        for (document.controls(), 0..) |control, i| {
+            const id = context.idFor(try std.fmt.allocPrint(arena, "control {d}", .{i}));
+            if (context.activated(id)) self.select(.{ .control = i });
+            const name = try arena.dupe(u8, control.name);
+            const on = self.selection == .control and self.selection.control == i;
+            page_style.navItem(context, id, name, .{ .detail = @tagName(control.kind) }, on, item_width, name);
+        }
+        context.end();
+        restyle(context, .{ .gap = 2 });
+        if (context.buttonVariant(plus_glyph ++ "  Add control", .ghost)) {
+            var buffer: [32]u8 = undefined;
+            if (document.addControl(document.freeName(&buffer), .button)) |_| {
+                self.select(.{ .control = document.controls().len - 1 });
+            } else |err| self.last_error = err;
+        }
+        restyle(context, .{ .width = item_width });
+        context.end();
+        if (context.last_added) |column| column.style = .{ .width = rail_width, .height = height, .justify = .space_between, .padding = .{ .right = 12 } };
+        page_style.railBackdrop(context);
     }
 
-    /// The selected control's name and value type, and removing it; the document's refusals
-    /// show as `last_error`.
-    fn editSelected(self: *View, context: *ui.Context, document: *Document) !void {
-        const index = @min(self.mappings.control_index, document.state.controls.count() - 1);
-        const control = document.state.controls.values()[index];
-        if (self.loaded_control != index) {
-            try self.control_name.set(control.name);
-            self.control_kind = @backingInt(control.kind);
-            self.loaded_control = index;
+    /// How the whole map starts and shares input with other maps.
+    fn mapPage(self: *View, context: *ui.Context, document: *Document) !void {
+        const settings = document.mapSettings();
+        if (!self.priority_filled) {
+            var buffer: [32]u8 = undefined;
+            try self.priority.set(try std.fmt.bufPrint(&buffer, "{d}", .{settings.priority}));
+            self.priority_filled = true;
         }
-        context.separator();
+        var next = settings;
+        var rows = SettingRows{};
+        setting_rows.beginGroup(context);
+        rows.begin(context, "Enabled at startup", "");
+        _ = context.toggle("##enabled at startup", &next.enabled);
+        rows.end(context);
+        rows.begin(context, "Priority", "Higher maps read shared inputs first.");
+        // In a row, like the control page's number fields, so it keeps its width; at the
+        // row's end, in line with the toggles.
         context.begin(.row);
-        _ = context.textInput("Selected control name", &self.control_name, "Name");
-        restyle(context, .{ .grow = 1 });
-        const rename = context.buttonVariant("Rename", .outline);
-        endRow(context);
-        context.begin(.row);
-        _ = context.select("Selected control value", kinds, &self.control_kind);
-        restyle(context, .{ .grow = 1 });
-        const retype = context.buttonVariant("Change type", .outline);
-        const remove = context.buttonVariant("Remove", .destructive);
-        endRow(context);
-        const edited = if (rename)
-            document.renameControl(index, self.control_name.text())
-        else if (retype)
-            document.setKind(index, @fromBackingInt(@intCast(self.control_kind)))
-        else if (remove)
-            document.removeControl(index)
-        else
-            return;
-        edited catch |err| {
-            self.last_error = err;
-            return;
+        page_style.spacer(context);
+        const typed = context.textInput("##priority", &self.priority, "");
+        restyle(context, .{ .width = 64 });
+        page_style.endRow(context);
+        restyle(context, .{ .width = SettingRows.control_width });
+        const priority = std.fmt.parseInt(i32, std.mem.trim(u8, self.priority.text(), " "), 10) catch null;
+        if (priority == null) {
+            context.muted("A whole number.");
+            page_style.smallText(context, 12);
+        }
+        if (typed) if (priority) |value| {
+            next.priority = value;
         };
-        self.resetMappings(if (remove) 0 else index);
+        rows.end(context);
+        rows.begin(context, "Consume shared inputs", "Inputs this map uses don't reach lower-priority maps.");
+        _ = context.toggle("##consume shared inputs", &next.consume);
+        rows.end(context);
+        setting_rows.endGroup(context);
+        if (!std.meta.eql(next, settings)) document.setMapSettings(next) catch |err| {
+            self.last_error = err;
+        };
     }
 };
+
+/// The asset's file name without `.inmap.zon`: "player" for `resources/player.inmap.zon`.
+fn mapTitle(path: []const u8) []const u8 {
+    const name = std.fs.path.basenamePosix(path);
+    return if (std.mem.endsWith(u8, name, eggy.input.asset.extension)) name[0 .. name.len - eggy.input.asset.extension.len] else name;
+}
+
+fn describe(err: anyerror) []const u8 {
+    return switch (err) {
+        error.InputMapChangedExternally => "The file changed outside the editor, so it was read again without your last change.",
+        error.InputMapTooLarge => "It would be over 1 MiB.",
+        error.OutOfMemory => "Out of memory.",
+        else => @errorName(err),
+    };
+}
 
 /// Save only after the complete replacement is validated by the document.
 /// Editor-only: caller supplies validated bytes and a path relative to `dir`. Writes and
@@ -216,7 +242,7 @@ pub const Window = struct {
     }
 
     /// Close desktop render/window resources and destroy this heap-owned editor window once.
-    /// Does not save: resolve unsaved-close confirmation before calling; the pointer becomes invalid.
+    /// Every edit is already saved; the pointer becomes invalid.
     ///
     /// ```zig
     /// window.close(graphics); // Existing Window pointer and its owning Graphics.
@@ -254,47 +280,59 @@ pub const Window = struct {
         self.path = replacement;
     }
 
-    /// Route desktop editor events to this window, prioritizing an active binding capture.
-    /// Controller input may be captured without owning its window; returns true if consumed
-    /// or window-owned. Borrowed event data is not retained.
+    /// Route desktop editor events to this window, a binding capture first: a controller
+    /// button may be captured without the window owning it. Returns true if consumed or
+    /// window-owned. Borrowed event data is not retained.
     ///
     /// ```zig
     /// const used = window.handle(event); // Existing input-map Window and Eggy event.
     /// ```
     pub fn handle(self: *Window, event: eggy.Event) bool {
-        if (self.view.mappings.capture != null and (self.window.owns(event) or eggy.game_ui.isControllerInput(event))) {
-            if (self.view.mappings.captureEvent(event)) return true;
+        if (self.view.control.capturing() and self.view.selection == .control and (self.window.owns(event) or eggy.game_ui.isControllerInput(event))) {
+            if (self.view.control.captureEvent(event, &self.document, self.view.selection.control)) return true;
         }
         if (!self.window.owns(event)) return false;
         self.window.handle(event);
         return true;
     }
 
-    /// Return true when this desktop editor window can close immediately for close/Escape.
-    /// Escape is ignored during binding capture; a modified document instead opens confirmation
-    /// and returns false. Does not destroy the window or write its file.
+    /// Ctrl+Z (undo) or Ctrl+Shift+Z / Ctrl+Y (redo) pressed in this window outside a text
+    /// field, for the editor's History; null for any other event.
+    ///
+    /// ```zig
+    /// if (window.undoShortcut(event)) |direction| editor.undoOrRedo(direction);
+    /// ```
+    pub fn undoShortcut(self: *const Window, event: eggy.Event) ?eggy.Direction {
+        if (!self.window.owns(event) or event != .key_down or self.window.ui.wants_text or self.view.control.capturing()) return null;
+        const key_down = event.key_down;
+        if (!key_down.mod.controlDown()) return null;
+        const key = key_down.key orelse return null;
+        return switch (key) {
+            .z => if (key_down.mod.shiftDown()) .redo else .undo,
+            .y => .redo,
+            else => null,
+        };
+    }
+
+    /// Whether `event` closes this window: its close button, or Escape when no key is being
+    /// captured. Every edit is already saved, so it can close at once.
     ///
     /// ```zig
     /// if (window.closeRequested(event)) window.close(graphics); // Host-owned event/graphics.
     /// ```
     pub fn closeRequested(self: *Window, event: eggy.Event) bool {
         if (!self.window.owns(event)) return false;
-        const requested = event == .window_close_requested or (self.view.mappings.capture == null and event == .key_down and event.key_down.scancode == .escape);
-        if (!requested) return false;
-        if (!self.document.modified()) return true;
-        self.view.confirm_close = true;
-        return false;
+        return event == .window_close_requested or (!self.view.control.capturing() and event == .key_down and event.key_down.scancode == .escape);
     }
 
-    /// Refuse external changes, and reserve history before replacing the file atomically.
-    /// Editor-only: validates/serializes at most 1 MiB, checks the loaded file hash, and records
-    /// an owned before/after step only after replacement succeeds. Marks saved on success;
-    /// unchanged bytes need no history step. Conflict/validation/history/I/O errors propagate.
+    /// Write the document over the file and record the change in `history`, joining the last
+    /// step while typing (`now_ms`, monotonic). Refuses (`error.InputMapChangedExternally`) when
+    /// the file changed since it was read; validation/history/I/O errors propagate.
     ///
     /// ```zig
-    /// try window.save(&history); // Existing input-map Window and editor History.
+    /// try window.save(&history, now_ms); // Existing input-map Window and editor History.
     /// ```
-    pub fn save(self: *Window, history: *history_zig.History) !void {
+    pub fn save(self: *Window, history: *history_zig.History, now_ms: u64) !void {
         var text: std.Io.Writer.Allocating = .init(self.gpa);
         defer text.deinit();
         try self.document.write(&text.writer);
@@ -317,17 +355,16 @@ pub const Window = struct {
         errdefer self.gpa.free(path);
         try history.reserve();
         try writeFile(io, dir, self.path, after);
-        history.record(.{ .input_map = .{ .path = path, .text = .{ .before = before, .after = after } } });
         self.loaded_hash = std.hash.Wyhash.hash(0, after);
         self.document.markSaved();
+        history.recordFileEdit(.input_map, path, before, after, now_ms);
     }
 
-    /// Re-read the editor asset from disk, discarding unsaved changes only after a valid parse.
-    /// Replaces document/view state and loaded hash; I/O/parse failures preserve current state.
-    /// Does not record history or change the live game's input state.
+    /// Re-read the asset from disk, replacing the document only after a valid parse and filling
+    /// the page's fields again. I/O/parse failures keep the current state.
     ///
     /// ```zig
-    /// try window.reload(); // Existing Window after the user chooses Revert.
+    /// try window.reload(); // Existing Window after the file changed outside the editor.
     /// ```
     pub fn reload(self: *Window) !void {
         var threaded: std.Io.Threaded = .init_single_threaded;
@@ -340,86 +377,59 @@ pub const Window = struct {
         self.document.deinit();
         self.document = replacement;
         self.loaded_hash = std.hash.Wyhash.hash(0, text);
-        self.view = .{};
+        self.view.forget();
     }
 
-    /// Apply editor input-map undo/redo to disk and this window, rejecting unsaved/external edits.
-    /// `dir` is the project directory; `expected` is the current history side and `text` the
-    /// target side. Validates and atomically replaces before swapping document/view/hash;
-    /// conflicts, parse and I/O errors propagate without replacing the working document.
+    /// Apply an undo/redo step to disk and this window. `dir` is the project directory;
+    /// `expected` is the current history side and `text` the target side. Validates and
+    /// atomically replaces before swapping the document; conflicts, parse and I/O errors
+    /// propagate without changing it.
     ///
     /// ```zig
     /// try window.restore(io, project, after, before); // Undo with history bytes.
     /// ```
     pub fn restore(self: *Window, io: std.Io, dir: std.Io.Dir, expected: []const u8, text: []const u8) !void {
-        if (self.document.modified()) return error.UnsavedInputMap;
         const replacement = try restoreFile(self.gpa, io, dir, self.path, expected, text);
         self.document.deinit();
         self.document = replacement;
         self.loaded_hash = std.hash.Wyhash.hash(0, text);
-        self.view = .{};
+        self.view.forget();
     }
 
-    /// Present one desktop editor frame, carrying out save/revert intents using `history`.
-    /// Borrows the main UI's style and owning graphics; presentation failures propagate,
-    /// while save/revert/build failures log and show in the view. The caller destroys the
-    /// window when `close` is true and refreshes asset state when `saved` is true.
+    /// Present one frame, then save what it changed into `history` (`now_ms`: monotonic).
+    /// Presentation failures propagate; save failures log and show on the page. Returns whether
+    /// the file was written, for the host to refresh asset state.
     ///
     /// ```zig
-    /// const result = try window.update(graphics, style, &history); // Existing host objects.
-    /// if (result.close) window.close(graphics);
+    /// if (try window.update(graphics, style, &history, now_ms)) assets.refreshSoon();
     /// ```
-    pub fn update(self: *Window, graphics: *eggy.Graphics, style: *const ui.Context, history: *history_zig.History) !struct { close: bool = false, saved: bool = false } {
+    pub fn update(self: *Window, graphics: *eggy.Graphics, style: *const ui.Context, history: *history_zig.History, now_ms: u64) !bool {
         const Page = struct {
             owner: *Window,
-            action: Action = .none,
-            /// ToolWindow callback for this editor frame: build a scrollable input-map page,
-            /// retaining its intent in `page.action`. Borrows owner/context synchronously;
-            /// UI failures are logged and stored in the view, not returned.
-            ///
-            /// ```zig
-            /// // Inside Window.update, with its local Page and a building UI context:
-            /// page.build(context);
-            /// ```
+            /// ToolWindow callback for this editor frame. UI failures are logged and shown.
             pub fn build(page: *@This(), context: *ui.Context) void {
                 const view = &page.owner.view;
-                context.beginScroll(&view.scroll, @max(1, context.viewport.h - 24));
-                defer context.end();
-                page.action = view.build(context, &page.owner.document, page.owner.path) catch |err| {
+                view.build(context, &page.owner.document, page.owner.path) catch |err| {
                     view.last_error = err;
                     std.log.err("cannot draw input map {s}: {t}", .{ page.owner.path, err });
-                    return;
                 };
             }
         };
         var page = Page{ .owner = self };
         try self.window.present(graphics, style, &page);
-        switch (page.action) {
-            .none => {},
-            .cancel_close => self.view.confirm_close = false,
-            .discard_close => return .{ .close = true },
-            .revert => self.reload() catch |err| {
-                self.report(err);
-            },
-            .save, .save_close => {
-                self.save(history) catch |err| {
-                    self.report(err);
-                    return .{};
-                };
-                self.view.last_error = null;
-                return .{ .saved = true, .close = page.action == .save_close };
-            },
-        }
-        return .{};
-    }
-
-    fn report(self: *Window, err: anyerror) void {
-        self.view.last_error = err;
-        std.log.err("input map {s}: {t}; revert to read the file again after external changes", .{ self.path, err });
+        if (!self.document.modified()) return false;
+        self.save(history, now_ms) catch |err| {
+            self.view.last_error = err;
+            std.log.err("cannot save input map {s}: {t}", .{ self.path, err });
+            if (err == error.InputMapChangedExternally) self.reload() catch |reload_err| std.log.err("cannot read input map {s} again: {t}", .{ self.path, reload_err });
+            return false;
+        };
+        self.view.last_error = null;
+        return true;
     }
 };
 
-test "an empty input-map asset has a usable editor and controls fit a scrollable page" {
+test "the map page and a control page lay out, and removing the last control shows the map" {
     const gpa = std.testing.allocator;
     var document = try Document.init(gpa, ".{}");
     defer document.deinit();
@@ -428,18 +438,42 @@ test "an empty input-map asset has a usable editor and controls fit a scrollable
     defer context.deinit();
     context.density = .compact;
     context.newFrame(.{ .x = 0, .y = 0, .w = 760, .h = 780 });
-    try std.testing.expectEqual(Action.none, try view.build(&context, &document, "resources/player.inmap.zon"));
+    try view.build(&context, &document, "resources/player.inmap.zon");
     try std.testing.expect((try context.render()).len > 0);
     try document.addControl("move", .vector);
-    context.newFrame(.{ .x = 0, .y = 0, .w = 760, .h = 400 });
-    context.beginScroll(&view.scroll, 376);
-    _ = try view.build(&context, &document, "resources/player.inmap.zon");
-    context.end();
+    try document.setBindings(0, &.{ .{ .keys_2d = .{} }, .{ .controller_stick = .{} }, .{ .mouse_delta = .{} } });
+    view.select(.{ .control = 0 });
+    context.newFrame(.{ .x = 0, .y = 0, .w = 760, .h = 780 });
+    try view.build(&context, &document, "resources/player.inmap.zon");
     try std.testing.expect((try context.render()).len > 0);
-    try std.testing.expect(view.scroll.content.y > view.scroll.viewport.h);
+    try std.testing.expectEqualStrings("move", view.control.name.text());
+    try document.removeControl(0);
+    context.newFrame(.{ .x = 0, .y = 0, .w = 760, .h = 780 });
+    try view.build(&context, &document, "resources/player.inmap.zon");
+    try std.testing.expect(view.selection == .map);
+    try std.testing.expectEqualStrings("player", mapTitle("resources/player.inmap.zon"));
 }
 
-test "saving an input-map asset records atomic undo and refuses external or unsaved conflicts" {
+test "a captured key goes into the binding and Escape cancels a capture" {
+    const gpa = std.testing.allocator;
+    var document = try Document.init(gpa, ".{ .controls = .{ .{ .name = \"move\", .kind = .vector, .bindings = .{ .{ .keys_2d = .{} } } } } }");
+    defer document.deinit();
+    var page = control_page.ControlPage{ .capture = .{ .binding = 0, .part = .left } };
+    const press = struct {
+        fn key(scancode: eggy.Key) eggy.Event {
+            return .{ .key_down = .{ .common = undefined, .id = null, .scancode = scancode, .key = null, .mod = .{}, .raw = 0, .down = true, .repeat = false } };
+        }
+    };
+    try std.testing.expect(page.captureEvent(press.key(.j), &document, 0));
+    try std.testing.expectEqual(eggy.Key.j, document.controls()[0].defaults[0].keys_2d.keys.left);
+    try std.testing.expect(document.modified());
+    page.capture = .{ .binding = 0, .part = .up };
+    try std.testing.expect(page.captureEvent(press.key(.escape), &document, 0));
+    try std.testing.expect(!page.capturing());
+    try std.testing.expectEqual(eggy.Key.w, document.controls()[0].defaults[0].keys_2d.keys.up);
+}
+
+test "each edit saves with one coalesced undo step and refuses external changes" {
     const gpa = std.testing.allocator;
     const io = std.testing.io;
     var tmp = std.testing.tmpDir(.{});
@@ -460,22 +494,26 @@ test "saving an input-map asset records atomic undo and refuses external or unsa
     var history = history_zig.History{ .gpa = gpa };
     defer history.deinit();
     try window.document.addControl("jump", .button);
-    try window.save(&history);
+    try window.save(&history, 1000);
+    try window.document.renameControl(0, "jum");
+    try window.save(&history, 1200);
     try std.testing.expect(!window.document.modified());
     try std.testing.expectEqual(@as(usize, 1), history.undo_steps.items.len);
-    const change = history.undo_steps.items[0].input_map;
+    try window.document.renameControl(0, "hop");
+    try window.save(&history, 5000);
+    try std.testing.expectEqual(@as(usize, 2), history.undo_steps.items.len);
+    const change = history.undo_steps.items[1].input_map;
     try window.restore(io, tmp.dir, change.text.after, change.text.before);
-    try std.testing.expectEqual(@as(usize, 0), window.document.state.controls.count());
+    try std.testing.expectEqualStrings("jum", window.document.controls()[0].name);
     try window.restore(io, tmp.dir, change.text.before, change.text.after);
-    try std.testing.expectEqualStrings("jump", window.document.state.controls.values()[0].name);
-    try window.document.addControl("move", .vector);
-    try std.testing.expectError(error.UnsavedInputMap, window.restore(io, tmp.dir, change.text.after, change.text.before));
+    try std.testing.expectEqualStrings("hop", window.document.controls()[0].name);
     try tmp.dir.writeFile(io, .{ .sub_path = "player.inmap.zon", .data = ".{ .priority = 9 }" });
-    try std.testing.expectError(error.InputMapChangedExternally, window.save(&history));
-    try std.testing.expectEqual(@as(usize, 1), history.undo_steps.items.len);
+    try window.document.renameControl(0, "jump");
+    try std.testing.expectError(error.InputMapChangedExternally, window.save(&history, 9000));
+    try std.testing.expectEqual(@as(usize, 2), history.undo_steps.items.len);
     try window.reload();
     try std.testing.expect(!window.document.modified());
-    try std.testing.expectEqual(@as(i32, 9), window.document.state.owners.get(1).?.priority);
+    try std.testing.expectEqual(@as(i32, 9), window.document.mapSettings().priority);
     try std.testing.expectError(error.InputMapChangedExternally, window.restore(io, tmp.dir, change.text.after, change.text.before));
     try window.moved("player.inmap.zon", "menu.inmap.zon");
     try std.testing.expectEqualStrings("menu.inmap.zon", window.path);
@@ -484,4 +522,5 @@ test "saving an input-map asset records atomic undo and refuses external or unsa
 
 test {
     _ = @import("document.zig");
+    _ = @import("control_page.zig");
 }
