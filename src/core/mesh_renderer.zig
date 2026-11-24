@@ -319,7 +319,9 @@ pub const MeshRenderer = struct {
         sources.stats.culled += drawables.len - sorted.len;
         if (sorted.len > max_drawables) return error.TooManyVisibleMeshes;
         const sky = self.sky.texture;
-        if (sorted.len == 0 and sky == null) return;
+        // Fog without a sky is drawn over the backdrop where the sky would be.
+        const sky_drawn = sky != null or sources.lights.fog[3] > 0;
+        if (sorted.len == 0 and !sky_drawn) return;
         for (sorted) |drawable| if (!drawable.material_failed) {
             sources.stats.meshes += 1;
         };
@@ -338,7 +340,7 @@ pub const MeshRenderer = struct {
         cmd.setBindGroup(1, sources.textures.white.group, &.{});
         if (sources.textures.mapsGroup(@splat(null), 0.01)) |neutral| cmd.setBindGroup(2, neutral, &.{});
         cmd.setBindGroup(3, (sky orelse sources.textures.white).group, &.{});
-        if (sky != null) {
+        if (sky_drawn) {
             cmd.setGraphicsPipeline(self.sky_pipeline);
             cmd.setVertexBuffer(0, self.sky_vertices, 0);
             cmd.draw(sky_triangle.len, 1, 0, 0);
@@ -381,14 +383,21 @@ pub const MeshRenderer = struct {
             .lights = lights.lights,
             .ambient = lights.ambient,
             .environment = environmentOf(lights.*),
-            .shadow_matrix = self.shadow.matrix,
+            .shadow_matrices = self.shadow.matrices,
+            .shadow_splits = self.shadow.splits_m,
+            .shadow_texels = self.shadow.texels_m,
+            .view_forward = .{ view.forward.x, view.forward.y, view.forward.z, if (view.projection == .orthographic) 1 else 0 },
             .shadow_params = self.shadow.params,
             .local_shadow_params = .{ 1 / @as(f32, @floatFromInt(self.local_shadow.resolution)), shadows.local_maps_across, 0, 0 },
+            .sky_rays = skyRays(view, aspect),
+            .fog = lights.fog,
+            .fog_shape = .{ lights.fog_shape[0], lights.fog_shape[1], view.far, 0 },
         };
         // Without maps drawn this frame, every local light reads as unshadowed.
         for (self.local_shadow.matrices[0..self.local_shadow.count], 0..) |matrix, map| uniforms.local_shadow_matrices[map] = matrix;
+        uniforms.sky_rays[0][3] = 0;
         if (self.sky.texture != null) {
-            uniforms.sky_rays = skyRays(view, aspect);
+            uniforms.sky_rays[0][3] = 1;
             uniforms.sky = .{ lights.sky[0], lights.sky[1], self.sky.mip_count, 0 };
             uniforms.sky_light = self.sky.light;
         }
@@ -452,32 +461,38 @@ pub const MeshRenderer = struct {
         try self.renderLocalShadows(cmd, drawables, sources, settings);
     }
 
+    // The directional light's cascades, in the squares of its texture.
     fn renderDirectionalShadow(self: *MeshRenderer, cmd: vit.CommandBuffer, drawables: []mesh.Drawable, sources: Sources, view: camera_zig.View, aspect: f32, settings: render_settings.Settings) !void {
-        const enabled = self.shadow.fit(view, aspect, sources.lights, settings);
-        if (!enabled and self.shadow.initialized) return;
-        const casters = if (enabled) castersFirst(visibleFirst(drawables, sources, math.fromArray(f32, 4, 4, self.shadow.matrix))) else drawables[0..0];
+        const map = &self.shadow;
+        const enabled = map.fit(view, aspect, sources.lights, settings);
+        if (!enabled and map.initialized) return;
+        const casters = if (enabled) castersFirst(drawables) else drawables[0..0];
         if (casters.len > max_drawables) return error.TooManyShadowMeshes;
-        self.shadow.slot = (self.shadow.slot + 1) % frames_in_flight;
-        const slot = self.shadow.slot;
+        map.slot = (map.slot + 1) % frames_in_flight;
+        const slot = map.slot;
         if (enabled) {
-            try upload(self.shadow.instances[slot], std.mem.sliceAsBytes(casters));
-            const uniforms = CameraUniforms{ .view_projection = self.shadow.matrix };
-            try upload(self.shadow.uniforms[slot], std.mem.asBytes(&uniforms));
+            try upload(map.instances[slot], std.mem.sliceAsBytes(casters));
+            try map.upload(slot);
         }
-        try cmd.barrier(&.{.{ .texture = .{ .texture = self.shadow.texture, .before = if (self.shadow.initialized) .sampled else .common, .after = .depth_stencil_write } }});
-        try cmd.beginRenderPass(.{ .label = "directional shadows", .color_attachments = &.{}, .depth_stencil_attachment = .{ .view = self.shadow.view, .depth_clear = 1, .depth_store_op = .store } });
+        try cmd.barrier(&.{.{ .texture = .{ .texture = map.texture, .before = if (map.initialized) .sampled else .common, .after = .depth_stencil_write } }});
+        try cmd.beginRenderPass(.{ .label = "directional shadows", .color_attachments = &.{}, .depth_stencil_attachment = .{ .view = map.view, .depth_clear = 1, .depth_store_op = .store } });
         if (enabled) {
-            const size: f32 = @floatFromInt(self.shadow.resolution);
-            cmd.setViewport(.{ .width = size, .height = size });
-            cmd.setScissor(.{ .x = 0, .y = 0, .width = self.shadow.resolution, .height = self.shadow.resolution });
             cmd.setGraphicsPipeline(self.shadow_pipeline);
-            cmd.setBindGroup(0, self.shadow.groups[slot], &.{0});
-            cmd.setVertexBuffer(1, self.shadow.instances[slot], 0);
-            for (casters, 0..) |drawable, index| self.drawRun(cmd, sources, drawable, @intCast(index), 1, .shadow);
+            cmd.setVertexBuffer(1, map.instances[slot], 0);
+            for (map.matrices, 0..) |matrix, cascade| {
+                const square = map.rect(cascade);
+                cmd.setViewport(.{ .x = @floatFromInt(square.x), .y = @floatFromInt(square.y), .width = @floatFromInt(square.width), .height = @floatFromInt(square.height) });
+                cmd.setScissor(square);
+                cmd.setBindGroup(0, map.groups[slot], &.{shadows.cameraOffset(cascade)});
+                const seen_from = math.fromArray(f32, 4, 4, matrix);
+                for (casters, 0..) |drawable, index| if (visibleThrough(drawable, sources, seen_from)) {
+                    self.drawRun(cmd, sources, drawable, @intCast(index), 1, .shadow);
+                };
+            }
         }
         cmd.endRenderPass();
-        try cmd.barrier(&.{.{ .texture = .{ .texture = self.shadow.texture, .before = .depth_stencil_write, .after = .sampled } }});
-        self.shadow.initialized = true;
+        try cmd.barrier(&.{.{ .texture = .{ .texture = map.texture, .before = .depth_stencil_write, .after = .sampled } }});
+        map.initialized = true;
     }
 
     // Each point and spot light's maps, in the squares of their shared texture.
@@ -503,7 +518,7 @@ pub const MeshRenderer = struct {
                 const square = local.rect(map);
                 cmd.setViewport(.{ .x = @floatFromInt(square.x), .y = @floatFromInt(square.y), .width = @floatFromInt(square.width), .height = @floatFromInt(square.height) });
                 cmd.setScissor(square);
-                cmd.setBindGroup(0, local.groups[slot], &.{shadows.Local.offset(map)});
+                cmd.setBindGroup(0, local.groups[slot], &.{shadows.cameraOffset(map)});
                 const seen_from = math.fromArray(f32, 4, 4, matrix);
                 for (casters, 0..) |drawable, index| if (visibleThrough(drawable, sources, seen_from)) {
                     self.drawRun(cmd, sources, drawable, @intCast(index), 1, .shadow);
@@ -777,7 +792,8 @@ fn pipelineOf(device: vit.Device, format: vit.Format, layout: vit.PipelineLayout
         .vertex = vs,
         .fragment = fs,
         .vertex_buffers = &.{.{ .stride = @sizeOf([2]f32), .attributes = &.{.{ .location = 0, .format = .float32x2, .offset = 0 }} }},
-        .color_targets = &.{.{ .format = format }},
+        // Blended, so fog without a sky lies over the backdrop; a sky covers it.
+        .color_targets = &.{.{ .format = format, .blend = alpha_blend }},
         .depth_stencil = .{ .format = .d32_float, .depth_write = false, .depth_compare = .always },
         .raster = .{ .cull_mode = .none },
         .layout = layout,

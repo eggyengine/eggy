@@ -1,5 +1,6 @@
 //! Shared GPU camera, lighting and shadow layout for scene passes.
 const lighting = @import("lighting.zig");
+const shadows = @import("shadows.zig");
 
 pub const Camera = extern struct {
     view_projection: [4][4]f32,
@@ -11,7 +12,14 @@ pub const Camera = extern struct {
     light_info: [4]f32 = @splat(0),
     ambient: [4]f32 = .{ 1, 1, 1, 0.03 },
     environment: [4]f32 = .{ 1, 1, -1, 0 },
-    shadow_matrix: [4][4]f32 = @splat(@splat(0)),
+    /// Each directional shadow cascade's matrix (`shadows.Map`), by column.
+    shadow_matrices: [shadows.cascades][4][4]f32 = @splat(@splat(@splat(0))),
+    /// How far along the view each cascade reaches, in metres.
+    shadow_splits: [shadows.cascades]f32 = @splat(0),
+    /// One shadow texel's width in each cascade, in metres.
+    shadow_texels: [shadows.cascades]f32 = @splat(0),
+    /// xyz: the way the view looks; w: 1 when it is orthographic.
+    view_forward: [4]f32 = @splat(0),
     /// x: depth bias, y: reciprocal map size, z: light index, w: enabled.
     shadow_params: [4]f32 = @splat(0),
     lights: [lighting.max_lights]lighting.GpuLight = @splat(.{}),
@@ -25,4 +33,8 @@ pub const Camera = extern struct {
     /// x: the sky's brightness as shown, y: as light, z: its texture's mip count.
     sky: [4]f32 = @splat(0),
     sky_light: @import("sky.zig").Irradiance = @splat(@splat(0)),
+    /// rgb: the fog's colour, a: its density at its height, per metre (`lighting.Fog`).
+    fog: [4]f32 = @splat(0),
+    /// x: the fog's height, y: how fast it thins going up, z: how far the sky is, in metres.
+    fog_shape: [4]f32 = @splat(0),
 };

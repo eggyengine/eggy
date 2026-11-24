@@ -90,10 +90,12 @@ half-angles in degrees and must satisfy `0 <= inner < outer < 90`. Parent transf
 apply to all light types.
 
 Lighting uses a GGX metallic/roughness BRDF, native lux/candela strengths with a shared
-exposure reference of 1000. Emissive surfaces are included before exposure. With the
-Environment's default **surface** tone mapping, lit surfaces fit themselves with an ACES
-curve and unlit materials are not mapped; the other tone mappings map the whole image
-afterwards. See [Post-processing and shaders](./post-processing-and-shaders.md).
+exposure reference of 1000. Rough surfaces keep the light that bounces between their
+microfacets, so rough metals don't darken, and highlights on tightly curved or normal-mapped
+surfaces are widened a little so they don't sparkle. Emissive surfaces are included before
+exposure. The Environment's tone mapping (ACES by default) then maps the whole image; with
+**surface**, lit surfaces fit themselves with an ACES curve and unlit materials are not
+mapped. See [Post-processing and shaders](./post-processing-and-shaders.md).
 
 Up to sixteen lights can be active; exceeding this reports an error rather than silently
 dropping lights. Scenes without authored lights retain a fixed preview light by default.
@@ -115,7 +117,9 @@ try app.lighting().setEnvironment(.{
 Give the Environment a **sky** to show an image behind the scene: a panorama twice as wide as
 it is tall, with the horizon across its middle and straight ahead (-z) in its middle column.
 The sky then lights the scene in place of `ambient_color`, softly from every side and in
-reflections, which are sharper on smoother surfaces. `sky_intensity` sets how bright it looks
+reflections, which are sharper on smoother surfaces. Without a sky, surfaces reflect the
+ambient colour evenly, so metals still show. An **occlusion_texture** darkens reflections as
+well as ambient light. `sky_intensity` sets how bright it looks
 and lights; `ambient_intensity` still scales its light, and the default 0.03 leaves it as is.
 
 A high-dynamic-range panorama (Radiance `.hdr` or OpenEXR `.exr`) keeps light brighter than
@@ -130,6 +134,19 @@ Positive exposure EV doubles brightness per stop; negative EV halves it. Disabli
 `default_light` removes the fallback light, not the ambient term. Multiple Environment
 components without a resource override report an error. The Environment's `post` holds the
 scene's tone mapping, bloom and colour grading.
+
+## Fog
+
+The Environment's **fog** hazes what is far from the camera into its **color**. **density**
+is how much light it takes per metre (0, the default, is no fog; 0.01 to 0.05 is a light to
+thick haze). It is that thick at **height_m** and thins going up by **falloff** per metre,
+so valleys fill and the sky above stays clear; a falloff of 0 makes it as thick at every
+height. The colour is in linear light like the scene's, so it follows exposure. Fog covers
+the sky too, or the backdrop when there is none.
+
+```zig
+try app.lighting().setEnvironment(.{ .fog = .{ .density = 0.02, .color = .{ 0.6, 0.65, 0.75 }, .falloff = 0.1 } });
+```
 
 ## Shadows
 
@@ -151,14 +168,16 @@ sixteen they share; asking for more reports `TooManyShadowLights`. Their maps re
 as the light's `range_m`, and they don't depend on the camera.
 
 Graphics settings select **off**, **low** (1024), **medium** (2048) or **high** (4096)
-shadow maps, plus shadow distance in metres and depth bias. Point and spot lights share one
-map of that size, a quarter of it across for each of theirs. One texel-stabilized map
-follows each view's camera; a 3×3 PCF filter softens edges, and alpha-cutout materials
-also cut out the shadow. Increasing distance trades nearby detail for coverage.
-Quality is bounded by the selected GPU's maximum texture size.
+shadow maps, plus shadow distance in metres and depth bias. The directional light's map is
+split into four cascades, each covering a stretch of the view farther out than the last, so
+shadows near the camera stay sharp while the last reaches the shadow distance; they hand over
+across a short band and fade out at the distance, and hold still as the camera moves. Point
+and spot lights share one map of that size, a quarter of it across for each of theirs. Every
+shadow's edge is softened by twelve filtered samples, and alpha-cutout materials also cut out
+the shadow. Increasing distance trades nearby detail for coverage. Quality is bounded by the
+selected GPU's maximum texture size.
 
-The directional light uses one map, not cascades. Global illumination and ray tracing are
-not implemented.
+Global illumination, screen-space ambient occlusion and ray tracing are not implemented.
 
 Remove just a light with `try app.lighting().removeLight(entity)`. Borrowed material/light
 services and component pointers must not survive world reset or library replacement.

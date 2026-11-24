@@ -1,6 +1,6 @@
-// Metallic/roughness surfaces with their maps, lit by scene lights (shadowed through PCF: the
-// directional light's map and point and spot lights' shared one) and by the sky or a flat
-// ambient; and the sky behind them. A material's surface shader is put in at "eggy: surface"
+// Metallic/roughness surfaces with their maps, lit by scene lights (with soft shadows: the
+// directional light's cascades and point and spot lights' shared map) and by the sky or a flat
+// ambient, through height fog; and the sky behind them. A material's surface shader is put in at "eggy: surface"
 // (`compose.zig`), replacing `defaultSurface`.
 #include "eggy.slang"
 
@@ -55,17 +55,19 @@ cbuffer Camera : register(b0, space0) {
     float4 light_info;       // x: number of scene lights, y: seconds the game has run
     float4 ambient;
     float4 environment;      // exposure multiplier, fallback light, shadow-light index, post pass maps tones
-    float4 shadow_matrix0;
-    float4 shadow_matrix1;
-    float4 shadow_matrix2;
-    float4 shadow_matrix3;
-    float4 shadow_params;    // bias, reciprocal map size, light index, enabled
+    float4 shadow_matrices[16]; // each directional cascade's matrix, by column
+    float4 shadow_splits;       // how far along the view each cascade reaches, in metres
+    float4 shadow_texels;       // one texel's width in each cascade, in metres
+    float4 view_forward;        // xyz: the way the view looks
+    float4 shadow_params;       // bias, reciprocal map size, light index, enabled
     SceneLight lights[16];
     float4 local_shadow_matrices[64]; // each point and spot shadow map's matrix, by column
     float4 local_shadow_params;       // reciprocal shared texture size, maps across it
     float4 sky_rays[3];               // through the view's middle, towards its right and top edges; [0].w: a sky
     float4 sky;                       // brightness shown, brightness as light, mip count
     float4 sky_light[9];              // the sky's light over pi, as spherical harmonics (`sky.zig`)
+    float4 fog;                       // rgb: its colour, a: its density at its height, per metre
+    float4 fog_shape;                 // x: that height, y: how fast it thins going up, z: how far the sky is
 };
 
 [[vk::binding(1, 0)]]
@@ -138,7 +140,7 @@ float3 unit(float3 value) {
     return value / max(length(value), 0.00001);
 }
 
-float3 surfaceLight(float3 base, float metallic, float roughness, float3 normal, float3 view, float3 incoming, float3 radiance) {
+float3 surfaceLight(float3 base, float metallic, float roughness, float3 normal, float3 view, float3 incoming, float3 radiance, float3 energy) {
     float ndl = max(dot(normal, incoming), 0.0);
     float ndv = max(dot(normal, view), 0.0001);
     float3 half_vector = unit(view + incoming);
@@ -152,7 +154,7 @@ float3 surfaceLight(float3 base, float metallic, float roughness, float3 normal,
     float geometry = ndv / (ndv * (1.0 - k) + k) * ndl / max(ndl * (1.0 - k) + k, 0.0001);
     float3 fresnel0 = lerp(float3(0.04, 0.04, 0.04), base, metallic);
     float3 fresnel = fresnel0 + (1.0 - fresnel0) * pow(1.0 - vdh, 5.0);
-    float3 specular = distribution * geometry * fresnel / max(4.0 * ndv * ndl, 0.0001);
+    float3 specular = energy * distribution * geometry * fresnel / max(4.0 * ndv * ndl, 0.0001);
     float3 diffuse = (1.0 - fresnel) * (1.0 - metallic) * base / pi;
     return (diffuse + specular) * radiance * ndl;
 }
@@ -176,13 +178,33 @@ float3 skyLight(float3 n) {
     return max(light, 0.0);
 }
 
-// How much of the surroundings a surface reflects, by angle and roughness (Karis' fit of the
-// split-sum lookup, so no table is needed).
-float3 environmentBrdf(float3 fresnel0, float roughness, float ndv) {
+// How much of the surroundings a surface reflects, by angle and roughness, as a scale and bias
+// on its fresnel0 (Karis' fit of the split-sum lookup, so no table is needed).
+float2 environmentBrdf(float roughness, float ndv) {
     float4 r = roughness * float4(-1.0, -0.0275, -0.572, 0.022) + float4(1.0, 0.0425, 1.04, -0.04);
     float a004 = min(r.x * r.x, exp2(-9.28 * ndv)) * r.x + r.y;
-    float2 ab = float2(-1.04, 1.04) * a004 + r.zw;
-    return fresnel0 * ab.x + ab.y;
+    return float2(-1.04, 1.04) * a004 + r.zw;
+}
+
+// What single-scattering specular misses on rough surfaces, which bounce light between their
+// microfacets: added back so rough metals don't darken (Fdez-Aguera).
+float3 multipleScattering(float3 fresnel0, float2 brdf) {
+    return 1.0 + fresnel0 * (1.0 / max(brdf.x + brdf.y, 0.0001) - 1.0);
+}
+
+// How much of the sky's reflection reaches a surface its occlusion map darkens (Lagarde).
+float specularOcclusion(float ndv, float occlusion, float roughness) {
+    return saturate(pow(ndv + occlusion, exp2(-16.0 * roughness - 1.0)) - 1.0 + occlusion);
+}
+
+// Rougher where the normal changes quickly across the pixel, so small highlights on curved or
+// normal-mapped surfaces don't sparkle (Tokuyoshi and Kaplanyan).
+float stableRoughness(float3 normal, float roughness) {
+    float3 across = ddx(normal);
+    float3 down = ddy(normal);
+    float variance = 0.25 * (dot(across, across) + dot(down, down));
+    float alpha2 = roughness * roughness * roughness * roughness;
+    return sqrt(sqrt(saturate(alpha2 + min(2.0 * variance, 0.18))));
 }
 
 // `normal` bent by a tangent-space normal map's `texel` (+y towards the image's top), along a
@@ -204,22 +226,66 @@ float3 mappedNormal(float3 normal, float3 world, float2 uv, float3 texel) {
     return unit(tangent * scale * bent.x - bitangent * scale * bent.y + normal * bent.z);
 }
 
-float visibility(float3 world, float ndl) {
-    float4 clip = shadow_matrix0 * world.x + shadow_matrix1 * world.y + shadow_matrix2 * world.z + shadow_matrix3;
+// A different number for each pixel in a fine, even pattern (Jimenez's interleaved gradient
+// noise), to turn shadow taps and dither cascade changes without visible repeats.
+float pixelNoise(float2 pixel) {
+    return frac(52.9829189 * frac(dot(pixel, float2(0.06711056, 0.00583715))));
+}
+
+static const int shadow_taps = 12;
+
+// How much of `map` at `uv` lies past `depth`: taps spread evenly over a disk `radius` wide (by
+// the golden angle), turned by `angle`, kept between `lowest` and `highest` so none reads a
+// neighbouring map. Each tap compares and blends four texels itself.
+float filteredShadow(DepthTexture2D map, float2 uv, float depth, float radius, float2 lowest, float2 highest, float angle) {
+    float visible = 0.0;
+    for (int i = 0; i < shadow_taps; ++i) {
+        float theta = float(i) * 2.3999632 + angle;
+        float2 tap = sqrt((float(i) + 0.5) / float(shadow_taps)) * float2(cos(theta), sin(theta));
+        visible += map.SampleCmpLevelZero(shadow_sampler, clamp(uv + tap * radius, lowest, highest), depth);
+    }
+    return visible / float(shadow_taps);
+}
+
+static const int cascades = 4;
+// The share of a cascade, at its far end, fading into the next (`shadows.cascade_blend`).
+static const float cascade_blend = 0.1;
+
+// How much of the directional light reaches `world` in `cascade`, sampled a little out along
+// `normal` (wider the coarser the cascade) so a surface doesn't shadow itself.
+float cascadeVisibility(int cascade, float3 world, float3 normal, float ndl, float noise) {
+    float3 shifted = world + normal * shadow_texels[cascade] * (1.0 + saturate(1.0 - ndl));
+    int column = cascade * 4;
+    float4 clip = shadow_matrices[column] * shifted.x + shadow_matrices[column + 1] * shifted.y + shadow_matrices[column + 2] * shifted.z + shadow_matrices[column + 3];
     float3 point = clip.xyz / clip.w;
     float2 uv = float2(point.x * 0.5 + 0.5, 0.5 - point.y * 0.5);
     if (point.z < 0.0 || point.z > 1.0 || any(uv < 0.0) || any(uv > 1.0)) return 1.0;
+    // The cascades are the quarters of one texture, row by row.
+    float2 corner = float2(float(cascade % 2), float(cascade / 2)) * 0.5;
+    float texel = shadow_params.y;
     float depth = point.z - shadow_params.x * (1.0 + 2.0 * (1.0 - saturate(ndl)));
-    float visible = 0.0;
-    for (int y = -1; y <= 1; ++y)
-        for (int x = -1; x <= 1; ++x)
-            visible += shadow_map.SampleCmpLevelZero(shadow_sampler, uv + float2(x, y) * shadow_params.y, depth);
-    return visible / 9.0;
+    return filteredShadow(shadow_map, corner + uv * 0.5, depth, 1.5 * texel, corner + texel, corner + 0.5 - texel, noise * 6.2831853);
+}
+
+// How much of the directional light reaches `world`: from the nearest cascade reaching it,
+// handed to the next across a dithered band, and fading out at the shadow distance.
+float visibility(float3 world, float3 normal, float ndl, float2 pixel) {
+    float depth_m = dot(world - eye.xyz, view_forward.xyz);
+    if (depth_m > shadow_splits[cascades - 1]) return 1.0;
+    int cascade = 0;
+    while (cascade < cascades - 1 && depth_m > shadow_splits[cascade]) ++cascade;
+    float previous = cascade == 0 ? 0.0 : shadow_splits[cascade - 1];
+    float end = shadow_splits[cascade];
+    float fading = saturate((depth_m - (end - (end - previous) * cascade_blend)) / max((end - previous) * cascade_blend, 0.0001));
+    float noise = pixelNoise(pixel);
+    if (cascade == cascades - 1) return lerp(cascadeVisibility(cascade, world, normal, ndl, noise), 1.0, fading);
+    if (noise < fading) ++cascade;
+    return cascadeVisibility(cascade, world, normal, ndl, noise);
 }
 
 // How much of a point or spot light reaches `world` past its shadow map, sampled a little out
 // along `normal` (a texel's width there) so a surface doesn't shadow itself.
-float localVisibility(SceneLight light, float3 world, float3 normal) {
+float localVisibility(SceneLight light, float3 world, float3 normal, float2 pixel) {
     float3 offset = world - light.position_kind.xyz;
     int map = int(light.cone_shadow.w + 0.5);
     // A point light's map is the cube side the point is on (`shadows.zig`'s `cube_sides`).
@@ -233,22 +299,30 @@ float localVisibility(SceneLight light, float3 world, float3 normal) {
         tan_half = tan(min(acos(clamp(light.cone_shadow.y, -1.0, 1.0)) + 0.0873, 1.4835));
     }
     float across = local_shadow_params.y;
-    float map_texel = across * local_shadow_params.x;
+    float texel = local_shadow_params.x;
+    float map_texel = across * texel;
     float3 shifted = world + normal * (2.0 * length(offset) * tan_half * map_texel * 1.5);
     float4 clip = local_shadow_matrices[map * 4] * shifted.x + local_shadow_matrices[map * 4 + 1] * shifted.y + local_shadow_matrices[map * 4 + 2] * shifted.z + local_shadow_matrices[map * 4 + 3];
     if (clip.w <= 0.0) return 1.0;
     float3 point = clip.xyz / clip.w;
     float2 uv = float2(point.x * 0.5 + 0.5, 0.5 - point.y * 0.5);
     if (point.z < 0.0 || point.z > 1.0 || any(uv < 0.0) || any(uv > 1.0)) return 1.0;
-    // Kept a filter's width inside the map, so it never reads its neighbour's.
-    uv = clamp(uv, 1.5 * map_texel, 1.0 - 1.5 * map_texel);
-    float2 shared = (float2(float(map % 4), float(map / 4)) + uv) / across;
+    float2 corner = float2(float(map % 4), float(map / 4)) / across;
     float depth = point.z - 0.00002;
-    float visible = 0.0;
-    for (int y = -1; y <= 1; ++y)
-        for (int x = -1; x <= 1; ++x)
-            visible += local_shadow_map.SampleCmpLevelZero(shadow_sampler, shared + float2(x, y) * local_shadow_params.x, depth);
-    return visible / 9.0;
+    return filteredShadow(local_shadow_map, corner + uv / across, depth, 1.5 * texel, corner + texel, corner + 1.0 / across - texel, pixelNoise(pixel) * 6.2831853);
+}
+
+// How much of the light between the camera and `world` the fog takes: thickest at its height,
+// thinning above it (exponential height fog, integrated along the ray).
+float fogAmount(float3 world) {
+    if (fog.a <= 0.0) return 0.0;
+    float3 ray = world - eye.xyz;
+    float distance = length(ray);
+    float climb = fog_shape.y * ray.y;
+    float thickness = fog.a * exp(-fog_shape.y * (eye.y - fog_shape.x));
+    // How the fog thins along the ray, averaged; 1 when the ray stays level or the fog is even.
+    float along = abs(climb) > 0.0001 ? (1.0 - exp(-climb)) / climb : 1.0;
+    return 1.0 - exp(-thickness * distance * along);
 }
 
 // eggy: surface
@@ -280,30 +354,38 @@ float4 fragmentMain(VertexOutput input) : SV_Target0 {
     described.unlit = input.material.z > 0.5;
     described.time_s = light_info.y;
     Surface shown = surface(described);
+    float3 normal = unit(shown.normal);
+    // Derivatives before anything is discarded, as above.
+    float roughness = clamp(stableRoughness(normal, clamp(shown.roughness, 0.05, 1.0)), 0.05, 1.0);
     float alpha = shown.alpha;
     // An authored material's cutoff comes with the instance, an imported surface's with its maps.
     float cutoff = input.material.w > 0.5 ? input.emissive_cutoff.w : map_flags.y;
     if (alpha < cutoff) discard;
     float3 base = max(shown.base_color, 0.0);
-    float3 normal = unit(shown.normal);
     float3 view = described.view_direction;
     float metallic = saturate(shown.metallic);
-    float roughness = clamp(shown.roughness, 0.05, 1.0);
+    float ndv = max(dot(normal, view), 0.0001);
+    float3 fresnel0 = lerp(float3(0.04, 0.04, 0.04), base, metallic);
+    float2 brdf = environmentBrdf(roughness, ndv);
+    float3 energy = multipleScattering(fresnel0, brdf);
     float3 color = base;
     if (!shown.unlit) {
+        float3 specular = (fresnel0 * brdf.x + brdf.y) * energy * specularOcclusion(ndv, occlusion, roughness);
         if (sky_rays[0].w > 0.5) {
-            // Lit by the sky: dimly from every side, and reflecting it, blurrier when rougher.
-            float ndv = max(dot(normal, view), 0.0001);
-            float3 fresnel0 = lerp(float3(0.04, 0.04, 0.04), base, metallic);
-            float3 reflected = skyColor(reflect(-view, normal), roughness * max(sky.z - 1.0, 0.0)) * environmentBrdf(fresnel0, roughness, ndv);
-            color = (base * (1.0 - metallic) * skyLight(normal) + reflected) * sky.y * occlusion;
+            // Lit by the sky: dimly from every side, and reflecting it, blurrier when rougher. A
+            // reflection that would come from inside the surface fades out.
+            float3 mirrored = reflect(-view, normal);
+            float horizon = saturate(1.0 + dot(mirrored, geometric));
+            float3 reflected = skyColor(mirrored, roughness * max(sky.z - 1.0, 0.0)) * specular * horizon * horizon;
+            color = (base * (1.0 - metallic) * skyLight(normal) * occlusion + reflected) * sky.y;
         } else {
-            color = base * ambient.rgb * ambient.w * (1.0 - metallic) * occlusion;
+            // A flat ambient lights evenly and is reflected evenly.
+            color = ambient.rgb * ambient.w * (base * (1.0 - metallic) * occlusion + specular);
         }
         if (light_info.x < 0.5 && environment.y > 0.5) {
             // Keep scenes without authored lights visible in both the editor and runtime.
             if (input.material.w > 0.5 || metallic > 0.0 || shown.roughness < 0.999) {
-                color += surfaceLight(base, metallic, roughness, normal, view, unit(light.xyz), float3(3.0, 3.0, 3.0));
+                color += surfaceLight(base, metallic, roughness, normal, view, unit(light.xyz), float3(3.0, 3.0, 3.0), energy);
             } else {
                 float lit = 0.3 + 0.7 * max(dot(normal, unit(light.xyz)), 0.0);
                 color = base * lit;
@@ -326,14 +408,15 @@ float4 fragmentMain(VertexOutput input) : SV_Target0 {
                 }
             }
             if (shadow_params.w > 0.5 && i == int(shadow_params.z))
-                attenuation *= visibility(input.world, dot(normal, incoming));
+                attenuation *= visibility(input.world, geometric, dot(geometric, incoming), input.position.xy);
             else if (current.position_kind.w > 0.5 && current.cone_shadow.z > 0.5 && attenuation > 0.0)
-                attenuation *= localVisibility(current, input.world, geometric);
+                attenuation *= localVisibility(current, input.world, geometric, input.position.xy);
             float3 radiance = current.color_intensity.rgb * current.color_intensity.w * 0.001 * attenuation;
-            color += surfaceLight(base, metallic, roughness, normal, view, incoming, radiance);
+            color += surfaceLight(base, metallic, roughness, normal, view, incoming, radiance, energy);
         }
     }
     color += max(shown.emissive, 0.0);
+    color = lerp(color, fog.rgb, fogAmount(input.world));
     color *= environment.x;
     // Fit HDR direct lighting into the output range without hard-clipping bright surfaces,
     // unless the post pass maps the whole image's tones.
@@ -351,8 +434,8 @@ void fragmentShadow(VertexOutput input) {
     if (alpha < cutoff) discard;
 }
 
-// The sky behind everything: one triangle over the whole view, each pixel looking out along
-// its ray. Its corners come in a vertex buffer, as SV_VertexID needs Vulkan's
+// The sky behind everything, through the fog: one triangle over the whole view, each pixel
+// looking out along its ray. Its corners come in a vertex buffer, as SV_VertexID needs Vulkan's
 // shaderDrawParameters.
 struct SkyOutput {
     float4 position : SV_Position;
@@ -370,11 +453,14 @@ SkyOutput vertexSky([[vk::location(0)]] float2 corner) {
 [shader("pixel")]
 float4 fragmentSky(SkyOutput input) : SV_Target0 {
     float3 ray = unit(sky_rays[0].xyz + sky_rays[1].xyz * input.ndc.x + sky_rays[2].xyz * input.ndc.y);
-    float3 color = skyColor(ray, 0.0) * sky.x * environment.x;
+    float fogged = fogAmount(eye.xyz + ray * fog_shape.z);
+    // Without a sky only the fog is drawn, over the backdrop.
+    bool has_sky = sky_rays[0].w > 0.5;
+    float3 color = lerp(has_sky ? skyColor(ray, 0.0) * sky.x : fog.rgb, fog.rgb, fogged) * environment.x;
     if (environment.w < 0.5)
         color = saturate((color * (2.51 * color + 0.03)) / (color * (2.43 * color + 0.59) + 0.14));
     color = options.x > 0.5 ? color : pow(max(color, 0.0), float3(1.0 / 2.2, 1.0 / 2.2, 1.0 / 2.2));
-    return float4(color, 1.0);
+    return float4(color, has_sky ? 1.0 : fogged);
 }
 
 // The selected object's mask: the object itself, at the nearest depth, without colour.

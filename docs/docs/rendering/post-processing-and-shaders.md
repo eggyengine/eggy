@@ -16,8 +16,8 @@ settings are the scene's look:
 
 | Setting | What it does |
 | --- | --- |
-| **tone_mapping** | How bright light fits the screen. **surface** (the default) is Eggy's original look: lit surfaces fit themselves and nothing else is mapped. **aces** is a filmic curve, **agx** keeps hues as they brighten, **reinhard** is gentle, and **none** clips at white. |
-| **bloom** | Light above **threshold** glows into its surroundings, at **intensity**. 0 is off. |
+| **tone_mapping** | How bright light fits the screen. **aces** (the default) is a filmic curve, **agx** keeps hues as they brighten, **reinhard** is gentle, and **none** clips at white. **surface** is Eggy's original look, which scenes made before keep: lit surfaces fit themselves and nothing else is mapped. |
+| **bloom** | Light above **threshold** glows into its surroundings, at **intensity** (0.04 by default). 0 is off. |
 | **contrast** | 1 leaves it as it is; higher pushes tones apart. |
 | **saturation** | 1 leaves colour as it is; 0 is black and white. |
 | **vignette** | Darkens the corners, from 0 (none) to 1. |
@@ -27,7 +27,8 @@ Bloom works best with a tone mapping other than **surface**. Under **surface**, 
 surfaces are already squeezed below white, so only bright unlit and emissive things glow.
 For a glowing object, give its material an **emissive_color** above 1.
 
-The Scene panel shows the look as you change it.
+The image is dithered as it is shown, so smooth gradients such as skies, fog and the vignette
+don't band. The Scene panel shows the look as you change it.
 
 ## Give one camera its own look
 

@@ -11,18 +11,36 @@ const Uniforms = @import("scene_uniforms.zig").Camera;
 const mesh = @import("mesh.zig");
 const slots = @import("weeoui_vitellus").frames_in_flight;
 
+/// How many cascades the directional light's map is split into, each a quarter of its texture,
+/// nearest the camera first.
+pub const cascades = 4;
+/// How many cascades fit across the directional map's texture, and down it.
+const cascades_across = 2;
+/// The share of each cascade's reach, at its far end, that fades into the next one.
+pub const cascade_blend = 0.1;
+/// How far the cascades lean towards splitting the shadow distance evenly by ratio (detail
+/// near the camera) rather than by distance.
+const cascade_split_ratio: f32 = 0.8;
+
+/// The directional light's shadow map: `cascades` maps of one texture, each covering a stretch of
+/// the view farther out than the last, so shadows near the camera stay sharp.
 pub const Map = struct {
     texture: vit.Texture,
     view: vit.TextureView,
     sampler: vit.Sampler,
     layout: vit.BindGroupLayout,
+    /// Each cascade's camera, `cameraOffset` apart.
     uniforms: [slots]vit.Buffer,
     instances: [slots]vit.Buffer,
     groups: [slots]vit.BindGroup,
     resolution: u32,
     initialized: bool = false,
     slot: usize = 0,
-    matrix: [4][4]f32 = @splat(@splat(0)),
+    matrices: [cascades][4][4]f32 = @splat(@splat(@splat(0))),
+    /// How far along the view each cascade reaches, in metres.
+    splits_m: [cascades]f32 = @splat(0),
+    /// One shadow texel's width in each cascade, in metres.
+    texels_m: [cascades]f32 = @splat(0),
     params: [4]f32 = @splat(0),
 
     pub fn init(device: vit.Device, quality: render.ShadowQuality, max_drawables: usize) !Map {
@@ -31,10 +49,10 @@ pub const Map = struct {
         errdefer texture.deinit();
         const view = try vit.TextureView.init(device, .{ .texture = texture, .aspect = .depth });
         errdefer view.deinit();
-        const sampler = try vit.Sampler.init(device, .{ .address_u = .clamp_to_edge, .address_v = .clamp_to_edge, .compare = .less_equal, .mag_filter = .nearest, .min_filter = .nearest, .mipmap_filter = .nearest });
+        // Linear filtering compares the four nearest texels and blends them, softening each tap.
+        const sampler = try vit.Sampler.init(device, .{ .address_u = .clamp_to_edge, .address_v = .clamp_to_edge, .compare = .less_equal, .mag_filter = .linear, .min_filter = .linear, .mipmap_filter = .nearest });
         errdefer sampler.deinit();
-        // A dynamic offset picks each local map's camera from one buffer; the directional map
-        // passes 0.
+        // A dynamic offset picks each map's camera from one buffer.
         const layout = try vit.BindGroupLayout.init(device, .{ .entries = &.{
             .{ .binding = 0, .kind = .{ .buffer = .{ .kind = .uniform, .dynamic_offset = true } }, .visibility = .{ .vertex = true, .fragment = true } },
         } });
@@ -48,7 +66,7 @@ pub const Map = struct {
                 instances[made].deinit();
                 uniforms[made].deinit();
             };
-            uniforms[i] = try vit.Buffer.init(device, .{ .size = @sizeOf(Uniforms), .usage = .{ .uniform = true }, .memory = .upload });
+            uniforms[i] = try vit.Buffer.init(device, .{ .label = "cascade cameras", .size = camera_stride * cascades, .usage = .{ .uniform = true }, .memory = .upload });
             errdefer uniforms[i].deinit();
             instances[i] = try vit.Buffer.init(device, .{ .size = max_drawables * @sizeOf(mesh.Drawable), .usage = .{ .vertex = true }, .memory = .upload });
             errdefer instances[i].deinit();
@@ -69,25 +87,87 @@ pub const Map = struct {
         self.texture.deinit();
     }
 
-    /// Fit the camera's reachable volume, with conservative caster depth and texel snapping.
-    /// One directional light is selected explicitly by `Lighting.setShadowCaster`.
+    /// Fit each cascade round its stretch of the camera's view, texel-stable. One directional
+    /// light is selected explicitly by `Lighting.setShadowCaster`.
     pub fn fit(self: *Map, view: camera.View, aspect: f32, lights: *const lighting.Frame, settings: render.Settings) bool {
         self.params = @splat(0);
         const index = lights.options[2];
         if (settings.shadow_quality == .off or index < 0 or index >= @as(f32, @floatFromInt(lights.count))) return false;
         const light = lights.lights[@intFromFloat(index)];
         const direction = math.Vec3.fromArray(light.direction_range[0..3].*);
-        self.matrix = transform.columns(fitCamera(view, aspect, direction, settings.shadow_distance_m, self.resolution).viewProjection(1));
+        const tile = self.resolution / cascades_across;
+        const reach = @min(view.far, settings.shadow_distance_m);
+        self.splits_m = cascadeSplits(view.near, reach);
+        var start = view.near;
+        var previous: f32 = 0;
+        for (self.splits_m, 0..) |split, cascade| {
+            const fitted = fitCamera(view, aspect, direction, start, split, reach, tile);
+            self.matrices[cascade] = transform.columns(fitted.viewProjection(1));
+            self.texels_m[cascade] = fitted.orthographic_height_m / @as(f32, @floatFromInt(tile));
+            // The next cascade starts where the shader begins fading this one into it.
+            start = split - (split - previous) * cascade_blend;
+            previous = split;
+        }
         self.params = .{ settings.shadow_bias, 1 / @as(f32, @floatFromInt(self.resolution)), index, 1 };
         return true;
     }
+
+    /// Write each cascade's camera for this frame into `slot`'s buffer.
+    pub fn upload(self: *Map, slot: usize) !void {
+        try uploadCameras(self.uniforms[slot], &self.matrices);
+    }
+
+    /// Where cascade `index` is drawn in the texture, in pixels.
+    pub fn rect(self: Map, index: usize) vit.hal.command.ScissorRect {
+        return tileRect(self.resolution, cascades_across, index);
+    }
 };
+
+/// Where each cascade ends along a view from `near_m` to `reach_m`: between even ratios (as
+/// perspective shrinks texels) and even distances.
+pub fn cascadeSplits(near_m: f32, reach_m: f32) [cascades]f32 {
+    const near = @max(near_m, 0.01);
+    const far = @max(reach_m, near * 2);
+    var splits: [cascades]f32 = undefined;
+    for (&splits, 1..) |*split, i| {
+        const share = @as(f32, @floatFromInt(i)) / cascades;
+        const by_ratio = near * std.math.pow(f32, far / near, share);
+        const by_distance = near + (far - near) * share;
+        split.* = by_ratio * cascade_split_ratio + by_distance * (1 - cascade_split_ratio);
+    }
+    splits[cascades - 1] = far;
+    return splits;
+}
+
+/// How far apart each map's camera sits in a shadow uniform buffer: a dynamic offset must be a
+/// multiple of 256 bytes.
+const camera_stride = std.mem.alignForward(usize, @sizeOf(Uniforms), 256);
+
+/// Map `index`'s camera's offset in its uniform buffer.
+pub fn cameraOffset(index: usize) u32 {
+    return @intCast(index * camera_stride);
+}
+
+// Each of `matrices` as a camera, `camera_stride` apart in `buffer`.
+fn uploadCameras(buffer: vit.Buffer, matrices: []const [4][4]f32) !void {
+    if (matrices.len == 0) return;
+    const size = camera_stride * matrices.len;
+    const mapped = try buffer.map(.write, .{ .size = size });
+    for (matrices, 0..) |matrix, index| {
+        const camera_uniforms = Uniforms{ .view_projection = matrix };
+        @memcpy(mapped[cameraOffset(index)..][0..@sizeOf(Uniforms)], std.mem.asBytes(&camera_uniforms));
+    }
+    buffer.unmap(.{ .size = size });
+}
+
+// Square `index` of a texture `resolution` wide split into `across` by `across`, row by row.
+fn tileRect(resolution: u32, across: u32, index: usize) vit.hal.command.ScissorRect {
+    const size = resolution / across;
+    return .{ .x = @intCast(index % across * size), .y = @intCast(index / across * size), .width = size, .height = size };
+}
 
 /// How many local shadow maps fit across their shared texture, and down it.
 pub const local_maps_across = 4;
-/// How far apart each local map's camera sits in their uniform buffer: a dynamic offset must be
-/// a multiple of 256 bytes.
-const local_stride = std.mem.alignForward(usize, @sizeOf(Uniforms), 256);
 /// The point lights' cube sides, in the order the shader picks them (`localShadowMap`).
 const cube_sides = [6]math.Vec3{ .init(1, 0, 0), .init(-1, 0, 0), .up, .down, .unit_z, .init(0, 0, -1) };
 /// Nearest a local light's shadow reaches, in metres.
@@ -124,7 +204,7 @@ pub const Local = struct {
                 instances[made].deinit();
                 uniforms[made].deinit();
             };
-            uniforms[i] = try vit.Buffer.init(device, .{ .label = "local shadow cameras", .size = local_stride * lighting.max_local_shadow_maps, .usage = .{ .uniform = true }, .memory = .upload });
+            uniforms[i] = try vit.Buffer.init(device, .{ .label = "local shadow cameras", .size = camera_stride * lighting.max_local_shadow_maps, .usage = .{ .uniform = true }, .memory = .upload });
             errdefer uniforms[i].deinit();
             instances[i] = try vit.Buffer.init(device, .{ .label = "local shadow casters", .size = max_drawables * @sizeOf(mesh.Drawable), .usage = .{ .vertex = true }, .memory = .upload });
             errdefer instances[i].deinit();
@@ -157,27 +237,14 @@ pub const Local = struct {
         return self.count;
     }
 
-    /// Map `index`'s camera's offset in its uniform buffer.
-    pub fn offset(index: usize) u32 {
-        return @intCast(index * local_stride);
-    }
-
     /// Write each map's camera for this frame into `slot`'s buffer.
     pub fn upload(self: *Local, slot: usize) !void {
-        if (self.count == 0) return;
-        const size = local_stride * self.count;
-        const mapped = try self.uniforms[slot].map(.write, .{ .size = size });
-        for (self.matrices[0..self.count], 0..) |matrix, index| {
-            const camera_uniforms = Uniforms{ .view_projection = matrix };
-            @memcpy(mapped[offset(index)..][0..@sizeOf(Uniforms)], std.mem.asBytes(&camera_uniforms));
-        }
-        self.uniforms[slot].unmap(.{ .size = size });
+        try uploadCameras(self.uniforms[slot], self.matrices[0..self.count]);
     }
 
     /// Where map `index` is drawn in the shared texture, in pixels.
     pub fn rect(self: Local, index: usize) vit.hal.command.ScissorRect {
-        const size = self.resolution / local_maps_across;
-        return .{ .x = @intCast(index % local_maps_across * size), .y = @intCast(index / local_maps_across * size), .width = size, .height = size };
+        return tileRect(self.resolution, local_maps_across, index);
     }
 };
 
@@ -200,11 +267,28 @@ pub fn localViews(light: lighting.GpuLight) [6]camera.View {
     return views;
 }
 
-pub fn fitCamera(view: camera.View, aspect: f32, direction: math.Vec3, distance_m: f32, resolution: u32) camera.View {
-    const distance = @min(view.far, distance_m);
-    const half_height = if (view.projection == .orthographic) view.orthographic_height_m / 2 else distance * @tan(view.fov_deg * std.math.rad_per_deg / 2);
-    const radius = @max(1, @sqrt(distance * distance / 4 + half_height * half_height * (1 + aspect * aspect)));
-    var center = view.eye.add(view.forward.scale(distance / 2));
+/// An orthographic camera looking along `direction` round the stretch of `view` from `near_m`
+/// to `far_m`, its texels fixed in the world as the view moves and turns, seeing casters up to
+/// `reach_m` behind that stretch.
+pub fn fitCamera(view: camera.View, aspect: f32, direction: math.Vec3, near_m: f32, far_m: f32, reach_m: f32, resolution: u32) camera.View {
+    const near = @min(near_m, far_m);
+    const far = @min(view.far, far_m);
+    // The smallest sphere round the stretch, which depends only on the lens, so it holds still
+    // as the view turns. A corner lies `depth * spread` off the view's axis.
+    var middle: f32 = undefined;
+    var radius: f32 = undefined;
+    if (view.projection == .orthographic) {
+        const half_height = view.orthographic_height_m / 2;
+        middle = (near + far) / 2;
+        radius = @sqrt((far - near) * (far - near) / 4 + half_height * half_height * (1 + aspect * aspect));
+    } else {
+        const tan_half = @tan(view.fov_deg * std.math.rad_per_deg / 2);
+        const spread2 = tan_half * tan_half * (1 + aspect * aspect);
+        middle = @min(far, (far + near) * (1 + spread2) / 2);
+        radius = @sqrt((far - middle) * (far - middle) + far * far * spread2);
+    }
+    radius = @max(radius, 0.5);
+    var center = view.eye.add(view.forward.scale(middle));
     const up_hint: math.Vec3 = if (@abs(direction.y) > 0.95) .unit_z else .up;
     const right = direction.cross(up_hint).normalize();
     const up = right.cross(direction).normalize();
@@ -213,8 +297,9 @@ pub fn fitCamera(view: camera.View, aspect: f32, direction: math.Vec3, distance_
         const coordinate = center.dot(axis);
         center = center.add(axis.scale(@round(coordinate / texel_m) * texel_m - coordinate));
     }
-    const eye = center.sub(direction.scale(radius * 2));
-    return .{ .eye = eye, .forward = direction, .up = up, .near = 0.01, .far = radius * 4, .projection = .orthographic, .orthographic_height_m = radius * 2 };
+    const behind = radius + @max(reach_m, radius);
+    const eye = center.sub(direction.scale(behind));
+    return .{ .eye = eye, .forward = direction, .up = up, .near = 0.01, .far = behind + radius, .projection = .orthographic, .orthographic_height_m = radius * 2 };
 }
 
 test "a point light's cube sides each look the way the shader picks them for" {
@@ -237,16 +322,31 @@ test "a point light's cube sides each look the way the shader picks them for" {
 test "local maps tile the shared texture row by row" {
     const local = Local{ .texture = undefined, .view = undefined, .uniforms = undefined, .instances = undefined, .groups = undefined, .resolution = 2048 };
     try std.testing.expectEqual(vit.hal.command.ScissorRect{ .x = 512, .y = 512, .width = 512, .height = 512 }, local.rect(5));
-    try std.testing.expectEqual(@as(u32, 0), Local.offset(0) % 256);
-    try std.testing.expectEqual(@as(u32, 0), Local.offset(3) % 256);
+    try std.testing.expectEqual(@as(u32, 0), cameraOffset(0) % 256);
+    try std.testing.expectEqual(@as(u32, 0), cameraOffset(3) % 256);
 }
 
 test "shadow fitting remains finite for vertical lights and preserves texel stability" {
-    const first = fitCamera(camera.View.default, 16.0 / 9.0, .down, 60, 2048);
+    const first = fitCamera(camera.View.default, 16.0 / 9.0, .down, 0.1, 60, 60, 2048);
     const matrix = transform.columns(first.viewProjection(1));
     for (matrix) |column| for (column) |value| try std.testing.expect(std.math.isFinite(value));
     var moved = camera.View.default;
     moved.eye.x += 0.00001;
-    const second = fitCamera(moved, 16.0 / 9.0, .down, 60, 2048);
+    const second = fitCamera(moved, 16.0 / 9.0, .down, 0.1, 60, 60, 2048);
     try std.testing.expectApproxEqAbs(first.eye.x, second.eye.x, 0.000001);
+}
+
+test "cascades reach further each, end at the shadow distance and keep their size as the view turns" {
+    const splits = cascadeSplits(0.1, 60);
+    for (splits[1..], splits[0 .. cascades - 1]) |later, earlier| try std.testing.expect(later > earlier);
+    try std.testing.expectEqual(@as(f32, 60), splits[cascades - 1]);
+    try std.testing.expect(splits[0] < 6);
+
+    var turned = camera.View.default;
+    turned.forward = math.Vec3.init(1, -0.2, 0.3).normalize();
+    const straight = fitCamera(camera.View.default, 16.0 / 9.0, .down, 0.1, splits[0], 60, 1024);
+    const sideways = fitCamera(turned, 16.0 / 9.0, .down, 0.1, splits[0], 60, 1024);
+    try std.testing.expectApproxEqAbs(straight.orthographic_height_m, sideways.orthographic_height_m, 1e-4);
+    // Casters as far back as the shadow distance stay in front of the light's camera.
+    try std.testing.expect(straight.far - straight.orthographic_height_m >= 60);
 }

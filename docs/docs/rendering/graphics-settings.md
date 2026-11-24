@@ -40,7 +40,8 @@ Only choices this computer supports are listed.
 - **Anisotropic filtering**: keeps textures sharp at a slant, up to what the graphics card
   reports. It needs Linear filtering, so choosing Nearest turns it off.
 
-- **Shadow quality**: Off, Low, Medium or High, the size of the shadow map. Higher is
+- **Shadow quality**: Off, Low, Medium or High, the size of the shadow map, which the
+  directional light splits into four cascades. Higher is
   sharper and costs more GPU time and memory; sizes the graphics card can't hold aren't
   listed. Only one directional light casts shadows.
 - **Shadow distance**: 1 to 10000 metres from the camera that shadows are drawn. A shorter

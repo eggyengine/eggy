@@ -158,6 +158,10 @@ float4 gradeMain(VertexOutput input) : SV_Target0 {
     // Darken toward the scene's corners, not the window's.
     float2 centered = ((input.uv - scene_uv.xy) / max(scene_uv.zw, 0.0001) - 0.5) * 2.0;
     color *= 1.0 - grade.z * smoothstep(0.3, 1.0, length(centered) * 0.7071);
-    if (options.y > 0.5) color = pow(color, 1.0 / 2.2);
+    // Dithered by under half a step of an 8-bit display, so smooth gradients (skies, fog,
+    // vignettes) don't band. The noise is Jimenez's interleaved gradient noise.
+    float noise = frac(52.9829189 * frac(dot(input.position.xy, float2(0.06711056, 0.00583715))));
+    float3 shown = pow(color, 1.0 / 2.2) + (noise - 0.5) / 255.0;
+    color = options.y > 0.5 ? shown : pow(max(shown, 0.0), 2.2);
     return float4(color, 1.0);
 }

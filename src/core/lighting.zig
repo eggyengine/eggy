@@ -17,6 +17,23 @@ pub const Light = union(enum) {
     spot: struct { color: [3]f32 = @splat(1), intensity_cd: f32 = 100, range_m: f32 = 10, inner_angle_deg: f32 = 20, outer_angle_deg: f32 = 30 },
 };
 
+/// Haze between the camera and what it sees, thickest at `height_m` and thinning above it.
+pub const Fog = struct {
+    /// How much light it takes per metre at `height_m`; 0 is no fog.
+    density: f32 = 0,
+    /// In linear light, like the scene's: brighter than 1 glows.
+    color: [3]f32 = .{ 0.55, 0.62, 0.7 },
+    height_m: f32 = 0,
+    /// How quickly it thins going up, per metre; 0 keeps it as thick at every height.
+    falloff: f32 = 0.2,
+
+    pub fn validate(self: Fog) error{InvalidEnvironment}!void {
+        for ([_]f32{ self.density, self.falloff, self.color[0], self.color[1], self.color[2] }) |value|
+            if (!std.math.isFinite(value) or value < 0) return error.InvalidEnvironment;
+        if (!std.math.isFinite(self.height_m)) return error.InvalidEnvironment;
+    }
+};
+
 /// Ambient illumination and photographic exposure shared by all views of the current world.
 pub const Environment = struct {
     /// Marks it in the editor (nf-md-earth).
@@ -35,11 +52,13 @@ pub const Environment = struct {
     exposure_ev: f32 = 0,
     /// Preserve the editor/runtime's helpful light until a scene authors its own lights.
     default_light: bool = true,
+    fog: Fog = .{},
     /// The scene's post-processing; a camera's own `PostProcess` replaces it.
     post: post_process.PostProcess = .{},
 
     pub fn validate(self: Environment) error{InvalidEnvironment}!void {
         self.post.validate() catch return error.InvalidEnvironment;
+        try self.fog.validate();
         for (self.ambient_color) |value| if (!std.math.isFinite(value) or value < 0) return error.InvalidEnvironment;
         if (!std.math.isFinite(self.sky_intensity) or self.sky_intensity < 0) return error.InvalidEnvironment;
         if (!std.math.isFinite(self.ambient_intensity) or self.ambient_intensity < 0 or
@@ -120,6 +139,10 @@ pub const Frame = extern struct {
     sky: [4]f32 = @splat(0),
     /// The post-processing the active camera sees (`post_process.forActiveCamera`).
     post: post_process.Frame = .{},
+    /// rgb: the fog's colour, a: its density (0 for none).
+    fog: [4]f32 = @splat(0),
+    /// x: the fog's height, y: how fast it thins going up.
+    fog_shape: [2]f32 = @splat(0),
 };
 
 /// Borrowed component access; obtain it from `app.lighting()`.
@@ -215,6 +238,9 @@ pub fn gather(world: *ecs.World) !Frame {
         result.sky = .{ environment.sky_intensity, environment.sky_intensity * environment.ambient_intensity / default_environment.ambient_intensity, 0, 0 };
     }
     result.options = .{ std.math.exp2(environment.exposure_ev), if (environment.default_light) 1 else 0, -1, 0 };
+    const fog = environment.fog;
+    result.fog = .{ fog.color[0], fog.color[1], fog.color[2], fog.density };
+    result.fog_shape = .{ fog.height_m, fog.falloff };
     result.post = (try post_process.forActiveCamera(world, &environment.post)).frame();
     var lights = world.query(.{ *const SceneLight, *const transform.Transform });
     while (lights.next()) |view| {
