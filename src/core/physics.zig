@@ -10,6 +10,8 @@ const Transform = @import("transform.zig").Transform;
 const Time = @import("time.zig").Time;
 const Mesh = @import("mesh.zig").Mesh;
 const Resources = @import("resources/resources.zig").Resources;
+const generated_meshes = @import("generated_meshes.zig");
+const Name = @import("name.zig").Name;
 const SceneRoot = @import("scene_root.zig").SceneRoot;
 const DebugDraw = @import("debug_draw.zig").DebugDraw;
 
@@ -92,21 +94,61 @@ pub const Host = struct {
                 // A rigged model's stored corners are in its bones' space; collide with it as drawn at rest.
                 const rest = try @import("eggy_assets").rig.restVertices(gpa, model);
                 defer gpa.free(rest);
-                const positions = try gpa.alloc([3]f32, rest.len);
-                errdefer gpa.free(positions);
-                // Collide with it where `local_transform` draws it.
-                const local = drawn.local_transform.matrix();
-                for (positions, rest) |*p, v| {
-                    const at = math.transformPoint4x4(f32, local, .init(v.position[0], v.position[1], v.position[2]));
-                    p.* = .{ at.x, at.y, at.z };
-                }
-                const indices = try gpa.alloc([3]u32, model.indices.len / 3);
-                for (indices, 0..) |*triangle, i| triangle.* = model.indices[i * 3 ..][0..3].*;
-                break :blk .{ .triangles = .{ .positions = positions, .indices = indices } };
+                break :blk try triangles(gpa, rest, model.indices, drawn.local_transform.matrix());
+            },
+            .generated => |*name| blk: {
+                const meshes = world.getResource(generated_meshes.Ref) orelse return error.NoResources;
+                const made = meshes.meshes.get(name.text()) orelse return null;
+                break :blk try triangles(gpa, made.model.vertices, made.model.indices, drawn.local_transform.matrix());
             },
         };
     }
 };
+
+/// `vertices` and `indices` as a collider's triangles, where `local` (a `Mesh`'s
+/// `local_transform`) draws them; owned by `gpa`, as humpty frees them.
+fn triangles(gpa: std.mem.Allocator, vertices: []const @import("eggy_assets").model.Vertex, indices: []const u32, local: math.Matrix(f32, 4, 4)) !humpty.ecs.MeshSource {
+    const positions = try gpa.alloc([3]f32, vertices.len);
+    errdefer gpa.free(positions);
+    for (positions, vertices) |*p, v| {
+        const at = math.transformPoint4x4(f32, local, .init(v.position[0], v.position[1], v.position[2]));
+        p.* = .{ at.x, at.y, at.z };
+    }
+    const corners = try gpa.alloc([3]u32, indices.len / 3);
+    for (corners, 0..) |*triangle, i| triangle.* = indices[i * 3 ..][0..3].*;
+    return .{ .triangles = .{ .positions = positions, .indices = corners } };
+}
+
+/// Rebuild the colliders made from the generated meshes `names` (set anew or removed since the
+/// last frame), on their next physics step. A body rebuilt this way starts again at rest.
+pub fn remesh(world: *ecs.World, names: []const Name) !void {
+    if (names.len == 0) return;
+    const installed = world.getResource(Installed) orelse return;
+    switch (installed.dimension) {
+        inline else => |dim| switch (installed.precision) {
+            inline else => |precision| {
+                const Link = Plugin(dim, precision.Type()).Link;
+                var stale: std.ArrayList(ecs.EntityId) = .empty;
+                defer stale.deinit(world.allocator);
+                var linked = world.query(.{ *const Collider, *const Link });
+                while (linked.next()) |view| {
+                    const from = view.get(*const Collider).mesh_from.entity orelse view.entity;
+                    const drawn = world.get(from, Mesh) orelse continue;
+                    const name = switch (drawn.shape) {
+                        .generated => |*name| name.text(),
+                        else => continue,
+                    };
+                    for (names) |changed| if (std.mem.eql(u8, changed.text(), name)) {
+                        try stale.append(world.allocator, view.entity);
+                        break;
+                    };
+                }
+                // Losing its link drops the body; the next sync builds it again from the mesh.
+                for (stale.items) |entity| try world.removeComponent(entity, Link);
+            },
+        },
+    }
+}
 
 /// Which plugin `install` put in this world, so it is installed once.
 const Installed = struct { dimension: humpty.Dim, precision: Precision };
@@ -224,23 +266,41 @@ fn runFramesIn(world: *ecs.World, frames: usize, precision: Precision) !void {
     }
 }
 
-test "a crate falls onto scaled static ground, and its Transform follows" {
+test "a crate falls onto ground made in code, its Transform follows, and setting the ground anew moves it" {
     const gpa = std.testing.allocator;
     var world = ecs.World.init(gpa);
     defer world.deinit();
     defer world.runStage(.Deinit) catch {};
+    var meshes = generated_meshes.GeneratedMeshes.init(gpa);
+    defer meshes.deinit();
+    try world.insertResource(generated_meshes.Ref{ .meshes = &meshes });
 
-    const ground = try world.spawn(.{ Transform{ .scale = .init(10, 1, 10) }, Collider{} });
+    // Ten metres square at height `y`, facing up.
+    const Ground = struct {
+        fn at(y: f32) [4]generated_meshes.Vertex {
+            const up = [3]f32{ 0, 1, 0 };
+            return .{ .{ .position = .{ -5, y, -5 }, .normal = up }, .{ .position = .{ 5, y, -5 }, .normal = up }, .{ .position = .{ 5, y, 5 }, .normal = up }, .{ .position = .{ -5, y, 5 }, .normal = up } };
+        }
+    };
+    const quad = [_]u32{ 0, 2, 1, 0, 3, 2 };
+    try meshes.set("ground", &Ground.at(0), &quad);
+    const ground = try world.spawn(.{ Transform{}, Mesh{ .shape = .{ .generated = .init("ground") } }, Collider{ .shape = .mesh } });
     const crate = try world.spawn(.{ Transform{ .position = .init(0, 3, 0) }, Collider{}, RigidBody{} });
     try runFrames(&world, 180);
-    try std.testing.expectApproxEqAbs(@as(f32, 1.0), world.get(crate, Transform).?.position.y, 0.03);
+    try std.testing.expectApproxEqAbs(@as(f32, 0.5), world.get(crate, Transform).?.position.y, 0.03);
     try std.testing.expect(std.meta.eql(raycast(&world, .init(0, 5, 0), .init(0, -1, 0), 10, .{}).?.entity, crate));
     // From inside the crate, leaving it out: the ground half a metre down.
-    const below = raycast(&world, .init(0, 1, 0), .init(0, -1, 0), 10, .{ .exclude = crate }).?;
+    const below = raycast(&world, .init(0, 0.5, 0), .init(0, -1, 0), 10, .{ .exclude = crate }).?;
     try std.testing.expect(std.meta.eql(below.entity, ground));
     try std.testing.expectApproxEqAbs(@as(f32, 0.5), below.distance_m, 0.03);
     // A static collider is left out too.
     try std.testing.expect(raycast(&world, .init(3, 5, 0), .init(0, -1, 0), 10, .{ .exclude = ground }) == null);
+
+    // The ground set a metre higher is collided with there once remeshed.
+    try meshes.set("ground", &Ground.at(1), &quad);
+    try remesh(&world, meshes.takeChanged());
+    try runFrames(&world, 1);
+    try std.testing.expectApproxEqAbs(@as(f32, 4), raycast(&world, .init(3, 5, 0), .init(0, -1, 0), 10, .{}).?.distance_m, 0.03);
 }
 
 test "a body under a moved, scaled parent rests on the ground in world space" {

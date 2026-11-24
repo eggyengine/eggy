@@ -28,6 +28,26 @@ const camera = try app.world.spawn(.{
 The Inspector and scene registry honor component `dependencies`. Direct native
 `world.spawn` requires you to include those components yourself.
 
+## Meshes made in code
+
+For terrain, or any shape the game builds, hand Eggy its triangles under a name and give a
+Mesh the `.generated` shape with that name. Setting the name again replaces the triangles,
+which are drawn from the next frame, and colliders made from the mesh are rebuilt.
+
+```zig
+// Three indices per triangle, wound counter-clockwise seen from the side it faces.
+try app.meshes().set("terrain", vertices, indices);
+_ = try app.world.spawn(.{
+    eggy.Transform{},
+    eggy.Mesh{ .shape = .{ .generated = .init("terrain") }, .color = .{ 0.35, 0.6, 0.3 } },
+    eggy.Collider{ .shape = .mesh },
+});
+```
+
+A vertex is an `eggy.GeneratedMeshes.Vertex` (position, normal and texture coordinate).
+A name is up to 64 bytes and can't be an asset key. `app.meshes().remove("terrain")` stops
+drawing it. A body whose collider is rebuilt starts again at rest.
+
 ## Positions, directions, and parents
 
 `Transform.position`, `rotation_deg`, and `scale` are relative to the parent.

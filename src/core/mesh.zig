@@ -14,12 +14,14 @@ const Animator = @import("animation.zig").Animator;
 const Sprite = @import("sprite.zig").Sprite;
 const SpriteAnimator = @import("sprite_animator.zig").SpriteAnimator;
 const Tilemap = @import("tilemap.zig").Tilemap;
+const Name = @import("name.zig").Name;
 
 /// The shapes there are, each about a metre across, centred on the entity. A `plane` faces up
 /// (+y); a `quad` faces the front (+z), as sprites do.
 pub const Shape = enum(u32) { cube, sphere, plane, cylinder, cone, quad };
 
-/// What a `Mesh` is: one of the built-in shapes, or a model file of the project.
+/// What a `Mesh` is: one of the built-in shapes, a model file of the project, or a mesh the game
+/// made in code (`GeneratedMeshes`, through `app.meshes()`), by name.
 pub const Source = union(enum) {
     cube,
     sphere,
@@ -28,6 +30,8 @@ pub const Source = union(enum) {
     cone,
     quad,
     model: AssetRef(.model),
+    /// Nothing is drawn until the game sets a mesh of this name.
+    generated: Name,
 
     /// The built-in `shape`, as a `Mesh`'s shape.
     /// Returns a source tag without loading or allocating geometry.
@@ -288,6 +292,11 @@ fn drawable(world: *ecs.World, entity: ecs.EntityId, mesh: *const Mesh) ?Drawabl
             result.model_file = &file.buffer;
             result.model_file_len = file.len;
             result.animator = world.get(entity, Animator);
+        },
+        .generated => |*name| {
+            if (name.len == 0) return null;
+            result.model_file = &name.buffer;
+            result.model_file_len = name.len;
         },
         inline else => |_, tag| result.shape = @field(Shape, @tagName(tag)),
     }

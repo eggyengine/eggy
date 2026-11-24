@@ -76,6 +76,8 @@ pub const scenes = @import("scenes/scenes.zig");
 pub const Support = @import("support.zig").Support;
 pub const audio = @import("audio/audio.zig");
 pub const animation = @import("animation.zig");
+pub const generated_meshes = @import("generated_meshes.zig");
+pub const GeneratedMeshes = generated_meshes.GeneratedMeshes;
 pub const animation_preview = @import("animation_preview.zig");
 /// How a model is posed and deformed by what its `Animator` plays.
 pub const deformation = @import("deformation.zig");
@@ -166,6 +168,7 @@ test {
     _ = @import("clip_cache.zig");
     _ = @import("deformation.zig");
     _ = animation;
+    _ = generated_meshes;
     _ = @import("animation_states.zig");
     _ = animation_preview;
     _ = cutscene;

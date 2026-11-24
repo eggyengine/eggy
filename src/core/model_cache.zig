@@ -1,11 +1,13 @@
 //! The model files a scene draws, on the GPU: each one's triangles and the textures its parts
 //! are painted with, loaded through `loader` the first time a `Mesh` shows it, then kept. The
 //! editor's loader imports model files with assimp; the runtime's reads what packaging made of
-//! them (`.eggmodel`).
+//! them (`.eggmodel`). Meshes a game makes in code (`generated`) are uploaded from there by
+//! name, and again whenever the game sets one anew.
 const std = @import("std");
 const vit = @import("vitellus");
 const assets = @import("eggy_assets");
 const texture_cache = @import("texture_cache.zig");
+const GeneratedMeshes = @import("generated_meshes.zig").GeneratedMeshes;
 const TextureCache = texture_cache.TextureCache;
 const log = std.log.scoped(.models);
 
@@ -27,6 +29,8 @@ pub const Gpu = struct {
     /// A moveable model's nodes, skins, blend shapes and clips with its stored corners, kept for
     /// `deformation.zig`; null for a static model. Owned by the cache.
     rig: ?*assets.Model = null,
+    /// Which `GeneratedMeshes` version it was uploaded from; 0 for a model file.
+    generated_version: u32 = 0,
 
     pub const Part = struct {
         first_index: u32,
@@ -75,6 +79,8 @@ pub const ModelCache = struct {
     loader: ?Loader = null,
     /// By path, which the map owns; null for a model that didn't load, so it isn't tried again.
     entries: std.StringHashMapUnmanaged(?Gpu) = .empty,
+    /// The meshes the game made in code, drawn by name.
+    generated: GeneratedMeshes,
 
     /// Create an empty host model cache borrowing `device` and retaining `gpa`.
     /// Configure `loader` before first use; no model can load without one.
@@ -86,7 +92,7 @@ pub const ModelCache = struct {
     /// models.loader = model_loader;
     /// ```
     pub fn init(gpa: std.mem.Allocator, device: vit.Device) ModelCache {
-        return .{ .gpa = gpa, .device = device };
+        return .{ .gpa = gpa, .device = device, .generated = .init(gpa) };
     }
 
     /// Free every model, and its textures from `textures`, once the GPU finishes with them.
@@ -99,6 +105,7 @@ pub const ModelCache = struct {
     pub fn deinit(self: *ModelCache, textures: *TextureCache) void {
         self.forgetAll(textures);
         self.entries.deinit(self.gpa);
+        self.generated.deinit();
     }
 
     /// The model at `path`, loading it the first time (its textures into `textures`); null when
@@ -112,7 +119,15 @@ pub const ModelCache = struct {
     /// const gpu_model = models.get(ship.key(), &textures) orelse return;
     /// ```
     pub fn get(self: *ModelCache, path: []const u8, textures: *TextureCache) ?Gpu {
-        if (self.entries.get(path)) |known| return known;
+        if (self.generated.get(path)) |made| return self.getGenerated(path, made.*, textures);
+        if (self.entries.get(path)) |known| {
+            // A generated mesh the game has since removed.
+            if (known != null and known.?.generated_version != 0) {
+                self.forget(path, textures);
+                return null;
+            }
+            return known;
+        }
         const key = self.gpa.dupe(u8, path) catch return null;
         const loaded = self.upload(path, textures);
         self.entries.put(self.gpa, key, loaded) catch {
@@ -168,6 +183,28 @@ pub const ModelCache = struct {
         const removed = self.entries.fetchRemove(path) orelse return;
         if (removed.value) |gpu| gpu.deinit(self.gpa, textures);
         self.gpa.free(removed.key);
+    }
+
+    /// The generated mesh `path` as `made` has it now, uploaded again when the game set it anew.
+    /// ponytail: one that fails to upload stays undrawn until it is set again under another name; keep failed versions if that bites.
+    fn getGenerated(self: *ModelCache, path: []const u8, made: GeneratedMeshes.Entry, textures: *TextureCache) ?Gpu {
+        if (self.entries.get(path)) |known| {
+            const gpu = known orelse return null;
+            if (gpu.generated_version == made.version) return gpu;
+            self.forget(path, textures);
+        }
+        const key = self.gpa.dupe(u8, path) catch return null;
+        var uploaded: ?Gpu = self.uploadModel(path, made.model, textures) catch |err| blk: {
+            log.err("cannot upload generated mesh {s}: {t}", .{ path, err });
+            break :blk null;
+        };
+        if (uploaded) |*gpu| gpu.generated_version = made.version;
+        self.entries.put(self.gpa, key, uploaded) catch {
+            self.gpa.free(key);
+            if (uploaded) |gpu| gpu.deinit(self.gpa, textures);
+            return null;
+        };
+        return uploaded;
     }
 
     /// Load the model at `path` and put it, and its textures, on the GPU.

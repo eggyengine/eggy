@@ -279,6 +279,15 @@ pub const App = struct {
         return .{ .world = &self.world };
     }
 
+    /// The meshes the game makes in code, which a `Mesh` with a `.generated` shape draws by name.
+    ///
+    /// ```zig
+    /// try app.meshes().set("terrain", vertices, indices);
+    /// ```
+    pub fn meshes(self: *App) *@import("generated_meshes.zig").GeneratedMeshes {
+        return &self.graphics.models.generated;
+    }
+
     /// Borrow sound controls: play sound files, placed in the world or not, and set bus gains.
     /// Every voice ends when the world resets. Do not retain across reset/reload.
     ///
@@ -476,7 +485,9 @@ pub const App = struct {
         try self.world.insertResource(self.time);
         // Physics runs as its own stage after Update, reading meshes through the resources.
         try self.world.insertResource(self.resource_provider);
+        try self.world.insertResource(@import("generated_meshes.zig").Ref{ .meshes = &self.graphics.models.generated });
         try @import("physics.zig").install(&self.world, self.world.allocator, self.physics_precision);
+        try @import("physics.zig").remesh(&self.world, self.graphics.models.generated.takeChanged());
         try ui_scenes.publish(&self.world, &self.ui_scenes);
         inline for (.{ .PreUpdate, .Update, .PostUpdate }) |stage| try self.world.runStage(stage);
         // Clips play after the game's systems, by the game's (scaled, pause-held) time; a
