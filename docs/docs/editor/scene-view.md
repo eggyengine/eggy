@@ -31,7 +31,8 @@ pans and zooms instead of flying.
 camera. The toolbar, gizmo and orientation widget hide, and an accent border marks the panel
 as playing. Press **Play** again, or **Escape**, to stop; change **Stop play key** in
 **Edit > Settings** if the game needs Escape itself. **Simulate** runs the game's systems and
-physics while you keep the editor's camera and tools. Both start with nothing selected.
+physics while you keep the editor's camera and tools, and game code that streams the world
+around `app.viewer()` follows that camera as you fly it. Both start with nothing selected.
 
 To play through another of the scene's cameras, hold **Shift** while you press **Play**, pick
 the camera, and press **Play**. That camera is the only active one until you stop.

@@ -76,7 +76,7 @@ const chunk_m: f32 = cells * cell_m;
 /// Make the chunk `chunk_x`, `chunk_z` the mesh `name`.
 fn makeChunk(gpa: std.mem.Allocator, meshes: *eggy.GeneratedMeshes, name: []const u8, chunk_x: i32, chunk_z: i32) !void {
     const side = cells + 1;
-    const vertices = try gpa.alloc(eggy.GeneratedMeshes.Vertex, side * side);
+    const vertices = try gpa.alloc(eggy.generated_meshes.Vertex, side * side);
     defer gpa.free(vertices);
     const indices = try gpa.alloc(u32, cells * cells * 6);
     defer gpa.free(indices);
@@ -173,5 +173,7 @@ The ground can change while the game runs. Keep the changes in the game, such as
 craters that `height` subtracts, then call `makeChunk` again for each chunk a change touches.
 Setting a name again draws its new triangles from the next frame and rebuilds its collider, so
 make only the chunks that changed: each one is sent to the GPU and rebuilt for physics in full.
-For a world without edges, make chunks ahead of the player as they move and drop the ones far
-behind with `app.meshes().remove(name)` and `app.world.despawn(entity)`.
+For a world without edges, make the chunks around `app.viewer()` in `update` and drop the ones
+far from it with `app.meshes().remove(name)` and `app.world.despawn(entity)`. The viewer is
+where the frame is seen from, so it is the game's camera while playing and the Scene panel's
+own while you Simulate and fly around.

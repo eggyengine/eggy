@@ -23,6 +23,7 @@ const ui_scenes = @import("ui_scenes/ui_scenes.zig");
 const audio_zig = @import("audio/audio.zig");
 const animation_zig = @import("animation.zig");
 const Cutscene = @import("cutscene.zig").Cutscene;
+const camera_zig = @import("camera.zig");
 
 const web = builtin.os.tag == .emscripten;
 const android = builtin.abi.isAndroid();
@@ -90,6 +91,8 @@ pub const App = struct {
     graphics_options: graphics_control.State = .{},
     /// The motion sensors and vibrator `mobile()` has opened.
     mobile_state: mobile_zig.State = .{},
+    /// Set by the host each frame from the view it draws; read through `viewer`.
+    viewer_view: ?camera_zig.View = null,
 
     /// Host entry point: open SDL video/gamepads, a 900x675 logical-point window, GPU and world,
     /// into `self`. `process_init` must outlive it; `title` is null-terminated UTF-8.
@@ -325,8 +328,19 @@ pub const App = struct {
         return .{ .window = self.window.window, .state = &self.mobile_state };
     }
 
+    /// Where the frame is seen from, to stream the world and pick detail around: the game's
+    /// camera, or the Scene panel's while the editor simulates or edits. May be a frame behind;
+    /// null before the first frame.
+    ///
+    /// ```zig
+    /// if (app.viewer()) |view| try streamChunksAround(view.eye);
+    /// ```
+    pub fn viewer(self: *const App) ?camera_zig.View {
+        return self.viewer_view;
+    }
+
     /// Borrow active-camera controls; selection changes apply to the next scene draw.
-    pub fn cameras(self: *App) @import("camera.zig").Cameras {
+    pub fn cameras(self: *App) camera_zig.Cameras {
         return .{ .world = &self.world };
     }
 
@@ -548,7 +562,7 @@ pub const App = struct {
     }
 
     /// Render copied debug requests through a camera, without input capture or depth testing.
-    pub fn drawDebug(self: *App, draw: @import("game_ui/game_ui.zig").DrawContext, view: @import("camera.zig").View) !void {
+    pub fn drawDebug(self: *App, draw: @import("game_ui/game_ui.zig").DrawContext, view: camera_zig.View) !void {
         try self.debug_draw.render(self.world.allocator, self.graphics.device, self.graphics.queue, draw, view);
     }
 
@@ -600,3 +614,12 @@ pub const App = struct {
         return .run;
     }
 };
+
+test "the viewer is null until the host sets it, then it is what app.viewer() gives" {
+    var app: App = undefined;
+    app.viewer_view = std.meta.fieldInfo(App, .viewer_view).attrs.defaultValue(?camera_zig.View).?;
+    try std.testing.expectEqual(null, app.viewer());
+    const seen = camera_zig.View.lookingAt(.init(3, 2, 1), .zero, .{});
+    app.viewer_view = seen;
+    try std.testing.expectEqual(seen, app.viewer().?);
+}

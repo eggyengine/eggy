@@ -212,8 +212,10 @@ pub fn Runtime(comptime project: type) type {
             self.app.graphics.ui_billboards = &self.billboards;
             const has_ui = self.plugins.hasGameUi() or self.app.ui_scenes.screen_count != 0;
             const frame = try self.app.graphics.beginFrame();
-            // Through a cutscene's shot or the game's camera; without one, there is nothing to see it from.
-            if (eggy.camera_cuts.find(&self.app.world, &self.app.graphics.clips, null)) |view| {
+            // Through a cutscene's shot or the game's camera; without one, there is nothing to see it
+            // from. Next frame's update hooks read it as `app.viewer()`.
+            self.app.viewer_view = eggy.camera_cuts.find(&self.app.world, &self.app.graphics.clips, null);
+            if (self.app.viewer_view) |view| {
                 const drawn = try eggy.mesh.gatherAlloc(self.gpa, &self.app.world);
                 defer self.gpa.free(drawn);
                 try self.app.graphics.drawScene(frame, drawn, view);

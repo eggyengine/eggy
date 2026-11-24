@@ -130,6 +130,7 @@ test {
     _ = @import("resources/async.zig");
     _ = scenes;
     _ = @import("action.zig");
+    _ = @import("app.zig");
     _ = @import("graphics.zig");
     _ = render_settings;
     _ = @import("mipmaps.zig");

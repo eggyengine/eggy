@@ -4,7 +4,7 @@
 //!     pub fn init(gpa: std.mem.Allocator, app: *eggy.App) !Self
 //!     pub fn deinit(self: *Self) void
 //!     pub fn event(self: *Self, app: *eggy.App, event: eggy.Event) !void
-//!     pub fn update(self: *Self, app: *eggy.App) !void  // in the editor, playing and not paused
+//!     pub fn update(self: *Self, app: *eggy.App) !void  // in the editor, playing and not paused; `app.viewer()` is last frame's view
 //!     pub fn animationEvent(self: *Self, app: *eggy.App, event: eggy.animation.Event) !void  // a clip passed an event key
 //!     pub fn gameUi(self: *Self, app: *eggy.App, ui: *eggy.ui.Context) !void
 //!     pub fn draw(self: *Self, app: *eggy.App, draw: eggy.DrawContext) !void

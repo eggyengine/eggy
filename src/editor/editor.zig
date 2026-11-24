@@ -750,6 +750,9 @@ pub fn Editor(comptime project: type) type {
             // The selection's colliders where they are now, so editing one shows its shape.
             if (look != .playing) if (self.game) |*game| game.drawColliders(&self.app, self.entity_editor.selection.all.items);
             self.scene_view.update(self.sceneTarget(), if (self.workspace.placed.scene) |placed| placed.rect else null, look);
+            // Next frame's game update and editor tools read it as `app.viewer()`: the free
+            // camera while editing or simulating, the game's while playing.
+            self.app.viewer_view = self.scene_view.view;
             self.scene_view.tools.plugin_tool_count = if (self.game) |game| @intCast(@min(game.scene_tools.len, std.math.maxInt(u8))) else 0;
             if (self.scene_view.tools.plugin_tool) |tool| if (tool >= self.scene_view.tools.plugin_tool_count) {
                 self.scene_view.tools.plugin_tool = null;
