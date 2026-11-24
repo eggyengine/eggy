@@ -9,6 +9,7 @@ const vit = @import("vitellus");
 const assets = @import("eggy_assets");
 const texture_cache = @import("texture_cache.zig");
 const GeneratedMeshes = @import("generated_meshes.zig").GeneratedMeshes;
+const Heightfields = @import("heightfields.zig").Heightfields;
 const TextureCache = texture_cache.TextureCache;
 const log = std.log.scoped(.models);
 
@@ -84,6 +85,8 @@ pub const ModelCache = struct {
     entries: std.StringHashMapUnmanaged(?Gpu) = .empty,
     /// The meshes the game made in code, drawn by name.
     generated: GeneratedMeshes,
+    /// The height grids the game made in code, which `Terrain`s draw by name.
+    heightfields: Heightfields,
 
     /// Create an empty host model cache borrowing `device` and retaining `gpa`.
     /// Configure `loader` before first use; no model can load without one.
@@ -95,7 +98,7 @@ pub const ModelCache = struct {
     /// models.loader = model_loader;
     /// ```
     pub fn init(gpa: std.mem.Allocator, device: vit.Device) ModelCache {
-        return .{ .gpa = gpa, .device = device, .generated = .init(gpa) };
+        return .{ .gpa = gpa, .device = device, .generated = .init(gpa), .heightfields = .init(gpa) };
     }
 
     /// Free every model, and its textures from `textures`, once the GPU finishes with them.
@@ -109,6 +112,7 @@ pub const ModelCache = struct {
         self.forgetAll(textures);
         self.entries.deinit(self.gpa);
         self.generated.deinit();
+        self.heightfields.deinit();
     }
 
     /// The model at `path`, loading it the first time (its textures into `textures`); null when

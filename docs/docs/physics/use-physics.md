@@ -27,6 +27,7 @@ A collider's **Shape** is one of:
 | `half_space` | Endless ground: everything below a plane through the entity. |
 | `convex_hull_from_mesh` | The tightest convex shape around the entity's **Mesh**. Good for props that move. |
 | `mesh` | The entity's **Mesh** itself, triangle by triangle. Static 3D scenery only, such as terrain. |
+| `heightfield` | A grid of heights the game sets with `app.heightfields()`, named by the shape: ground as big as you like for the same cost. Static 3D only. |
 
 Sizes are before the entity's scale, so a scaled entity's collider grows with it. An axis
 (a capsule's, a cylinder's) runs along the entity's Y. **Offset** moves the shape away from the
@@ -39,6 +40,10 @@ still reports what it overlaps: a trigger zone.
 The two mesh shapes take the entity's own **Mesh**. On an entity without one, such as a player
 whose model is a child, drag the entity holding the mesh from the Hierarchy onto **Mesh From**;
 the shape is made where that entity sits.
+
+A `heightfield` grid's first corner sits at the entity, with columns along its X and rows along
+its Z; the entity's scale stretches it. A **Terrain** naming the same grid draws exactly what is
+stood on ([Procedural terrain](../rendering/procedural-terrain.md)).
 
 A collider under a moving parent goes where the parent takes it, so a door's collider can be a
 child of the door.
@@ -139,4 +144,4 @@ try eggy.physics.drawColliders(&app.world, gpa, &.{entity}, &app.debug_draw);
 
 - Joints, such as hinges and ropes, and character controllers that climb steps.
 - Bodies can't pass through each other one way, as on platforms jumped up through.
-- A `mesh` collider is never 2D and never moves.
+- A `mesh` or `heightfield` collider is never 2D and never moves.

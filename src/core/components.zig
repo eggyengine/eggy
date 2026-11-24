@@ -364,12 +364,18 @@ pub fn editableType(comptime T: type) bool {
     };
 }
 
+/// Whether `T` is a name kept in a fixed buffer: `Name`, or a type marked `eggy_text` with the
+/// same `init` and `text` (such as humpty's `GridName`).
+fn isText(comptime T: type) bool {
+    return T == Name or (@typeInfo(T) == .@"struct" and @hasDecl(T, "eggy_text"));
+}
+
 /// `T` as scenes and the Inspector write it: each reference (anywhere inside) as what it points
-/// at, `null` or an entity for an `EntityRef`, a path for an `AssetRef`, and a `Name` as its text.
+/// at, `null` or an entity for an `EntityRef`, a path for an `AssetRef`, and a name as its text.
 fn Stored(comptime T: type) type {
     // Every component of a project is walked in one evaluation; the default runs out with many.
     @setEvalBranchQuota(100_000);
-    if (T == Name) return []const u8;
+    if (isText(T)) return []const u8;
     if (refs.refKind(T)) |kind| return switch (kind) {
         .entity => ?ecs.EntityId,
         .asset => []const u8,
@@ -401,7 +407,7 @@ fn mathVectorLen(comptime T: type) ?u32 {
 /// something else.
 fn needsStoring(comptime T: type) bool {
     @setEvalBranchQuota(100_000);
-    if (T == Name or refs.refKind(T) != null or mathVectorLen(T) != null) return true;
+    if (isText(T) or refs.refKind(T) != null or mathVectorLen(T) != null) return true;
     return switch (@typeInfo(T)) {
         .array => |info| needsStoring(info.child),
         .optional => |info| needsStoring(info.child),
@@ -414,7 +420,7 @@ fn needsStoring(comptime T: type) bool {
 
 /// `value` as `Stored(T)`; an asset path points into `value`, so it must outlive the result.
 fn store(comptime T: type, value: *const T) Stored(T) {
-    if (T == Name) return value.text();
+    if (comptime isText(T)) return value.text();
     if (comptime refs.refKind(T)) |kind| return switch (kind) {
         .entity => value.entity,
         .asset => value.key(),
@@ -494,7 +500,7 @@ pub fn valuesEqual(gpa: std.mem.Allocator, comptime T: type, a: *const T, b: *co
 
 /// `stored` back as a `T`. Fails with `error.ParseZon` for an invalid `AssetRef`.
 fn restore(comptime T: type, stored: Stored(T)) error{ParseZon}!T {
-    if (T == Name) return Name.init(stored);
+    if (comptime isText(T)) return T.init(stored);
     if (comptime refs.refKind(T)) |kind| switch (kind) {
         .entity => return .init(stored),
         .asset => {
@@ -577,8 +583,8 @@ fn partsOf(comptime T: type, comptime name: [:0]const u8) []const Part {
 
 /// `T`'s part, without its children; `name` is the field's (or struct field's) name.
 fn describePart(comptime T: type, comptime name: []const u8) Part {
-    // ponytail: a Name inside a component shows as its text, read-only; give the Inspector a text box when one needs editing there.
-    if (T == Name) return .{ .kind = .other };
+    // ponytail: a name inside a component shows as its text, read-only; give the Inspector a text box when one needs editing there.
+    if (isText(T)) return .{ .kind = .other };
     if (refs.refKind(T)) |kind| return switch (kind) {
         .entity => .{ .kind = .entity, .requires = if (T.Required == void) "" else shortName(T.Required) },
         .asset => .{ .kind = .asset, .accepts = T.accepts },

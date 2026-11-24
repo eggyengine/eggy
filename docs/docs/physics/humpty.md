@@ -93,7 +93,11 @@ in `started` and `ended` without pushing anything.
 | `cylinder`, `cone` | `half_height`, `radius`; along local y; 3D only |
 | `convex_hull` | `points`, copied |
 | `mesh` | `vertices` and `indices` (triangles in 3D, segments in 2D), copied; static only |
+| `heightfield` | `Heightfield.init(heights, columns, cell_x, cell_z)`: heights row by row, `columns` along x, rows along z, each cell split from its first corner to the one across; copied; 3D and static only. Contacts and rays test only the cells a shape or ray crosses |
 | `half_space` | `normal`: everything behind the plane through the origin |
+
+`addColliderOwned` is `addCollider` without the copy: the world takes the shape's points,
+triangles or heights, allocated with its own allocator, and frees them with the collider.
 
 ## Rays
 
@@ -171,6 +175,8 @@ const MyHost = struct {
     }
     // Optional: the triangles of `entity`'s mesh, for mesh and convex-hull colliders.
     // pub fn mesh(world: *clutch.World, entity: clutch.EntityId, gpa: Allocator) !?humpty.ecs.MeshSource
+    // Optional: the height grid `name`, for heightfield colliders.
+    // pub fn heightfield(world: *clutch.World, name: []const u8) ?humpty.ecs.HeightfieldSource
 };
 ```
 
@@ -179,7 +185,7 @@ list and save them; in 2D only x and y are read, and bodies turn about z.
 
 | Component | What it is |
 | --- | --- |
-| `Collider` | `shape` (sizes in metres before the entity's scale), `offset_m`, `restitution`, `friction`, `sensor`, `mesh_from` (another entity whose mesh the mesh shapes take, where it sits; the collider's own when unset) |
+| `Collider` | `shape` (sizes in metres before the entity's scale; a `heightfield` names a grid the host gives), `offset_m`, `restitution`, `friction`, `sensor`, `mesh_from` (another entity whose mesh the mesh shapes take, where it sits; the collider's own when unset) |
 | `RigidBody` | `kind`, `mass_kg`, damping, `gravity_scale`, `rotation` |
 | `LinearVelocity`, `AngularVelocity` | Read to see how a body moves; set to change it |
 | `CollidingEntities` | Kept listing the entities its collider touches |

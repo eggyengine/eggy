@@ -80,6 +80,8 @@ pub const animation = @import("animation.zig");
 pub const animation_graph = @import("animation_graph.zig");
 pub const generated_meshes = @import("generated_meshes.zig");
 pub const GeneratedMeshes = generated_meshes.GeneratedMeshes;
+pub const heightfields = @import("heightfields.zig");
+pub const Heightfields = heightfields.Heightfields;
 pub const AnimationGraph = animation_graph.AnimationGraph;
 pub const animation_preview = @import("animation_preview.zig");
 /// How a model is posed and deformed by what its `Animator` plays.

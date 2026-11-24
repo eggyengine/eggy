@@ -11,6 +11,7 @@ const Time = @import("time.zig").Time;
 const Mesh = @import("mesh.zig").Mesh;
 const Resources = @import("resources/resources.zig").Resources;
 const generated_meshes = @import("generated_meshes.zig");
+const heightfields = @import("heightfields.zig");
 const Name = @import("name.zig").Name;
 const SceneRoot = @import("scene_root.zig").SceneRoot;
 const DebugDraw = @import("debug_draw.zig").DebugDraw;
@@ -25,6 +26,8 @@ pub const CollisionStarted = humpty.ecs.CollisionStarted;
 pub const CollisionEnded = humpty.ecs.CollisionEnded;
 pub const PhysicsStage = humpty.ecs.PhysicsStage;
 pub const RayFilter = humpty.ecs.RayFilter;
+/// The name of the height grid (`app.heightfields()`) a `.heightfield` collider stands on.
+pub const GridName = humpty.ecs.GridName;
 
 /// The physics components every project has.
 pub const components = .{ RigidBody, Collider, LinearVelocity, AngularVelocity, CollidingEntities, PhysicsSettings };
@@ -103,6 +106,13 @@ pub const Host = struct {
             },
         };
     }
+
+    /// The grid `name` in the world's `Heightfields`, borrowed while the collider is built.
+    pub fn heightfield(world: *ecs.World, name: []const u8) ?humpty.ecs.HeightfieldSource {
+        const ref = world.getResource(heightfields.Ref) orelse return null;
+        const grid = ref.heightfields.get(name) orelse return null;
+        return .{ .heights = grid.heights, .columns = grid.columns, .cell_m = grid.cell_m };
+    }
 };
 
 /// `vertices` and `indices` (empty: the vertices in order, three by three) as a collider's
@@ -124,8 +134,18 @@ fn triangles(gpa: std.mem.Allocator, vertices: []const @import("eggy_assets").mo
     return .{ .triangles = .{ .positions = positions, .indices = corners } };
 }
 
-/// Rebuild the colliders made from the generated meshes `names` (set anew or removed since the
-/// last frame), on their next physics step. A body rebuilt this way starts again at rest.
+/// The generated mesh `entity`'s `Mesh` draws, if it draws one.
+fn generatedName(world: *ecs.World, entity: ecs.EntityId) ?[]const u8 {
+    const drawn = world.get(entity, Mesh) orelse return null;
+    return switch (drawn.shape) {
+        .generated => |*name| name.text(),
+        else => null,
+    };
+}
+
+/// Rebuild the colliders made from the generated meshes or height grids `names` (set anew or
+/// removed since the last frame), on their next physics step. A body rebuilt this way starts
+/// again at rest.
 pub fn remesh(world: *ecs.World, names: []const Name) !void {
     if (names.len == 0) return;
     const installed = world.getResource(Installed) orelse return;
@@ -137,11 +157,10 @@ pub fn remesh(world: *ecs.World, names: []const Name) !void {
                 defer stale.deinit(world.allocator);
                 var linked = world.query(.{ *const Collider, *const Link });
                 while (linked.next()) |view| {
-                    const from = view.get(*const Collider).mesh_from.entity orelse view.entity;
-                    const drawn = world.get(from, Mesh) orelse continue;
-                    const name = switch (drawn.shape) {
-                        .generated => |*name| name.text(),
-                        else => continue,
+                    const collider = view.get(*const Collider);
+                    const name = switch (collider.shape) {
+                        .heightfield => |*grid| grid.text(),
+                        else => generatedName(world, collider.mesh_from.entity orelse view.entity) orelse continue,
                     };
                     for (names) |changed| if (std.mem.eql(u8, changed.text(), name)) {
                         try stale.append(world.allocator, view.entity);
@@ -306,6 +325,21 @@ test "a crate falls onto ground made in code, its Transform follows, and setting
     try remesh(&world, meshes.takeChanged());
     try runFrames(&world, 1);
     try std.testing.expectApproxEqAbs(@as(f32, 4), raycast(&world, .init(3, 5, 0), .init(0, -1, 0), 10, .{}).?.distance_m, 0.03);
+
+    // A height grid is found by name the same way, and rebuilt when set again.
+    var grids = heightfields.Heightfields.init(gpa);
+    defer grids.deinit();
+    try world.insertResource(heightfields.Ref{ .heightfields = &grids });
+    try grids.set("hill", &.{ 2, 2, 2, 2 }, 2, 4);
+    const hill = try world.spawn(.{ Transform{ .position = .init(20, 0, 0) }, Collider{ .shape = .{ .heightfield = .init("hill") } } });
+    try runFrames(&world, 1);
+    const top = raycast(&world, .init(22, 5, 2), .init(0, -1, 0), 10, .{}).?;
+    try std.testing.expect(std.meta.eql(top.entity, hill));
+    try std.testing.expectApproxEqAbs(@as(f32, 3), top.distance_m, 1e-4);
+    try grids.set("hill", &.{ 3, 3, 3, 3 }, 2, 4);
+    try remesh(&world, grids.takeChanged());
+    try runFrames(&world, 1);
+    try std.testing.expectApproxEqAbs(@as(f32, 2), raycast(&world, .init(22, 5, 2), .init(0, -1, 0), 10, .{}).?.distance_m, 1e-4);
 }
 
 test "a body under a moved, scaled parent rests on the ground in world space" {

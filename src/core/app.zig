@@ -291,6 +291,16 @@ pub const App = struct {
         return &self.graphics.models.generated;
     }
 
+    /// The height grids the game makes in code, which a `Terrain` draws and a `Collider` with a
+    /// `.heightfield` shape stands on, by name.
+    ///
+    /// ```zig
+    /// try app.heightfields().set("ground", heights, 33, 2);
+    /// ```
+    pub fn heightfields(self: *App) *@import("heightfields.zig").Heightfields {
+        return &self.graphics.models.heightfields;
+    }
+
     /// Borrow the parameters of entities' animation graphs; do not retain across reset/reload.
     pub fn animationGraphs(self: *App) @import("animation_graph.zig").Graphs {
         return .{ .world = &self.world };
@@ -505,8 +515,10 @@ pub const App = struct {
         // Physics runs as its own stage after Update, reading meshes through the resources.
         try self.world.insertResource(self.resource_provider);
         try self.world.insertResource(@import("generated_meshes.zig").Ref{ .meshes = &self.graphics.models.generated });
+        try self.world.insertResource(@import("heightfields.zig").Ref{ .heightfields = &self.graphics.models.heightfields });
         try @import("physics.zig").install(&self.world, self.world.allocator, self.physics_precision);
         try @import("physics.zig").remesh(&self.world, self.graphics.models.generated.takeChanged());
+        try @import("physics.zig").remesh(&self.world, self.graphics.models.heightfields.takeChanged());
         try ui_scenes.publish(&self.world, &self.ui_scenes);
         inline for (.{ .PreUpdate, .Update, .PostUpdate }) |stage| try self.world.runStage(stage);
         // Clips play after the game's systems, by the game's (scaled, pause-held) time; a
