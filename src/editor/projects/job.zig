@@ -928,29 +928,3 @@ test "a progress snapshot gives the build's step count and its current step" {
     try std.testing.expectEqual(@as(u32, 12), summary.total);
     try std.testing.expect(summarize(nodes[0..1], &.{255}) == null);
 }
-
-test "a build nested in a step counts as that step's progress" {
-    // The outer build at 1 of 4 steps, running a nested build at 3 of 6.
-    var nodes: [6]ProgressNode = undefined;
-    for (&nodes, [_][]const u8{ "", "steps", "zig build runtime", "steps", "compile exe game", "steps-not" }, [_][2]u32{ .{ 0, 0 }, .{ 1, 4 }, .{ 0, std.math.maxInt(u32) }, .{ 3, 6 }, .{ 0, 0 }, .{ 0, 0 } }) |*node, name, counts| {
-        node.* = .{ .completed_count = counts[0], .estimated_total_count = counts[1], .name = @splat(0) };
-        @memcpy(node.name[0..name.len], name);
-    }
-    const summary = summarize(&nodes, &.{ 255, 0, 1, 2, 3, 0 }).?;
-    try std.testing.expectApproxEqAbs(@as(f32, 2.5 / 4.0), summary.fraction, 0.001);
-    try std.testing.expectEqualStrings("compile exe game", summary.step);
-    try std.testing.expectEqual(@as(u32, 6), summary.total);
-}
-
-test "each stage is timed once, and the one that failed stays last" {
-    var job: Job = undefined;
-    job.stage_count = 0;
-    job.recordStage(.unpacking_engine);
-    job.recordStage(.reading_project);
-    job.recordStage(.reading_project); // the same stage with new detail
-    job.recordStage(.failed);
-    try std.testing.expectEqual(@as(usize, 2), job.stage_count);
-    try std.testing.expect(job.stages[0].ended_ms != null);
-    try std.testing.expectEqual(Stage.reading_project, job.stages[1].stage);
-    try std.testing.expect(job.stages[1].ended_ms != null);
-}

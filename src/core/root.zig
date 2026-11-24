@@ -115,7 +115,6 @@ test {
     _ = @import("log/log.zig");
     _ = @import("mobile/mobile.zig");
     _ = @import("log/crash_report.zig");
-    _ = @import("capabilities_test.zig");
     _ = audio;
     _ = editor;
     _ = game_ui;

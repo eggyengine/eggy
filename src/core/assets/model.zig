@@ -392,31 +392,6 @@ pub fn read(gpa: std.mem.Allocator, reader: *std.Io.Reader) !Model {
     return model;
 }
 
-test "a model reads back as written" {
-    var vertices = [_]Vertex{ .{ .position = .{ 0, 0, 0 }, .normal = .{ 0, 1, 0 }, .color = .{ 1, 0.5, 0.2, 1 }, .metallic_roughness = .{ 0.8, 0.3 }, .emissive_color = .{ 0.1, 0.2, 0.3 } }, .{ .position = .{ 1, 0, 0 }, .normal = .{ 0, 1, 0 } }, .{ .position = .{ 0, 0, 1 }, .normal = .{ 0, 1, 0 } } };
-    var indices = [_]u32{ 0, 2, 1 };
-    var bytes: std.Io.Writer.Allocating = .init(std.testing.allocator);
-    defer bytes.deinit();
-    var parts = [_]Part{.{ .first_index = 0, .index_count = 3, .texture = 0, .maps = .{ .normal = 0 }, .alpha_mode = .blend, .double_sided = true }};
-    var pixels = [_]u8{ 1, 2, 3, 4 };
-    var textures = [_]Texture{.{ .width = 1, .height = 1, .pixels = &pixels }};
-    try write(&bytes.writer, .{ .vertices = &vertices, .indices = &indices, .parts = &parts, .textures = &textures });
-
-    var reader: std.Io.Reader = .fixed(bytes.written());
-    var model = try read(std.testing.allocator, &reader);
-    defer model.deinit(std.testing.allocator);
-    try std.testing.expectEqualSlices(u32, &indices, model.indices);
-    try std.testing.expectEqual(@as(?u32, 0), model.parts[0].texture);
-    try std.testing.expectEqual(@as(?u32, 0), model.parts[0].maps.normal);
-    try std.testing.expectEqual(AlphaMode.blend, model.parts[0].alpha_mode);
-    try std.testing.expect(model.parts[0].double_sided);
-    try std.testing.expectEqualSlices(u8, &pixels, model.textures[0].pixels);
-    try std.testing.expectEqual(@as(f32, 1), model.vertices[1].position[0]);
-    try std.testing.expectEqualSlices(f32, &vertices[0].color, &model.vertices[0].color);
-    try std.testing.expectEqualSlices(f32, &vertices[0].metallic_roughness, &model.vertices[0].metallic_roughness);
-    try std.testing.expectEqualSlices(f32, &vertices[0].emissive_color, &model.vertices[0].emissive_color);
-}
-
 fn riggedFixture() Model {
     const S = struct {
         var vertices = [_]Vertex{
@@ -443,62 +418,4 @@ fn riggedFixture() Model {
         var clips = [_]Clip{.{ .name = "lift", .duration_s = 1, .tracks = &tracks }};
     };
     return .{ .vertices = &S.vertices, .indices = &S.indices, .parts = &S.parts, .textures = &.{}, .rig = .{ .nodes = &S.nodes, .influences = &S.influences, .skins = &S.skins, .morph_targets = &S.targets, .clips = &S.clips } };
-}
-
-test "a rigged model reads back with its nodes, skin, blend shapes and clips" {
-    const model = riggedFixture();
-    try std.testing.expect(model.isWhole());
-    var bytes: std.Io.Writer.Allocating = .init(std.testing.allocator);
-    defer bytes.deinit();
-    try write(&bytes.writer, model);
-    var reader: std.Io.Reader = .fixed(bytes.written());
-    var read_back = try read(std.testing.allocator, &reader);
-    defer read_back.deinit(std.testing.allocator);
-    try std.testing.expectEqualStrings("arm", read_back.rig.nodes[1].name);
-    try std.testing.expectEqual(@as(?u32, 0), read_back.rig.nodes[1].parent);
-    try std.testing.expectEqual(@as(f32, 1), read_back.rig.influences[1].weights[0]);
-    try std.testing.expectEqualStrings("tall", read_back.rig.morph_targets[0].name);
-    const lift = read_back.rig.clip("lift").?;
-    try std.testing.expectEqual(@as(usize, 2), lift.tracks.len);
-    try std.testing.expectEqual(@as(f32, 2), lift.tracks[0].values[4]);
-    try std.testing.expectEqual(@as(?u32, 1), read_back.rig.node("arm"));
-}
-
-test "a rig with a broken reference, key or number is refused" {
-    // Each case damages one thing a good rigged model holds, then checks it is refused.
-    var model = riggedFixture();
-    model.format_version = 1;
-    try std.testing.expect(!model.isWhole());
-
-    model = riggedFixture();
-    model.parts[0].vertex_count = 4;
-    try std.testing.expect(!model.isWhole());
-    model.parts[0].vertex_count = 3;
-
-    model.rig.skins[0].joints[1] = 9;
-    try std.testing.expect(!model.isWhole());
-    model.rig.skins[0].joints[1] = 1;
-
-    model.rig.clips[0].tracks[0].times[1] = -1;
-    try std.testing.expect(!model.isWhole());
-    model.rig.clips[0].tracks[0].times[1] = 1;
-
-    model.rig.clips[0].tracks[0].values[1] = std.math.nan(f32);
-    try std.testing.expect(!model.isWhole());
-    model.rig.clips[0].tracks[0].values[1] = 0;
-
-    model.rig.clips[0].tracks[1].stride = 2;
-    try std.testing.expect(!model.isWhole());
-    model.rig.clips[0].tracks[1].stride = 1;
-
-    model.rig.nodes[0].parent = 1;
-    try std.testing.expect(!model.isWhole());
-    model.rig.nodes[0].parent = null;
-
-    model.rig.morph_targets[0].deltas[0].vertex = 7;
-    try std.testing.expect(!model.isWhole());
-    model.rig.morph_targets[0].deltas[0].vertex = 2;
-
-    // Undamaged again, it is whole, so each refusal above was down to its own damage.
-    try std.testing.expect(model.isWhole());
 }

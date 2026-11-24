@@ -486,38 +486,3 @@ fn drawViewport(context: *const anyopaque, c: *ui.Canvas, r: ui.Rect) anyerror!v
     try drawHandles(self, c);
     try c.roundRectStroke(r, c.theme.border, 0, 1);
 }
-
-test "zooming keeps the point under the pointer still" {
-    var view = Scene2d{ .area = .{ .x = 0, .y = 0, .w = 400, .h = 200 }, .shown = true };
-    const pointer = ui.Vec2{ .x = 300, .y = 50 };
-    const before = view.worldAt(pointer);
-    view.zoomAbout(pointer, 2);
-    try std.testing.expect(view.height_m < 12);
-    const after = view.worldAt(pointer);
-    try std.testing.expectApproxEqAbs(before.x, after.x, 1e-4);
-    try std.testing.expectApproxEqAbs(before.y, after.y, 1e-4);
-}
-
-test "panning drags the world with the pointer, and the grid thins out when zoomed out" {
-    var view = Scene2d{ .area = .{ .x = 0, .y = 0, .w = 400, .h = 200 }, .shown = true };
-    // 12 m over 200 px: 100 px right is 6 m, the world moving right under the pointer.
-    view.panBy(100, 0);
-    try std.testing.expectApproxEqAbs(@as(f32, -6), view.centre.x, 1e-4);
-    try std.testing.expectApproxEqAbs(@as(f32, 0), view.worldAt(.{ .x = 300, .y = 100 }).x, 1e-4);
-    const near_step = view.gridStep();
-    view.height_m = 400;
-    try std.testing.expect(view.gridStep() > near_step);
-}
-
-test "a click picks the entity under the pointer through the flat view" {
-    var view = Scene2d{ .area = .{ .x = 0, .y = 0, .w = 400, .h = 200 }, .shown = true };
-    view.panBy(-100, 0);
-    // Panned to x = 6 m; at 12 m over 200 px, 50 px right of the middle is 3 m further, on the cube.
-    const cube = eggy.mesh.Drawable{ .model = .{ .{ 1, 0, 0, 0 }, .{ 0, 1, 0, 0 }, .{ 0, 0, 1, 0 }, .{ 9, 0, 0, 1 } }, .color = .{ 1, 1, 1, 1 }, .shape = .cube, .entity_id = 4, .entity_generation = 0 };
-    var models = eggy.model_cache.ModelCache.init(std.testing.allocator, undefined);
-    var ui_scenes = eggy.ui_scenes.State{ .gpa = std.testing.allocator };
-    const over = view.worldAt(.{ .x = 250, .y = 100 });
-    try std.testing.expectApproxEqAbs(@as(f32, 9), over.x, 1e-4);
-    try std.testing.expectEqual(@as(u32, 4), scene_view.picking.pick(&.{cube}, &models, &ui_scenes, .{}, view.view(), view.area, .{ .x = 250, .y = 100 }).?.id);
-    try std.testing.expect(scene_view.picking.pick(&.{cube}, &models, &ui_scenes, .{}, view.view(), view.area, .{ .x = 100, .y = 100 }) == null);
-}

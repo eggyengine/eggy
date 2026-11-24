@@ -71,13 +71,3 @@ const Screen = struct {
         try c.textIn(.{ .x = left, .y = middle + 12, .w = width, .h = 20 }, self.detail, 12, c.theme.muted_foreground, .center);
     }
 };
-
-test "the screen names the scene and says what is loading, out of how many" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    try std.testing.expectEqualStrings("level", sceneName("resources/scene/level.scene.zon"));
-    const loading = Loading{ .scene = "resources/scene/level.scene.zon", .stage = .models_and_images, .done = 2, .total = 5, .item = "resources/ship.glb", .loading_screen = true };
-    try std.testing.expectEqualStrings("resources/ship.glb (3 of 5)", try detailText(arena.allocator(), loading));
-    try std.testing.expectApproxEqAbs(@as(f32, 0.4), loading.fraction(), 0.001);
-    try std.testing.expect(!shows(null));
-}

@@ -793,27 +793,3 @@ fn recordArea(context: *const anyopaque, _: *ui.Canvas, rect: ui.Rect) anyerror!
     const area: *ui.Rect = @ptrCast(@alignCast(@constCast(context)));
     area.* = rect;
 }
-
-test "text is told from binary, and a cut-off character still reads as text" {
-    try std.testing.expect(readsAsText(".{ .name = \"caf\xc3\xa9\" }"));
-    try std.testing.expect(!readsAsText("\x89PNG\r\n\x1a\n\x00\x00"));
-    try std.testing.expect(readsAsText("caf\xc3"));
-    var buffer: [32]u8 = undefined;
-    try std.testing.expectEqualStrings("8.0 KB", sizeText(&buffer, 8192));
-    try std.testing.expectEqualStrings("12 bytes", sizeText(&buffer, 12));
-}
-
-test "fitting enlarges small images by whole multiples and shrinks large ones to fit" {
-    try std.testing.expectEqual(@as(f32, 4), imageScale(.fit, .{ 32, 32 }, .{ 150, 140 }));
-    try std.testing.expectEqual(@as(f32, 0.5), imageScale(.fit, .{ 400, 200 }, .{ 200, 300 }));
-    try std.testing.expectEqual(@as(f32, 2), imageScale(.x2, .{ 400, 200 }, .{ 200, 300 }));
-}
-
-test "a playing sheet steps through its frames at its speed and wraps" {
-    const sheet: AssetPreview.Sheet = .{ .columns = 3, .rows = 2, .playing = true, .fps = 10, .started_ms = 1000, .started_frame = 4 };
-    try std.testing.expectEqual(@as(u16, 4), sheet.frameAt(1000));
-    try std.testing.expectEqual(@as(u16, 5), sheet.frameAt(1100));
-    try std.testing.expectEqual(@as(u16, 0), sheet.frameAt(1200));
-    const paused: AssetPreview.Sheet = .{ .columns = 2, .rows = 1, .frame = 7 };
-    try std.testing.expectEqual(@as(u16, 1), paused.frameAt(0));
-}

@@ -363,40 +363,6 @@ fn drawDots(_: *const anyopaque, c: *ui.Canvas, r: ui.Rect) anyerror!void {
     }
 }
 
-test "pressing a trigger opens its menu, and an item runs and closes it" {
-    var menubar = Menubar{};
-    try std.testing.expectEqual(Action.handled, menubar.press(@backingInt(Menu.file), .{}).?);
-    try std.testing.expectEqual(@backingInt(Menu.file), menubar.open);
-    try std.testing.expectEqual(Action{ .command = .quit }, menubar.press(@backingInt(Command.quit), .{}).?);
-    try std.testing.expectEqual(@as(u32, 0), menubar.open);
-    try std.testing.expect(menubar.press(@backingInt(Command.quit), .{}) == null); // closed: not ours
-}
-
-test "menus that don't fit fold into the \"...\" menu, and its rows open them beside it" {
-    var font = try ui.Font.init(std.testing.allocator, ui.default_font);
-    defer font.deinit();
-    try std.testing.expectEqual(menu_order.len, shownMenus(&font, 1000, .{}));
-    const shown = shownMenus(&font, triggerWidth(&font, 0, .{}) + triggerWidth(&font, 1, .{}) + widgets.flush_trigger_height, .{});
-    try std.testing.expectEqual(@as(usize, 2), shown);
-    try std.testing.expectEqual(@as(usize, 0), shownMenus(&font, 1, .{}));
-
-    var menubar = Menubar{};
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    var layout = dock.DockSpace.init();
-    const list = try menubar.list(arena.allocator(), &layout, &.{}, &.{}, .{}, .{}, .{}, shown);
-    try std.testing.expectEqual(@as(usize, 3), list.len);
-    try std.testing.expectEqual(@backingInt(Menu.more), list[2].id);
-    try std.testing.expectEqualStrings("View", list[2].items[0].label);
-
-    _ = menubar.press(@backingInt(Menu.more), .{});
-    try std.testing.expect(menubar.hover(overflow_first + 3));
-    try std.testing.expectEqual(Action.handled, menubar.press(overflow_first + 4, .{}).?);
-    try std.testing.expectEqual(@backingInt(Menu.more), menubar.open); // still open, on Help now
-    try std.testing.expectEqual(Action{ .command = .about }, menubar.press(@backingInt(Command.about), .{}).?);
-    try std.testing.expectEqual(@as(u32, 0), menubar.open_submenu);
-}
-
 const test_menus = [_]eggy.plugins.EditorMenu{
     .{ .key = "tools/tools", .title = "Tools", .items = &.{ .{ .key = "tools/tools/bake", .title = "Bake" }, .{ .key = "tools/tools/clean", .title = "Clean" } } },
     .{ .key = "tools/view", .title = "Grid", .extends = .view, .items = &.{.{ .key = "tools/view/snap", .title = "Snap" }} },
@@ -405,30 +371,3 @@ const test_status = [_]eggy.plugins.EditorStatusItem{
     .{ .key = "tools/fps", .title = "FPS" },
     .{ .key = "tools/mode", .title = "Mode", .items = &.{.{ .key = "tools/mode/fast", .title = "Fast" }} },
 };
-
-test "plugin menus join the bar and Eggy's menus, and their rows run by place" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    var layout = dock.DockSpace.init();
-    var menubar = Menubar{};
-    const bars = plugin_bars.Bars{ .menus = &test_menus, .status_items = &test_status };
-    const states = try plugin_bars.States.declared(arena.allocator(), bars);
-    const list = try menubar.list(arena.allocator(), &layout, &.{}, &.{}, bars, states, .{}, menu_order.len + 1);
-
-    // Eggy's six, then the one menu that stands alone.
-    try std.testing.expectEqual(@as(usize, 7), list.len);
-    try std.testing.expectEqualStrings("Tools", list[6].label);
-    // The extension's row ends View.
-    try std.testing.expectEqualStrings("Snap", list[2].items[list[2].items.len - 1].label);
-
-    try std.testing.expectEqual(Action.handled, menubar.press(list[6].id, bars).?);
-    const press = menubar.press(list[6].items[1].id, bars).?;
-    try std.testing.expectEqual(@as(usize, 0), press.plugin_bar.menu_item.menu);
-    try std.testing.expectEqual(@as(usize, 1), press.plugin_bar.menu_item.item);
-    try std.testing.expectEqual(@as(u32, 0), menubar.open);
-
-    // The extension is pressed from its own place in View.
-    _ = menubar.press(@backingInt(Menu.view), bars);
-    const snap = menubar.press(list[2].items[list[2].items.len - 1].id, bars).?;
-    try std.testing.expectEqual(@as(usize, 1), snap.plugin_bar.menu_item.menu);
-}

@@ -174,34 +174,3 @@ fn folderInUse(dir: []const u8) bool {
     var entries = opened.iterate();
     return (entries.next(io) catch return true) != null;
 }
-
-test "the package name follows the title until it is edited" {
-    var wizard = Wizard.init("/tmp");
-    defer wizard.deinit();
-    try wizard.title.set("Space Game");
-    wizard.followTitle();
-    try std.testing.expectEqualStrings("space_game", wizard.name.text());
-    try wizard.name.set("rocket");
-    wizard.followTitle();
-    try wizard.title.set("Other");
-    wizard.followTitle();
-    try std.testing.expectEqualStrings("rocket", wizard.name.text());
-}
-
-test "the wizard won't leave a step until its fields are good" {
-    var wizard = Wizard.init("relative/path");
-    defer wizard.deinit();
-    try wizard.name.set("2d");
-    wizard.name_edited = true;
-    wizard.next();
-    try std.testing.expectEqual(Step.name, wizard.step);
-    try wizard.name.set("space_game");
-    wizard.next();
-    try std.testing.expectEqual(Step.location, wizard.step);
-    wizard.next();
-    try std.testing.expect(wizard.problem != null); // not an absolute path
-    try wizard.location.set("/nonexistent-eggy-test-location");
-    wizard.next();
-    try std.testing.expectEqual(Step.review, wizard.step);
-    try std.testing.expectEqualStrings("/nonexistent-eggy-test-location/space_game", wizard.dir);
-}

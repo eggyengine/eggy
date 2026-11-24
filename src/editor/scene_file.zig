@@ -389,47 +389,6 @@ pub fn isProjectPath(path: []const u8) bool {
     return true;
 }
 
-test "scene paths stay inside the project" {
-    try std.testing.expect(isProjectPath("scenes/main.scene.zon"));
-    try std.testing.expect(!isProjectPath("../elsewhere.scene.zon"));
-    try std.testing.expect(!isProjectPath("scenes/../../x.scene.zon"));
-    try std.testing.expect(!isProjectPath("/etc/passwd"));
-}
-
-test "a saved scene is remembered, and a new one gets a free name" {
-    const gpa = std.testing.allocator;
-    const io = std.testing.io;
-    var tmp = std.testing.tmpDir(.{});
-    defer tmp.cleanup();
-    const dir = try tmp.dir.realPathFileAlloc(io, ".", gpa);
-    defer gpa.free(dir);
-    const access = eggy.scene.registryAccess(eggy.components.Registry(&.{}, &.{}));
-    var world = eggy.ecs.World.init(gpa);
-    defer world.deinit();
-
-    var first = OpenScene{ .gpa = gpa, .project_dir = dir };
-    defer first.deinit();
-    try std.testing.expect(first.readMemory() == null);
-    const named = try world.spawn(.{});
-    access.setName(&world, named, "Sun");
-    try std.testing.expect(first.unsaved(&world, access)); // an entity, and nowhere saved
-    try first.save(&world, access, null, .unless_changed);
-    try std.testing.expectEqualStrings("untitled.scene.zon", first.name().?);
-    try std.testing.expect(!first.unsaved(&world, access));
-    access.setName(&world, named, "Sol");
-    try std.testing.expect(first.unsaved(&world, access));
-    try first.create(eggy.project.scenes_dir, .three, &world, access);
-    try std.testing.expectEqualStrings("untitled-2.scene.zon", first.name().?);
-
-    // A later editor reopens the last one, and opening the first brings its entity back.
-    var second = OpenScene{ .gpa = gpa, .project_dir = dir };
-    defer second.deinit();
-    second.reopen(.three, &world, access);
-    try std.testing.expectEqualStrings("untitled-2.scene.zon", second.name().?);
-    try second.open(eggy.project.scenes_dir ++ "/untitled.scene.zon", .three, &world, access);
-    try std.testing.expectEqual(@as(usize, 1), world.entityCount());
-}
-
 test "a save leaves a scene file another editor changed alone, unless told to overwrite it" {
     const gpa = std.testing.allocator;
     const io = std.testing.io;

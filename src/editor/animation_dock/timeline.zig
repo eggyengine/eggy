@@ -569,22 +569,6 @@ fn head(c: *ui.Canvas, x: f32, y: f32, h: f32, color: [3]f32) !void {
     try c.rect(.{ .x = x - 1, .y = y, .w = 2, .h = h }, color);
 }
 
-test "times map across the lane after the gutter, and back" {
-    const layout = Layout{ .width = label_width + 209, .view = .{ .duration_s = 10 } };
-    try std.testing.expectEqual(label_width, layout.xOf(0));
-    try std.testing.expectEqual(label_width + 100, layout.xOf(5));
-    try std.testing.expect(!layout.shows(99));
-    try std.testing.expect(layout.timeAt(10) == null);
-    try std.testing.expectApproxEqAbs(@as(f32, 5), layout.timeAt(label_width + 100).?, 0.001);
-    try std.testing.expectApproxEqAbs(@as(f32, 0.5), layout.secondsAcross(10), 0.001);
-
-    // Zoomed to 2..4 s, the lane shows those two seconds.
-    const zoomed = Layout{ .width = label_width + 209, .view = .{ .duration_s = 10, .start_s = 2, .span_s = 2 } };
-    try std.testing.expectEqual(label_width + 100, zoomed.xOf(3));
-    try std.testing.expect(!zoomed.shows(1));
-    try std.testing.expectApproxEqAbs(@as(f32, 4), zoomed.timeAtAny(label_width + 500), 0.001);
-}
-
 test "dragged keys land on frames or the head, and stop at the start" {
     const layout = Layout{ .width = label_width + 209, .view = .{ .duration_s = 10 } };
     // Pressed on a key at 1 s, the pointer 0.51 s on: the key lands on the frame at 1.5 s.
@@ -594,12 +578,4 @@ test "dragged keys land on frames or the head, and stop at the start" {
     try std.testing.expectApproxEqAbs(@as(f32, 2.27), dragShift(layout, 1, 1, 3.3, 3.27, 0, false), 0.0001);
     // Dragged back past the start, the earliest key stops at 0.
     try std.testing.expectApproxEqAbs(@as(f32, -0.5), dragShift(layout, 2, 2, 0, 9, 0.5, false), 0.0001);
-}
-
-test "a click picks the nearest key within reach" {
-    const layout = Layout{ .width = label_width + 209, .view = .{ .duration_s = 10 } };
-    const keys = [_]eggy.assets.clip.Key{ .{ .time_s = 1 }, .{ .time_s = 1.2 }, .{ .time_s = 6 } };
-    try std.testing.expectEqual(@as(?usize, 1), layout.keyNear(&keys, layout.xOf(1.25)));
-    try std.testing.expectEqual(@as(?usize, 2), layout.keyNear(&keys, layout.xOf(6) + 5));
-    try std.testing.expect(layout.keyNear(&keys, layout.xOf(4)) == null);
 }

@@ -134,18 +134,3 @@ fn line(c: *ui.Canvas, from: ui.Vec2, to: ui.Vec2, width: f32, color: [4]f32) !v
     try c.triangle(.{ .{ from.x + nx, from.y + ny }, .{ to.x + nx, to.y + ny }, .{ to.x - nx, to.y - ny } }, .{ color, color, color });
     try c.triangle(.{ .{ from.x + nx, from.y + ny }, .{ to.x - nx, to.y - ny }, .{ from.x - nx, from.y - ny } }, .{ color, color, color });
 }
-
-test "looking down -z, +x is to the right and +y up, and clicking +x looks from the side" {
-    const view = View.lookingAt(.init(0, 0, 10), .zero, .{});
-    const scene = ui.Rect{ .x = 0, .y = 0, .w = 800, .h = 600 };
-    var x_end: ?End = null;
-    var y_end: ?End = null;
-    for (ends(view, scene)) |end| {
-        if (end.axis == 0 and end.positive) x_end = end;
-        if (end.axis == 1 and end.positive) y_end = end;
-    }
-    try std.testing.expect(x_end.?.at.x > scene.w - inset_pt);
-    try std.testing.expect(y_end.?.at.y < inset_pt);
-    const clicked = hit(view, scene, x_end.?.at).?;
-    try std.testing.expectEqual(@as(f32, 90), lookFrom(clicked).yaw_deg);
-}

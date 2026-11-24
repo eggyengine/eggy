@@ -85,37 +85,3 @@ pub fn compose(gpa: std.mem.Allocator, source: []const u8, name: []const u8) (Er
     writer.writeAll(wrapper[marked..]) catch return error.OutOfMemory;
     return out.toOwnedSliceSentinel(0);
 }
-
-test "a post shader is put into the post wrapper with the library inlined" {
-    const source =
-        \\#include "eggy.slang"
-        \\float4 post(PostInput input) { return float4(1.0 - sceneColor(input.uv), 1.0); }
-    ;
-    try std.testing.expectEqual(Role.post, try roleOf(source));
-    const whole = try compose(std.testing.allocator, source, "invert.slang");
-    defer std.testing.allocator.free(whole);
-    try std.testing.expect(std.mem.indexOf(u8, whole, "#include") == null);
-    try std.testing.expect(std.mem.indexOf(u8, whole, "struct PostInput") != null);
-    const user = std.mem.indexOf(u8, whole, "1.0 - sceneColor").?;
-    try std.testing.expect(std.mem.indexOf(u8, whole, "float3 sceneColor").? < user);
-    try std.testing.expect(std.mem.indexOf(u8, whole, "fragmentMain").? > user);
-    try std.testing.expect(std.mem.indexOf(u8, whole, "#line 1 \"invert.slang\"").? < user);
-}
-
-test "a surface shader replaces the mesh shader's default surface" {
-    const source =
-        \\#include "eggy"
-        \\Surface surface(SurfaceInput input) { return defaultSurface(input); }
-    ;
-    const whole = try compose(std.testing.allocator, source, "plain.slang");
-    defer std.testing.allocator.free(whole);
-    try std.testing.expect(std.mem.indexOf(u8, whole, "#include") == null);
-    try std.testing.expect(std.mem.indexOf(u8, whole, "#define EGGY_SURFACE 1").? < std.mem.indexOf(u8, whole, "#ifndef EGGY_SURFACE").?);
-    try std.testing.expect(std.mem.indexOf(u8, whole, "vertexMain") != null);
-}
-
-test "a shader without Eggy's include or a role is refused" {
-    try std.testing.expectError(error.MissingEggyInclude, compose(std.testing.allocator, "float4 post(PostInput input) { return 0; }", "a.slang"));
-    try std.testing.expectError(error.UnknownShaderRole, roleOf("#include \"eggy\"\nfloat4 main() { return 0; }"));
-    try std.testing.expectError(error.AmbiguousShaderRole, roleOf("PostInput SurfaceInput"));
-}

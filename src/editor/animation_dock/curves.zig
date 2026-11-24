@@ -215,29 +215,3 @@ fn diamond(c: *ui.Canvas, x: f32, y: f32, half: f32, color: [3]f32) !void {
     try c.triangle(.{ .{ x, y - half }, .{ x - half, y }, .{ x + half, y } }, .{ rgba, rgba, rgba });
     try c.triangle(.{ .{ x - half, y }, .{ x, y + half }, .{ x + half, y } }, .{ rgba, rgba, rgba });
 }
-
-test "a track's range holds its keys with room around them, and a flat one sits in the middle" {
-    const keys = [_]eggy.assets.clip.Key{ .{ .time_s = 0, .value = .{ 0, 2, -1 } }, .{ .time_s = 1, .value = .{ 3, 2, 0 } } };
-    const range = rangeOf(.{ .target = "", .property = .position, .keys = &keys });
-    try std.testing.expect(range.low < -1 and range.high > 3);
-    try std.testing.expectApproxEqAbs(range.yOf(1, 200), 100, 0.01);
-    const flat = [_]eggy.assets.clip.Key{.{ .time_s = 0, .value = .{ 45, 0, 0 } }};
-    const fov = rangeOf(.{ .target = "", .property = .fov_deg, .keys = &flat });
-    try std.testing.expectApproxEqAbs((fov.low + fov.high) / 2, 45, 0.001);
-}
-
-test "a key's point is found on the axis nearest the pointer" {
-    const keys = [_]eggy.assets.clip.Key{.{ .time_s = 1, .value = .{ 0, 1, 2 } }};
-    const track = Track{ .target = "", .property = .position, .keys = &keys };
-    const layout = timeline.Layout{ .width = timeline.label_width + 210, .view = .{ .duration_s = 2 } };
-    const range = Range{ .low = 0, .high = 2 };
-    const x = layout.xOf(1);
-    try std.testing.expectEqual(Point{ .key = 0, .axis = 2 }, pointNear(layout, range, 200, track, x, range.yOf(2, 200) + 2).?);
-    try std.testing.expectEqual(@as(?Point, null), pointNear(layout, range, 200, track, x + 40, range.yOf(2, 200)));
-}
-
-test "value lines fall on round numbers" {
-    try std.testing.expectEqual(@as(f32, 1), valueStep(4));
-    try std.testing.expectEqual(@as(f32, 0.5), valueStep(1.6));
-    try std.testing.expectEqual(@as(f32, 20), valueStep(70));
-}

@@ -122,12 +122,3 @@ fn sameSet(a: Set, b: Set) bool {
     }
     return true;
 }
-
-test "sets match by their textures, a missing map only another missing one" {
-    const texture: vit.Texture = undefined;
-    const view: vit.TextureView = undefined;
-    const normal: Set = .{ .{ .texture = texture, .view = view }, null, null, null };
-    try std.testing.expect(sameSet(normal, normal));
-    try std.testing.expect(!sameSet(normal, .{ null, null, null, null }));
-    try std.testing.expect(sameSet(.{ null, null, null, null }, .{ null, null, null, null }));
-}

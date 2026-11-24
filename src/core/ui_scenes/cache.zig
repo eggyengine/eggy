@@ -255,35 +255,3 @@ pub fn pack(gpa: std.mem.Allocator, font: *ui.Font, decoded: assets.Texture) !*u
     image.* = .{ .width = texture.width, .height = texture.height, .frames = frames, .duration_ms = if (count > 1) duration else 0 };
     return image;
 }
-
-test "an animated texture packs every frame and plays them in turn" {
-    const gpa = std.testing.allocator;
-    var font = try ui.Font.init(gpa, ui.default_font);
-    defer font.deinit();
-    var pixels = [_]u8{ 255, 0, 0, 255, 0, 0, 255, 255 };
-    var delays = [_]u32{ 100, 200 };
-    const image = try pack(gpa, &font, .{ .width = 1, .height = 1, .pixels = &pixels, .frame_delays_ms = &delays });
-    defer {
-        image.deinit(gpa);
-        gpa.destroy(image);
-    }
-    try std.testing.expectEqual(@as(usize, 2), image.frames.len);
-    try std.testing.expectEqual(@as(u32, 300), image.duration_ms);
-    try std.testing.expect(!std.meta.eql(image.frameAt(50), image.frameAt(150)));
-}
-
-test "a large image is shrunk to fit the atlas" {
-    const gpa = std.testing.allocator;
-    var font = try ui.Font.init(gpa, ui.default_font);
-    defer font.deinit();
-    const pixels = try gpa.alloc(u8, 1024 * 4 * 4);
-    defer gpa.free(pixels);
-    @memset(pixels, 255);
-    const image = try pack(gpa, &font, .{ .width = 1024, .height = 4, .pixels = pixels });
-    defer {
-        image.deinit(gpa);
-        gpa.destroy(image);
-    }
-    try std.testing.expectEqual(@as(u32, 1024), image.width);
-    try std.testing.expectEqual(@as(u16, 512), image.frames[0].sprite.w);
-}

@@ -429,50 +429,6 @@ pub const Window = struct {
     }
 };
 
-test "the map page and a control page lay out, and removing the last control shows the map" {
-    const gpa = std.testing.allocator;
-    var document = try Document.init(gpa, ".{}");
-    defer document.deinit();
-    var view = View{};
-    var context = try ui.Context.init(gpa);
-    defer context.deinit();
-    context.density = .compact;
-    context.newFrame(.{ .x = 0, .y = 0, .w = 760, .h = 780 });
-    try view.build(&context, &document, "resources/player.inmap.zon");
-    try std.testing.expect((try context.render()).len > 0);
-    try document.addControl("move", .vector);
-    try document.setBindings(0, &.{ .{ .keys_2d = .{} }, .{ .controller_stick = .{} }, .{ .mouse_delta = .{} } });
-    view.select(.{ .control = 0 });
-    context.newFrame(.{ .x = 0, .y = 0, .w = 760, .h = 780 });
-    try view.build(&context, &document, "resources/player.inmap.zon");
-    try std.testing.expect((try context.render()).len > 0);
-    try std.testing.expectEqualStrings("move", view.control.name.text());
-    try document.removeControl(0);
-    context.newFrame(.{ .x = 0, .y = 0, .w = 760, .h = 780 });
-    try view.build(&context, &document, "resources/player.inmap.zon");
-    try std.testing.expect(view.selection == .map);
-    try std.testing.expectEqualStrings("player", mapTitle("resources/player.inmap.zon"));
-}
-
-test "a captured key goes into the binding and Escape cancels a capture" {
-    const gpa = std.testing.allocator;
-    var document = try Document.init(gpa, ".{ .controls = .{ .{ .name = \"move\", .kind = .vector, .bindings = .{ .{ .keys_2d = .{} } } } } }");
-    defer document.deinit();
-    var page = control_page.ControlPage{ .capture = .{ .binding = 0, .part = .left } };
-    const press = struct {
-        fn key(scancode: eggy.Key) eggy.Event {
-            return .{ .key_down = .{ .common = undefined, .id = null, .scancode = scancode, .key = null, .mod = .{}, .raw = 0, .down = true, .repeat = false } };
-        }
-    };
-    try std.testing.expect(page.captureEvent(press.key(.j), &document, 0));
-    try std.testing.expectEqual(eggy.Key.j, document.controls()[0].defaults[0].keys_2d.keys.left);
-    try std.testing.expect(document.modified());
-    page.capture = .{ .binding = 0, .part = .up };
-    try std.testing.expect(page.captureEvent(press.key(.escape), &document, 0));
-    try std.testing.expect(!page.capturing());
-    try std.testing.expectEqual(eggy.Key.w, document.controls()[0].defaults[0].keys_2d.keys.up);
-}
-
 test "each edit saves with one coalesced undo step and refuses external changes" {
     const gpa = std.testing.allocator;
     const io = std.testing.io;

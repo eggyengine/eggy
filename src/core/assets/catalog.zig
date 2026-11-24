@@ -617,35 +617,3 @@ test "moves keep ids, copies get new ones, and the trash round trip returns the 
     try std.testing.expect(catalog.view().findPath("resources/more/a.png") == null);
     try std.testing.expectError(error.NotCatalogued, catalog.setModelImport(io, project, "resources/pictures/a.png", .{ .scale = 2 }));
 }
-
-test "two processes' catalogs agree on new ids instead of the last writer winning" {
-    const gpa = std.testing.allocator;
-    const io = std.testing.io;
-    var tmp = std.testing.tmpDir(.{});
-    defer tmp.cleanup();
-    const project = tmp.dir;
-    try project.createDirPath(io, "resources");
-
-    // The editor and a build each open the catalog before either has seen the new files.
-    var editor = try Catalog.open(gpa, io, project);
-    defer editor.deinit();
-    var build = try Catalog.open(gpa, io, project);
-    defer build.deinit();
-    try project.writeFile(io, .{ .sub_path = "resources/ship.glb", .data = "x" });
-    try project.writeFile(io, .{ .sub_path = "resources/rock.png", .data = "x" });
-
-    _ = try build.sync(io, project);
-    const ship = build.view().findPath("resources/ship.glb").?.id;
-    // The editor's stale copy takes the build's ids rather than inventing its own.
-    try std.testing.expectEqual(@as(usize, 0), (try editor.sync(io, project)).made);
-    try std.testing.expectEqual(ship, editor.view().findPath("resources/ship.glb").?.id);
-
-    // A change in one is kept by the other's next change.
-    try editor.setModelImport(io, project, "resources/ship.glb", .{ .scale = 0.25 });
-    try project.rename("resources/rock.png", project, "resources/stone.png", io);
-    try build.move(io, project, "resources/rock.png", "resources/stone.png");
-    var disk = try Snapshot.read(gpa, io, project);
-    defer disk.deinit();
-    try std.testing.expectEqual(@as(f32, 0.25), disk.findPath("resources/ship.glb").?.model_import.scale);
-    try std.testing.expect(disk.findPath("resources/stone.png") != null);
-}

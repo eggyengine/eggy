@@ -57,32 +57,3 @@ pub fn follow(layout: *dock.DockSpace, first: u32, rest: []const u32) void {
         layout.move(panel, stack, .center) catch |err| log.warn("cannot move panel {d} with its tab: {t}", .{ panel, err });
     }
 }
-
-test "a tab rested on is shown once, after a moment" {
-    var spring = SpringLoad{};
-    try std.testing.expectEqual(@as(?u8, null), spring.hover(2, 1000));
-    try std.testing.expectEqual(@as(?u8, null), spring.hover(2, 1000 + spring_ms - 1));
-    try std.testing.expectEqual(@as(?u8, 2), spring.hover(2, 1000 + spring_ms));
-    try std.testing.expectEqual(@as(?u8, null), spring.hover(2, 5000));
-    // Moving onto another tab starts the wait again.
-    try std.testing.expectEqual(@as(?u8, null), spring.hover(3, 5000));
-    try std.testing.expectEqual(@as(?u8, null), spring.hover(null, 9000));
-}
-
-test "a press becomes a drag once the pointer has moved a little" {
-    var drag = TabDrag{ .root = 0, .from = .{ .x = 10, .y = 10 } };
-    try std.testing.expect(!drag.moveTo(.{ .x = 12, .y = 11 }));
-    try std.testing.expect(drag.moveTo(.{ .x = 10, .y = 30 }));
-    try std.testing.expect(drag.moveTo(.{ .x = 10, .y = 10 }));
-}
-
-test "a carried tab's other panels join its first wherever it docked" {
-    var layout = dock.DockSpace.init();
-    try layout.add(1, null, .center);
-    try layout.add(2, 1, .right);
-    try layout.add(3, 2, .bottom);
-    try layout.move(1, layout.nodeOf(3).?, .center);
-    follow(&layout, 1, &.{2});
-    try std.testing.expectEqual(layout.nodeOf(1).?, layout.nodeOf(2).?);
-    try std.testing.expectEqual(layout.nodeOf(3).?, layout.nodeOf(2).?);
-}

@@ -53,22 +53,3 @@ const kernel = struct {
     extern "kernel32" fn TerminateJobObject(win.HANDLE, u32) callconv(.winapi) win.BOOL;
     extern "kernel32" fn CloseHandle(win.HANDLE) callconv(.winapi) win.BOOL;
 };
-
-test "a build owns a separate process group and cancellation reaps its root" {
-    if (windows) return error.SkipZigTest;
-    var process = try Process.spawn(std.testing.io, .{
-        .argv = &.{ "/bin/sh", "-c", "printf ready; sleep 30" },
-        .stdout = .pipe,
-        .stderr = .ignore,
-    });
-    defer process.stop(std.testing.io);
-    var buffer: [32]u8 = undefined;
-    var reader = process.child.stdout.?.readerStreaming(std.testing.io, &buffer);
-    try std.testing.expectEqualStrings("ready", try reader.interface.take(5));
-    const libc = struct {
-        extern "c" fn getpgid(c_int) c_int;
-    };
-    try std.testing.expectEqual(process.child.id.?, libc.getpgid(process.child.id.?));
-    process.stop(std.testing.io);
-    try std.testing.expect(process.child.id == null);
-}

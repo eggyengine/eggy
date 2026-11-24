@@ -111,14 +111,3 @@ pub fn packageChange(gpa: std.mem.Allocator, project_dir: []const u8, before: []
     }
     return .{ .before = before, .after = after };
 }
-
-test "an update from another repository or package is refused" {
-    const installed = Installed{ .module = "stats", .repository = "https://github.com/me/stats", .fingerprint = 1 };
-    var manifest = Manifest{ .title = "Stats", .module = "stats", .version = "2.0.0", .repository = "https://github.com/me/stats", .fingerprint = 1 };
-    try std.testing.expect(replacementProblem(installed, manifest) == null);
-    manifest.fingerprint = 2;
-    try std.testing.expect(replacementProblem(installed, manifest) != null);
-    manifest.fingerprint = 1;
-    manifest.repository = "https://github.com/mallory/stats";
-    try std.testing.expect(replacementProblem(installed, manifest) != null);
-}

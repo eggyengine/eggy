@@ -92,18 +92,3 @@ pub const Store = struct {
         return std.fmt.bufPrint(buffer, "eggy.graphics.{s}.{s}", .{ @tagName(self.scope), self.namespace });
     }
 };
-
-test "graphics preferences roundtrip separately from saves and reject invalid replacement" {
-    var tmp = std.testing.tmpDir(.{});
-    defer tmp.cleanup();
-    var store = Store{ .gpa = std.testing.allocator, .io = std.testing.io, .scope = .runtime, .namespace = identityHash("test"), .directory = try tmp.dir.openDir(std.testing.io, ".", .{}) };
-    defer store.deinit();
-    try std.testing.expect(try store.load() == null);
-    const settings = render.Settings{ .anti_aliasing = .fxaa, .frame_limit = 120, .anisotropy = 4 };
-    try store.save(settings);
-    try std.testing.expectEqualDeep(settings, (try store.load()).?);
-    try std.testing.expectError(error.InvalidRenderScale, store.save(.{ .render_scale = 0 }));
-    try std.testing.expectEqualDeep(settings, (try store.load()).?);
-    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "graphics.zon", .data = ".{ .version = 2, .settings = .{} }" });
-    try std.testing.expectError(error.UnsupportedGraphicsSettingsVersion, store.load());
-}

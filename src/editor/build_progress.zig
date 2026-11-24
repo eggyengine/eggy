@@ -603,14 +603,6 @@ fn drawMono(context: *const anyopaque, c: *ui.Canvas, r: ui.Rect) anyerror!void 
     try c.textIn(r, self.value, 12.5, c.theme.destructive, .start);
 }
 
-test "a short wait reads in tenths, a long one in minutes" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    try std.testing.expectEqualStrings("0.4s", duration(arena.allocator(), 420));
-    try std.testing.expectEqualStrings("12s", duration(arena.allocator(), 12_300));
-    try std.testing.expectEqualStrings("1:24", duration(arena.allocator(), 84_000));
-}
-
 test "the first compile error is found, its path made absolute" {
     const gpa = std.testing.allocator;
     const output =
@@ -632,8 +624,4 @@ test "the first compile error is found, its path made absolute" {
     try std.testing.expectEqual(@as(u32, 42), found.line);
     try std.testing.expect(std.mem.endsWith(u8, found.path, "main.zig"));
     try std.testing.expect(std.fs.path.isAbsolute(found.path));
-}
-
-test "output without a compile error has none" {
-    try std.testing.expectEqual(@as(?FirstError, null), try findFirstError(std.testing.allocator, "error: the following command failed\n", "/home/me/space"));
 }

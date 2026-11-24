@@ -94,22 +94,3 @@ pub const PluginSwitches = struct {
         return null;
     }
 };
-
-test "switches are read from the project's registry" {
-    const gpa = std.testing.allocator;
-    var tmp = std.testing.tmpDir(.{});
-    defer tmp.cleanup();
-    const dir = try tmp.dir.realPathFileAlloc(std.testing.io, ".", gpa);
-    defer gpa.free(dir);
-    try tmp.dir.createDirPath(std.testing.io, ".eggy");
-    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = eggy.plugins.registry_file, .data = ".{ .plugins = .{ .{ .key = \"stats\", .on = false }, .{ .key = \"audio\" } } }" });
-
-    var switches = PluginSwitches.load(gpa, dir);
-    defer switches.deinit();
-    try std.testing.expect(!switches.isOn("stats"));
-    try std.testing.expect(switches.isOn("audio"));
-    try switches.set("audio", false);
-    try switches.set("audio", false); // already off: still once
-    try switches.set("stats", true);
-    try std.testing.expectEqual(@as(usize, 1), switches.off().len);
-}

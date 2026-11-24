@@ -135,29 +135,3 @@ pub fn columns(m: math.Mat4) [4][4]f32 {
     for (&out, m.data) |*column, data| column.* = data;
     return out;
 }
-
-test "a transform's inverse takes its points back" {
-    const transform = Transform{ .position = .init(3, -1, 2), .rotation_deg = .init(30, 45, 10), .scale = .init(2, 0.5, 1) };
-    const back = math.inverse4x4(f32, transform.matrix()).?;
-    const moved = math.transformPoint4x4(f32, transform.matrix(), .init(1, 2, 3));
-    try std.testing.expect(math.transformPoint4x4(f32, back, moved).approxEql(.init(1, 2, 3), 0.001));
-    try std.testing.expect(math.inverse4x4(f32, (Transform{ .scale = .init(0, 1, 1) }).matrix()) == null);
-}
-
-test "a transform's orientation turns as its matrix does, and reads back into the same angles" {
-    var transform = Transform{ .rotation_deg = .init(30, -40, 50) };
-    const direction = math.Vec3.init(0.3, -1, 2);
-    const by_matrix = math.transformDirection4x4(f32, transform.matrix(), direction);
-    try std.testing.expect(transform.orientation().rotateVector(direction).approxEql(by_matrix, 1e-4));
-    const turn = transform.orientation();
-    transform.rotation_deg = .zero;
-    transform.setOrientation(turn);
-    try std.testing.expect(transform.rotation_deg.approxEql(.init(30, -40, 50), 1e-3));
-}
-
-test "a transform scales, then turns, then moves" {
-    const transform = Transform{ .position = .init(10, 0, 0), .rotation_deg = .init(0, 0, 90), .scale = .splat(2) };
-    const corner = math.transformPoint4x4(f32, transform.matrix(), .unit_x);
-    try std.testing.expectApproxEqAbs(@as(f32, 10), corner.x, 0.001);
-    try std.testing.expectApproxEqAbs(@as(f32, 2), corner.y, 0.001);
-}

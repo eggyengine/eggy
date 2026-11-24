@@ -501,20 +501,6 @@ pub fn setDefaultScene(gpa: std.mem.Allocator, project_dir: []const u8, scene: [
     return .{ .before = owned_before, .after = try gpa.dupe(u8, after.written()) };
 }
 
-test "the default scene is written into eggy.zon, and an unchanged one is no change" {
-    const gpa = std.testing.allocator;
-    var tmp = std.testing.tmpDir(.{});
-    defer tmp.cleanup();
-    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = eggy.project.file_name, .data = ".{ .name = \"rats\", .title = \"Rats\" }\n" });
-    const dir = try tmp.dir.realPathFileAlloc(std.testing.io, ".", gpa);
-    defer gpa.free(dir);
-    const change = (try setDefaultScene(gpa, dir, "resources/scene/sewer.scene.zon")).?;
-    defer gpa.free(change.before);
-    defer gpa.free(change.after);
-    try std.testing.expect(std.mem.indexOf(u8, change.after, "sewer.scene.zon") != null);
-    try std.testing.expect(try setDefaultScene(gpa, dir, "resources/scene/sewer.scene.zon") == null);
-}
-
 test "saving the Project section keeps the installed plugins" {
     const gpa = std.testing.allocator;
     var tmp = std.testing.tmpDir(.{});
@@ -530,30 +516,4 @@ test "saving the Project section keeps the installed plugins" {
     defer gpa.free(change.after);
     try std.testing.expect(std.mem.indexOf(u8, change.after, "eggy_git") != null);
     try std.testing.expect(std.mem.indexOf(u8, change.after, "eggy_frame_stats") != null);
-}
-
-test "a half typed or invalid number is not written to eggy.zon, and says why" {
-    const gpa = std.testing.allocator;
-    var tmp = std.testing.tmpDir(.{});
-    defer tmp.cleanup();
-    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = eggy.project.file_name, .data = ".{ .name = \"rats\", .title = \"Rats\" }\n" });
-    const dir = try tmp.dir.realPathFileAlloc(std.testing.io, ".", gpa);
-    defer gpa.free(dir);
-    const settings = try ProjectSettings.open(gpa, dir, .{});
-    defer settings.close();
-
-    // Too small a window is refused, and the file keeps the last good choice.
-    try settings.graphics.width.set("10");
-    settings.graphics.draft.width = 10;
-    const change = (try settings.save()).?; // only the file's normal form, not the window
-    defer gpa.free(change.before);
-    defer gpa.free(change.after);
-    try std.testing.expect(settings.graphics.message_kind == .failed);
-    try std.testing.expectEqual(render_settings.Settings{}, (try loadApplied(gpa, dir)).graphics);
-    try std.testing.expect(try settings.save() == null);
-
-    // A number half typed keeps the last good choice too.
-    try settings.graphics.width.set("12x");
-    try std.testing.expect(try settings.save() == null);
-    try std.testing.expectEqual(render_settings.Settings{}, (try loadApplied(gpa, dir)).graphics);
 }

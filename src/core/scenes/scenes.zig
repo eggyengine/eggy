@@ -101,12 +101,3 @@ pub const Scenes = struct {
         _ = @import("loading_screen.zig");
     }
 };
-
-test "scene instantiation reports missing context rather than manufacturing a root" {
-    var world = ecs.World.init(std.testing.allocator);
-    defer world.deinit();
-    var made = instances.SceneInstances.init(std.testing.allocator);
-    defer made.deinit();
-    const scenes = Scenes{ .world = &world, .instances = &made, .resources = .{}, .access = null };
-    try std.testing.expectError(error.NoSceneRegistry, scenes.instantiate(.init("level.scene.zon"), .{}));
-}

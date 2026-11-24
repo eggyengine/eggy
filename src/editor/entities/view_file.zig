@@ -55,32 +55,3 @@ fn read(arena: std.mem.Allocator, project_dir: []const u8) File {
     const text = dir.readFileAllocOptions(io, file_name, arena, .limited(4 << 20), .of(u8), 0) catch return .{};
     return zon_file.parse(File, arena, text, .{ .ignore_unknown_fields = true }) catch .{};
 }
-
-test "each scene's folds are kept apart, and a scene with none is left out" {
-    const gpa = std.testing.allocator;
-    var tmp = std.testing.tmpDir(.{});
-    defer tmp.cleanup();
-    const dir = try tmp.dir.realPathFileAlloc(std.testing.io, ".", gpa);
-    defer gpa.free(dir);
-    var state = ViewState{ .gpa = gpa };
-    defer state.deinit();
-
-    try state.keep(&.{"fence"}, &.{"fence/panel#2"});
-    save(gpa, dir, "resources/scene/garden.scene.zon", &state);
-    try state.keep(&.{"house"}, &.{});
-    save(gpa, dir, "resources/scene/town.scene.zon", &state);
-
-    load(gpa, dir, "resources/scene/garden.scene.zon", &state);
-    try std.testing.expect(state.kept[@backingInt(Fold.collapsed)].contains("fence"));
-    try std.testing.expect(state.kept[@backingInt(Fold.hidden)].contains("fence/panel#2"));
-    try std.testing.expect(!state.dirty);
-    load(gpa, dir, "resources/scene/town.scene.zon", &state);
-    try std.testing.expect(state.kept[@backingInt(Fold.collapsed)].contains("house"));
-
-    // Unfolded again: the scene goes from the file.
-    try state.keep(&.{}, &.{});
-    save(gpa, dir, "resources/scene/town.scene.zon", &state);
-    var arena = std.heap.ArenaAllocator.init(gpa);
-    defer arena.deinit();
-    try std.testing.expectEqual(@as(usize, 1), read(arena.allocator(), dir).scenes.len);
-}

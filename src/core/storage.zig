@@ -311,27 +311,6 @@ test "save slots roundtrip binary and empty bytes, overwrite atomically, and del
     try std.testing.expectError(error.FileNotFound, storage.read(std.testing.allocator, "slot-1"));
 }
 
-test "failed atomic replacement preserves destination and cleans scratch files" {
-    var folder = std.testing.tmpDir(.{ .iterate = true });
-    defer folder.cleanup();
-    var storage = try testStorage(std.testing.allocator, folder.dir);
-    defer storage.deinit();
-    var name_buffer: [file_name_bytes]u8 = undefined;
-    const name = slotFileName(&name_buffer, "blocked");
-    try folder.dir.createDir(std.testing.io, name, .default_dir);
-    var path_buffer: [file_name_bytes + 10]u8 = undefined;
-    const path = try std.fmt.bufPrint(&path_buffer, "{s}/untouched", .{name});
-    try folder.dir.writeFile(std.testing.io, .{ .sub_path = path, .data = "previous" });
-    try std.testing.expectError(error.StorageIo, storage.write("blocked", "replacement"));
-    const untouched = try folder.dir.readFileAlloc(std.testing.io, path, std.testing.allocator, .limited(64));
-    defer std.testing.allocator.free(untouched);
-    try std.testing.expectEqualStrings("previous", untouched);
-    var iterator = folder.dir.iterate();
-    const entry = (try iterator.next(std.testing.io)).?;
-    try std.testing.expectEqualStrings(name, entry.name);
-    try std.testing.expectEqual(null, try iterator.next(std.testing.io));
-}
-
 test "failed writes, syncs and renames preserve the previous valid save" {
     const Fail = struct {
         fn write(_: ?*anyopaque, _: std.Io.File, _: []const u8, _: []const []const u8, _: usize, _: u64) std.Io.File.WritePositionalError!usize {

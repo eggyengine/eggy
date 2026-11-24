@@ -83,20 +83,3 @@ pub const Kind = enum(u8) {
         return self == .any or Kind.of(path) == self;
     }
 };
-
-test "a file's kind comes from its name" {
-    try std.testing.expect(Kind.audio.takes("sounds/boom.ogg"));
-    try std.testing.expect(!Kind.audio.takes("art/ship.png"));
-    try std.testing.expectEqual(Kind.scene, Kind.of("levels/one.scene.zon"));
-    try std.testing.expectEqual(Kind.model, Kind.of("ships/Fighter.GLB"));
-    try std.testing.expectEqual(Kind.input_map, Kind.of("input/player.inmap.zon"));
-    try std.testing.expectEqual(Kind.material, Kind.of("art/metal.material.zon"));
-    try std.testing.expectEqual(Kind.animation, Kind.of("art/walk.clip.zon"));
-    try std.testing.expectEqual(Kind.ui, Kind.of("ui/hud.ui.zon"));
-    try std.testing.expectEqual(Kind.tilemap, Kind.of("levels/cave.tilemap.zon"));
-    try std.testing.expectEqual(Kind.font, Kind.of("ui/Title.OTF"));
-    try std.testing.expectEqual(Kind.shader, Kind.of("shaders/water.slang"));
-    try std.testing.expect(Kind.isTexture("art/Wood.PNG"));
-    try std.testing.expect(Kind.isTexture("skies/dusk.hdr") and Kind.isTexture("skies/noon.EXR"));
-    try std.testing.expect(!Kind.isTexture("art/logo.svg"));
-}

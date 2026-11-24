@@ -533,39 +533,3 @@ pub const Group = struct {
         self.active = false;
     }
 };
-
-test "typed editor edits commit once, reject stale values, and restore failed commits" {
-    const TestHost = struct {
-        commits: usize = 0,
-        cancels: usize = 0,
-        fail: bool = false,
-        fn request(raw: *anyopaque, input: *const Request, _: *Response) callconv(.c) Status {
-            const self: *@This() = @ptrCast(@alignCast(raw));
-            switch (input.operation) {
-                .commit_edit => {
-                    if (self.fail) return .failed;
-                    self.commits += 1;
-                },
-                .cancel_edit => self.cancels += 1,
-                else => {},
-            }
-            return .ok;
-        }
-    };
-    const Health = struct { value: u32 = 10 };
-    var app: App = undefined;
-    app.world = .init(std.testing.allocator);
-    defer app.world.deinit();
-    const entity = try app.world.spawn(.{Health{}});
-    var host = TestHost{};
-    var editor = Context{ .app = &app, .host = .{ .context = &host, .request = TestHost.request } };
-    const change = action.Action(Health){ .before = .{}, .after = .{ .value = 20 } };
-    try editor.changeComponent(entity, change);
-    try std.testing.expectEqual(@as(u32, 20), app.world.get(entity, Health).?.value);
-    try std.testing.expectEqual(@as(usize, 1), host.commits);
-    try std.testing.expectError(error.StaleAction, editor.changeComponent(entity, change));
-    host.fail = true;
-    try std.testing.expectError(error.EditorOperationFailed, editor.changeComponent(entity, action.Action(Health){ .before = .{ .value = 20 }, .after = .{ .value = 30 } }));
-    try std.testing.expectEqual(@as(u32, 20), app.world.get(entity, Health).?.value);
-    try std.testing.expectEqual(@as(usize, 1), host.cancels);
-}

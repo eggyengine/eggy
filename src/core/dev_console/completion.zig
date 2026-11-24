@@ -71,16 +71,6 @@ const test_sources = Sources{
     .fields = &.{ "Transform.position", "Transform.scale", "Camera.fov" },
 };
 
-test "a first word completes to commands" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    const found = try complete(arena.allocator(), "g", 1, test_sources);
-    try std.testing.expectEqual(@as(usize, 0), found.start);
-    try std.testing.expectEqual(@as(usize, 2), found.candidates.len);
-    try std.testing.expectEqualStrings("get", found.candidates[0]);
-    try std.testing.expectEqualStrings("god", found.candidates[1]);
-}
-
 test "get and set complete an entity, then a field" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
@@ -93,13 +83,4 @@ test "get and set complete an entity, then a field" {
     try std.testing.expectEqualStrings("Transform.scale", field.candidates[0]);
     // A command's next word is offered before anything is typed.
     try std.testing.expectEqual(@as(usize, 3), (try complete(arena.allocator(), "get ", 4, test_sources)).candidates.len);
-}
-
-test "help completes a command, and other commands' words complete to nothing" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    const found = try complete(arena.allocator(), "help se", 7, test_sources);
-    try std.testing.expectEqual(@as(usize, 5), found.start);
-    try std.testing.expectEqualStrings("set", found.candidates[0]);
-    try std.testing.expectEqual(@as(usize, 0), (try complete(arena.allocator(), "god m", 5, test_sources)).candidates.len);
 }

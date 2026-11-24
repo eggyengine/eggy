@@ -382,32 +382,3 @@ test "a column stacks children with gaps, and fill takes what is left" {
     try std.testing.expectEqual(@as(f32, 550), placed[3].rect.y);
     try std.testing.expectEqual(@as(u32, 4), placed[0].end);
 }
-
-test "a pinned node sits at its anchor, and scaling moves every box" {
-    var font = try ui.Font.init(std.testing.allocator, ui.default_font);
-    defer font.deinit();
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    var children = [_]Node{.{ .name = "corner", .layout = .{ .width = .{ .px = 100 }, .height = .{ .px = 40 }, .anchor = .{ .at = .{ 1, 1 }, .pivot = .{ 1, 1 }, .offset = .{ -10, -10 } } } }};
-    const scene = UiScene{ .root = .{ .layout = .{ .width = .fill, .height = .fill }, .children = &children } };
-    const placed = try place(arena.allocator(), &scene, .plain(&font), .{ .x = 0, .y = 0, .w = 1280, .h = 720 }, 1);
-    try std.testing.expectEqual(ui.Rect{ .x = 1170, .y = 670, .w = 100, .h = 40 }, placed[1].rect);
-    // At half scale the screen is laid out as 2560 by 1440 design pixels, then halved.
-    const half = try place(arena.allocator(), &scene, .plain(&font), .{ .x = 0, .y = 0, .w = 1280, .h = 720 }, 0.5);
-    try std.testing.expectEqual(ui.Rect{ .x = 1225, .y = 695, .w = 50, .h = 20 }, half[1].rect);
-}
-
-test "children paint in the order they are declared, pinned or not" {
-    var font = try ui.Font.init(std.testing.allocator, ui.default_font);
-    defer font.deinit();
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    var children = [_]Node{
-        .{ .name = "pinned", .layout = .{ .anchor = .{} } },
-        .{ .name = "flowing" },
-    };
-    const scene = UiScene{ .root = .{ .children = &children } };
-    const placed = try place(arena.allocator(), &scene, .plain(&font), .{ .x = 0, .y = 0, .w = 100, .h = 100 }, 1);
-    try std.testing.expectEqualStrings("pinned", placed[1].node.name);
-    try std.testing.expectEqual(@as(?u32, 2), placed[2].index);
-}

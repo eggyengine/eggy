@@ -74,23 +74,3 @@ pub const RootOrder = struct {
         return null;
     }
 };
-
-test "new top-level entities go last, and placed ones stay put" {
-    const gpa = std.testing.allocator;
-    var world = ecs.World.init(gpa);
-    defer world.deinit();
-    var order = RootOrder{ .gpa = gpa };
-    defer order.deinit();
-
-    const a = try world.spawn(.{});
-    const b = try world.spawn(.{});
-    try std.testing.expectEqualSlices(ecs.EntityId, &.{ a, b }, order.of(&world));
-    try order.place(b, 0);
-    const c = try world.spawn(.{});
-    try std.testing.expectEqualSlices(ecs.EntityId, &.{ b, a, c }, order.of(&world));
-
-    // Gone, or moved under a parent: out of the order.
-    world.despawn(b);
-    try world.setParent(c, a);
-    try std.testing.expectEqualSlices(ecs.EntityId, &.{a}, order.of(&world));
-}

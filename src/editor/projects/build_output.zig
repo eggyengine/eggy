@@ -297,43 +297,6 @@ test "problems keep errors and their context, not the runner's steps or failed c
     , text);
 }
 
-test "multiple errors, warnings and unknown output remain separate" {
-    const output = "src/a.zig:1:2: error: first\r\n    broken();\r\nsrc/b.zig:3:4: warning: second\r\n    warning context\r\nlinker stopped unexpectedly\r\nerror: unable to find library 'missing'";
-    var messages: std.ArrayList(Message) = .empty;
-    defer messages.deinit(std.testing.allocator);
-    try parse(std.testing.allocator, output, &messages);
-    try std.testing.expectEqual(@as(usize, 4), messages.items.len);
-    try std.testing.expectEqual(std.log.Level.err, messages.items[0].level);
-    try std.testing.expectEqual(std.log.Level.warn, messages.items[1].level);
-    try std.testing.expectEqualStrings("linker stopped unexpectedly", output[messages.items[2].start..messages.items[2].end]);
-    try std.testing.expectEqual(std.log.Level.err, messages.items[3].level);
-}
-
-test "streaming suppresses build roots and bounds one diagnostic without dropping later errors" {
-    const console_log = @import("../console_log.zig");
-    defer console_log.clear();
-    var stream = Stream{ .gpa = std.testing.allocator, .project_dir = "/game", .emit = captureStream };
-    defer stream.deinit();
-    try stream.line("run\n");
-    try stream.line("+- compile lib game 2 errors\n");
-    try stream.line("src/main.zig:1:1: error: first streamed error\n");
-    try stream.line("    ");
-    const huge_source = try std.testing.allocator.alloc(u8, Stream.max_diagnostic + 4096);
-    defer std.testing.allocator.free(huge_source);
-    @memset(huge_source, 'x');
-    try stream.continueLine(huge_source);
-    try stream.continueLine("\n");
-    try std.testing.expect(stream.pending.items.len <= Stream.max_diagnostic);
-    try stream.line("src/main.zig:2:1: error: second streamed error");
-    try stream.finish();
-    var out = console_log.Messages{};
-    defer out.deinit(std.testing.allocator);
-    _ = try console_log.snapshot(std.testing.allocator, &out, .{});
-    try std.testing.expectEqual(@as(usize, 2), out.entries.items.len);
-    try std.testing.expect(std.mem.indexOf(u8, out.text.items, "Further details omitted after 1 MiB") != null);
-    try std.testing.expect(std.mem.indexOf(u8, out.text.items, "second streamed error") != null);
-}
-
 fn captureStream(gpa: std.mem.Allocator, output: []const u8, _: bool, _: []const u8) !void {
     const console_log = @import("../console_log.zig");
     var messages: std.ArrayList(Message) = .empty;

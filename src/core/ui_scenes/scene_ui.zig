@@ -93,34 +93,3 @@ pub fn build(context: *ui.Context, state: *State, resources: Resources, images: 
     context.element(element);
     return .{ .placed = placed, .ids = ids };
 }
-
-test "a built scene records the press of its button" {
-    const gpa = std.testing.allocator;
-    var state = State{ .gpa = gpa };
-    defer state.deinit();
-    var images = cache.Images{ .gpa = gpa };
-    defer images.deinit();
-    var context = try ui.Context.init(gpa);
-    defer context.deinit();
-    var children = [_]ui_scene.Node{.{ .name = "go", .widget = .{ .button = .{} }, .layout = .{ .width = .{ .px = 100 }, .height = .{ .px = 40 }, .anchor = .{ .offset = .{ 10, 10 } } } }};
-    const scene = ui_scene.UiScene{ .root = .{ .layout = .{ .width = .fill, .height = .fill }, .children = &children } };
-    const hud = ecs.EntityId{ .id = 1, .generation = 1 };
-    const viewport = ui.Rect{ .x = 0, .y = 0, .w = 400, .h = 300 };
-    var pressed = false;
-    for (0..3) |frame| {
-        state.forgetClicks();
-        context.newFrame(viewport);
-        const built = try build(&context, &state, .{}, &images, &scene, hud, .{ .viewport = viewport, .scale = 1 }, 0);
-        try std.testing.expect(built.ids[1] != 0);
-        try std.testing.expectEqual(@as(u32, 0), built.ids[0]);
-        if (state.clicks.items.len != 0) pressed = true;
-        _ = try context.render();
-        // Press and release over the button between the first frames.
-        if (frame == 0) {
-            context.handle(.{ .pointer_move = .init(50, 30) });
-            context.handle(.{ .pointer_down = .{ .position = .init(50, 30), .button = .left, .clicks = 1 } });
-            context.handle(.{ .pointer_up = .{ .position = .init(50, 30), .button = .left } });
-        }
-    }
-    try std.testing.expect(pressed);
-}

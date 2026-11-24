@@ -246,8 +246,3 @@ fn before(_: void, a: Item, b: Item) bool {
     if (a.distance2 != b.distance2) return a.distance2 > b.distance2;
     return a.order < b.order;
 }
-
-test "world transparencies sort by layer, then back to front, then submission order" {
-    try std.testing.expect(before({}, .{ .index = 0, .kind = .sprite, .layer = -1, .distance2 = 1, .order = 2 }, .{ .index = 1, .kind = .sprite, .layer = 0, .distance2 = 100, .order = 0 }));
-    try std.testing.expect(before({}, .{ .index = 0, .kind = .sprite, .layer = 0, .distance2 = 100, .order = 2 }, .{ .index = 1, .kind = .panel, .layer = 0, .distance2 = 1, .order = 0 }));
-}

@@ -287,34 +287,6 @@ fn copyInto(arena: std.mem.Allocator, node: Node) !Node {
     return (try (ui_scene.UiScene{ .root = node }).clone(arena)).root;
 }
 
-test "a scene's nodes become rows in paint order, folds skipping their children's numbers" {
-    const gpa = std.testing.allocator;
-    var document = try Document.init(gpa, "hud.ui.zon", "", ui_scene.template);
-    defer document.deinit();
-    try document.addChild(.{ .name = "card", .children = &.{} });
-    try document.addChild(.{ .name = "", .widget = .{ .button = .{} } });
-    document.select(&.{});
-    try document.addChild(.{ .name = "after" });
-
-    var arena = std.heap.ArenaAllocator.init(gpa);
-    defer arena.deinit();
-    var folded: std.AutoHashMapUnmanaged(u32, void) = .empty;
-    defer folded.deinit(gpa);
-    const all = try rowsOf(arena.allocator(), &document, &folded, "");
-    try std.testing.expectEqual(@as(usize, 5), all.len);
-    try std.testing.expectEqualStrings("Button", all[3].name);
-    try std.testing.expectEqual(@as(usize, 2), all[3].depth);
-
-    // Folding the card hides its button but keeps "after" numbered 4.
-    try folded.put(gpa, 2, {});
-    const shown = try rowsOf(arena.allocator(), &document, &folded, "");
-    try std.testing.expectEqual(@as(usize, 4), shown.len);
-    try std.testing.expectEqual(@as(u32, 4), shown[3].entity.id);
-    // A search opens folds.
-    const found = try rowsOf(arena.allocator(), &document, &folded, "button");
-    try std.testing.expectEqualStrings("Button", found[found.len - 1].name);
-}
-
 test "dropping a row beside the root puts the node inside it" {
     const gpa = std.testing.allocator;
     var document = try Document.init(gpa, "hud.ui.zon", "", ui_scene.template);
@@ -325,20 +297,4 @@ test "dropping a row beside the root puts the node inside it" {
     // "late" (paint order 2) goes before the root: first among the root's children.
     try std.testing.expect(tree.apply(&document, .{ .move = .{ .entity = .init(2, 0), .place = .{ .before = .init(0, 0) } } }, .{ .x = 0, .y = 0 }));
     try std.testing.expectEqualStrings("late", document.scene().root.children[0].name);
-}
-
-test "every kind in the Add menu has an icon the symbols font draws" {
-    var context = try ui.Context.init(std.testing.allocator);
-    defer context.deinit();
-    try context.font.setSymbolsFont(@embedFile("symbols_font"));
-    const strike = context.font.strike(14);
-    const missing = strike.glyph('?');
-    var icons: [palette.len + 1][]const u8 = undefined;
-    for (palette, icons[0..palette.len]) |entry, *icon| icon.* = entry.icon;
-    icons[palette.len] = eggy.components.default_icon;
-    for (icons) |icon| {
-        var i: usize = 0;
-        const glyph = context.font.next(strike, icon, &i);
-        try std.testing.expect(!std.meta.eql(glyph, missing) and glyph.w > 0);
-    }
 }

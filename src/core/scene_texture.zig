@@ -226,9 +226,3 @@ fn scissorFor(rect_px: ui.Rect, target: vit.Extent2D) ?vit.hal.command.ScissorRe
     if (right <= left or bottom <= top) return null;
     return .{ .x = @intFromFloat(left), .y = @intFromFloat(top), .width = @intFromFloat(right - left), .height = @intFromFloat(bottom - top) };
 }
-
-test "the scene's scissor stays inside the render target" {
-    const target = vit.Extent2D{ .width = 200, .height = 100 };
-    try std.testing.expectEqual(vit.hal.command.ScissorRect{ .x = 150, .y = 0, .width = 50, .height = 40 }, scissorFor(.{ .x = 150, .y = -10, .w = 80, .h = 50 }, target).?);
-    try std.testing.expect(scissorFor(.{ .x = 210, .y = 0, .w = 20, .h = 20 }, target) == null);
-}

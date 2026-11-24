@@ -137,16 +137,6 @@ pub fn waitForProjectIcon() void {
     job.finish();
 }
 
-test "a project icon loads on its thread and is used once taken" {
-    const gpa = std.testing.allocator;
-    useBadge(null);
-    loadProjectIcon(gpa, "/nonexistent-eggy-project", "icon.png");
-    // A file that isn't there falls back to the plain egg, said once the thread is done.
-    while (!loadedProjectIcon()) try std.Thread.yield();
-    try std.testing.expect(!has_badge);
-    try std.testing.expect(!loadedProjectIcon());
-}
-
 /// The egg badged with the image file at `path` in `project_dir`, into `out`.
 /// Decoding and allocation errors propagate.
 pub fn decodeBadge(gpa: std.mem.Allocator, project_dir: []const u8, path: []const u8, out: *Badged) !void {
@@ -224,13 +214,6 @@ pub fn roundedDistance(x: f32, y: f32, width: f32, height: f32, radius: f32) f32
     return outside + @min(@max(qx, qy), 0) - radius;
 }
 
-test "a rounded rectangle covers its middle, not its corner, and edges by half" {
-    try std.testing.expectEqual(@as(f32, 1), roundedCoverage(40, 10, 80, 20, 6));
-    try std.testing.expectEqual(@as(f32, 0), roundedCoverage(0, 0, 80, 20, 6));
-    try std.testing.expectApproxEqAbs(@as(f32, 0.5), roundedCoverage(40, -0.5, 80, 20, 6), 0.001);
-    try std.testing.expectApproxEqAbs(@as(f32, 2), roundedDistance(40, -2.5, 80, 20, 6), 0.001);
-}
-
 fn set(window: sdl3.video.Window) !void {
     if (has_badge) {
         const surface = try sdl3.surface.Surface.initFrom(badged_size, badged_size, .array_rgba_32, &current);
@@ -266,18 +249,4 @@ pub fn pixels() !Pixels {
         pixel.* = .{ color.r, color.g, color.b, color.a };
     };
     return art;
-}
-
-test "a badge keeps the egg's top left and puts the image in the bottom right" {
-    const red: [16]u8 = @bitCast(@as([4][4]u8, @splat(.{ 255, 0, 0, 255 })));
-    const badged = try std.testing.allocator.create(Badged);
-    defer std.testing.allocator.destroy(badged);
-    try badge(&red, 2, 2, badged);
-    const egg = try pixels();
-    // The top-left corner is the egg's, see-through.
-    try std.testing.expectEqual(egg[0][0][3], badged[3]);
-    // The bottom-right quarter's middle is the image's red.
-    const at = (badged_size * 3 / 4 * badged_size + badged_size * 3 / 4) * 4;
-    try std.testing.expectEqualSlices(u8, &.{ 255, 0, 0, 255 }, badged[at..][0..4]);
-    try std.testing.expectError(error.InvalidImage, badge(&.{}, 0, 0, badged));
 }

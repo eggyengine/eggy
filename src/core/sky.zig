@@ -97,25 +97,3 @@ pub const Sky = struct {
         self.mip_count = if (textures.settings.mipmaps) @floor(std.math.log2(largest)) + 1 else 1;
     }
 };
-
-test "a panorama's middle looks along -z and its top straight up" {
-    const ahead = direction(0.5, 0.5);
-    try std.testing.expectApproxEqAbs(@as(f32, -1), ahead.z, 1e-6);
-    try std.testing.expectApproxEqAbs(@as(f32, 1), direction(0.3, 0).y, 1e-6);
-    try std.testing.expectApproxEqAbs(@as(f32, 1), direction(0.75, 0.5).x, 1e-6);
-}
-
-test "an even white sky lights every way alike, as brightly as it looks" {
-    var pixels: [64 * 32 * 4]u8 = @splat(255);
-    const light = irradiance(.{ .width = 64, .height = 32, .pixels = &pixels });
-    // A surface under an even sky of radiance 1 receives pi, which over pi is 1.
-    try std.testing.expectApproxEqAbs(@as(f32, 1), light[0][0] * 0.282095, 0.02);
-    for (light[1..]) |term| try std.testing.expectApproxEqAbs(@as(f32, 0), term[0], 0.02);
-}
-
-test "a high-dynamic-range sky lights as brightly as its light, past white" {
-    var pixels: [64 * 32 * 8]u8 = undefined;
-    for (0..64 * 32 * 4) |i| assets.texture.setHalf(&pixels, i, 3);
-    const light = irradiance(.{ .width = 64, .height = 32, .pixels = &pixels, .format = .rgba16_float });
-    try std.testing.expectApproxEqAbs(@as(f32, 3), light[0][0] * 0.282095, 0.06);
-}

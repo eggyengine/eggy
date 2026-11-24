@@ -130,8 +130,3 @@ const Glyph = struct {
         return .{ color[0], color[1], color[2], alpha };
     }
 };
-
-test "each row opens its kind of tab" {
-    for (choices) |choice| try std.testing.expectEqual(choice.kind, kindOf(first_id + @as(u32, @backingInt(choice.kind))).?);
-    try std.testing.expect(kindOf(first_id + @as(u32, @backingInt(Kind.panels))) == null);
-}

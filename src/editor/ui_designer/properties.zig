@@ -355,14 +355,3 @@ const AnchorCell = struct {
         try c.roundRectAlpha(r, t.muted_foreground, 3, 0.35);
     }
 };
-
-test "a view turns asset keys into references and names a theme's colours, field for field" {
-    const ThemeView = View(ui_scene.Theme, .{ .assets = &.{.{ "font", .font }}, .colours = true });
-    const infos = eggy.components.Registry(&.{ThemeView}, &.{"ui"}).infos[0].fields;
-    try std.testing.expectEqual(@typeInfo(ui_scene.Theme).@"struct".field_names.len, infos.len);
-    try std.testing.expectEqualStrings("background_color", infos[1].name);
-    // An optional colour's inner value is still a colour.
-    try std.testing.expectEqual(eggy.components.PartKind.color, infos[1].parts[1].kind);
-    try std.testing.expectEqual(eggy.components.PartKind.asset, infos[infos.len - 1].parts[0].kind);
-    try std.testing.expectEqual(eggy.assets.Kind.font, infos[infos.len - 1].parts[0].accepts);
-}

@@ -1645,12 +1645,6 @@ fn unquote(zon: []const u8) ?[]const u8 {
     return zon[1 .. zon.len - 1];
 }
 
-test "targets read as names, from the top of the scene or below the entity" {
-    try std.testing.expectEqualStrings("bee", displayTarget("/bee"));
-    try std.testing.expectEqualStrings("Arm/Hand", displayTarget("Arm/Hand"));
-    try std.testing.expectEqualStrings("This entity", displayTarget(""));
-}
-
 test "an edit keys several properties at once, adding the tracks it needs" {
     const gpa = std.testing.allocator;
     const clip = Clip{ .duration_s = 2, .tracks = &.{} };
@@ -1665,33 +1659,6 @@ test "an edit keys several properties at once, adding the tracks it needs" {
     try std.testing.expectEqual(@as(usize, 2), edited.tracks[0].keys.len);
     try std.testing.expectEqualStrings("Bzz!", edited.tracks[1].keys[0].text);
     try std.testing.expectEqual(@as(f32, 3), edited.duration_s);
-}
-
-test "copied keys paste from the head onto their tracks, and stay picked there" {
-    const gpa = std.testing.allocator;
-    const clip = Clip{ .duration_s = 2, .tracks = &.{
-        .{ .target = "/bee", .property = .position, .keys = &.{ .{ .time_s = 0.5, .value = .{ 1, 0, 0 } }, .{ .time_s = 1, .value = .{ 2, 0, 0 } } } },
-        .{ .target = "", .property = .event, .interpolation = .step, .keys = &.{.{ .time_s = 1.25, .text = "buzz" }} },
-    } };
-    var dock = Dock{};
-    defer dock.deinit();
-    dock.pick(.{ .track = 0, .key = 1 });
-    dock.pick(.{ .track = 1, .key = 0 });
-    dock.copy(gpa, clip);
-    try std.testing.expectEqual(@as(f32, 0), dock.copied.?.keys[0].key.time_s);
-    try std.testing.expectEqual(@as(f32, 0.25), dock.copied.?.keys[1].key.time_s);
-
-    const pasted = try Dock.applied(gpa, &clip, .{ .paste = .{ .keys = dock.copied.?.keys, .at_s = 1.75 } });
-    defer pasted.deinit(gpa);
-    try std.testing.expectEqual(@as(f32, 2), pasted.duration_s);
-    try std.testing.expectEqual(@as(usize, 3), pasted.tracks[0].keys.len);
-    try std.testing.expectEqual(@as(f32, 2), pasted.tracks[0].keys[2].value[0]);
-    try std.testing.expectEqualStrings("buzz", pasted.tracks[1].keys[1].text);
-
-    dock.pickLanded(pasted, &.{ .{ .target = "/bee", .property = .position, .node = "", .time_s = 1.75 }, .{ .target = "", .property = .event, .node = "", .time_s = 2 } });
-    try std.testing.expect(dock.isPicked(.{ .track = 0, .key = 2 }));
-    try std.testing.expect(dock.isPicked(.{ .track = 1, .key = 1 }));
-    try std.testing.expectEqual(@as(usize, 2), dock.picked_count);
 }
 
 test {

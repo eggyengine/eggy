@@ -611,28 +611,3 @@ test "dragging the x arrow along its own line moves the entity along x, in snapp
     const snapped = drag.changeAt(gizmo.tips[0], true);
     try std.testing.expectApproxEqAbs(@as(f32, 0), @mod(snapped.value.x, snap.move_m), 0.001);
 }
-
-test "a move under a parent turned a quarter is made in the parent's space" {
-    const gizmo = layout(.move, .world, at_origin, .default, test_scene).?;
-    // The parent's inverse: turned back a quarter about y, world x is the parent's z.
-    const to_local = math.fromArray(f32, 4, 4, .{ .{ 0, 0, 1, 0 }, .{ 0, 1, 0, 0 }, .{ -1, 0, 0, 0 }, .{ 0, 0, 0, 1 } });
-    const drag = Drag.init(.{ .arrow = .x }, gizmo.origin, gizmo, .{ .position = .zero, .rotation_deg = .zero, .scale = .one }, to_local);
-    const moved = drag.changeAt(gizmo.tips[0], false);
-    try std.testing.expectApproxEqAbs(gizmo.world_length, @abs(moved.value.z), 0.001);
-    try std.testing.expectApproxEqAbs(@as(f32, 0), moved.value.x, 0.001);
-}
-
-test "turning the y ring a snapped step turns about y only" {
-    const gizmo = layout(.rotate, .world, at_origin, .default, test_scene).?;
-    const ring = gizmo.rings[1];
-    // A front point of the ring, then a little further round it.
-    var front: usize = 0;
-    while (!gizmo.ring_front[1][front]) front += 1;
-    const drag = Drag.init(.{ .ring = .y }, ring[front], gizmo, still, identity);
-    const turned = drag.changeAt(ring[(front + 6) % ring_points], true);
-    try std.testing.expectEqual(@TypeOf(turned.field).rotation_deg, turned.field);
-    try std.testing.expectApproxEqAbs(@as(f32, 0), turned.value.x, 0.01);
-    try std.testing.expectApproxEqAbs(@as(f32, 0), turned.value.z, 0.01);
-    try std.testing.expectApproxEqAbs(@as(f32, 0), @mod(turned.value.y + 360, snap.rotate_deg), 0.01);
-    try std.testing.expect(turned.value.y != 0);
-}

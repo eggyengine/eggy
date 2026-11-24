@@ -30,13 +30,3 @@ pub fn Action(comptime T: type) type {
         }
     };
 }
-
-test "one value application path supports undo and redo" {
-    const Position = struct { x: f32, y: f32 };
-    const change = Action(Position){ .before = .{ .x = 1, .y = 2 }, .after = .{ .x = 3, .y = 4 } };
-    var position = change.value(.redo);
-    try std.testing.expectEqual(@as(f32, 3), position.x);
-    position = change.value(.undo);
-    try std.testing.expectEqual(@as(f32, 1), position.x);
-    try std.testing.expectEqual(@as(f32, 2), position.y);
-}

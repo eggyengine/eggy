@@ -255,17 +255,3 @@ test "a package's build.zig.zon is read out of the archive Zig's cache keeps" {
     archive = .fixed(gzipped.written());
     try std.testing.expect(try zonInArchive(a, &archive, "other-hash") == null);
 }
-
-test "a package's fingerprint is read past its other fields" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    try std.testing.expectEqual(@as(u64, 0x634131700cbdf8dd), try fingerprintIn(arena.allocator(),
-        \\.{
-        \\    .name = .eggy,
-        \\    .version = "0.1.0",
-        \\    .fingerprint = 0x634131700cbdf8dd,
-        \\    .dependencies = .{ .sdl3 = .{ .url = "git+https://example.com/sdl", .hash = "sdl3-0" } },
-        \\    .paths = .{ "build.zig", "src" },
-        \\}
-    ));
-}

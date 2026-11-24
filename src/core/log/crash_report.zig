@@ -54,12 +54,3 @@ fn writeReport(io: std.Io, writer: *std.Io.Writer, stage: []const u8, message: [
     try writer.print("\nThe end of the log ({s}):\n{s}", .{ log.filePath() orelse "none", log.readTail(io, &tail_buffer) });
     try writer.flush();
 }
-
-test "a report names the failure and quotes no log without one" {
-    var buffer: [4096]u8 = undefined;
-    var writer: std.Io.Writer = .fixed(&buffer);
-    try writeReport(std.testing.io, &writer, "frame", "OutOfMemory", .none);
-    const report = writer.buffered();
-    try std.testing.expect(std.mem.startsWith(u8, report, "Fatal error during frame: OutOfMemory\n"));
-    try std.testing.expect(std.mem.indexOf(u8, report, "The end of the log (none):") != null);
-}

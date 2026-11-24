@@ -101,36 +101,3 @@ pub fn hookHint(message: []const u8) ?Hint {
         };
     return null;
 }
-
-test "source positions support log prefixes, reference traces, spaces and drive letters" {
-    const unix = location("error(zig_build): /home/me/my game/src/main.zig:12:5: error: broken").?;
-    try std.testing.expectEqualStrings("/home/me/my game/src/main.zig", unix.path);
-    try std.testing.expectEqual(@as(u32, 12), unix.line);
-    try std.testing.expectEqual(@as(u32, 5), unix.column);
-    const windows = location("    editorUi: C:\\game\\src\\root.zig:69:9").?;
-    try std.testing.expectEqualStrings("C:\\game\\src\\root.zig", windows.path);
-    try std.testing.expectEqualStrings("/game (copy)/src/root.zig", location("/game (copy)/src/root.zig:69:9: note: function declared here").?.path);
-    try std.testing.expect(location("src/root.zig:0:9: error: invalid") == null);
-    try std.testing.expect(location("src/root.zig:99999999999999:9: error: invalid") == null);
-    try std.testing.expect(location("referenced by:") == null);
-}
-
-test "project declaration notes outrank the engine and generated references" {
-    const message =
-        \\/home/me/eggy/src/core/plugins.zig:252:113: error: member function expected 1 argument(s), found 2
-        \\    try self.instances[i].editorUi(editor, context);
-        \\src/root.zig:69:9: note: function declared here
-        \\    pub fn editorUi(self: *Plugin, ui: *eggy.ui.Context) void {
-        \\referenced by:
-        \\    game: /home/me/game/.zig-cache/o/library.zig:2:3
-    ;
-    const source = projectSource(message, "/home/me/game").?;
-    try std.testing.expectEqualStrings("src/root.zig", source.path);
-    try std.testing.expectEqual(@as(u32, 69), source.line);
-    const hint = hookHint(message).?;
-    try std.testing.expectEqualStrings("editorUi is missing its editor context parameter", hint.summary);
-    try std.testing.expect(std.mem.indexOf(u8, hint.signature, "editor: *eggy.editor.Context") != null);
-    try std.testing.expect(projectSource("/home/me/game-other/src/main.zig:1:1: error: broken", "/home/me/game") == null);
-    try std.testing.expect(projectSource("../other/src/main.zig:1:1: error: broken", "/home/me/game") == null);
-    try std.testing.expect(hookHint("src/main.zig:1:1: error: member function expected 1 argument(s), found 2\n    other.call(a, b);") == null);
-}

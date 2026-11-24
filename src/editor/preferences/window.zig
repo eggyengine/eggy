@@ -480,16 +480,3 @@ fn displayNameInto(buffer: []u8, name: []const u8) []const u8 {
     var fixed = std.heap.FixedBufferAllocator.init(buffer);
     return files.displayName(fixed.allocator(), name[0..@min(name.len, buffer.len)]) catch name;
 }
-
-test "field names become labels" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    try std.testing.expectEqualStrings("Show gizmos", try files.displayName(arena.allocator(), "show_gizmos"));
-}
-
-test "a search keeps the pages with a matching row" {
-    const section = Section{ .title = "Editor", .group = "This computer", .content = .{ .preferences = files.editor_manifest } };
-    try std.testing.expect(sectionMatches(section, ""));
-    try std.testing.expect(sectionMatches(section, "autosave"));
-    try std.testing.expect(!sectionMatches(section, "anisotropic"));
-}

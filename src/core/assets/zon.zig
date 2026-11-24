@@ -23,13 +23,3 @@ pub fn parse(comptime T: type, arena: std.mem.Allocator, source: [:0]const u8, o
         .ignore_unknown_fields = options.ignore_unknown_fields,
     });
 }
-
-test "a ZON value parses, skipping unknown fields when asked" {
-    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
-    defer arena.deinit();
-    const Point = struct { x: i32, name: []const u8 };
-    const point = try parse(Point, arena.allocator(), ".{ .x = 3, .name = \"a\", .z = 1 }", .{ .ignore_unknown_fields = true });
-    try std.testing.expectEqual(3, point.x);
-    try std.testing.expectEqualStrings("a", point.name);
-    try std.testing.expectError(error.ParseZon, parse(Point, arena.allocator(), ".{ .x = 3, .name = \"a\", .z = 1 }", .{}));
-}

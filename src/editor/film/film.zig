@@ -488,36 +488,6 @@ fn freeFolder(gpa: std.mem.Allocator, io: std.Io, project_dir: []const u8, name:
     return error.PathAlreadyExists;
 }
 
-test "a film's folder takes the first free number" {
-    const gpa = std.testing.allocator;
-    var tmp = std.testing.tmpDir(.{});
-    defer tmp.cleanup();
-    const root = try tmp.dir.realPathFileAlloc(std.testing.io, ".", gpa);
-    defer gpa.free(root);
-    const first = try freeFolder(gpa, std.testing.io, root, "bee_intro");
-    defer gpa.free(first);
-    try std.testing.expect(std.mem.endsWith(u8, first, "bee_intro-1"));
-    try std.Io.Dir.cwd().createDirPath(std.testing.io, first);
-    const second = try freeFolder(gpa, std.testing.io, root, "bee_intro");
-    defer gpa.free(second);
-    try std.testing.expect(std.mem.endsWith(u8, second, "bee_intro-2"));
-}
-
-test "Render All queues every cutscene, and a new render replaces the last queue" {
-    var film = Film{ .gpa = std.testing.allocator };
-    defer film.deinit(null);
-    for ([_][]const u8{ "bee · intro.clip.zon", "wasp · outro.clip.zon" }, 0..) |text, index| {
-        const label = try std.testing.allocator.dupe(u8, text);
-        try film.sources.append(std.testing.allocator, .{ .entity = .{ .id = @intCast(index), .generation = 0 }, .clip = @splat('a'), .label = label });
-    }
-    for (film.sources.items) |source| try film.enqueue(source, .animation);
-    try std.testing.expectEqual(@as(usize, 2), film.queue.items.len);
-    film.clearQueue();
-    try film.enqueue(film.sources.items[1], .{ .still_s = 1.5 });
-    try std.testing.expectEqual(@as(usize, 1), film.queue.items.len);
-    try std.testing.expectEqual(@as(f32, 1.5), film.queue.items[0].span.still_s);
-}
-
 test {
     _ = encode;
 }

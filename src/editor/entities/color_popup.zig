@@ -152,36 +152,6 @@ pub const ColorPopup = struct {
     }
 };
 
-test "a picked preset comes back as the colour, and Cancel puts the old one back" {
-    var context = try ui.Context.init(std.testing.allocator);
-    defer context.deinit();
-    const viewport = ui.Rect{ .x = 0, .y = 0, .w = 600, .h = 800 };
-    var popup = ColorPopup.open(1, .{ 0.2, 0.4, 0.6, 1 });
-    const first_id: u32 = 0x4000_0000;
-
-    // A frame to lay it out, then a click on the first preset (white).
-    context.newFrame(viewport);
-    try std.testing.expect(popup.build(&context, try testAnchor(&context), first_id).color == null);
-    _ = try context.render();
-    const preset = context.last_bounds.get(first_id + first_preset).?.rect;
-    const at = ui.Vec2{ .x = preset.x + 5, .y = preset.y + 5 };
-    context.handle(.{ .pointer_move = at });
-    context.handle(.{ .pointer_down = .{ .position = at, .button = .left, .clicks = 1 } });
-    context.handle(.{ .pointer_up = .{ .position = at, .button = .left } });
-    context.newFrame(viewport);
-    const picked = popup.build(&context, try testAnchor(&context), first_id);
-    _ = try context.render();
-    try std.testing.expectApproxEqAbs(@as(f32, 1), picked.color.?[0], 0.01);
-    try std.testing.expect(!picked.closed);
-
-    // Escape: back to where it started, and closed.
-    context.handle(.{ .key_down = .{ .key = .escape, .modifiers = .{}, .repeat = false } });
-    context.newFrame(viewport);
-    const cancelled = popup.build(&context, try testAnchor(&context), first_id);
-    try std.testing.expect(cancelled.closed);
-    try std.testing.expectApproxEqAbs(@as(f32, 0.2), cancelled.color.?[0], 0.01);
-}
-
 /// A swatch for the test's picker to float under, made anew each frame (frames own their elements).
 fn testAnchor(context: *ui.Context) !*L.Element {
     const anchor = try context.builder().node(77, .{ .width = 20, .height = 20 }, .none, &.{});

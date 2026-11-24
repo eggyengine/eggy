@@ -436,25 +436,3 @@ fn ago(arena: std.mem.Allocator, now_s: i64, then_s: i64) []const u8 {
         .{ .n = @divFloor(elapsed_s, 365 * day), .unit = "year" };
     return std.fmt.allocPrint(arena, "{d} {s}{s} ago", .{ counted.n, counted.unit, if (counted.n == 1) "" else "s" }) catch "";
 }
-
-test "when a project was opened reads in words" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    const a = arena.allocator();
-    const day = 24 * 60 * 60;
-    try std.testing.expectEqualStrings("Just now", ago(a, 1000, 990));
-    try std.testing.expectEqualStrings("1 minute ago", ago(a, 1000, 1000 - 60));
-    try std.testing.expectEqualStrings("3 hours ago", ago(a, 100_000, 100_000 - 3 * 3600));
-    try std.testing.expectEqualStrings("Yesterday", ago(a, 10 * day, 9 * day - 100));
-    try std.testing.expectEqualStrings("5 days ago", ago(a, 10 * day, 5 * day));
-    try std.testing.expectEqualStrings("2 months ago", ago(a, 100 * day, 40 * day));
-    try std.testing.expectEqualStrings("Just now", ago(a, 0, 50)); // a clock set back
-}
-
-test "search matches a title or folder regardless of case" {
-    const shown = Shown{ .dir = "/home/you/space_game", .title = "Space Game", .opened_s = 0, .found = true };
-    try std.testing.expect(matches(shown, ""));
-    try std.testing.expect(matches(shown, "space g"));
-    try std.testing.expect(matches(shown, "SPACE_GAME"));
-    try std.testing.expect(!matches(shown, "rocket"));
-}

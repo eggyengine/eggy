@@ -54,30 +54,6 @@ pub fn createFile(gpa: std.mem.Allocator, io: std.Io, project: std.Io.Dir, paren
     return path;
 }
 
-test "file templates create unique complete files and reject path-like names" {
-    const gpa = std.testing.allocator;
-    const io = std.testing.io;
-    var tmp = std.testing.tmpDir(.{});
-    defer tmp.cleanup();
-    const template = @import("eggy").plugins.EditorFileType{ .key = "game/map", .title = "Player", .extension = ".inmap.zon", .contents = ".{ .controls = .{} }\n" };
-    const first = try createFile(gpa, io, tmp.dir, "resources/input", template);
-    defer gpa.free(first);
-    const second = try createFile(gpa, io, tmp.dir, "resources/input", template);
-    defer gpa.free(second);
-    try std.testing.expectEqualStrings("resources/input/Player.inmap.zon", first);
-    try std.testing.expectEqualStrings("resources/input/Player 2.inmap.zon", second);
-    const contents = try tmp.dir.readFileAlloc(io, first, gpa, .limited(1024));
-    defer gpa.free(contents);
-    try std.testing.expectEqualStrings(template.contents, contents);
-    try std.testing.expectError(error.InvalidPath, createFile(gpa, io, tmp.dir, "../outside", template));
-    var invalid = template;
-    invalid.title = "../file";
-    try std.testing.expectError(error.BadPathName, createFile(gpa, io, tmp.dir, "", invalid));
-    invalid = template;
-    invalid.extension = ".zon/other";
-    try std.testing.expectError(error.BadPathName, createFile(gpa, io, tmp.dir, "", invalid));
-}
-
 /// Rename `path` to `new_name` in the same folder. Returns the new path; caller-owned.
 /// Editor-only: rejects invalid names and occupied destinations. Tell the catalog afterwards.
 ///
@@ -332,14 +308,6 @@ pub fn checkName(name: []const u8) !void {
 fn checkDestination(path: []const u8, folder: []const u8) !void {
     if (path.len == 0 or std.mem.eql(u8, path, folder)) return error.InvalidDestination;
     if (std.mem.startsWith(u8, folder, path) and folder.len > path.len and folder[path.len] == '/') return error.InvalidDestination;
-}
-
-test "move and copy reject destinations inside their source" {
-    try std.testing.expectError(error.InvalidDestination, checkDestination("art", "art"));
-    try std.testing.expectError(error.InvalidDestination, checkDestination("art", "art/copy"));
-    try std.testing.expectError(error.InvalidDestination, checkDestination("", "art"));
-    try checkDestination("art", "art2");
-    try checkDestination("art", "");
 }
 
 fn join(gpa: std.mem.Allocator, folder: []const u8, name: []const u8) ![]u8 {

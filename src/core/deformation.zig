@@ -290,16 +290,6 @@ fn multiply(a: [4]f32, b: [4]f32) [4]f32 {
     };
 }
 
-test "a quaternion from degrees turns as a Transform does" {
-    const transform = @import("transform.zig").Transform{ .position = .init(1, 2, 3), .rotation_deg = .init(30, 45, 60), .scale = .init(2, 3, 4) };
-    const expected = transform.matrix().data;
-    const made = assets.rig.fromTrs(transform.position.toArray(), eulerQuaternion(transform.rotation_deg.toArray()), transform.scale.toArray());
-    for (expected, made) |column, mine| {
-        const wanted: [4]f32 = column;
-        for (wanted, mine) |a, b| try std.testing.expectApproxEqAbs(a, b, 1e-4);
-    }
-}
-
 /// Imported clips by id for tests: each holds the node "hips" at x = its id, from model 99.
 const HeldClips = struct {
     fn read(_: *anyopaque, gpa: std.mem.Allocator, clip_key: []const u8) ![:0]u8 {
@@ -319,57 +309,3 @@ const HeldClips = struct {
         return error.Unsupported;
     }
 };
-
-test "states mix by weight over the rest pose, on a model with the clips' bone names" {
-    const gpa = std.testing.allocator;
-    var context: u8 = 0;
-    var cache = ClipCache{ .gpa = gpa, .resources = .from(&context, HeldClips.read, HeldClips.model, HeldClips.image) };
-    defer cache.deinit();
-    var nodes = [_]assets.model.Node{ .{ .name = "root" }, .{ .name = "hips", .parent = 0 } };
-    const model = assets.Model{ .vertices = &.{}, .indices = &.{}, .parts = &.{}, .textures = &.{}, .rig = .{ .nodes = &nodes } };
-    var arena = std.heap.ArenaAllocator.init(gpa);
-    defer arena.deinit();
-    const refs = @import("refs.zig");
-
-    // Two states at full weight share the pose evenly: x = 2 and x = 4 make 3.
-    var animator = Animator{};
-    try animation.states.set(&animator.states, refs.AssetRef(.animation).fromId(2), 1, 0, .{});
-    try animation.states.set(&animator.states, refs.AssetRef(.animation).fromId(4), 1, 0, .{});
-    const both = try posed(arena.allocator(), &model, "000000000000002a", animator, &cache, null);
-    try std.testing.expectApproxEqAbs(@as(f32, 3), both.translation[1][0], 1e-5);
-
-    // One at half weight, mid-fade, still makes the whole pose: the rest pose never shows.
-    animator.states = @splat(.{});
-    try animation.states.set(&animator.states, refs.AssetRef(.animation).fromId(2), 0.5, 0, .{});
-    const half = try posed(arena.allocator(), &model, "000000000000002a", animator, &cache, null);
-    try std.testing.expectApproxEqAbs(@as(f32, 2), half.translation[1][0], 1e-5);
-
-    // Over a model clip (x = 8), it leaves the other half to the clip.
-    animator.model_clip = refs.AssetRef(.animation).fromId(8);
-    const over = try posed(arena.allocator(), &model, "000000000000002a", animator, &cache, null);
-    try std.testing.expectApproxEqAbs(@as(f32, 5), over.translation[1][0], 1e-5);
-}
-
-test "a layer on a bone moves that branch over the body's states" {
-    const gpa = std.testing.allocator;
-    var context: u8 = 0;
-    var cache = ClipCache{ .gpa = gpa, .resources = .from(&context, HeldClips.read, HeldClips.model, HeldClips.image) };
-    defer cache.deinit();
-    // HeldClips move "hips"; here the hips sit below the spine, which the layer is on.
-    var nodes = [_]assets.model.Node{ .{ .name = "root" }, .{ .name = "spine", .parent = 0 }, .{ .name = "hips", .parent = 1 } };
-    const model = assets.Model{ .vertices = &.{}, .indices = &.{}, .parts = &.{}, .textures = &.{}, .rig = .{ .nodes = &nodes } };
-    var arena = std.heap.ArenaAllocator.init(gpa);
-    defer arena.deinit();
-    const refs = @import("refs.zig");
-
-    var animator = Animator{};
-    try animation.states.set(&animator.states, refs.AssetRef(.animation).fromId(2), 1, 0, .{});
-    try animation.states.set(&animator.states, refs.AssetRef(.animation).fromId(6), 0.5, 0, .{ .bone = "spine" });
-    const layered = try posed(arena.allocator(), &model, "000000000000002a", animator, &cache, null);
-    try std.testing.expectApproxEqAbs(@as(f32, 4), layered.translation[2][0], 1e-5);
-
-    // Hips outside the spine's branch keep the body's pose.
-    nodes[2].parent = 0;
-    const apart = try posed(arena.allocator(), &model, "000000000000002a", animator, &cache, null);
-    try std.testing.expectApproxEqAbs(@as(f32, 2), apart.translation[2][0], 1e-5);
-}

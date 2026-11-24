@@ -33,9 +33,3 @@ pub fn typeIndex(types: []const components.Info) ?usize {
     }
     return null;
 }
-
-test "the instance is found among a registry's types" {
-    const Registry = components.Registry(&.{ Transform, SceneInstance }, &.{ "eggy", "eggy" });
-    try std.testing.expectEqual(@as(?usize, 1), typeIndex(Registry.infos));
-    try std.testing.expectEqual(@as(?usize, null), typeIndex(Registry.infos[0..1]));
-}

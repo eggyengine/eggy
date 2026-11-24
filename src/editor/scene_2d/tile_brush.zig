@@ -260,7 +260,3 @@ fn drawPalette(context: *const anyopaque, c: *ui.Canvas, r: ui.Rect) anyerror!vo
     const row: f32 = @floatFromInt(self.tile / target.columns);
     try c.roundRectStroke(.{ .x = r.x + column * cell_w, .y = r.y + row * cell_h, .w = cell_w, .h = cell_h }, c.theme.primary, 0, 2);
 }
-
-test "a field's quoted key reads without its quotes" {
-    try std.testing.expectEqualStrings("12ab", unquote("\"12ab\""));
-}

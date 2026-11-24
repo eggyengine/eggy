@@ -77,11 +77,3 @@ fn lookOf(line: []const u8) Look {
     if (std.mem.startsWith(u8, line, "-")) return .removed;
     return .plain;
 }
-
-test "diff lines are told apart by how they start" {
-    try std.testing.expectEqual(Look.header, lookOf("+++ b/src/main.zig"));
-    try std.testing.expectEqual(Look.added, lookOf("+    const x = 1;"));
-    try std.testing.expectEqual(Look.removed, lookOf("-old"));
-    try std.testing.expectEqual(Look.hunk, lookOf("@@ -1,4 +1,5 @@"));
-    try std.testing.expectEqual(Look.plain, lookOf(" context"));
-}

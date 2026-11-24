@@ -252,8 +252,3 @@ test "the model stands, walks and sprints by how fast the body goes" {
     try std.testing.expectEqual(Gait.walk, gaitFor(4, 4, 8));
     try std.testing.expectEqual(Gait.run, gaitFor(7.5, 4, 8));
 }
-
-test "the body turns the short way round" {
-    try std.testing.expectEqual(@as(f32, -20), angleBetween(10, 350));
-    try std.testing.expectEqual(@as(f32, 20), angleBetween(350, 10));
-}

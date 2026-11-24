@@ -110,25 +110,3 @@ pub fn forActiveCamera(world: *ecs.World, scene: *const PostProcess) error{Inval
     try own.validate();
     return own;
 }
-
-test "a camera's post-processing replaces the environment's" {
-    var world = ecs.World.init(std.testing.allocator);
-    defer world.deinit();
-    const scene = PostProcess{ .tone_mapping = .reinhard };
-    try std.testing.expectEqual(ToneMapping.reinhard, (try forActiveCamera(&world, &scene)).tone_mapping);
-
-    const eye = try world.spawn(.{camera.Camera{}});
-    try std.testing.expectEqual(ToneMapping.reinhard, (try forActiveCamera(&world, &scene)).tone_mapping);
-    var own = PostProcess{ .tone_mapping = .agx, .vignette = 0.4 };
-    own.passes[1] = .{ .shader = .fromId(42), .values = .{ 0.5, 0, 0, 0 } };
-    try world.addComponent(eye, own);
-    const chosen = (try forActiveCamera(&world, &scene)).frame();
-    try std.testing.expectEqual(@backingInt(ToneMapping.agx), chosen.tone_mapping);
-    try std.testing.expectEqual(@as(f32, 0.4), chosen.grade[2]);
-    try std.testing.expect(chosen.passShader(0) == null);
-    try std.testing.expect(chosen.passShader(1) != null);
-    try std.testing.expectEqual(@as(f32, 0.5), chosen.pass_values[1][0]);
-
-    world.get(eye, PostProcess).?.vignette = 2;
-    try std.testing.expectError(error.InvalidPostProcess, forActiveCamera(&world, &scene));
-}

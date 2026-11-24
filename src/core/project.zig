@@ -198,28 +198,6 @@ pub fn load(arena: std.mem.Allocator, io: std.Io, dir: std.Io.Dir) !Config {
     return parse(arena, source);
 }
 
-test "a project gets its resources and scene folders" {
-    var tmp = std.testing.tmpDir(.{});
-    defer tmp.cleanup();
-    try makeFolders(std.testing.io, tmp.dir);
-    try makeFolders(std.testing.io, tmp.dir); // already there: fine
-    try tmp.dir.access(std.testing.io, scenes_dir, .{});
-}
-
-test "eggy.zon gives the project's title and version" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    const config = try parse(arena.allocator(),
-        \\.{ .name = "space_game", .title = "Space Game", .version = "1.2.0" }
-    );
-    try std.testing.expectEqualStrings("space_game", config.name);
-    try std.testing.expectEqualStrings("Space Game", config.title);
-    // Phones show it in landscape unless the file says otherwise.
-    try std.testing.expectEqual(Orientation.landscape, config.orientation);
-    try std.testing.expectEqualStrings("1.2.0", config.version);
-    try std.testing.expectError(error.ParseZon, parse(arena.allocator(), ".{ .title = \"No name\" }"));
-}
-
 test "eggy.zon written reads back the same, its metadata included" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();

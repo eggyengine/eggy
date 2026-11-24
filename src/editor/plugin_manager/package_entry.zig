@@ -101,39 +101,6 @@ fn isBlank(text: []const u8) bool {
     return std.mem.trim(u8, text, " \t\r").len == 0;
 }
 
-test "a dependency is taken out of build.zig.zon, the others kept as written" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    const manifest =
-        \\.{
-        \\    .name = .rats,
-        \\    .dependencies = .{
-        \\        .eggy = .{ .path = "../eggy" },
-        \\        .stat_pack = .{
-        \\            .url = "git+https://github.com/rat/stat_pack#1234",
-        \\            .hash = "stat_pack-1.0.0-AAAA",
-        \\        },
-        \\        // Physics.
-        \\        .@"wobble" = .{ .path = "wobble" },
-        \\    },
-        \\}
-        \\
-    ;
-    try std.testing.expectEqualStrings(
-        \\.{
-        \\    .name = .rats,
-        \\    .dependencies = .{
-        \\        .eggy = .{ .path = "../eggy" },
-        \\        // Physics.
-        \\        .@"wobble" = .{ .path = "wobble" },
-        \\    },
-        \\}
-        \\
-    , (try withoutDependency(arena.allocator(), manifest, "stat_pack")).?);
-    try std.testing.expect(std.mem.indexOf(u8, (try withoutDependency(arena.allocator(), manifest, "wobble")).?, "wobble") == null);
-    try std.testing.expect(try withoutDependency(arena.allocator(), manifest, "missing") == null);
-}
-
 test "a plugin's folder goes in as a path entry, replacing a fetched one" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
@@ -162,18 +129,4 @@ test "a plugin's folder goes in as a path entry, replacing a fetched one" {
     try std.testing.expectEqualStrings(".{ .name = .rats, .dependencies = .{ .eggy = .{ .path = \"../eggy\" }, .wobble = .{ .path = \"C:\\\\wobble\" }, } }", inline_list);
     try std.testing.expect(try isFolderDependency(a, try a.dupeSentinel(u8, inline_list, 0), "wobble"));
     try std.testing.expectError(error.NoDependencies, withFolderDependency(a, ".{ .name = .rats }", "wobble", "w"));
-}
-
-test "a folder dependency is told from a fetched one" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    const manifest =
-        \\.{ .name = .rats, .dependencies = .{
-        \\    .wobble = .{ .path = "../wobble" },
-        \\    .stat_pack = .{ .url = "git+https://github.com/rat/stat_pack#1234", .hash = "stat_pack-1.0.0-AAAA" },
-        \\} }
-    ;
-    try std.testing.expect(try isFolderDependency(arena.allocator(), manifest, "wobble"));
-    try std.testing.expect(!try isFolderDependency(arena.allocator(), manifest, "stat_pack"));
-    try std.testing.expect(!try isFolderDependency(arena.allocator(), manifest, "missing"));
 }

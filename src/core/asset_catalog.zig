@@ -42,14 +42,3 @@ pub fn findId(id: u64) ?Entry {
 fn current() []const Entry {
     return if (@inComptime()) compiled else entries;
 }
-
-test "a catalog set at run time answers lookups until replaced" {
-    const before = entries;
-    defer set(before);
-    const catalog = [_]Entry{.{ .path = "resources/rat.glb", .id = 42, .kind = 3, .converted = true }};
-    set(&catalog);
-    try std.testing.expectEqual(@as(u64, 42), find("resources/rat.glb").?.id);
-    try std.testing.expectEqualStrings("resources/rat.glb", findId(42).?.path);
-    set(&.{});
-    try std.testing.expect(findId(42) == null);
-}

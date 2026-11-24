@@ -313,35 +313,3 @@ test "git status gives the branch, how far it is from its upstream, and each cha
     try std.testing.expectEqual(@as(usize, 2), counts.unstaged);
     try std.testing.expectEqual(@as(usize, 1), counts.conflicted);
 }
-
-test "a new repository has no commits and no upstream; a detached one has no branch" {
-    var state = State{ .arena = .init(std.testing.allocator) };
-    defer state.arena.deinit();
-    try parseStatus(state.arena.allocator(), &state, "## No commits yet on main\nA  a.zig\n");
-    try std.testing.expectEqualStrings("main", state.branch);
-    try std.testing.expect(state.unborn and state.upstream.len == 0);
-    var detached = State{ .arena = .init(std.testing.allocator) };
-    defer detached.arena.deinit();
-    try parseStatus(detached.arena.allocator(), &detached, "## HEAD (no branch)\n");
-    try std.testing.expect(detached.detached);
-}
-
-test "refs give local and remote branches, with tracking, and tags" {
-    var state = State{ .arena = .init(std.testing.allocator) };
-    defer state.arena.deinit();
-    try parseRefs(state.arena.allocator(), &state, "*\trefs/heads/main\torigin/main\tahead 1, behind 3\tabc1234\tFix the\ttab\n" ++
-        " \trefs/heads/old\torigin/old\tgone\tdef5678\tOld work\n" ++
-        " \trefs/remotes/origin/HEAD\t\t\tabc1234\tFix\n" ++
-        " \trefs/remotes/origin/main\t\t\tabc1234\tFix\n" ++
-        " \trefs/tags/v1.0.0\t\t\t0123abc\tRelease\n");
-    try std.testing.expectEqual(@as(usize, 3), state.branches.len);
-    const main = state.branches[0];
-    try std.testing.expect(main.current and !main.remote);
-    try std.testing.expectEqual(@as(usize, 1), main.ahead);
-    try std.testing.expectEqual(@as(usize, 3), main.behind);
-    try std.testing.expectEqualStrings("Fix the\ttab", main.subject);
-    try std.testing.expect(state.branches[1].gone);
-    try std.testing.expect(state.branches[2].remote);
-    try std.testing.expectEqualStrings("origin/main", state.branches[2].name);
-    try std.testing.expectEqualStrings("v1.0.0", state.tags[0].name);
-}

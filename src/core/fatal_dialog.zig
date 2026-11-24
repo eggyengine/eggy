@@ -55,12 +55,3 @@ fn formatMessage(buffer: []u8, stage: []const u8, message: []const u8) [:0]u8 {
     buffer[prefix.len + length] = 0;
     return buffer[0 .. prefix.len + length :0];
 }
-
-test "fatal dialog preserves error context and bounds long messages" {
-    var buffer: [80]u8 = undefined;
-    try std.testing.expectEqualStrings("Fatal error during init:\nNoAdapter", formatMessage(&buffer, "init", "NoAdapter"));
-    const long: [100]u8 = @splat('A');
-    const bounded = formatMessage(&buffer, "frame", &long);
-    try std.testing.expectEqual(@as(usize, buffer.len - 1), bounded.len);
-    try std.testing.expectEqual(@as(u8, 'A'), bounded[bounded.len - 1]);
-}

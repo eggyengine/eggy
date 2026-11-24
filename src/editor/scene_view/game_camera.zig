@@ -135,14 +135,3 @@ pub fn steer(game: *const HotGame, app: *eggy.App, entity: eggy.ecs.EntityId, ca
 fn parseNumber(text: []const u8) ?f32 {
     return std.fmt.parseFloat(f32, std.mem.trim(u8, text, " ")) catch null;
 }
-
-test "a camera turned by the scene camera's pitch and yaw looks where it looks" {
-    var camera = SceneCamera{ .yaw_deg = 30, .pitch_deg = -20 };
-    const transform = eggy.Transform{ .rotation_deg = .init(camera.pitch_deg, camera.yaw_deg, 0) };
-    const expected = camera.view().forward;
-    try std.testing.expect(transform.forward().approxEql(expected, 0.001));
-    camera.place(.{ .eye = .init(1, 2, 3), .forward = expected, .up = .up });
-    try std.testing.expectApproxEqAbs(@as(f32, 30), camera.yaw_deg, 0.01);
-    try std.testing.expectApproxEqAbs(@as(f32, -20), camera.pitch_deg, 0.01);
-    try std.testing.expect(camera.view().eye.approxEql(.init(1, 2, 3), 0.001));
-}

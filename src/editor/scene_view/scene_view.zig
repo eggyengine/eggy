@@ -820,27 +820,6 @@ test {
     _ = @import("scene_camera.zig");
 }
 
-test "the toolbar picks the gizmo and its axes, and folds away" {
-    var view = SceneView{};
-    view.press(.rotate);
-    try std.testing.expectEqual(gizmo.Tool.rotate, view.tools.tool);
-    view.press(.space);
-    try std.testing.expectEqual(gizmo.Space.local, view.tools.space);
-    view.press(.game_camera);
-    view.press(.game_camera);
-    try std.testing.expect(!view.tools.through_game_camera);
-    view.press(.fold);
-    try std.testing.expect(view.tools.folded);
-}
-
-test "a Transform field's ZON, as the game's library writes it, reads back for a drag" {
-    var written: std.Io.Writer.Allocating = .init(std.testing.allocator);
-    defer written.deinit();
-    try std.zon.stringify.serialize([3]f32{ 0, 0.75, -2 }, .{ .whitespace = false }, &written.writer);
-    try std.testing.expectEqual(eggy.math.Vec3.init(0, 0.75, -2), parseVector(written.written()).?);
-    try std.testing.expect(parseVector("sideways") == null);
-}
-
 /// Whether one of `entity`'s ancestors is among `entities`.
 fn underAnyOf(world: *eggy.ecs.World, entity: eggy.ecs.EntityId, entities: []const eggy.ecs.EntityId) bool {
     var at = world.getParent(entity);

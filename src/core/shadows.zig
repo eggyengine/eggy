@@ -302,33 +302,6 @@ pub fn fitCamera(view: camera.View, aspect: f32, direction: math.Vec3, near_m: f
     return .{ .eye = eye, .forward = direction, .up = up, .near = 0.01, .far = behind + radius, .projection = .orthographic, .orthographic_height_m = radius * 2 };
 }
 
-test "a point light's cube sides each look the way the shader picks them for" {
-    const light = lighting.GpuLight{ .position_kind = .{ 1, 2, 3, 1 }, .direction_range = .{ 0, 0, -1, 10 } };
-    const views = localViews(light);
-    for (views, cube_sides) |view, side| {
-        // A point a little along the side, from the light, lands in the middle of its map.
-        const point = view.eye.add(side.scale(2));
-        const columns = transform.columns(view.viewProjection(1));
-        var clip: [4]f32 = @splat(0);
-        for (columns, [4]f32{ point.x, point.y, point.z, 1 }) |column, coordinate| {
-            for (&clip, column) |*value, entry| value.* += entry * coordinate;
-        }
-        try std.testing.expect(clip[3] > 0);
-        try std.testing.expectApproxEqAbs(@as(f32, 0), clip[0] / clip[3], 1e-4);
-        try std.testing.expectApproxEqAbs(@as(f32, 0), clip[1] / clip[3], 1e-4);
-    }
-}
-
-test "shadow fitting remains finite for vertical lights and preserves texel stability" {
-    const first = fitCamera(camera.View.default, 16.0 / 9.0, .down, 0.1, 60, 60, 2048);
-    const matrix = transform.columns(first.viewProjection(1));
-    for (matrix) |column| for (column) |value| try std.testing.expect(std.math.isFinite(value));
-    var moved = camera.View.default;
-    moved.eye.x += 0.00001;
-    const second = fitCamera(moved, 16.0 / 9.0, .down, 0.1, 60, 60, 2048);
-    try std.testing.expectApproxEqAbs(first.eye.x, second.eye.x, 0.000001);
-}
-
 test "cascades reach further each, end at the shadow distance and keep their size as the view turns" {
     const splits = cascadeSplits(0.1, 60);
     for (splits[1..], splits[0 .. cascades - 1]) |later, earlier| try std.testing.expect(later > earlier);

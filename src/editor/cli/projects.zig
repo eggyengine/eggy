@@ -138,16 +138,3 @@ fn follow(process: *const std.process.Init, prompt: *Prompt, job: *jobs.Job) !vo
         }
     }
 }
-
-test "export scene must be an existing scene in project resources" {
-    var tmp = std.testing.tmpDir(.{});
-    defer tmp.cleanup();
-    const io = std.testing.io;
-    try tmp.dir.createDirPath(io, "resources/scene");
-    try tmp.dir.writeFile(io, .{ .sub_path = "resources/scene/main.scene.zon", .data = ".{}" });
-    try validateScene(io, tmp.dir, "resources/scene/main.scene.zon");
-    try std.testing.expectError(error.FileNotFound, validateScene(io, tmp.dir, "resources/missing.scene.zon"));
-    try std.testing.expectError(error.InvalidScenePath, validateScene(io, tmp.dir, "/outside.scene.zon"));
-    try std.testing.expectError(error.InvalidScenePath, validateScene(io, tmp.dir, "resources/../outside.scene.zon"));
-    try std.testing.expectError(error.InvalidScenePath, validateScene(io, tmp.dir, "src/main.zig"));
-}

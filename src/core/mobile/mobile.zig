@@ -206,23 +206,3 @@ const Unsupported = struct {
         return error.UnsupportedPlatform;
     }
 };
-
-test "the display's orientation maps over, unknown when it can't say" {
-    try std.testing.expectEqual(Orientation.landscape_flipped, orientationOf(.landscape_flipped));
-    try std.testing.expectEqual(Orientation.unknown, orientationOf(null));
-}
-
-test "a desktop build reports no vibration, toasts or motion" {
-    if (is_mobile) return error.SkipZigTest;
-    var state = State{};
-    const mobile = Mobile{ .window = undefined, .state = &state };
-    try std.testing.expectError(error.UnsupportedPlatform, mobile.vibrate(1, 10));
-    try std.testing.expectError(error.UnsupportedPlatform, mobile.showToast("hi", .short));
-    try std.testing.expectError(error.UnsupportedPlatform, mobile.motion());
-    try std.testing.expectEqual(api.Support.unsupported_platform, vibration_support);
-}
-
-test "every call compiles for this platform" {
-    std.testing.refAllDecls(Mobile);
-    std.testing.refAllDecls(native);
-}

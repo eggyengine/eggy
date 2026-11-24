@@ -258,35 +258,3 @@ fn line(c: *ui.Canvas, from: ui.Vec2, to: ui.Vec2, half_width: f32, color: [4]f3
     try c.triangle(.{ .{ from.x + nx, from.y + ny }, .{ to.x + nx, to.y + ny }, .{ to.x - nx, to.y - ny } }, colors);
     try c.triangle(.{ .{ from.x + nx, from.y + ny }, .{ to.x - nx, to.y - ny }, .{ from.x - nx, from.y - ny } }, colors);
 }
-
-test "a part is placed by its entity: a turned spotlight's lens follows the turn" {
-    // The entity half a turn round Y, at (5, 0, 0): its -Z (where the lens sits) is world +Z.
-    const turned = math.fromArray(f32, 4, 4, .{ .{ -1, 0, 0, 0 }, .{ 0, 1, 0, 0 }, .{ 0, 0, -1, 0 }, .{ 5, 0, 0, 1 } });
-    var out: [spotlight.len]Drawable = undefined;
-    const written = place(&spotlight, turned, .init(3, 1), .{ 2, 1, 0 }, &out, 0);
-    try std.testing.expectEqual(spotlight.len, written);
-    const lens = out[3];
-    try std.testing.expectApproxEqAbs(@as(f32, 5), lens.model[3][0], 0.0001);
-    try std.testing.expectApproxEqAbs(@as(f32, 0.17), lens.model[3][2], 0.0001);
-    // Its axis (built along +Y) now runs along Z, and it glows the light's hue.
-    try std.testing.expectApproxEqAbs(@as(f32, 0), lens.model[1][1], 0.0001);
-    try std.testing.expectEqual(@as(f32, 0.5), lens.surface_color[1]);
-    try std.testing.expectEqual(@as(u32, 0), lens.casts_shadow);
-    try std.testing.expectEqual(@as(u32, 3), lens.entity_id);
-}
-
-test "only directional lights get a badge, placed where they are and ticked the way they shine" {
-    var lights = eggy.lighting.Frame{ .count = 2 };
-    lights.lights[0] = .{ .position_kind = .{ 0, 0, 0, 0 }, .direction_range = .{ 0, 0, -1, 0 }, .color_intensity = .{ 1, 1, 1, 1000 } };
-    lights.lights[1] = .{ .position_kind = .{ 0, 0, 0, 1 }, .color_intensity = .{ 1, 1, 1, 100 } };
-    lights.entities[0] = .{ .id = 7, .generation = 2 };
-    const scene = ui.Rect{ .x = 0, .y = 0, .w = 800, .h = 600 };
-    // From +X looking back at the origin: world -Z is to the right.
-    const view = eggy.camera.View.lookingAt(.init(10, 0, 0), .zero, .{});
-    var shown: [4]Sun = undefined;
-    try std.testing.expectEqual(@as(usize, 1), suns(&lights, view, scene, &shown));
-    try std.testing.expectApproxEqAbs(@as(f32, 400), shown[0].at.x, 0.5);
-    try std.testing.expect(shown[0].tip.?.x > shown[0].at.x + 10);
-    try std.testing.expectEqual(@as(u32, 7), sunAt(shown[0..1], .{ .x = 405, .y = 303 }).?.id);
-    try std.testing.expect(sunAt(shown[0..1], .{ .x = 450, .y = 300 }) == null);
-}

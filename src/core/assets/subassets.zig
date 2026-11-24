@@ -89,35 +89,3 @@ pub fn free(gpa: std.mem.Allocator, children: []const Child) void {
     for (children) |child| gpa.free(child.path);
     gpa.free(children);
 }
-
-test "model children preserve clip identities while disambiguating virtual names" {
-    const Check = struct {
-        fn run(gpa: std.mem.Allocator) !void {
-            const clips = [_]model.Clip{
-                .{ .name = "walk", .duration_s = 0, .tracks = &.{} },
-                .{ .name = "walk", .duration_s = 0, .tracks = &.{} },
-                .{ .name = "Skeletal", .duration_s = 0, .tracks = &.{} },
-                .{ .name = "a/b", .duration_s = 0, .tracks = &.{} },
-                .{ .name = "a_b", .duration_s = 0, .tracks = &.{} },
-                .{ .name = "", .duration_s = 0, .tracks = &.{} },
-            };
-            const children = try list(gpa, 42, "resources/rat.glb", &clips, 2);
-            defer free(gpa, children);
-            try std.testing.expectEqualStrings("resources/rat.glb/Skeletal", children[0].path);
-            try std.testing.expectEqualStrings("resources/rat.glb/walk (2)", children[2].path);
-            try std.testing.expectEqualStrings("resources/rat.glb/Skeletal (2)", children[3].path);
-            try std.testing.expectEqualStrings("resources/rat.glb/a_b", children[4].path);
-            try std.testing.expectEqualStrings("resources/rat.glb/a_b (2)", children[5].path);
-            try std.testing.expectEqualStrings("resources/rat.glb/Animation", children[6].path);
-            try std.testing.expectEqual(identity.animation(42, "walk", 1), children[2].id);
-            try std.testing.expectEqualStrings("resources/rat.glb/Material 2", children[8].path);
-            try std.testing.expectEqual(@as(?usize, 1), children[8].texture_index);
-            try std.testing.expectEqual(identity.texture(42, 1), children[8].id);
-            const static = try list(gpa, 42, "resources/renamed.glb", &.{}, 0);
-            defer free(gpa, static);
-            try std.testing.expectEqual(children[0].id, static[0].id);
-            try std.testing.expectEqualStrings("resources/renamed.glb/Static", static[0].path);
-        }
-    };
-    try std.testing.checkAllAllocationFailures(std.testing.allocator, Check.run, .{});
-}

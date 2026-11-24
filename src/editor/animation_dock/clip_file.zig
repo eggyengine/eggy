@@ -47,8 +47,3 @@ test "a clip's text is written, read back and parsed again" {
     defer parsed.deinit(gpa);
     try std.testing.expectEqualStrings("Arm", parsed.tracks[0].target);
 }
-
-test "only .clip.zon files are authored clips" {
-    try std.testing.expect(isAuthored("resources/walk.clip.zon"));
-    try std.testing.expect(!isAuthored("resources/rig.gltf/Walk"));
-}

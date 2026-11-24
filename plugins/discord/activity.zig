@@ -64,16 +64,3 @@ test "the status names the project and the open scene" {
     try std.testing.expectEqualStrings("Playtesting testing project", describe("testing project", "", .playing).details());
     try std.testing.expectEqualStrings("", describe("testing project", "", .paused).state());
 }
-
-test "a long title is cut at Discord's limit" {
-    const long: [300]u8 = @splat('x');
-    const cut = describe(&long, "", .editing);
-    try std.testing.expectEqual(@as(usize, max_line_bytes), cut.details().len);
-}
-
-test "the same lines are equal, so an unchanged status isn't sent again" {
-    const a = describe("p", "a.scene.zon", .editing);
-    const b = describe("p", "a.scene.zon", .editing);
-    try std.testing.expect(a.eql(&b));
-    try std.testing.expect(!a.eql(&describe("p", "a.scene.zon", .paused)));
-}

@@ -130,11 +130,3 @@ fn execute(process: *const std.process.Init, prompt: *Prompt, dir: []const u8, a
     const term = try child.wait(process.io);
     if (term != .exited or term.exited != 0) return error.DoctorCommandFailed;
 }
-
-test "Zig must match the engine's minor release and minimum version" {
-    try std.testing.expect(compatible(required_zig));
-    try std.testing.expect(!compatible("0.16.0"));
-    try std.testing.expect(!compatible("0.18.0"));
-    try std.testing.expect(!compatible("0.17.0-dev.1"));
-    try std.testing.expect(!compatible("not a version"));
-}

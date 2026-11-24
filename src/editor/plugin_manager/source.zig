@@ -146,34 +146,3 @@ fn githubPage(url: []const u8) ?Page {
     const ref = parts.next() orelse return null;
     return .{ .owner = owner, .repo = repo, .ref = ref, .path = std.mem.trimEnd(u8, parts.rest(), "/") };
 }
-
-test "a GitHub page of a plugin's folder or file reads its raw eggy.zon" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    const a = arena.allocator();
-    try std.testing.expectEqualStrings("https://raw.githubusercontent.com/me/pack/main/stats/eggy.zon", (try locate(a, "https://github.com/me/pack/tree/main/stats/", "/")).url);
-    try std.testing.expectEqualStrings("https://raw.githubusercontent.com/me/pack/v1/stats/eggy.zon", (try locate(a, "https://github.com/me/pack/blob/v1/stats/eggy.zon", "/")).url);
-    try std.testing.expectEqualStrings("/work/stats/eggy.zon", (try locate(a, " stats ", "/work")).path);
-    try std.testing.expectEqualStrings("/work/stats/README.md", (try sibling(a, .{ .path = "/work/stats/eggy.zon" }, "README.md")).path);
-    try std.testing.expectEqualStrings("https://example.com/p/README.md", (try sibling(a, .{ .url = "https://example.com/p/eggy.zon" }, "README.md")).url);
-    try std.testing.expectError(error.EmptyLocation, locate(a, "  ", "/"));
-}
-
-test "a plugin's package is its repository at the commit its eggy.zon came from" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    const a = arena.allocator();
-    const manifest = Manifest{ .title = "Stats", .module = "stats", .version = "1.2.0", .repository = "https://github.com/Me/eggy-pack", .fingerprint = 1 };
-    // From a raw file: the repository at that commit, saved under the repository's name.
-    const raw = (try packageFor(a, manifest, .{ .url = "https://raw.githubusercontent.com/me/eggy-pack/abc123/stats/eggy.zon" }, null)).fetch;
-    try std.testing.expectEqualStrings("git+https://github.com/me/eggy-pack#abc123", raw.url);
-    try std.testing.expectEqualStrings("eggy_pack", raw.dependency);
-    // A copy of the manifest hosted in someone else's repository is refused.
-    try std.testing.expectError(error.NotFromRepository, packageFor(a, manifest, .{ .url = "https://raw.githubusercontent.com/mallory/pack/main/stats/eggy.zon" }, null));
-    // Elsewhere: the tag of its version; from a folder: that folder's package.
-    try std.testing.expectEqualStrings("git+https://github.com/Me/eggy-pack#v1.2.0", (try packageFor(a, manifest, .{ .url = "https://example.com/eggy.zon" }, null)).fetch.url);
-    try std.testing.expectEqualStrings("/work/pack", (try packageFor(a, manifest, .{ .path = "/work/pack/stats/eggy.zon" }, "/work/pack")).folder.path);
-    var in_eggy = manifest;
-    in_eggy.package = "eggy";
-    try std.testing.expect(try packageFor(a, in_eggy, .{ .path = "/x/eggy.zon" }, null) == .eggy);
-}

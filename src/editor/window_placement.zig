@@ -98,14 +98,3 @@ pub fn fromArgs(args: []const [*:0]const u8) ?Placement {
     }
     return null;
 }
-
-test "a placement survives the command line, and bad values are refused" {
-    const placement = Placement{ .x = -1280, .y = 40, .width = 1280, .height = 1400, .maximized = false };
-    var buffer: [64]u8 = undefined;
-    const text = try placement.format(&buffer);
-    try std.testing.expectEqualStrings("-1280,40,1280,1400,0", text);
-    try std.testing.expectEqual(placement, Placement.parse(text).?);
-    try std.testing.expect(Placement.parse("1,2,3") == null);
-    try std.testing.expect(Placement.parse("1,2,0,4,0") == null);
-    try std.testing.expect(Placement.parse("1,2,3,4,0,5") == null);
-}

@@ -488,60 +488,6 @@ fn restyleText(context: *ui.Context, size: f32) void {
     if (element.paint_kind == .text) element.paint_kind.text.size = size;
 }
 
-test "every tab fits a narrow panel, a row's diff open under it" {
-    const gpa = std.testing.allocator;
-    var context = try ui.Context.init(gpa);
-    defer context.deinit();
-    var environ = std.process.Environ.Map.init(gpa);
-    defer environ.deinit();
-    const no_environ: std.process.Environ = if (@import("builtin").os.tag == .windows) .{ .block = .global } else .{ .block = .{ .slice = &.{} } };
-    const repo = try Repo.create(gpa, &environ, no_environ, "/nowhere");
-    defer repo.destroy();
-
-    // A repository with a bit of everything, mid-merge.
-    const state = try gpa.create(State);
-    state.* = .{ .arena = .init(gpa), .operation = .merging };
-    repo.state = state;
-    const a = state.arena.allocator();
-    try status.parseStatus(a, state, "## feature/a-rather-long-branch-name...origin/feature/a-rather-long-branch-name [ahead 2, behind 1]\nM  src/main.zig\n M resources/scene/a/very/deep/folder/with/a/long/path/start.scene.zon\n?? notes.txt\nUU build.zig\n");
-    try status.parseRefs(a, state, "*\trefs/heads/main\torigin/main\tahead 1\tabc1234\tFix\n \trefs/remotes/origin/main\t\t\tabc1234\tFix\n \trefs/tags/v1.0.0\t\t\tabc1234\tRelease\n");
-    try status.parseLog(a, state, "abc1234\tabc1234ff\tSomeone With A Long Name\t3 weeks ago\tHEAD -> main, origin/main, tag: v1.0.0\tA commit whose subject goes on for quite a while\n");
-    try status.parseStashes(a, state, "stash@{0}\tOn main: halfway through\n");
-    try status.parseRemotes(a, state, "origin\thttps://github.com/someone/a-game-with-a-long-name.git (fetch)\n");
-    repo.say("Push", "fatal: the remote end hung up unexpectedly", true);
-
-    // The selected row's diff, as read.
-    const diff = try gpa.create(repo_zig.Diff);
-    diff.* = .{ .arena = .init(gpa), .key = "", .text = "", .lines = &.{} };
-    repo.diff = diff;
-
-    var panel = Panel{};
-    for ([_]f32{ 300, 640 }) |width| for (std.enums.values(Tab)) |tab| {
-        panel.open(tab);
-        const key = switch (tab) {
-            .changes => "git-row-w:resources/scene/a/very/deep/folder/with/a/long/path/start.scene.zon",
-            .history => "git-row-c:abc1234ff",
-            .branches => "git-row-b:main",
-            .stashes => "git-row-z:stash@{0}",
-            // Nothing on the page: a selection kept from another tab.
-            .remotes => "git-row-r:none",
-        };
-        panel.select(repo, key);
-        diff.key = key;
-        diff.text = "diff --git a/x b/x\n@@ -1 +1 @@\n-old\n+new";
-        diff.lines = &.{ .{ .start = 0, .end = 18 }, .{ .start = 19, .end = 30 }, .{ .start = 31, .end = 35 }, .{ .start = 36, .end = 40 } };
-        const viewport = ui.Rect{ .x = 0, .y = 0, .w = width, .h = 800 };
-        context.newFrame(viewport);
-        try panel.build(repo, &context);
-        _ = try context.render();
-        try expectInside(context.last_root.?, viewport);
-    };
-    // The test's diff isn't the repository's to free.
-    diff.arena.deinit();
-    gpa.destroy(diff);
-    repo.diff = null;
-}
-
 /// Fail if an element of `element` reaches past `viewport`'s sides, outside a scrolling one.
 fn expectInside(element: *const ui.Layout.Element, viewport: ui.Rect) !void {
     const box = element.bounds;

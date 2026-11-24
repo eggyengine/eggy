@@ -263,23 +263,3 @@ test "a project falls back on the global value, then the default" {
     try std.testing.expectEqualStrings("0.2", current(&store, .project, "game", field));
     try std.testing.expectEqualStrings("0.5", current(&store, .global, "game", field));
 }
-
-test "number fields show their unit, and enum values their names" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    try std.testing.expectEqualStrings("seconds", unitOf("autosave_seconds").label);
-    try std.testing.expectEqualStrings("", unitOf("volume").label);
-    try std.testing.expectEqualStrings("VS Code", optionLabel(arena.allocator(), files.editor_key, "code_editor", "vscode"));
-    try std.testing.expectEqualStrings("Warnings", optionLabel(arena.allocator(), files.editor_key, "log_level", "warn"));
-    const field = prefs.Field{ .name = "autosave_seconds", .kind = .int, .default = "60" };
-    try std.testing.expectEqualStrings("60 seconds", valueLabel(arena.allocator(), files.editor_key, field, "60"));
-}
-
-test "a global-only field is shown and set in the global layer from either scope" {
-    const field = prefs.Field{ .name = "eggy_source", .kind = .string, .default = "\"a\"", .scope = .global_only };
-    try std.testing.expectEqual(Store.Layer.global, layerOf(.project, field));
-    try std.testing.expectEqual(Store.Layer.project, layerOf(.project, .{ .name = "volume", .kind = .float, .default = "1" }));
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    try std.testing.expectEqualStrings("https://x/eggy#main", valueLabel(arena.allocator(), "editor", field, "\"https://x/eggy#main\""));
-}

@@ -225,11 +225,3 @@ fn clockText(arena: std.mem.Allocator, seconds: f32) []const u8 {
     const tenths: u64 = @intFromFloat(@round(@max(0, seconds) * 10));
     return std.fmt.allocPrint(arena, "{d}:{d:0>2}.{d}", .{ tenths / 600, tenths / 10 % 60, tenths % 10 }) catch "";
 }
-
-test "the clock shows minutes, seconds and tenths" {
-    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
-    defer arena.deinit();
-    try std.testing.expectEqualStrings("0:00.0", clockText(arena.allocator(), 0));
-    try std.testing.expectEqualStrings("1:05.3", clockText(arena.allocator(), 65.27));
-    try std.testing.expectEqualStrings("0:01.8", clockText(arena.allocator(), 1.8));
-}

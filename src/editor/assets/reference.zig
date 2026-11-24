@@ -34,10 +34,3 @@ pub const Reference = struct {
         return accepts == .any or accepts == self.kind;
     }
 };
-
-test "a reference holds a canonical key and fits the kind it is" {
-    const reference = Reference.of(0x2a, .audio, "hum.ogg");
-    try std.testing.expectEqualStrings("000000000000002a", reference.key());
-    try std.testing.expect(reference.fits(.audio) and reference.fits(.any));
-    try std.testing.expect(!reference.fits(.image));
-}

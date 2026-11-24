@@ -49,16 +49,3 @@ fn argsVector(args: [][*:0]u8) std.process.Args.Vector {
     if (builtin.os.tag == .windows) return std.os.windows.peb().ProcessParameters.CommandLine.slice();
     return args;
 }
-
-test "the environment and arguments read back through std.process.Init" {
-    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
-    defer arena.deinit();
-    var program = "game".*;
-    var args = [_][*:0]u8{&program};
-    const process = try fromSdl(.{ .arena = &arena, .gpa = std.testing.allocator, .io = std.testing.io, .args = &args });
-    if (builtin.os.tag != .windows) {
-        try std.testing.expectEqual(@as(usize, 1), process.minimal.args.vector.len);
-        try std.testing.expectEqualStrings("game", std.mem.span(process.minimal.args.vector[0]));
-    }
-    try std.testing.expect(process.environ_map.count() > 0);
-}

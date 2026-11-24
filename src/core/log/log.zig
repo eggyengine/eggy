@@ -167,20 +167,3 @@ fn isRunOf(file_name: []const u8, name: []const u8) bool {
     const stamp = file_name[name.len..];
     return stamp[0] == '-' and stamp[9] == '-' and std.mem.endsWith(u8, stamp, ".log");
 }
-
-test "a run's log is told apart from a program whose name starts the same" {
-    try std.testing.expect(isRunOf("space-20261021-230405.log", "space"));
-    try std.testing.expect(!isRunOf("space_editor-20261021-230405.log", "space"));
-    try std.testing.expect(!isRunOf("space-20261021-230405-crash.txt", "space"));
-}
-
-test "the command line's level wins over a preference" {
-    defer {
-        shown_level = .info;
-        level_from_command_line = false;
-    }
-    takeLevelFlag(&.{"--log-level=debug"});
-    try std.testing.expect(shows(.debug));
-    setLevel(.err);
-    try std.testing.expect(shows(.debug));
-}

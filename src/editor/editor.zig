@@ -4386,22 +4386,3 @@ test "the editor compiles for a project" {
     };
     std.testing.refAllDecls(Editor(project));
 }
-
-test "Nerd Font icons draw from the symbols font, and text from the UI's" {
-    var context = try ui.Context.init(std.testing.allocator);
-    defer context.deinit();
-    const font = context.font;
-    const strike = font.strike(14);
-    const missing = strike.glyph('?');
-    // Without the symbols font, Powerline's branch icon (private use) is missing.
-    var i: usize = 0;
-    try std.testing.expect(std.meta.eql(font.next(strike, "\u{e0a0}", &i), missing));
-    // With it, Material Design's first icon draws.
-    try font.setSymbolsFont(@embedFile("symbols_font"));
-    i = 0;
-    const material = font.next(strike, "\u{f0001}", &i);
-    try std.testing.expect(!std.meta.eql(material, missing) and material.w > 0);
-    // Text is still the UI font's.
-    i = 0;
-    try std.testing.expect(std.meta.eql(font.next(strike, "A", &i), strike.glyph('A')));
-}

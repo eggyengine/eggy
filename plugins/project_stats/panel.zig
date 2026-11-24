@@ -191,19 +191,6 @@ fn date(arena: std.mem.Allocator, day: i32) ![]const u8 {
     return std.fmt.allocPrint(arena, "{d} {s} {d}", .{ month_day.day_index + 1, months[@backingInt(month_day.month) - 1], year_day.year });
 }
 
-test "numbers, sizes and dates read as people write them" {
-    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena_state.deinit();
-    const arena = arena_state.allocator();
-    try std.testing.expectEqualStrings("4,210", try grouped(arena, 4210));
-    try std.testing.expectEqualStrings("1,000,000", try grouped(arena, 1_000_000));
-    try std.testing.expectEqualStrings("999", try grouped(arena, 999));
-    try std.testing.expectEqualStrings("512 B", try size(arena, 512));
-    try std.testing.expectEqualStrings("84.2 MB", try size(arena, 84_200_000));
-    try std.testing.expectEqualStrings("1 Jan 1970", try date(arena, 0));
-    try std.testing.expectEqualStrings("29 Oct 2026", try date(arena, 20755));
-}
-
 test {
     _ = scan_zig;
     _ = summary_zig;

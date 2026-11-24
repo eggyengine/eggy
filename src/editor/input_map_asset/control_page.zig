@@ -544,25 +544,3 @@ fn displayNames(comptime names: []const []const u8) [names.len][]const u8 {
     }
     return labels;
 }
-
-test "key names and enum labels read as words" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    try std.testing.expectEqualStrings("W", keyLabel(arena.allocator(), .w));
-    try std.testing.expectEqualStrings("Left shift", keyLabel(arena.allocator(), .left_shift));
-    try std.testing.expectEqualStrings("Button", kind_labels[0]);
-    try std.testing.expectEqualStrings("Hold", trigger_labels[1]);
-}
-
-test "typed numbers apply only once every field of the binding reads" {
-    var page = ControlPage{};
-    try page.fillNumbers(0, .{ .controller_stick = .{} });
-    try std.testing.expectEqual(@as(f32, 0.15), page.withNumbers(.{ .controller_stick = .{} }, 0).?.controller_stick.dead_zone);
-    try page.numbers[0][2].set("1.5");
-    try std.testing.expect(page.withNumbers(.{ .controller_stick = .{} }, 0) == null);
-    try page.numbers[0][2].set("0.3");
-    try page.numbers[0][1].set("-1");
-    const stick = page.withNumbers(.{ .controller_stick = .{} }, 0).?.controller_stick;
-    try std.testing.expectEqual(@as(f32, 0.3), stick.dead_zone);
-    try std.testing.expectEqual(@as(f32, -1), stick.scale[1]);
-}

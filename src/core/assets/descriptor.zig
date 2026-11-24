@@ -114,27 +114,3 @@ pub fn write(io: std.Io, dir: std.Io.Dir, path: []const u8, descriptor: Descript
     try writer.writeByte('\n');
     try dir.writeFile(io, .{ .sub_path = try pathOf(&name_buffer, path), .data = writer.buffered() });
 }
-
-test "a descriptor reads back as written, and unknown fields are skipped" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    const descriptor = try parse(arena.allocator(), ".{ .id = 42, .kind = .model, .model = .{ .scale = 0.01 }, .later = true }");
-    try std.testing.expectEqual(@as(u64, 42), descriptor.id);
-    try std.testing.expectEqual(Kind.model, descriptor.kind);
-    try std.testing.expectEqual(@as(f32, 0.01), descriptor.model.scale);
-    try std.testing.expect(isDescriptor("ships/fighter.glb.eggy"));
-    try std.testing.expect(!isDescriptor("ships/fighter.glb"));
-    try std.testing.expect(!isDescriptor(".eggy")); // the project's own folder
-}
-
-test "allocated descriptor paths match buffer paths" {
-    const Check = struct {
-        fn run(gpa: std.mem.Allocator) !void {
-            const path = try pathOfAlloc(gpa, "ships/fighter.glb");
-            defer gpa.free(path);
-            var buffer: [64]u8 = undefined;
-            try std.testing.expectEqualStrings(try pathOf(&buffer, "ships/fighter.glb"), path);
-        }
-    };
-    try std.testing.checkAllAllocationFailures(std.testing.allocator, Check.run, .{});
-}

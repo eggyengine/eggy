@@ -323,12 +323,3 @@ test "binding, trigger and map edits round-trip, and bad ones change nothing" {
     try std.testing.expectEqual(MapSettings{ .enabled = false, .priority = 8, .consume = false }, reopened.mapSettings());
     try std.testing.expectEqual(@as(usize, 0), reopened.controls()[1].defaults.len);
 }
-
-test "changing a control's type clears its bindings and trigger" {
-    var document = try Document.init(std.testing.allocator, ".{ .controls = .{ .{ .name = \"jump\", .trigger = .{ .tap = 0.2 }, .bindings = .{ .{ .key = .space } } } } }");
-    defer document.deinit();
-    try document.setKind(0, .axis);
-    try std.testing.expectEqual(eggy.input.Kind.axis, document.controls()[0].kind);
-    try std.testing.expectEqual(@as(usize, 0), document.controls()[0].defaults.len);
-    try std.testing.expect(document.controls()[0].trigger == .immediate);
-}

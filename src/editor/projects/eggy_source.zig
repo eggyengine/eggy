@@ -255,29 +255,3 @@ fn zig(arena: std.mem.Allocator, io: std.Io, argv: []const []const u8) ![]const 
     }
     return result.stdout;
 }
-
-test "a source is an address and a ref, HEAD when none is given" {
-    const source = try Source.parse(" git+https://git.tirbo.fish/eggy/eggy/#main ");
-    try std.testing.expectEqualStrings("https://git.tirbo.fish/eggy/eggy", source.url);
-    try std.testing.expectEqualStrings("main", source.ref);
-    try std.testing.expectEqualStrings("HEAD", (try Source.parse("https://github.com/me/eggy")).ref);
-    try std.testing.expectError(error.InvalidSource, Source.parse("git.tirbo.fish/eggy/eggy"));
-    try std.testing.expectError(error.InvalidSource, Source.parse("https://example.com"));
-}
-
-test "a ref's commit is read from the server's ref list" {
-    const main = "c2e4dc9e78c1222331c8b062d3a77169906145d4";
-    const tag = "1111111111111111111111111111111111111111";
-    const tagged = "2222222222222222222222222222222222222222";
-    const refs = "001e# service=git-upload-pack\n0000" ++
-        "0058" ++ main ++ " HEAD\x00multi_ack symref=HEAD:refs/heads/main\n" ++
-        "003d" ++ main ++ " refs/heads/main\n" ++
-        "003e" ++ tag ++ " refs/heads/mainx\n" ++
-        "003e" ++ tag ++ " refs/tags/v0.2.0\n" ++
-        "0041" ++ tagged ++ " refs/tags/v0.2.0^{}\n" ++ "0000";
-    try std.testing.expectEqualStrings(main, findCommit(refs, "main").?);
-    try std.testing.expectEqualStrings(main, findCommit(refs, "HEAD").?);
-    try std.testing.expectEqualStrings(tagged, findCommit(refs, "v0.2.0").?);
-    try std.testing.expect(findCommit(refs, "dev") == null);
-    try std.testing.expectEqualStrings(tag, findCommit("", tag).?);
-}

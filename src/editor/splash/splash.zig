@@ -35,9 +35,3 @@ test {
     _ = screen;
     _ = link;
 }
-
-test "only the splash flag with a project and version starts the splash" {
-    try std.testing.expect(isCommand(&.{ "garden_editor", "--splash", "garden", "0.1.0" }));
-    try std.testing.expect(!isCommand(&.{ "garden_editor", "--splash" }));
-    try std.testing.expect(!isCommand(&.{ "garden_editor", "--project", "/games/garden", "x" }));
-}

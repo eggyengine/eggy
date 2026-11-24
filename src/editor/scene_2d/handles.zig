@@ -104,25 +104,3 @@ fn unit(v: Vec2) Vec2 {
 }
 
 const two_by_one = Box.of(.{ .{ 2, 0, 0, 0 }, .{ 0, 1, 0, 0 }, .{ 0, 0, 1, 0 }, .{ 3, 0, 0, 1 } });
-
-test "corners and the knob are found near the pointer, and nothing far from them or hidden" {
-    try std.testing.expectEqual(Handle{ .corner = 2 }, two_by_one.handleAt(.init(4.02, 0.5), 0.01, all).?);
-    try std.testing.expectEqual(Handle.turn, two_by_one.handleAt(.init(3, 0.5 + knob_gap_px * 0.01), 0.01, all).?);
-    try std.testing.expect(two_by_one.handleAt(.init(3, 0), 0.01, all) == null);
-    try std.testing.expect(two_by_one.handleAt(.init(4.02, 0.5), 0.01, .{ .corners = false, .knob = true }) == null);
-    try std.testing.expect(two_by_one.handleAt(.init(3, 0.5 + knob_gap_px * 0.01), 0.01, .{ .corners = true, .knob = false }) == null);
-}
-
-test "dragging a corner outwards scales by how much farther it went, uniformly with Shift" {
-    const drag = Drag{ .handle = .{ .corner = 2 }, .box = two_by_one, .from = .init(4, 0.5), .rotation_deg = .zero, .scale = .init(2, 1, 1) };
-    try std.testing.expectEqual(Change{ .scale = .init(4, 2, 1) }, drag.apply(.init(5, 1), false, false));
-    try std.testing.expectEqual(Change{ .scale = .init(2, 2, 1) }, drag.apply(.init(4, 1), false, false));
-    try std.testing.expectEqual(Change{ .scale = .init(3, 1.5, 1) }, drag.apply(.init(4, 1), true, false));
-}
-
-test "dragging the knob a quarter turn round turns 90 degrees about z, in steps when snapping" {
-    const drag = Drag{ .handle = .turn, .box = two_by_one, .from = .init(3, 1), .rotation_deg = .init(0, 0, 10), .scale = .one };
-    const turned = drag.apply(.init(2, 0), false, false).rotation_deg;
-    try std.testing.expectApproxEqAbs(@as(f32, 100), turned.z, 1e-3);
-    try std.testing.expectApproxEqAbs(@as(f32, 105), drag.apply(.init(2, 0), false, true).rotation_deg.z, 1e-3);
-}

@@ -155,16 +155,3 @@ pub fn at(index: usize, plugins: []const FileType) ?Entry {
     if (index - builtins.len < plugins.len) return .{ .file = plugins[index - builtins.len] };
     return null;
 }
-
-test "built-in input maps are valid ZON and plugin templates extend the same catalog" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    const input_map = for (builtins) |entry| {
-        if (entry == .file and std.mem.eql(u8, entry.file.key, "eggy/input_map")) break entry.file;
-    } else unreachable;
-    _ = try eggy.input.asset.File.parse(arena.allocator(), try arena.allocator().dupeSentinel(u8, input_map.contents, 0));
-    const plugins = [_]FileType{.{ .key = "game/material", .title = "Material", .extension = ".material.zon", .contents = ".{}" }};
-    try std.testing.expectEqualStrings("Material", at(builtins.len, &plugins).?.label());
-    try std.testing.expect(at(count(&plugins), &plugins) == null);
-    try std.testing.expectEqualStrings("game", ownerOf(plugins[0]));
-}

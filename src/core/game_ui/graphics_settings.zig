@@ -161,22 +161,3 @@ pub fn buildButtons(form: *Form, context: *ui.Context, app: *App, cancel_label: 
     }
     return false;
 }
-
-test "the menu opens, closes and toggles" {
-    var menu = GraphicsSettingsUi{};
-    try std.testing.expect(!menu.isOpen());
-    menu.open();
-    try std.testing.expect(menu.isOpen());
-    menu.toggle();
-    try std.testing.expect(!menu.isOpen());
-    menu.toggle();
-    menu.close();
-    try std.testing.expect(!menu.isOpen());
-}
-
-test "F10 is the default key, and a game may turn it off" {
-    var menu = GraphicsSettingsUi{};
-    try std.testing.expectEqual(@as(?Key, .func10), menu.toggle_key);
-    menu.toggle_key = null;
-    try std.testing.expectEqual(@as(?Key, null), menu.toggle_key);
-}

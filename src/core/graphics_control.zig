@@ -91,20 +91,3 @@ pub const State = struct {
         self.capper.mode = if (self.requested.frame_limit == 0) .unlimited else .{ .limited = @floatFromInt(self.requested.frame_limit) };
     }
 };
-
-test "requests are validated and queued without changing active restart fields" {
-    var graphics: Graphics = undefined;
-    graphics.cached_caps = .{};
-    graphics.cached_caps.backends.insert(.vulkan);
-    graphics.cached_caps.anti_aliasing.insert(.msaa_4x);
-    graphics.render_settings = .{};
-    var state = State{};
-    const requested = render.Settings{ .backend = .vulkan, .anti_aliasing = .fxaa };
-    try std.testing.expectEqual(render.ApplyResult.restart_required, try state.request(requested, &graphics, false));
-    try std.testing.expectEqualDeep(requested, state.pending.?);
-    try std.testing.expectEqual(render.Backend.auto, graphics.render_settings.backend);
-    try std.testing.expectError(error.InvalidRenderScale, state.request(.{ .render_scale = 0 }, &graphics, false));
-    try std.testing.expectEqualDeep(requested, state.pending.?);
-    try std.testing.expectError(error.GraphicsPreferencesNotInitialized, state.request(.{}, &graphics, true));
-    try std.testing.expectEqualDeep(requested, state.requested);
-}

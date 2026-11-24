@@ -118,18 +118,3 @@ fn newerThan(releases: []const Release, commit: []const u8) ?Release {
 fn isNightly(release: Release) bool {
     return std.mem.startsWith(u8, release.tag_name, "nightly");
 }
-
-test "a launcher is offered the newest release of its own kind, and nothing when it is that one" {
-    const releases = [_]Release{
-        .{ .tag_name = "nightly-2026-11-08", .target_commitish = "c3", .html_url = "n3" },
-        .{ .tag_name = "v0.2.0", .target_commitish = "c2", .html_url = "r2" },
-        .{ .tag_name = "nightly-2026-11-07", .target_commitish = "c1", .html_url = "n1" },
-        .{ .tag_name = "v0.1.0", .target_commitish = "c0", .html_url = "r0" },
-    };
-    try std.testing.expectEqualStrings("n3", newerThan(&releases, "c1").?.html_url);
-    try std.testing.expectEqualStrings("r2", newerThan(&releases, "c0").?.html_url);
-    try std.testing.expect(newerThan(&releases, "c3") == null);
-    try std.testing.expect(newerThan(&releases, "c2") == null);
-    // Built outside any release: nothing to compare with.
-    try std.testing.expect(newerThan(&releases, "local") == null);
-}

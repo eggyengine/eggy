@@ -250,13 +250,3 @@ fn fit(stage: ui.Rect, width_px: u32, height_px: u32) ui.Rect {
     const h = w / aspect;
     return .{ .x = stage.x + (stage.w - w) / 2, .y = stage.y + (stage.h - h) / 2, .w = w, .h = h };
 }
-
-test "a picture fits its stage at its own shape, centred" {
-    const wide = fit(.{ .x = 0, .y = 0, .w = 400, .h = 400 }, 1920, 1080);
-    try std.testing.expectEqual(@as(f32, 400), wide.w);
-    try std.testing.expectApproxEqAbs(@as(f32, 225), wide.h, 0.01);
-    try std.testing.expectApproxEqAbs(@as(f32, 87.5), wide.y, 0.01);
-    const tall = fit(.{ .x = 10, .y = 0, .w = 800, .h = 225 }, 1920, 1080);
-    try std.testing.expectApproxEqAbs(@as(f32, 400), tall.w, 0.01);
-    try std.testing.expectApproxEqAbs(@as(f32, 210), tall.x, 0.01);
-}

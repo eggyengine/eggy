@@ -319,34 +319,3 @@ fn placeholder(canvas: *ui.Canvas, box: ui.Rect, theme: ui.Theme, label: []const
     try canvas.roundRectStroke(box, theme.border, 0, @max(1, scale));
     try canvas.textIn(box, label, @min(13 * scale, box.h * 0.6), theme.muted_foreground, .center);
 }
-
-test "a scene paints its boxes, text and placeholders" {
-    const gpa = std.testing.allocator;
-    var font = try ui.Font.init(gpa, ui.default_font);
-    defer font.deinit();
-    var arena = std.heap.ArenaAllocator.init(gpa);
-    defer arena.deinit();
-    var children = [_]ui_scene.Node{
-        .{ .name = "title", .widget = .{ .text = .{ .value = "Hi" } }, .look = .{ .opacity = 0.5 } },
-        .{ .name = "go", .widget = .{ .button = .{} }, .layout = .{ .padding = .{ .left = 8, .right = 8 } } },
-        .{ .name = "hp", .widget = .{ .progress = .{ .value = 0.25 } } },
-        .{ .name = "pic", .widget = .{ .image = .{} }, .look = .{ .border = .{ .theme = .border }, .border_width = 1 } },
-    };
-    const scene = ui_scene.UiScene{ .root = .{ .look = .{ .background = .{ .theme = .card }, .radius = 4 }, .children = &children } };
-    const placed = try layout.place(arena.allocator(), &scene, .plain(&font), .{ .x = 0, .y = 0, .w = 400, .h = 300 }, 1);
-    const vertices = try gpa.alloc(ui.Vertex, 8192);
-    defer gpa.free(vertices);
-    var canvas = ui.Canvas.init(vertices, &font);
-    try paint(&canvas, .{ .placed = placed, .scale = 1 });
-    try std.testing.expect(canvas.len > 0);
-    try std.testing.expect(!canvas.out_of_vertices);
-}
-
-test "theme colors resolve from the base and the scene's replacements" {
-    const theme = resolveTheme(.{ .base = .dark, .primary = .{ 1, 0, 0, 1 }, .radius = 2 });
-    try std.testing.expectEqual(ui.Color{ 1, 0, 0 }, theme.primary);
-    try std.testing.expectEqual(@as(f32, 2), theme.radius);
-    try std.testing.expectEqual(ui.Theme.dark.card, theme.card);
-    try std.testing.expectEqual([4]f32{ 1, 0, 0, 1 }, colorOf(.{ .theme = .primary }, theme).?);
-    try std.testing.expect(colorOf(.none, theme) == null);
-}

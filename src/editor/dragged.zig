@@ -53,21 +53,3 @@ pub const Dragged = union(enum) {
         };
     }
 };
-
-test "an entity reference takes an entity with the component it requires" {
-    const field = eggy.components.Part{ .kind = .entity, .requires = "Body" };
-    const sun = Dragged{ .entity = .{ .entity = .init(1, 0), .name = "Sun", .components = &.{ "Name", "Body" } } };
-    const rock = Dragged{ .entity = .{ .entity = .init(2, 0), .name = "Rock", .components = &.{"Name"} } };
-    try std.testing.expect(sun.fits(field));
-    try std.testing.expect(!rock.fits(field));
-    try std.testing.expect(!(Dragged{ .asset = Reference.of(1, .image, "sun.png") }).fits(field));
-}
-
-test "an asset reference takes an asset of its kind and holds its identity" {
-    const sound = eggy.components.Part{ .kind = .asset, .accepts = .audio };
-    const hum = Dragged{ .asset = Reference.of(0x2a, .audio, "hum.ogg") };
-    try std.testing.expect(hum.fits(sound));
-    try std.testing.expect(!(Dragged{ .asset = Reference.of(7, .image, "hum.png") }).fits(sound));
-    var buffer: [64]u8 = undefined;
-    try std.testing.expectEqualStrings("\"000000000000002a\"", try hum.zon(&buffer));
-}

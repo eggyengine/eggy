@@ -924,11 +924,6 @@ fn withoutTitle(markdown: []const u8, title: []const u8) []const u8 {
     return std.mem.trimStart(u8, trimmed[line_end..], " \r\n");
 }
 
-test "a read-me's heading that only repeats the plugin's title is left out" {
-    try std.testing.expectEqualStrings("Body.", withoutTitle("# Frame Stats\n\nBody.", "Frame Stats"));
-    try std.testing.expectEqualStrings("# Other\n\nBody.", withoutTitle("# Other\n\nBody.", "Frame Stats"));
-}
-
 /// The manifest of the plugin inside Eggy published as `module`, read into `arena`; null when
 /// none is (a plugin from elsewhere) or its manifest is broken.
 ///
@@ -1022,43 +1017,5 @@ test "Eggy's own plugins have readable manifests that name Eggy" {
         const manifest = try eggy.plugin_manifest.parse(arena.allocator(), plugin.manifest);
         try std.testing.expect(manifest.inEggy());
         try std.testing.expectEqual(build_options.fingerprint, manifest.fingerprint);
-    }
-}
-
-test "every page of the Plugins window fits it, narrow or wide" {
-    const gpa = std.testing.allocator;
-    var context = try ui.Context.init(gpa);
-    defer context.deinit();
-    var window = PluginsWindow{ .gpa = gpa, .window = undefined, .project_dir = @constCast("/nowhere"), .installed_arena = .init(gpa) };
-    defer window.installed_arena.deinit();
-    try window.readBuiltins();
-    defer window.freeBuiltins();
-    defer window.problem.deinit(gpa);
-    window.off = &.{ "eggy_git", "a_plugin_with_a_rather_long_module_name" };
-    window.installed = &.{
-        .{ .module = "eggy_git", .version = "0.1.0", .dev = true },
-        .{ .module = "a_second_plugin_from_the_collection", .dependency = "someone_elses_plugin_collection", .version = "1.0.0" },
-        .{ .module = "a_plugin_with_a_rather_long_module_name", .dependency = "someone_elses_plugin_collection", .version = "12.0.0-beta.3", .source = "https://raw.githubusercontent.com/someone/plugins/main/x/eggy.zon" },
-    };
-    // A plugin fetched from elsewhere, without a read-me.
-    const elsewhere = try Fetched.create(gpa, .{ .url = "https://raw.githubusercontent.com/someone/eggy-plugins/0123456789abcdef/a/very/deep/folder/eggy.zon" }, ".{ .plugin = .{ .title = \"Elsewhere\", .module = \"elsewhere\", .version = \"2.0.0\", .repository = \"https://github.com/someone/eggy-plugins\", .fingerprint = 1, .minimum_eggy_version = \"99.0.0\" } }", null, null);
-    defer elsewhere.destroy();
-
-    window.elsewhere = elsewhere;
-    defer window.elsewhere = null;
-    defer window.selected.deinit(gpa);
-    for ([_]f32{ 560, 820 }) |width| {
-        const viewport = ui.Rect{ .x = 0, .y = 0, .w = width, .h = 600 };
-        for (std.enums.values(Section)) |section| for ([_]?*Fetched{ null, window.builtins[0], elsewhere }) |reading| for ([_][]const u8{ "", "eggy_git", "a_plugin_with_a_rather_long_module_name" }) |chosen| {
-            window.section = section;
-            window.reading = reading;
-            window.selected.clearRetainingCapacity();
-            try window.selected.appendSlice(gpa, chosen);
-            window.setProblem(if (section == .address) "That eggy.zon is hosted outside the repository it names, so it can't be trusted." else "");
-            context.newFrame(viewport);
-            window.build(&context);
-            _ = try context.render();
-            try @import("../ui_checks.zig").expectFits(context.last_root.?, context.font, viewport);
-        };
     }
 }

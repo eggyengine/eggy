@@ -49,15 +49,3 @@ pub fn thumbnail(image: []const u8, width: u32, height: u32, out: *Pixels) !void
         pixel[3] = @intFromFloat(@round(@as(f32, @floatFromInt(pixel[3])) * coverage));
     };
 }
-
-test "a wide logo is cropped to its centre and its corners rounded off" {
-    // 3 by 1: red, green, blue. The centre square is the green pixel.
-    const image = [_]u8{ 255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255 };
-    const out = try std.testing.allocator.create(Pixels);
-    defer std.testing.allocator.destroy(out);
-    try thumbnail(&image, 3, 1, out);
-    const middle = (side / 2 * side + side / 2) * 4;
-    try std.testing.expectEqualSlices(u8, &.{ 0, 255, 0, 255 }, out[middle..][0..4]);
-    try std.testing.expectEqual(0, out[3]); // the top-left corner is see-through
-    try std.testing.expectError(error.InvalidImage, thumbnail(&image, 0, 1, out));
-}

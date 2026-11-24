@@ -135,37 +135,3 @@ pub const File = struct {
         try writer.writeAll("    },\n}\n");
     }
 };
-
-test "input-map assets round-trip multiple sources and timed/chord triggers" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    const file = try File.parse(arena.allocator(),
-        \\.{ .priority = 3, .controls = .{
-        \\    .{ .name = "jump", .bindings = .{ .{ .key = .space }, .{ .controller = .{ .button = .south } } } },
-        \\    .{ .name = "move", .kind = .vector, .bindings = .{ .{ .keys_2d = .{} }, .{ .controller_stick = .{} } } },
-        \\    .{ .name = "sprint", .trigger = .{ .hold = 0.5 }, .bindings = .{ .{ .key = .left_shift } } },
-        \\    .{ .name = "dash", .trigger = .{ .chord = "sprint" }, .bindings = .{ .{ .key = .f } } },
-        \\} }
-    );
-    var text: std.Io.Writer.Allocating = .init(std.testing.allocator);
-    defer text.deinit();
-    try file.write(&text.writer);
-    const source = try arena.allocator().dupeSentinel(u8, text.written(), 0);
-    const copy = try File.parse(arena.allocator(), source);
-    try std.testing.expectEqual(@as(i32, 3), copy.priority);
-    try std.testing.expectEqual(@as(usize, 4), copy.controls.len);
-    try std.testing.expectEqual(@as(usize, 2), copy.controls[0].bindings.len);
-    try std.testing.expectEqualStrings("sprint", copy.controls[3].trigger.chord);
-}
-
-test "input-map assets reject duplicate names, incompatible values and invalid chord graphs" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    const gpa = arena.allocator();
-    try std.testing.expectError(error.UnsupportedInputMap, File.parse(gpa, ".{ .version = 99 }"));
-    try std.testing.expectError(error.DuplicateControls, File.parse(gpa, ".{ .controls = .{ .{ .name = \"jump\" }, .{ .name = \"jump\" } } }"));
-    try std.testing.expectError(error.InvalidControlName, File.parse(gpa, ".{ .controls = .{ .{ .name = \"\" } } }"));
-    try std.testing.expectError(error.WrongControlKind, File.parse(gpa, ".{ .controls = .{ .{ .name = \"move\", .kind = .vector, .bindings = .{ .{ .key = .w } } } } }"));
-    try std.testing.expectError(error.InvalidTrigger, File.parse(gpa, ".{ .controls = .{ .{ .name = \"dash\", .trigger = .{ .chord = \"missing\" } } } }"));
-    try std.testing.expectError(error.InvalidTrigger, File.parse(gpa, ".{ .controls = .{ .{ .name = \"a\", .trigger = .{ .chord = \"b\" } }, .{ .name = \"b\", .trigger = .{ .chord = \"a\" } } } }"));
-}

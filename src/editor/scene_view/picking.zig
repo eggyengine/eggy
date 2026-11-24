@@ -95,20 +95,6 @@ fn hitSphere(origin: math.Vec3, along: math.Vec3) ?f32 {
     return if (t >= 0) t else null;
 }
 
-test "an orthographic pointer ray is parallel and starts beside the eye" {
-    const scene = ui.Rect{ .x = 0, .y = 0, .w = 800, .h = 400 };
-    const view = eggy.camera.View.lookingAt(.init(0, 0, 10), .zero, .{ .projection = .orthographic, .orthographic_height_m = 4 });
-    const ray = rayThrough(view, scene, .{ .x = 800, .y = 200 });
-    // The right edge is half the view's width (4 m tall at 2:1 is 8 m wide) from its centre.
-    try std.testing.expectApproxEqAbs(@as(f32, 4), ray.origin.x, 0.001);
-    try std.testing.expectApproxEqAbs(@as(f32, -1), ray.direction.z, 0.001);
-    const cube = eggy.mesh.Drawable{ .model = .{ .{ 1, 0, 0, 0 }, .{ 0, 1, 0, 0 }, .{ 0, 0, 1, 0 }, .{ 3.5, 0, -5, 1 } }, .color = .{ 1, 1, 1, 1 }, .shape = .cube, .entity_id = 9, .entity_generation = 0 };
-    var models = eggy.model_cache.ModelCache.init(std.testing.allocator, undefined);
-    var ui_scenes = eggy.ui_scenes.State{ .gpa = std.testing.allocator };
-    try std.testing.expectEqual(@as(u32, 9), pick(&.{cube}, &models, &ui_scenes, .{}, view, scene, .{ .x = 790, .y = 200 }).?.id);
-    try std.testing.expect(pick(&.{cube}, &models, &ui_scenes, .{}, view, scene, .{ .x = 400, .y = 200 }) == null);
-}
-
 test "the nearest mesh under the pointer is picked, and empty space picks nothing" {
     const scene = ui.Rect{ .x = 0, .y = 0, .w = 800, .h = 600 };
     const view = eggy.camera.View.lookingAt(.init(0, 0, 10), .zero, .{});

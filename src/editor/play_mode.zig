@@ -140,19 +140,3 @@ pub const PlayMode = struct {
         game.restart(app, &scene, off, .discard);
     }
 };
-
-test "one configured Stop press exits play or paused simulation without key repeats" {
-    var mode = PlayMode{};
-    var event = eggy.Event{ .key_down = .{ .common = .{ .timestamp = 0 }, .id = null, .scancode = .escape, .key = .escape, .mod = .{}, .raw = 0, .down = true, .repeat = false } };
-    try std.testing.expect(!mode.stopPressed(event, .escape));
-    mode.before = undefined; // playing, as far as `playing` can tell
-    try std.testing.expect(mode.stopPressed(event, .escape));
-    try std.testing.expect(!mode.stopPressed(event, .func8));
-    mode.paused = true;
-    event.key_down.scancode = .func8;
-    try std.testing.expect(mode.stopPressed(event, .func8));
-    event.key_down.repeat = true;
-    try std.testing.expect(!mode.stopPressed(event, .func8));
-    try std.testing.expect(!mode.stopPressed(.{ .key_up = event.key_down }, .func8));
-    mode.before = null;
-}

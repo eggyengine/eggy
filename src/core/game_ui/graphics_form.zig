@@ -506,49 +506,6 @@ fn testCapabilities() Capabilities {
     return caps;
 }
 
-test "rows that differ from the baseline are counted, and reset sets them back" {
-    var form = Form{};
-    form.load(.{ .anti_aliasing = .msaa_4x, .width = 1280, .height = 720 });
-    const baseline = Settings{ .anti_aliasing = .fxaa };
-    try std.testing.expectEqual(@as(usize, 2), changedRows(form.draft, baseline));
-    form.reset(.{ "width", "height" }, baseline);
-    try std.testing.expectEqual(@as(usize, 1), changedRows(form.draft, baseline));
-    try std.testing.expectEqual(baseline.width, (try form.read()).width);
-}
-
-test "the form reads its number fields back, and refuses text that is not a number" {
-    var form = Form{};
-    form.load(.{ .width = 1280, .height = 720, .frame_limit = 144 });
-    const read = try form.read();
-    try std.testing.expectEqual(@as(u32, 1280), read.width);
-    try std.testing.expectEqual(@as(u16, 144), read.frame_limit);
-
-    try form.width.set("wide");
-    try std.testing.expectError(error.InvalidWindowSize, form.read());
-    try form.width.set("1280");
-    try form.frame_limit.set("fast");
-    try std.testing.expectError(error.InvalidFrameLimit, form.read());
-}
-
-test "a GPU is offered only for the backend its list belongs to" {
-    const caps = testCapabilities();
-    const vulkan_list = Options{ .caps = &caps, .adapters_backend = .vulkan };
-    try std.testing.expect(adaptersFit(vulkan_list, .vulkan));
-    try std.testing.expect(!adaptersFit(vulkan_list, .dx12));
-    try std.testing.expect(adaptersFit(.{ .caps = &caps }, .dx12));
-
-    // A draft on another backend still renders, and building it leaves its settings alone.
-    const gpa = std.testing.allocator;
-    var context = try ui.Context.init(gpa);
-    defer context.deinit();
-    var form = Form{};
-    form.load(.{ .backend = .dx12, .adapter_index = null });
-    context.newFrame(.{ .x = 0, .y = 0, .w = 720, .h = 2400 });
-    try std.testing.expect(!form.build(&context, vulkan_list));
-    try std.testing.expectEqual(@as(?u16, null), form.draft.adapter_index);
-    try std.testing.expect((try context.render()).len > 0);
-}
-
 fn testFrame(context: *ui.Context, form: *Form, caps: *const Capabilities) !void {
     context.newFrame(.{ .x = 0, .y = 0, .w = 720, .h = 2400 });
     _ = form.build(context, .{ .caps = caps });

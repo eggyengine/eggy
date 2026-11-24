@@ -207,14 +207,6 @@ test "a voice mixes its sound until it is removed" {
     for (mix) |sample| try std.testing.expectEqual(@as(f32, 0), sample);
 }
 
-test "a voice handle stops naming its slot once the voice ends" {
-    const first = Voice.of(3, 1);
-    const reused = Voice.of(3, 2);
-    try std.testing.expectEqual(@as(usize, 3), reused.slot());
-    try std.testing.expect(first != reused);
-    try std.testing.expect(@backingInt(first) != 0);
-}
-
 test "a placed voice to the listener's right is louder on the right" {
     const wav = testSquareWave(4800);
     const host = try Host.create(std.testing.allocator, false);

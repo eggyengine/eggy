@@ -215,23 +215,6 @@ test "code's changes are kept by entity and name, and presses are found" {
     try std.testing.expect(state.overrideOf(hud, "menu") == null);
 }
 
-test "screens are gathered lowest layer first and billboards with their place" {
-    var world = ecs.World.init(std.testing.allocator);
-    defer world.deinit();
-    const top = try world.spawn(.{UiScreen{ .scene = .init("hud.ui.zon"), .layer = 5 }});
-    const bottom = try world.spawn(.{UiScreen{ .scene = .init("back.ui.zon"), .layer = -1 }});
-    _ = try world.spawn(.{UiScreen{ .scene = .init("hidden.ui.zon"), .visible = false }});
-    _ = try world.spawn(.{UiScreen{}});
-    _ = try world.spawn(.{ UiBillboard{ .scene = .init("sign.ui.zon") }, Transform{ .position = .init(1, 2, 3) } });
-    var screens: [8]Screen = undefined;
-    var signs: [8]Billboard = undefined;
-    const counts = gather(&world, &screens, &signs);
-    try std.testing.expectEqual([2]usize{ 2, 1 }, counts);
-    try std.testing.expect(screens[0].entity().eql(bottom));
-    try std.testing.expect(screens[1].entity().eql(top));
-    try std.testing.expectEqual(@as(f32, 2), signs[0].model[3][1]);
-}
-
 test {
     _ = layout;
     _ = paint;

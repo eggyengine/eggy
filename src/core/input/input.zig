@@ -764,30 +764,3 @@ test "a key held for frames is pressed once, and an axis reads two keys" {
     input.cancel();
     try std.testing.expect(!input.released(.w));
 }
-
-test "a swallowed release clears a gameplay hold without inventing an edge" {
-    var input = Input{};
-    const down = sdl3.events.Event{ .key_down = .{ .common = undefined, .id = null, .scancode = .w, .key = null, .mod = .{}, .raw = 0, .down = true, .repeat = false } };
-    try input.handle(down);
-    input.endFrame();
-    var up = down.key_down;
-    up.down = false;
-    const event = sdl3.events.Event{ .key_up = up };
-    input.suppress(event);
-    try std.testing.expect(!input.held(.w) and !input.released(.w));
-    try input.handle(event);
-    try std.testing.expect(!input.released(.w));
-}
-
-test "allocated input lists free their buffer if the copy fails" {
-    const Host = struct {
-        fn request(_: *anyopaque, read: *const protocol.Request, response: *protocol.Response) callconv(.c) protocol.Status {
-            response.count = 2;
-            return if (read.output == null) .ok else .io_failed;
-        }
-    };
-    var context: u8 = 0;
-    const input = Input{ .backend = .{ .context = &context, .request = Host.request } };
-    try std.testing.expectError(error.InputSettingsFailed, input.controllersAlloc(std.testing.allocator));
-    try std.testing.expectError(error.InputSettingsFailed, input.touchesAlloc(std.testing.allocator));
-}

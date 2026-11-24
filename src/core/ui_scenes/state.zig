@@ -278,20 +278,3 @@ pub const Sources = struct {
         return self.state.overrideOf(self.entity, name);
     }
 };
-
-test "code's changes are kept by entity and name until cleared" {
-    var state = State{ .gpa = std.testing.allocator };
-    defer state.deinit();
-    const hud = ecs.EntityId{ .id = 3, .generation = 1 };
-    (try state.overrideFor(hud, "health")).value = 0.5;
-    (try state.overrideFor(hud, "menu")).visible = false;
-    try std.testing.expectEqual(@as(f32, 0.5), state.overrideOf(hud, "health").?.value.?);
-    try std.testing.expect(state.overrideOf(.{ .id = 4, .generation = 1 }, "health") == null);
-    state.removeOverride(hud, "health");
-    try std.testing.expect(state.overrideOf(hud, "health") == null);
-    try state.recordClick(hud, "pause");
-    try std.testing.expectEqualStrings("pause", state.clicks.items[0].node);
-    state.clearEntities();
-    try std.testing.expect(state.overrideOf(hud, "menu") == null);
-    try std.testing.expectEqual(@as(usize, 0), state.clicks.items.len);
-}

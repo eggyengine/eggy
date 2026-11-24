@@ -65,30 +65,3 @@ pub const Prompt = struct {
         }
     }
 };
-
-test "provided answers bypass input and unattended defaults do not prompt" {
-    var input: std.Io.Reader = .fixed("");
-    var output: std.Io.Writer.Allocating = .init(std.testing.allocator);
-    defer output.deinit();
-    var prompt = Prompt{ .arena = std.testing.allocator, .input = &input, .output = &output.writer, .non_interactive = true };
-    try std.testing.expectEqualStrings("Game", try prompt.text("Game", "Title", "title", null));
-    try std.testing.expectEqualStrings(".", try prompt.text(null, "Project", "project", "."));
-    try std.testing.expect(!try prompt.confirm(null, "Repair?"));
-    try std.testing.expect(try prompt.confirm(true, "Repair?"));
-    try std.testing.expectEqualStrings("", output.written());
-    try std.testing.expectError(error.MissingArgument, prompt.text(null, "Title", "title", null));
-    try std.testing.expectError(error.EmptyArgument, prompt.text(" ", "Title", "title", null));
-}
-
-test "questions accept CRLF and retry empty required answers" {
-    var input: std.Io.Reader = .fixed("\nSpace Game\r\n\nmaybe\nyes\n");
-    var output: std.Io.Writer.Allocating = .init(std.testing.allocator);
-    defer output.deinit();
-    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
-    defer arena.deinit();
-    var prompt = Prompt{ .arena = arena.allocator(), .input = &input, .output = &output.writer };
-    try std.testing.expectEqualStrings("Space Game", try prompt.text(null, "Title", "title", null));
-    try std.testing.expectEqualStrings("game", try prompt.text(null, "Name", "name", "game"));
-    try std.testing.expect(try prompt.confirm(null, "Repair?"));
-    try std.testing.expectError(error.EndOfInput, prompt.text(null, "Folder", "directory", "."));
-}

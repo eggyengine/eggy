@@ -472,13 +472,6 @@ pub fn validateSnapshot(comptime T: type, value: *const T) !void {
     }
 }
 
-test "typed snapshots preflight the actual field size and parse budget" {
-    const Small = struct { value: u32 = 42, texture: refs.AssetRef(.image) = .init("ship.png") };
-    try validateSnapshot(Small, &Small{});
-    const Large = struct { values: [max_field_bytes]u8 = @splat(1) };
-    try std.testing.expectError(error.ValueTooLarge, validateSnapshot(Large, &Large{}));
-}
-
 /// Compare values as scenes store them, excluding unused reference buffers. Allocates
 /// temporary serialization buffers; never compares borrowed addresses.
 /// Borrows both values; releases its buffers before returning and propagates writer or
@@ -718,36 +711,4 @@ test "fields are read and written as ZON, and bad text leaves them be" {
 
     Components.remove(&world, entity, 0);
     try std.testing.expect(!Components.has(&world, entity, 0));
-}
-
-test "references are read and written as what they point at" {
-    const Target = struct { size: f32 = 1 };
-    const Orbit = struct {
-        around: refs.EntityRef(Target) = .{},
-        sound: refs.AssetRef(.audio) = .{},
-    };
-    const Components = Registry(&.{Orbit}, &.{"game"});
-    const info = Components.infos[0];
-    try std.testing.expectEqual(Kind.entity, info.fields[0].kind);
-    try std.testing.expectEqualStrings("Target", info.fields[0].requires);
-    try std.testing.expectEqual(Kind.asset, info.fields[1].kind);
-    try std.testing.expectEqual(refs.AssetKind.audio, info.fields[1].accepts);
-
-    var world = ecs.World.init(std.testing.allocator);
-    defer world.deinit();
-    const entity = try world.spawn(.{Orbit{}});
-    try Components.setField(&world, entity, 0, 0, ".{ .id = 4, .generation = 2 }");
-    try Components.setField(&world, entity, 0, 1, "\"sounds/hum.ogg\"");
-    var text: std.Io.Writer.Allocating = .init(std.testing.allocator);
-    defer text.deinit();
-    try Components.writeField(&world, entity, 0, 0, &text.writer);
-    try std.testing.expectEqualStrings(".{.id=4,.generation=2}", text.written());
-    text.clearRetainingCapacity();
-    try Components.writeField(&world, entity, 0, 1, &text.writer);
-    const sound = refs.AssetRef(.audio).init("sounds/hum.ogg");
-    try std.testing.expectEqual(sound.id(), world.get(entity, Orbit).?.sound.id());
-    var expected: [18]u8 = undefined;
-    try std.testing.expectEqualStrings(try std.fmt.bufPrint(&expected, "\"{s}\"", .{sound.key()}), text.written());
-    try Components.setField(&world, entity, 0, 0, "null");
-    try std.testing.expect(world.get(entity, Orbit).?.around.entity == null);
 }

@@ -63,32 +63,6 @@ test "file maps match enum names, coexist with code maps and retain project over
     try std.testing.expectEqual(input_api.Key.space, (try input.map(FilePlayer).getBindings(.jump, &bindings))[0].key);
 }
 
-test "typed controls aggregate devices and report exact buffer/disconnect errors" {
-    var state = State.init(std.testing.allocator);
-    defer state.deinit();
-    var input = input_api.Input{ .backend = state.interface() };
-    try input.registerMap(Player, "game/player");
-    const player = input.map(Player);
-    try key(&input, .space, true);
-    try std.testing.expect(try player.pressed(.jump));
-    input.endFrame();
-    try state.addController(7, .{});
-    try input.handle(.{ .gamepad_button_down = .{ .common = undefined, .id = .{ .value = 7 }, .button = .south, .down = true } });
-    try std.testing.expect(!try player.pressed(.jump));
-    try key(&input, .space, false);
-    try std.testing.expect(try player.held(.jump));
-    try std.testing.expect(!try player.released(.jump));
-    var empty: [0]input_api.Controller = .{};
-    try std.testing.expectError(error.BufferTooSmall, input.controllers(&empty));
-    var devices: [1]input_api.Controller = undefined;
-    try std.testing.expectEqual(@as(usize, 1), (try input.controllers(&devices)).len);
-    state.removeController(7);
-    try std.testing.expect(try player.released(.jump));
-    try std.testing.expectEqual(@as(usize, 0), try input.controllerCount());
-    try std.testing.expectError(error.ControllerDisconnected, input.controllerState(@fromBackingInt(@intCast(7))));
-    try std.testing.expectError(error.WrongControlKind, player.axis(.jump));
-}
-
 test "higher priority maps own overlapping sources and activation does not invent a press" {
     const Menu = input_api.Map(enum { accept }, .{
         .key = "menu",

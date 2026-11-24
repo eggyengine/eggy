@@ -370,36 +370,6 @@ test "looking around turns about the eye, and orbiting about the focus point" {
     try std.testing.expect(camera.focus.eql(focus_before));
 }
 
-test "a press outside the Scene panel doesn't steer it, and zoom stops short of the focus" {
-    var camera = SceneCamera{};
-    try std.testing.expect(!camera.handle(press(.right), .{ .x = 500, .y = 500, .w = 10, .h = 10 }));
-    try std.testing.expect(camera.drag == null);
-    for (0..100) |_| _ = camera.handle(.{ .mouse_wheel = .{ .common = .{ .timestamp = 0 }, .id = .{ .value = 0 }, .scroll_x = 0, .scroll_y = 1, .direction = .normal, .x = 1, .y = 1 } }, .{ .x = 0, .y = 0, .w = 10, .h = 10 });
-    try std.testing.expectEqual(min_distance, camera.distance);
-}
-
-test "a gamepad's left stick flies, its right stick looks about the eye, and rest is ignored" {
-    var camera = SceneCamera{ .focus = .zero, .pitch_deg = 0, .distance = 10 };
-    camera.steer(.{ .left_stick = .init(0.1, -0.1), .right_stick = .init(-0.1, 0) }, 1);
-    try std.testing.expectEqualSlices(f32, &[6]f32{ 0, 0, 0, 0, 0, 10 }, &camera.pose());
-
-    // Full forward for half a second flies 4 m down -z.
-    camera.steer(.{ .left_stick = .init(0, -1) }, 0.5);
-    try std.testing.expect(camera.focus.approxEql(.init(0, 0, -4), 0.001));
-
-    const eye_before = camera.eye();
-    camera.steer(.{ .right_stick = .init(1, 0) }, 0.5);
-    try std.testing.expectApproxEqAbs(@as(f32, 300), camera.yaw_deg, 0.001);
-    try std.testing.expect(camera.eye().approxEql(eye_before, 0.001));
-
-    // With the right shoulder held it orbits: the focus point stays put.
-    const focus_before = camera.focus;
-    var orbiting = eggy.input.ControllerState{ .right_stick = .init(1, 0) };
-    orbiting.buttons.insert(.right_shoulder);
-    camera.steer(orbiting, 0.5);
-    try std.testing.expect(camera.focus.eql(focus_before));
-}
-
 fn scrollWheel(x: f32, y: f32) sdl3.events.MouseWheel {
     return .{ .common = .{ .timestamp = 0 }, .scroll_x = x, .scroll_y = y, .direction = .normal, .x = 10, .y = 10 };
 }

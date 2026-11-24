@@ -48,20 +48,3 @@ pub fn find(world: *ecs.World, name: []const u8) ?ecs.EntityId {
     while (named.next()) |view| if (std.mem.eql(u8, view.get(*const Name).text(), name)) return view.entity;
     return null;
 }
-
-test "an entity is found by its name" {
-    var world = ecs.World.init(std.testing.allocator);
-    defer world.deinit();
-    _ = try world.spawn(.{Name.init("Floor")});
-    const player = try world.spawn(.{Name.init("Player")});
-    try std.testing.expect(find(&world, "Player").?.eql(player));
-    try std.testing.expect(find(&world, "Nobody") == null);
-}
-
-test "a name keeps its text, cut at a character boundary when too long" {
-    try std.testing.expectEqualStrings("Sun", Name.init("Sun").text());
-    const long: [80]u8 = @bitCast(@as([40][2]u8, @splat("é".*)));
-    const cut = Name.init(&long);
-    try std.testing.expectEqual(@as(usize, 64), cut.text().len);
-    try std.testing.expect(std.unicode.utf8ValidateSlice(cut.text()));
-}

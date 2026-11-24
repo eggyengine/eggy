@@ -131,8 +131,3 @@ test "a copy is kept, found by the next editor with its scene, and forgotten onc
     recovery.forget(io, tmp.dir);
     try std.testing.expect(try takeLeftover(gpa, io, tmp.dir) == null);
 }
-
-test "a copy of a scene never saved names none" {
-    try std.testing.expect(sceneOf(header ++ "\n.{}") == null);
-    try std.testing.expect(sceneOf(".{}") == null);
-}

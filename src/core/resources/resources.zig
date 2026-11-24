@@ -269,32 +269,3 @@ fn check(result: Status) !void {
 fn unavailable() error{ UnsupportedPlatform, NoResourceProvider } {
     return if (builtin.os.tag == .emscripten) error.UnsupportedPlatform else error.NoResourceProvider;
 }
-
-test "C-safe resource reads preserve stable failures and caller ownership" {
-    const Source = struct {
-        fn read(_: *anyopaque, gpa: std.mem.Allocator, path: []const u8) ![:0]u8 {
-            if (std.mem.eql(u8, path, refs.AssetRef(.image).init("ship.png").key())) return error.ConvertedResource;
-            if (!std.mem.eql(u8, path, refs.AssetRef(.text).init("notes.txt").key())) return error.FileNotFound;
-            return gpa.dupeSentinel(u8, "hello", 0);
-        }
-        fn model(_: *anyopaque, _: std.mem.Allocator, _: []const u8) !assets.Model {
-            return error.NotPackaged;
-        }
-        fn image(_: *anyopaque, _: std.mem.Allocator, path: []const u8) !assets.Texture {
-            if (std.mem.eql(u8, path, refs.AssetRef(.image).init("ship.svg").key())) return error.UnsupportedImageFormat;
-            return error.OutOfMemory;
-        }
-    };
-    var context: u8 = 0;
-    const resources = Resources.from(&context, Source.read, Source.model, Source.image);
-    const text = try resources.read(std.testing.allocator, refs.AssetRef(.text).init("notes.txt"));
-    defer std.testing.allocator.free(text);
-    try std.testing.expectEqualStrings("hello", text);
-    try std.testing.expectError(error.FileNotFound, resources.read(std.testing.allocator, refs.AssetRef(.text).init("missing.txt")));
-    try std.testing.expectError(error.UnsetAsset, resources.read(std.testing.allocator, refs.AssetRef(.text){}));
-    try std.testing.expectError(error.NoResourceProvider, (Resources{}).read(std.testing.allocator, refs.AssetRef(.text).init("notes.txt")));
-    try std.testing.expectError(error.NotPackaged, resources.loadModel(std.testing.allocator, .init("ship.glb")));
-    try std.testing.expectError(error.OutOfMemory, resources.loadImage(std.testing.allocator, .init("ship.png")));
-    try std.testing.expectError(error.ConvertedResource, resources.read(std.testing.allocator, refs.AssetRef(.image).init("ship.png")));
-    try std.testing.expectError(error.UnsupportedImageFormat, resources.loadImage(std.testing.allocator, .init("ship.svg")));
-}

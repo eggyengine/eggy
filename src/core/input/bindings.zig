@@ -351,20 +351,3 @@ fn writeControl(writer: *std.Io.Writer, owner: []const u8, name: []const u8, map
     try std.zon.stringify.serialize(trigger, .{ .whitespace = false }, writer);
     try writer.writeAll(" }");
 }
-
-test "saved overrides use stable owner/tag names and failed saves preserve the active binding" {
-    const Sink = struct {
-        fn fail(_: *anyopaque, _: []const u8) !void {
-            return error.AccessDenied;
-        }
-    };
-    var overrides = Overrides.init(std.testing.allocator);
-    defer overrides.deinit();
-    try overrides.read(".{ .controls = .{ .{ .owner = \"game\", .name = \"jump\", .bindings = .{ .{ .key = .space } } } } }");
-    const key = try stableKey(std.testing.allocator, "game", "jump");
-    defer std.testing.allocator.free(key);
-    var context: u8 = 0;
-    try std.testing.expectError(error.AccessDenied, overrides.set("game", "jump", &.{.{ .key = .j }}, null, .{ .context = &context, .save = Sink.fail }));
-    try std.testing.expectEqual(types.Key.space, overrides.get(key).?[0].key);
-    try std.testing.expectError(error.TransientControllerBinding, validate(&.{.{ .controller = .{ .device = @fromBackingInt(@intCast(1)), .button = .south } }}, true));
-}

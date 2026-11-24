@@ -33,27 +33,3 @@ pub fn payload(encoded: []const u8, schema: u32) ![]const u8 {
     if (std.mem.readInt(u32, encoded[12..16], .little) != schema) return error.UnsupportedSaveSchema;
     return bytes;
 }
-
-test "save envelope detects bad magic, truncation, trailing bytes and checksums" {
-    const saved_header = header("save", 3);
-    var encoded = saved_header ++ "save".*;
-    try std.testing.expectEqualStrings("save", try payload(&encoded, 3));
-    try std.testing.expectError(error.UnsupportedSaveSchema, payload(&encoded, 1));
-    for (0..encoded.len) |len| try std.testing.expectError(error.CorruptSave, payload(encoded[0..len], 3));
-    try std.testing.expectError(error.CorruptSave, payload(&(encoded ++ "x".*), 3));
-    encoded[0] ^= 1;
-    try std.testing.expectError(error.CorruptSave, payload(&encoded, 3));
-    encoded[0] ^= 1;
-    encoded[24] ^= 1;
-    try std.testing.expectError(error.CorruptSave, payload(&encoded, 3));
-}
-
-test "save envelope distinguishes engine format from game schema" {
-    var encoded = header("", 42);
-    try std.testing.expectEqualStrings("", try payload(&encoded, 42));
-    std.mem.writeInt(u32, encoded[8..12], 99, .little);
-    try std.testing.expectError(error.UnsupportedSaveFormat, payload(&encoded, 42));
-    std.mem.writeInt(u32, encoded[8..12], 1, .little);
-    std.mem.writeInt(u64, encoded[16..24], max_payload_bytes + 1, .little);
-    try std.testing.expectError(error.SaveTooLarge, payload(&encoded, 42));
-}

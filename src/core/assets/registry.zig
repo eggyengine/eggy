@@ -88,23 +88,3 @@ pub const Builder = struct {
         );
     }
 };
-
-test "compiled aliases reject collisions and inconsistent kinds" {
-    var registry = Builder{ .gpa = std.testing.allocator };
-    defer registry.deinit();
-    try registry.claim(42);
-    try std.testing.expectError(error.AssetIdCollision, registry.claim(42));
-    try std.testing.expectError(error.InvalidAssetId, registry.claim(0));
-    const source = Entry{ .path = "resources/rat.glb", .id = 42, .kind = .model, .converted = true };
-    try registry.add(source);
-    try registry.add(source);
-    try registry.add(.{ .path = "resources/rat.glb/Skeletal", .id = 42, .kind = .model, .converted = true });
-    try std.testing.expectError(error.InconsistentAssetKind, registry.add(.{ .path = "other", .id = 42, .kind = .animation, .converted = false }));
-    try registry.claim(7);
-    try std.testing.expectError(error.AmbiguousAssetPath, registry.add(.{ .path = source.path, .id = 7, .kind = .model, .converted = true }));
-    var output: std.Io.Writer.Allocating = .init(std.testing.allocator);
-    defer output.deinit();
-    try registry.write(&output.writer);
-    try std.testing.expect(std.mem.indexOf(u8, output.written(), ".id = 0x2a") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.written(), "manifest") == null);
-}

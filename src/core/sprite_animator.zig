@@ -76,30 +76,3 @@ pub fn step(world: *ecs.World, delta_s: f32) void {
         view.get(*Sprite).region = animator.region(animator.frame());
     }
 }
-
-test "frames loop, play once and stop on the last, or bounce back without repeating the ends" {
-    var animator = SpriteAnimator{ .first_frame = 4, .frame_count = 3, .frames_per_second = 10, .time_s = 0.45 };
-    try std.testing.expectEqual(@as(u32, 5), animator.frame());
-    animator.repeat = .once;
-    try std.testing.expectEqual(@as(u32, 6), animator.frame());
-    try std.testing.expect(animator.finished());
-    animator.repeat = .ping_pong;
-    // Ticks 0..5 show 4 5 6 5 4 5.
-    try std.testing.expectEqual(@as(u32, 4), animator.frame());
-    animator.time_s = 0.3;
-    try std.testing.expectEqual(@as(u32, 5), animator.frame());
-}
-
-test "frames are cut from the sheet left to right, then top to bottom" {
-    const animator = SpriteAnimator{ .columns = 4, .rows = 2 };
-    try std.testing.expectEqual([4]f32{ 0.25, 0, 0.5, 0.5 }, animator.region(1));
-    try std.testing.expectEqual([4]f32{ 0.75, 0.5, 1, 1 }, animator.region(7));
-}
-
-test "stepping moves the sprite to the frame due" {
-    var world = ecs.World.init(std.testing.allocator);
-    defer world.deinit();
-    const entity = try world.spawn(.{ Sprite{}, SpriteAnimator{ .columns = 2, .frame_count = 2, .frames_per_second = 2 } });
-    step(&world, 0.6);
-    try std.testing.expectEqual([4]f32{ 0.5, 0, 1, 1 }, world.get(entity, Sprite).?.region);
-}

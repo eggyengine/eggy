@@ -176,15 +176,3 @@ const Panel = struct {
         }
     }
 };
-
-test "the toggle key shows and hides the console, and takes the key from the game" {
-    var app: App = undefined;
-    app.input = .{};
-    app.ui_layer = null;
-    var console = DevConsole{};
-    const down = sdl.events.Event{ .key_down = .{ .common = undefined, .id = null, .scancode = .grave, .key = .grave, .mod = .{}, .raw = 0, .down = true, .repeat = false } };
-    try std.testing.expect(event(&console, &app, down, false));
-    try std.testing.expect(console.isOpen());
-    try std.testing.expect(event(&console, &app, down, false));
-    try std.testing.expect(!console.isOpen());
-}

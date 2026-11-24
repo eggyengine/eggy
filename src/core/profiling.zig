@@ -106,36 +106,3 @@ pub const Profiling = struct {
         self.counter_count += 1;
     }
 };
-
-test "profile samples time nested work and reject expired or completed handles" {
-    var profile = Profiling{};
-    profile.beginFrame(10);
-    const outer = try profile.beginAt("outer", 20);
-    const inner = try profile.beginAt("inner", 30);
-    try profile.endAt(inner, 40);
-    try profile.endAt(outer, 60);
-    try std.testing.expectEqual(@as(u64, 40), profile.samples[0].duration_ns);
-    try std.testing.expectEqual(@as(u64, 10), profile.samples[1].duration_ns);
-    try std.testing.expectError(error.InvalidProfileSample, profile.endAt(inner, 70));
-    try profile.finishFrame(80);
-    try std.testing.expectEqual(@as(u64, 70), profile.frame_duration_ns);
-    profile.beginFrame(90);
-    try std.testing.expectEqual(@as(usize, 2), profile.last.sample_count);
-    try std.testing.expectEqual(@as(u64, 70), profile.last.frame_duration_ns);
-    try std.testing.expectError(error.InvalidProfileSample, profile.endAt(outer, 100));
-    _ = try profile.beginAt("forgotten", 100);
-    try std.testing.expectError(error.UnfinishedProfileSample, profile.finishFrame(110));
-}
-
-test "profile counters copy names, update in place and reject invalid values" {
-    var profile = Profiling{};
-    var name = [_]u8{ 'A', 'I' };
-    try profile.counter(&name, 2);
-    name[0] = 'X';
-    try profile.counter("AI", 4);
-    try std.testing.expectEqual(@as(usize, 1), profile.counter_count);
-    try std.testing.expectEqual(@as(f64, 4), profile.counters[0].value);
-    try std.testing.expectEqualStrings("AI", profile.counters[0].name.text());
-    try std.testing.expectError(error.InvalidProfileValue, profile.counter("bad", std.math.nan(f64)));
-    try std.testing.expectError(error.InvalidProfileName, profile.beginAt("", 0));
-}

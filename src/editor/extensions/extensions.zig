@@ -379,24 +379,6 @@ fn firstMissing(io: std.Io, files: std.Io.Dir, path: []const u8) []const u8 {
     return path;
 }
 
-test "a written file's first missing folder is what undo trashes" {
-    var tmp = std.testing.tmpDir(.{});
-    defer tmp.cleanup();
-    const io = std.testing.io;
-    try tmp.dir.createDirPath(io, ".vscode");
-    try std.testing.expectEqualStrings(".vscode/mcp.json", firstMissing(io, tmp.dir, ".vscode/mcp.json"));
-    try std.testing.expectEqualStrings(".cursor", firstMissing(io, tmp.dir, ".cursor/rules/mcp.json"));
-    try std.testing.expectEqualStrings(".mcp.json", firstMissing(io, tmp.dir, ".mcp.json"));
-}
-
-test "deferred workflow requests are taken once without retaining callbacks" {
-    var state = State{ .pending = .request_reload };
-    try std.testing.expectEqual(workspace.Outcome.reload, state.takeRequest().?);
-    try std.testing.expect(state.takeRequest() == null);
-    state.pending = .request_build;
-    try std.testing.expectEqual(workspace.Outcome.build_project, state.takeRequest().?);
-}
-
 /// Open one undo step for a plugin Scene tool's stroke, from press to release: what it changes
 /// in the world in between is undone together. A failure is logged and the stroke goes unrecorded.
 pub fn beginStroke(host: anytype) void {

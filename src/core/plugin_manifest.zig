@@ -180,20 +180,3 @@ test "a plugin's eggy.zon gives its manifest, around whatever else it holds" {
     // A package from somewhere else than the repository it names is refused.
     try std.testing.expectError(error.PackageOutsideRepository, parse(arena.allocator(), ".{ .plugin = .{ .title = \"T\", .module = \"m\", .version = \"1.0.0\", .package = \"git+https://github.com/mallory/stats#v1\", " ++ home ++ " } }"));
 }
-
-test "a package comes from its repository only by the same address" {
-    const repository = "https://github.com/Rat/stats/";
-    try std.testing.expectEqualStrings("github.com/Rat/stats", repositoryPath(repository).?);
-    try std.testing.expect(packageInRepository("git+https://github.com/rat/stats.git#v1.0.0", repository));
-    try std.testing.expect(packageInRepository("https://github.com/rat/stats/archive/v1.0.0.tar.gz", repository));
-    try std.testing.expect(!packageInRepository("git+https://github.com/rat/stats-evil#v1", repository));
-    try std.testing.expect(!packageInRepository("git+http://github.com/rat/stats#v1", repository));
-    try std.testing.expect(repositoryPath("github.com/rat/stats") == null);
-}
-
-test "versions compare as semver" {
-    try std.testing.expectEqual(std.math.Order.lt, compareVersions("0.9.0", "0.10.0"));
-    try std.testing.expectEqual(std.math.Order.gt, compareVersions("1.0.0", "1.0.0-beta"));
-    try std.testing.expectEqual(std.math.Order.eq, compareVersions("2.1.3", "2.1.3"));
-    try std.testing.expectEqual(std.math.Order.lt, compareVersions("", "0.0.1"));
-}

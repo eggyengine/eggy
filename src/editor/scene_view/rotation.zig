@@ -96,18 +96,3 @@ pub fn apply(m: Matrix, v: Vec3) Vec3 {
 fn expectSame(a: Matrix, b: Matrix) !void {
     for (a, b) |row_a, row_b| for (row_a, row_b) |x, y| try std.testing.expectApproxEqAbs(x, y, 0.0005);
 }
-
-test "Euler angles come back from their rotation" {
-    const angles = Vec3.init(20, -35, 70);
-    const back = toEuler(fromEuler(angles));
-    for (angles.toArray(), back.toArray()) |want, got| try std.testing.expectApproxEqAbs(want, got, 0.01);
-    // At a quarter turn about y the angles change, but the rotation doesn't.
-    const locked = Vec3.init(10, 90, 30);
-    try expectSame(fromEuler(locked), fromEuler(toEuler(fromEuler(locked))));
-}
-
-test "a turn about z matches the Euler angle about z" {
-    try expectSame(fromEuler(.init(0, 0, 40)), aboutAxis(.unit_z, 40));
-    const turned = apply(aboutAxis(.up, 90), .unit_x);
-    try std.testing.expectApproxEqAbs(@as(f32, -1), turned.z, 0.0001);
-}

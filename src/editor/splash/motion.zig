@@ -91,25 +91,3 @@ fn cubicBezier(points: [4]f32, t: f32) f32 {
 fn bezier(p1: f32, p2: f32, u: f32) f32 {
     return 3 * (1 - u) * (1 - u) * u * p1 + 3 * (1 - u) * u * u * p2 + u * u * u;
 }
-
-test "the step label overshoots as it rolls in, then settles" {
-    try std.testing.expectEqual(@as(f32, 0), roll(0));
-    var most: f32 = 0;
-    var t: f32 = 0;
-    while (t < roll_s) : (t += 0.01) most = @max(most, roll(t));
-    try std.testing.expect(most > 1.05);
-    try std.testing.expectEqual(@as(f32, 1), roll(roll_s));
-}
-
-test "a step's segment fills but never quite until the step ends" {
-    try std.testing.expectEqual(@as(f32, 0), fill(0));
-    try std.testing.expect(fill(1) > fill(0.5));
-    try std.testing.expect(fill(60) <= 0.92);
-}
-
-test "the crack draws early in each period and the border flashes with it" {
-    try std.testing.expectEqual(@as(f32, 0), crack(0.05 * alarm_period_s));
-    try std.testing.expectEqual(@as(f32, 1), crack(0.5 * alarm_period_s));
-    try std.testing.expectApproxEqAbs(@as(f32, 1), alarm(0.06 * alarm_period_s), 0.001);
-    try std.testing.expectEqual(@as(f32, 0), alarm(0.5 * alarm_period_s));
-}

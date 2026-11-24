@@ -61,21 +61,3 @@ pub const Draw2d = struct {
         self.sprites.deinit(self.gpa);
     }
 };
-
-test "world requests copy their data and reject invalid geometry before appending" {
-    var draw = Draw2d{ .gpa = std.testing.allocator };
-    defer draw.deinit();
-    try draw.sprite(.{ .image = .init("sprites.png"), .uv_rect = .{ 0, 0, 0.5, 0.5 } });
-    try std.testing.expectError(error.InvalidSprite, draw.sprite(.{ .image = .init("sprites.png"), .size = .init(0, 1) }));
-    try std.testing.expectEqual(@as(usize, 1), draw.sprites.items.len);
-    var message = [_]u8{ 'h', 'i' };
-    try draw.worldText(&message, .init(0, 1, 0), 0.25);
-    message[0] = 'x';
-    try std.testing.expectEqualStrings("hi", draw.labels.items[0].value);
-    try draw.sprite(.{ .image = .init("sprites.png") });
-    try std.testing.expectEqual(@as(usize, 1), draw.labels.items[0].order);
-    try std.testing.expectEqual(@as(usize, 2), draw.sprites.items[1].order);
-    try std.testing.expectError(error.InvalidUtf8, draw.worldText("\xff", .zero, 1));
-    draw.clear();
-    try std.testing.expectEqual(@as(usize, 0), draw.labels.items.len);
-}

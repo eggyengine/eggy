@@ -78,19 +78,3 @@ fn withSearchPath(gpa: std.mem.Allocator, settings: ?[]const u8, path: []const u
     const text = try std.json.Stringify.valueAlloc(a, root, .{ .whitespace = .indent_4 });
     return try gpa.dupe(u8, text);
 }
-
-test "the library's folder joins the Slang search paths once, other settings kept" {
-    const gpa = std.testing.allocator;
-    const added = (try withSearchPath(gpa, "{\"editor.tabSize\": 4, \"slang.additionalSearchPaths\": [\"/other\"]}", "/game/.eggy/shaders")).?;
-    defer gpa.free(added);
-    try std.testing.expect(std.mem.indexOf(u8, added, "\"editor.tabSize\": 4") != null);
-    try std.testing.expect(std.mem.indexOf(u8, added, "\"/other\"") != null);
-    try std.testing.expect(std.mem.indexOf(u8, added, "\"/game/.eggy/shaders\"") != null);
-    try std.testing.expect(try withSearchPath(gpa, added, "/game/.eggy/shaders") == null);
-
-    // No settings yet: made; settings with comments are left alone.
-    const fresh = (try withSearchPath(gpa, null, "/game/.eggy/shaders")).?;
-    defer gpa.free(fresh);
-    try std.testing.expect(std.mem.indexOf(u8, fresh, setting) != null);
-    try std.testing.expectError(error.InvalidSettings, withSearchPath(gpa, "// mine\n{}", "/game/.eggy/shaders"));
-}

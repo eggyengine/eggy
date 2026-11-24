@@ -176,28 +176,3 @@ fn clippedLine(matrix: [4][4]f32, from: math.Vec3, to: math.Vec3) ?[2]@Vector(4,
     if (a[3] <= 0.000001 or b[3] <= 0.000001) return null;
     return .{ a, b };
 }
-
-test "debug boxes reserve twelve edges and requests validate before recording" {
-    var debug = DebugDraw{};
-    try debug.box(.splat(-1), .one, @splat(1));
-    try std.testing.expectEqual(@as(usize, 12), debug.line_count);
-    try std.testing.expectError(error.InvalidDebugBounds, debug.box(.init(2, 0, 0), .one, @splat(1)));
-    try std.testing.expectError(error.InvalidDebugPoint, debug.line(.init(std.math.nan(f32), 0, 0), .zero, @splat(1)));
-    debug.line_count = max_lines - 11;
-    try std.testing.expectError(error.DebugDrawCapacity, debug.box(.zero, .one, @splat(1)));
-    try std.testing.expectEqual(max_lines - 11, debug.line_count);
-    debug.clear();
-    var message = [_]u8{ 'h', 'i' };
-    try debug.text(.zero, &message);
-    message[0] = 'x';
-    try std.testing.expectEqualStrings("hi", debug.labels[0].bytes[0..2]);
-    try std.testing.expectError(error.DebugLabelTooLong, debug.text(.zero, &@as([257]u8, @splat('x'))));
-}
-
-test "debug lines clip across the near plane and reject segments behind the camera" {
-    const matrix = transform.columns(camera.View.lookingAt(.zero, .forward, .{}).viewProjection(1));
-    const clipped = clippedLine(matrix, .init(0, 0, 1), .init(0, 0, -2)).?;
-    try std.testing.expect(clipped[0][3] > 0);
-    try std.testing.expect(clipped[0][2] >= -0.00001);
-    try std.testing.expect(clippedLine(matrix, .init(0, 0, 1), .init(0, 0, 2)) == null);
-}

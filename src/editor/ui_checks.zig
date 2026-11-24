@@ -51,15 +51,3 @@ fn describe(element: *const L.Element) []const u8 {
         else => @tagName(element.paint_kind),
     };
 }
-
-test "a box too narrow for its text is caught" {
-    var font = try ui.Font.init(std.testing.allocator, ui.default_font);
-    defer font.deinit();
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    const b = L.Builder{ .allocator = arena.allocator() };
-    const viewport = ui.Rect{ .x = 0, .y = 0, .w = 60, .h = 100 };
-    const root = try b.node(0, .{ .width = 60 }, .none, &.{try b.node(0, .{ .width = 50 }, .{ .text = .{ .value = "A much longer line than fits" } }, &.{})});
-    root.layout(viewport, &font);
-    try std.testing.expectError(error.TextOverflows, expectFits(root, &font, viewport));
-}

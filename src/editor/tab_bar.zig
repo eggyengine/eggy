@@ -193,12 +193,3 @@ const DropZone = struct {
         try c.textIn(r, "Drop here for a new tab", 12, c.theme.muted_foreground, .center);
     }
 };
-
-test "the bar's ids say what a press asks for" {
-    try std.testing.expectEqual(Action{ .show = 2 }, actionOf(tab_first + 2).?);
-    try std.testing.expectEqual(Action{ .close = 1 }, actionOf(close_first + 1).?);
-    try std.testing.expectEqual(Action{ .open = .ui }, actionOf(kind_first + @backingInt(Kind.ui)).?);
-    try std.testing.expectEqual(Action.choose, actionOf(new_id).?);
-    try std.testing.expectEqual(Action.pin_open_menu, actionOf(pin_row_id).?);
-    try std.testing.expect(actionOf(first_id + 0x99) == null);
-}

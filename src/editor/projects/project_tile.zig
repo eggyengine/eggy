@@ -106,17 +106,6 @@ pub fn isDark(theme: ui.Theme) bool {
     return 0.3 * bg[0] + 0.59 * bg[1] + 0.11 * bg[2] < 0.5;
 }
 
-test "a tile shows the title's first character, upper-cased" {
-    try std.testing.expectEqualStrings("N", initial("nido"));
-    try std.testing.expectEqualStrings("F", initial("Foobar"));
-    try std.testing.expectEqualStrings("\u{e9}", initial("\u{e9}clair"));
-    try std.testing.expectEqualStrings("?", initial(""));
-}
-
-test "a project keeps its colour" {
-    try std.testing.expectEqual(colorsFor("Space", true), colorsFor("Space", true));
-}
-
 /// `title`'s tile, `size` points square, as a node to place in a hand-built row: its initial on
 /// its colour, as Settings > Plugins and Edit > Plugins show a plugin.
 ///

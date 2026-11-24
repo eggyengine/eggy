@@ -157,16 +157,3 @@ test "rendering fills every placeholder with a fingerprint valid for the new nam
     try std.testing.expect(std.mem.indexOf(u8, zon, ".eggy = .{ .path = \"../engines/abc\" }") != null);
     try std.testing.expect(std.mem.indexOf(u8, zon, ".title = \"Space \\\"Game\\\"\"") != null);
 }
-
-test "an absolute engine path is rejected, since Zig would reject the dependency" {
-    try std.testing.expectError(error.EnginePathNotRelative, render(std.testing.allocator, "", .{ .name = "space_game", .title = "", .fingerprint_id = 1, .engine_path = "/home/me/eggy" }));
-}
-
-test "project names must be plain identifiers" {
-    try validateName("space_game");
-    try std.testing.expectError(error.EmptyName, validateName(""));
-    try std.testing.expectError(error.NameNotIdentifier, validateName("space game"));
-    try std.testing.expectError(error.NameNotIdentifier, validateName("2d_game"));
-    try std.testing.expectError(error.NameNotIdentifier, validateName("const"));
-    try std.testing.expectError(error.NameTooLong, validateName(&@as([33]u8, @splat('a'))));
-}

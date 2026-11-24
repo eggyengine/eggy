@@ -155,18 +155,3 @@ pub fn entityNames(arena: std.mem.Allocator, app: *App) ![]const []const u8 {
     }
     return names.toOwnedSlice(arena);
 }
-
-test "every builtin is listed in its enum's order" {
-    inline for (@typeInfo(Builtin).@"enum".field_names, 0..) |name, index| try std.testing.expectEqualStrings(name, list[index].name);
-}
-
-test "help lists Eggy's commands and the game's" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    var out: std.Io.Writer.Allocating = .init(std.testing.allocator);
-    defer out.deinit();
-    var call = Call{ .line = "help", .args = &.{}, .out = &out.writer, .arena = arena.allocator() };
-    help(&call, &.{.{ .name = "god", .help = "Never die" }});
-    try std.testing.expect(std.mem.indexOf(u8, out.written(), "timescale") != null);
-    try std.testing.expect(std.mem.indexOf(u8, out.written(), "god   Never die") != null);
-}

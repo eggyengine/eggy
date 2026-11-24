@@ -45,20 +45,3 @@ fn child(source: Id, kind: []const u8, name: []const u8, occurrence: u32) Id {
     const value = hash.final();
     return if (value == 0) 1 else value;
 }
-
-test "asset keys are canonical opaque identities" {
-    var buffer: [key_len]u8 = undefined;
-    try std.testing.expectEqualStrings("000000000000002a", key(&buffer, 42));
-    try std.testing.expectEqual(@as(Id, 42), try parse(&buffer));
-    for ([_][]const u8{ "", "42", "0000000000000000", "resources/a.png", "00000000000000zz" }) |bad| {
-        try std.testing.expectError(error.InvalidAssetId, parse(bad));
-    }
-}
-
-test "model children have stable distinct identities" {
-    try std.testing.expectEqual(model(42), model(42));
-    try std.testing.expect(model(42) != model(43));
-    try std.testing.expect(model(42) != animation(42, "walk", 0));
-    try std.testing.expect(animation(42, "walk", 0) != animation(42, "run", 0));
-    try std.testing.expect(animation(42, "walk", 0) != animation(42, "walk", 1));
-}

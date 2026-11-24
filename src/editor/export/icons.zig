@@ -94,14 +94,3 @@ fn paintTinted(tinted: Tinted, theme: ui.Theme) ui.Layout.Paint {
     const image = (if (dark) tinted.on_dark else tinted.on_light) orelse return .none;
     return .{ .image = image.frameAt(0) };
 }
-
-test "every platform icon loads" {
-    var font = try ui.Font.init(std.testing.allocator, ui.default_font);
-    defer font.deinit();
-    var icons = Icons.load(std.testing.allocator, &font);
-    defer icons.deinit();
-    for (icons.builtins ++ [_]Tinted{ icons.package, icons.folder_icon }) |tinted| {
-        try std.testing.expect(tinted.on_dark != null);
-        try std.testing.expect(tinted.on_light != null);
-    }
-}

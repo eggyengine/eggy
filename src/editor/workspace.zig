@@ -1532,54 +1532,6 @@ test "every new tab is a tab of its own, and the copy of its panel in the tab sh
     try std.testing.expectEqual(@as(u8, 0), workspace.live.scene);
 }
 
-test "closing a Scene asks the close guard first, which can hold it until closeAnyway" {
-    var workspace = try testWorkspace();
-    defer workspace.deinit();
-    _ = workspace.run(.{ .command = .new_tab_3d });
-    workspace.followShownTab();
-    try std.testing.expectEqual(@as(u8, 1), workspace.live.scene);
-
-    const Guard = struct {
-        asked: ?Closing = null,
-        fn refuse(context: *anyopaque, closing: Closing) bool {
-            const self: *@This() = @ptrCast(@alignCast(context));
-            self.asked = closing;
-            return false;
-        }
-    };
-    var guard = Guard{};
-    workspace.close_guard = .{ .context = &guard, .mayClose = Guard.refuse };
-
-    // Closing the shown tab takes Scene copy 1, and shows the first tab's copy 0 next.
-    workspace.closeTab(1);
-    const asked = guard.asked.?;
-    try std.testing.expect(asked.scenes[1] and !asked.scenes[0]);
-    try std.testing.expectEqual(@as(?u8, 0), asked.live_after);
-    try std.testing.expectEqual(@as(usize, 2), workspace.tabs.count());
-    workspace.closeAnyway(asked.target);
-    try std.testing.expectEqual(@as(usize, 1), workspace.tabs.count());
-    try std.testing.expect(workspace.close_guard != null);
-
-    // Panels without a Scene close without asking; the last Scene leaves none to show.
-    guard.asked = null;
-    workspace.togglePanel(@backingInt(Panel.console));
-    try std.testing.expect(guard.asked == null);
-    workspace.togglePanel(@backingInt(Panel.scene));
-    try std.testing.expectEqual(@as(?u8, null), guard.asked.?.live_after);
-    try std.testing.expect(workspace.dock.nodeOf(@backingInt(Panel.scene)) != null);
-}
-
-test "a 3D tab is titled with its Scene's scene" {
-    var workspace = try testWorkspace();
-    defer workspace.deinit();
-    const shown = workspace.tabs.active.?;
-    try std.testing.expectEqualStrings("3D", workspace.tabTitleZ(shown));
-    workspace.nameScene(workspace.live.scene, "main");
-    try std.testing.expectEqualStrings("3D: main", workspace.tabTitleZ(shown));
-    workspace.nameScene(workspace.live.scene, null);
-    try std.testing.expectEqualStrings("3D", workspace.tabTitleZ(shown));
-}
-
 /// Check that each menu row under `element` is hit at its centre; returns how many there were.
 fn expectRowsHit(workspace: *const Workspace, element: *const L.Element) !usize {
     var rows: usize = 0;

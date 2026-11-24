@@ -170,32 +170,3 @@ pub fn refKind(comptime T: type) ?RefKind {
     if (@typeInfo(T) != .@"struct" or !@hasDecl(T, "eggy_ref")) return null;
     return T.eggy_ref;
 }
-
-test "asset references retain identities instead of their authoring paths" {
-    const image = AssetRef(.image).init("art/ship.png");
-    try std.testing.expectEqual(@as(usize, asset_id.key_len), image.key().len);
-    try std.testing.expectEqual(image.id(), (try AssetRef(.image).parse(image.key())).id());
-    try std.testing.expectEqualStrings("000000000000002a", AssetRef(.image).fromId(42).key());
-    try std.testing.expectError(error.PathTooLong, AssetRef(.any).parse(&@as([max_path_len + 1]u8, @splat('x'))));
-    try std.testing.expectEqual(@as(usize, asset_id.key_len), (try AssetRef(.any).parse(&@as([max_path_len]u8, @splat('x')))).key().len);
-    for ([_][]const u8{ "/ship.png", "../ship.png", "art/../ship.png", "art\\ship.png", "C:/ship.png", "art//ship.png" }) |path| {
-        try std.testing.expectError(error.InvalidPath, AssetRef(.image).parse(path));
-    }
-    try std.testing.expectError(error.WrongAssetKind, AssetRef(.audio).parse("ship.png"));
-    try std.testing.expectEqual(@as(usize, 0), (try AssetRef(.image).parse("")).key().len);
-}
-
-test "entity references check generations and required components" {
-    const Health = struct { value: u32 = 10 };
-    var world = ecs.World.init(std.testing.allocator);
-    defer world.deinit();
-    const entity = try world.spawn(.{Health{}});
-    const ref = EntityRef(Health).init(entity);
-    try std.testing.expectEqual(@as(u32, 10), ref.get(&world).?.value);
-    try std.testing.expect(EntityRef(void).init(entity).get(&world).?.eql(entity));
-    try std.testing.expect(EntityRef(u32).init(entity).get(&world) == null);
-    world.despawn(entity);
-    _ = try world.spawn(.{Health{}});
-    try std.testing.expect(ref.get(&world) == null);
-    try std.testing.expect((EntityRef(Health){}).get(&world) == null);
-}

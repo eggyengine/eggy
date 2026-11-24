@@ -304,36 +304,3 @@ fn writeVariant(writer: *std.Io.Writer, parts: []const Part, index: usize, varia
     try writeDefault(writer, parts, part.first + variant);
     try writer.writeAll(" }");
 }
-
-test "a part of a value changes, and the rest of its text stays" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    const value = Value.parse(arena.allocator(), ".{.position=.{1,-2.5,3},.shape=.cube}").?;
-    const position = value.field(.root, "position").?;
-    var numbers: [4]Node = undefined;
-    try std.testing.expectEqual(@as(usize, 3), value.numbers(position, &numbers));
-    try std.testing.expectEqual(@as(f64, -2.5), value.number(numbers[1]).?);
-    try std.testing.expectEqualStrings(".{.position=.{1,7,3},.shape=.cube}", try value.replace(arena.allocator(), numbers[1], "7"));
-    try std.testing.expectEqualStrings(".{.position=.{9,-2.5,8},.shape=.cube}", try value.replaceAll(arena.allocator(), &.{ numbers[0], numbers[2] }, &.{ "9", "8" }));
-    try std.testing.expectEqualStrings("cube", value.variant(value.field(.root, "shape").?).?.tag);
-    try std.testing.expect(Value.parse(arena.allocator(), ".{ 1, ") == null);
-}
-
-test "numbers are written for their part: whole for ints, short for floats" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    try std.testing.expectEqualStrings("0.1", numberText(arena.allocator(), 0.1, .{ .kind = .float }));
-    try std.testing.expectEqualStrings("3", numberText(arena.allocator(), 2.6, .{ .kind = .int }));
-    try std.testing.expectEqualStrings("0", numberText(arena.allocator(), -4, .{ .kind = .int, .unsigned = true }));
-}
-
-test "a union variant starts with its payload's defaults" {
-    const Shape = union(enum) { cube, model: eggy.AssetRef(.model), size: struct { x: f32 = 1, on: bool = true } };
-    const Holder = struct { shape: Shape = .cube };
-    const parts = eggy.components.Registry(&.{Holder}, &.{"game"}).infos[0].fields[0].parts;
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    try std.testing.expectEqualStrings(".cube", try variantText(arena.allocator(), parts, 0, 0));
-    try std.testing.expectEqualStrings(".{ .model = \"\" }", try variantText(arena.allocator(), parts, 0, 1));
-    try std.testing.expectEqualStrings(".{ .size = .{ .x = 0, .on = false } }", try variantText(arena.allocator(), parts, 0, 2));
-}

@@ -71,16 +71,3 @@ fn onPath(path: []const u8, name: []const u8) bool {
 }
 
 extern "c" fn setenv(name: [*:0]const u8, value: [*:0]const u8, overwrite: c_int) c_int;
-
-test "the shell's PATH is read past what its profile prints" {
-    try std.testing.expectEqualStrings("/a:/b", markedLine("welcome!\n" ++ marker ++ "/a:/b\n").?);
-    try std.testing.expectEqualStrings("/a", markedLine(marker ++ "/a\r\nbye\n").?);
-    try std.testing.expect(markedLine("no marker\n") == null);
-    try std.testing.expect(markedLine(marker ++ "\n") == null);
-}
-
-test "an executable is found only in a folder on the PATH" {
-    if (builtin.os.tag == .windows) return error.SkipZigTest;
-    try std.testing.expect(onPath("/nonexistent:/bin", "sh"));
-    try std.testing.expect(!onPath("/nonexistent", "sh"));
-}

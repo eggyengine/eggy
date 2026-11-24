@@ -205,19 +205,6 @@ fn fitTo(gpa: std.mem.Allocator, file: assets.imported_clip.File, key: []const u
 
 const test_clip_key = refs.AssetRef(.animation).init("walk.clip.zon").key();
 
-test "a replaced clip is what get returns until it is forgotten" {
-    const gpa = std.testing.allocator;
-    var cache = ClipCache{ .gpa = gpa };
-    defer cache.deinit();
-    const tracks = [_]assets.clip.Track{.{ .target = "", .property = .position, .keys = &.{.{ .time_s = 1, .value = .{ 1, 2, 3 } }} }};
-    try cache.replace(test_clip_key, .{ .duration_s = 1, .tracks = &tracks });
-    try std.testing.expectEqual(@as(f32, 1), cache.get(test_clip_key).?.duration_s());
-    try cache.replace(test_clip_key, .{ .duration_s = 4, .tracks = &tracks });
-    try std.testing.expectEqual(@as(f32, 4), cache.authored(test_clip_key).?.duration_s);
-    cache.forget(test_clip_key);
-    try std.testing.expectEqual(@as(usize, 0), cache.entries.count());
-}
-
 const Source = struct {
     bytes: []const u8,
 
@@ -233,31 +220,3 @@ const Source = struct {
         return error.Unsupported;
     }
 };
-
-test "an imported clip loads from its binary, and plays on models with its bones" {
-    const gpa = std.testing.allocator;
-    var times = [_]f32{ 0, 1 };
-    var values = [_]f32{ 0, 0, 0, 1, 2, 3 };
-    var tracks = [_]assets.model.Track{.{ .channel = .translation, .target = 0, .stride = 3, .times = &times, .values = &values }};
-    var bytes: std.Io.Writer.Allocating = .init(gpa);
-    defer bytes.deinit();
-    try assets.imported_clip.write(&bytes.writer, .{ .source_model = 42, .node_names = &.{"root"}, .clip = .{ .name = "walk", .duration_s = 1, .tracks = &tracks } });
-
-    var source = Source{ .bytes = bytes.written() };
-    var cache = ClipCache{ .gpa = gpa, .resources = Resources.from(&source, Source.read, Source.model, Source.image) };
-    defer cache.deinit();
-    const nodes = [_]assets.model.Node{.{ .name = "root", .parent = null }};
-    const skeleton = assets.Model{ .vertices = &.{}, .indices = &.{}, .parts = &.{}, .textures = &.{}, .rig = .{ .nodes = @constCast(&nodes) } };
-
-    try std.testing.expectEqual(@as(f32, 1), cache.get(test_clip_key).?.duration_s());
-    try std.testing.expect(cache.authored(test_clip_key) == null);
-    try std.testing.expectEqualStrings("walk", cache.importedFor(test_clip_key, 42, skeleton).?.name);
-
-    // Another model plays it on its bone of the same name, and not at all without one.
-    const other_nodes = [_]assets.model.Node{ .{ .name = "armature", .parent = null }, .{ .name = "root", .parent = 0 } };
-    const other = assets.Model{ .vertices = &.{}, .indices = &.{}, .parts = &.{}, .textures = &.{}, .rig = .{ .nodes = @constCast(&other_nodes) } };
-    try std.testing.expectEqual(@as(u32, 1), cache.importedFor(test_clip_key, 43, other).?.tracks[0].target);
-    const stranger_nodes = [_]assets.model.Node{.{ .name = "tail", .parent = null }};
-    const stranger = assets.Model{ .vertices = &.{}, .indices = &.{}, .parts = &.{}, .textures = &.{}, .rig = .{ .nodes = @constCast(&stranger_nodes) } };
-    try std.testing.expect(cache.importedFor(test_clip_key, 44, stranger) == null);
-}

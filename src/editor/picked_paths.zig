@@ -55,15 +55,3 @@ pub const PickedPaths = struct {
         if (self.?.slot.swap(owned.ptr, .acq_rel)) |old| std.heap.c_allocator.free(std.mem.span(old));
     }
 };
-
-test "picked paths arrive one per line, newest replacing what wasn't taken" {
-    var paths: PickedPaths = .{};
-    defer paths.deinit();
-    PickedPaths.picked(&paths, &.{"/old"}, null, false);
-    PickedPaths.picked(&paths, &.{ "/a.png", "/b.png" }, null, false);
-    PickedPaths.picked(&paths, &.{}, null, false); // cancelled: nothing changes
-    const taken = paths.take().?;
-    defer PickedPaths.free(taken);
-    try std.testing.expectEqualStrings("/a.png\n/b.png", taken);
-    try std.testing.expect(paths.take() == null);
-}

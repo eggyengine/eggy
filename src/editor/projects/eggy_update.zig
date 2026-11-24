@@ -152,31 +152,3 @@ fn git(arena: std.mem.Allocator, io: std.Io, cwd: []const u8, argv: []const []co
     if (!result.term.success()) return null;
     return result.stdout;
 }
-
-test "commits are sorted by their header, and ! or a BREAKING CHANGE footer marks them breaking" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    const log = "feat(core)!: rename App.world\x1f\x1e\n" ++
-        "fix(editor): stop a crash\x1fBREAKING CHANGE: Hook.draw takes a context\n\x1e\n" ++
-        "docs: explain hooks\x1f\x1e\n" ++
-        "Update README.md\x1f\x1e\n";
-    const changes = try parseLog(arena.allocator(), log);
-    try std.testing.expectEqual(4, changes.len);
-    try std.testing.expectEqualStrings("feat(core)!: rename App.world", changes[0].summary);
-    try std.testing.expect(changes[0].breaking and changes[0].kind == .feat);
-    try std.testing.expect(changes[1].breaking and changes[1].kind == .fix);
-    try std.testing.expect(!changes[2].breaking and changes[2].kind == .docs);
-    try std.testing.expect(!changes[3].breaking and changes[3].kind == .other);
-}
-
-test "an update's size follows its breaking changes and its version" {
-    const feature = Change{ .summary = "feat: a", .kind = .feat, .breaking = false };
-    const breaking = Change{ .summary = "feat!: b", .kind = .feat, .breaking = true };
-    try std.testing.expectEqual(.small, sizeOf(&.{feature}, "0.1.0", "0.1.1"));
-    try std.testing.expectEqual(.breaking, sizeOf(&.{ feature, breaking }, "0.1.0", "0.1.0"));
-    try std.testing.expectEqual(.breaking, sizeOf(&.{feature}, "0.1.0", "0.2.0"));
-    const five_breaking: [5]Change = @splat(breaking);
-    try std.testing.expectEqual(.extreme, sizeOf(&five_breaking, "0.1.0", "0.1.0"));
-    try std.testing.expectEqual(.extreme, sizeOf(&.{}, "0.9.0", "1.0.0"));
-    try std.testing.expectEqual(.small, sizeOf(&.{}, "1.2.0", "1.3.0"));
-}

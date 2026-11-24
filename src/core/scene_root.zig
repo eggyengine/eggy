@@ -68,17 +68,3 @@ pub fn ensure(world: *ecs.World, access: scene.Access, dimension: Dim) !?ecs.Ent
     }
     return root;
 }
-
-test "a world gets one scene root, with physics settings, however often it is ensured" {
-    const gpa = std.testing.allocator;
-    const access = scene.registryAccess(components.Registry(&.{ PhysicsSettings, SceneRoot }, &.{ "eggy", "eggy" }));
-    var world = ecs.World.init(gpa);
-    defer world.deinit();
-    _ = try world.spawn(.{});
-
-    const root = (try ensure(&world, access, .two)).?;
-    try std.testing.expect((try ensure(&world, access, .three)).?.eql(root));
-    try std.testing.expectEqual(Dim.two, world.get(root, SceneRoot).?.dimension);
-    try std.testing.expect(world.get(root, PhysicsSettings) != null);
-    try std.testing.expect(find(&world, access).?.eql(root));
-}

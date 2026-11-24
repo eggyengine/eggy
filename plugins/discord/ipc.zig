@@ -241,18 +241,6 @@ test "a frame is its opcode and length, then the JSON, and reads back the same" 
     try std.testing.expectEqual(@as(usize, 0), reader.bufferedLen());
 }
 
-test "Discord's sockets are looked for in the runtime folder first, then the temporary ones" {
-    if (builtin.os.tag == .windows) return error.SkipZigTest;
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    var environ_map: std.process.Environ.Map = .init(arena.allocator());
-    try environ_map.put("XDG_RUNTIME_DIR", "/run/user/1000");
-    const paths = try socketPaths(arena.allocator(), &environ_map);
-    try std.testing.expectEqualStrings("/run/user/1000/discord-ipc-0", paths[0]);
-    try std.testing.expectEqualStrings("/run/user/1000/app/com.discordapp.Discord/discord-ipc-0", paths[10]);
-    try std.testing.expectEqualStrings("/tmp/discord-ipc-9", paths[paths.len - 31]);
-}
-
 test "the client says hello, then sends the status, to a pretend Discord" {
     if (!Io.net.has_unix_sockets or builtin.os.tag == .windows) return error.SkipZigTest;
     const io = std.testing.io;

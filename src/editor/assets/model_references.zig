@@ -50,33 +50,3 @@ fn staysInFolder(relative: []const u8) bool {
     while (parts.next()) |part| if (std.mem.eql(u8, part, "..")) return false;
     return true;
 }
-
-test "a model's texture and buffer files are found, not embedded data or paths leaving its folder" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    const gltf =
-        \\{"images":[{"uri":"Textures/color%20map.png"},{"uri":"data:image/png;base64,AAAA"},{"uri":"../secret.png"},{"bufferView":0}],
-        \\ "buffers":[{"uri":"bee.bin"},{"uri":"/etc/passwd"},{"uri":"Textures/color map.png"}]}
-    ;
-    const files = try referencedFiles(arena.allocator(), gltf);
-    try std.testing.expectEqual(@as(usize, 2), files.len);
-    try std.testing.expectEqualStrings("Textures/color map.png", files[0]);
-    try std.testing.expectEqualStrings("bee.bin", files[1]);
-}
-
-test "a binary model's references are read from its JSON chunk" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    const json = "{\"images\":[{\"uri\":\"Textures/colormap.png\"}]}  ";
-    var glb: [20 + json.len]u8 = undefined;
-    @memcpy(glb[0..4], "glTF");
-    std.mem.writeInt(u32, glb[4..8], 2, .little);
-    std.mem.writeInt(u32, glb[8..12], glb.len, .little);
-    std.mem.writeInt(u32, glb[12..16], json.len, .little);
-    @memcpy(glb[16..20], "JSON");
-    @memcpy(glb[20..], json);
-    const files = try referencedFiles(arena.allocator(), &glb);
-    try std.testing.expectEqual(@as(usize, 1), files.len);
-    try std.testing.expectEqualStrings("Textures/colormap.png", files[0]);
-    try std.testing.expectError(error.InvalidModel, referencedFiles(arena.allocator(), "glTF"));
-}

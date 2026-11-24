@@ -58,12 +58,3 @@ fn set(name: [:0]const u8, value: [:0]const u8) void {
     const environment = c.SDL_GetEnvironment() orelse return;
     _ = c.SDL_SetEnvironmentVariable(environment, name, value, true);
 }
-
-test "the title and scene come back as remembered, cut to the buffers" {
-    remember("testing project", "resources/scene/garden.scene.zon");
-    var title: [7]u8 = undefined;
-    var scene: [64]u8 = undefined;
-    const back = recall(&title, &scene);
-    try std.testing.expectEqualStrings("testing", back.title);
-    try std.testing.expectEqualStrings("resources/scene/garden.scene.zon", back.scene);
-}

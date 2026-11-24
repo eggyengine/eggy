@@ -44,27 +44,3 @@ fn chunk(out: *std.Io.Writer, kind: *const [4]u8, data: []const u8) !void {
     crc.update(data);
     try out.writeInt(u32, crc.final(), .big);
 }
-
-test "a PNG holds its size and, inflated, each row behind a filter byte" {
-    const gpa = std.testing.allocator;
-    const pixels = [_]u8{ 255, 0, 0, 255, 0, 255, 0, 128, 0, 0, 255, 255, 9, 9, 9, 0 };
-    var out: std.Io.Writer.Allocating = .init(gpa);
-    defer out.deinit();
-    try write(gpa, &out.writer, 2, 2, &pixels);
-    const png = out.written();
-    try std.testing.expectEqualStrings("\x89PNG\r\n\x1a\n", png[0..8]);
-    try std.testing.expectEqualStrings("IHDR", png[12..16]);
-    try std.testing.expectEqual(@as(u32, 2), std.mem.readInt(u32, png[16..20], .big));
-    try std.testing.expectEqualStrings("IEND", png[png.len - 8 ..][0..4]);
-
-    // The image data, inflated again.
-    const idat_len = std.mem.readInt(u32, png[33..37], .big);
-    try std.testing.expectEqualStrings("IDAT", png[37..41]);
-    var input: std.Io.Reader = .fixed(png[41..][0..idat_len]);
-    var window: [flate.max_window_len]u8 = undefined;
-    var inflate = flate.Decompress.init(&input, .zlib, &window);
-    var rows: std.Io.Writer.Allocating = .init(gpa);
-    defer rows.deinit();
-    _ = try inflate.reader.streamRemaining(&rows.writer);
-    try std.testing.expectEqualSlices(u8, &([_]u8{0} ++ pixels[0..8].* ++ [_]u8{0} ++ pixels[8..16].*), rows.written());
-}

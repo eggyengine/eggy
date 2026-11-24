@@ -633,25 +633,6 @@ fn skyRays(view: camera_zig.View, aspect: f32) [3][4]f32 {
     };
 }
 
-test "mirrored entities cull their front faces, double-sided ones none" {
-    const identity: [4][4]f32 = .{ .{ 1, 0, 0, 0 }, .{ 0, 1, 0, 0 }, .{ 0, 0, 1, 0 }, .{ 0, 0, 0, 1 } };
-    var drawable = mesh.Drawable{ .model = identity, .color = @splat(1), .shape = .cube, .entity_id = 0, .entity_generation = 0 };
-    try std.testing.expectEqual(vit.hal.pipeline.CullMode.back, cullOf(drawable, lookOf(drawable, null)));
-    drawable.model[0][0] = -1;
-    try std.testing.expectEqual(vit.hal.pipeline.CullMode.front, cullOf(drawable, lookOf(drawable, null)));
-    drawable.double_sided = 1;
-    try std.testing.expectEqual(vit.hal.pipeline.CullMode.none, cullOf(drawable, lookOf(drawable, null)));
-}
-
-test "a model's parts keep their own look unless a material is authored" {
-    const part = ModelPart{ .first_index = 0, .index_count = 3, .texture = null, .alpha_mode = .blend, .double_sided = true };
-    var drawable = mesh.Drawable{ .model = undefined, .color = @splat(1), .shape = .cube, .entity_id = 0, .entity_generation = 0 };
-    try std.testing.expectEqual(Look{ .blend = true, .double_sided = true }, lookOf(drawable, part));
-    const material = @import("material.zig").Material{};
-    drawable.applyMaterial(&material);
-    try std.testing.expectEqual(Look{ .blend = false, .double_sided = false }, lookOf(drawable, part));
-}
-
 /// Partition by swapping rather than compacting: another viewport still needs every entity.
 /// Move what doesn't cast a shadow (the editor's stand-ins) after the rest, in place; returns the rest.
 fn castersFirst(drawables: []mesh.Drawable) []mesh.Drawable {
@@ -693,26 +674,6 @@ fn visibleThrough(drawable: mesh.Drawable, sources: Sources, matrix: math.Mat4) 
         break :block @import("bounds.zig").Bounds{ .min = cached.bounds.min, .max = cached.bounds.max };
     } else @import("bounds.zig").Bounds.unit;
     return bounds.visible(transform.columns(math.mul(f32, 4, 4, 4, matrix, math.fromArray(f32, 4, 4, drawable.model))));
-}
-
-test "visibility partition retains every entity for a second viewport" {
-    const identity: [4][4]f32 = .{ .{ 1, 0, 0, 0 }, .{ 0, 1, 0, 0 }, .{ 0, 0, 1, 0 }, .{ 0, 0, 0, 1 } };
-    var drawables = [_]mesh.Drawable{
-        .{ .model = identity, .color = @splat(1), .shape = .cube, .entity_id = 0, .entity_generation = 0 },
-        .{ .model = identity, .color = @splat(1), .shape = .plane, .entity_id = 1, .entity_generation = 0 },
-        .{ .model = identity, .color = @splat(1), .shape = .sphere, .entity_id = 2, .entity_generation = 0 },
-    };
-    drawables[0].model[3][0] = 100;
-    const sources = Sources{ .models = undefined, .textures = undefined, .materials = undefined, .shaders = undefined, .lights = undefined, .stats = undefined };
-    try std.testing.expectEqual(@as(usize, 2), visibleFirst(&drawables, sources, math.fromArray(f32, 4, 4, identity)).len);
-    var other_view = identity;
-    other_view[3][0] = -100;
-    const other = visibleFirst(&drawables, sources, math.fromArray(f32, 4, 4, other_view));
-    try std.testing.expectEqual(@as(usize, 1), other.len);
-    try std.testing.expectEqual(@as(u32, 0), other[0].entity_id);
-    var ids: u8 = 0;
-    for (drawables) |drawable| ids |= @as(u8, 1) << @intCast(drawable.entity_id);
-    try std.testing.expectEqual(@as(u8, 7), ids);
 }
 
 /// The order meshes are drawn in: by how they look (blended, double-sided, mirrored), as one

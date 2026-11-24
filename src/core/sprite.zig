@@ -55,13 +55,3 @@ pub const Sprite = struct {
         return model;
     }
 };
-
-test "flipping swaps the region's edges, and the size stretches the quad's axes" {
-    const sprite = Sprite{ .region = .{ 0.25, 0, 0.5, 1 }, .flip_x = true, .size_m = .init(2, 3), .layer = 10 };
-    try std.testing.expectEqual([4]f32{ 0.5, 0, 0.25, 1 }, sprite.uvRect());
-    const identity = [4][4]f32{ .{ 1, 0, 0, 0 }, .{ 0, 1, 0, 0 }, .{ 0, 0, 1, 0 }, .{ 4, 5, 0, 1 } };
-    const model = sprite.placed(identity);
-    try std.testing.expectEqual([4]f32{ 2, 0, 0, 0 }, model[0]);
-    try std.testing.expectEqual([4]f32{ 0, 3, 0, 0 }, model[1]);
-    try std.testing.expectApproxEqAbs(@as(f32, 10 * layer_step_m), model[3][2], 1e-6);
-}

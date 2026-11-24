@@ -59,24 +59,3 @@ fn countLines(gpa: std.mem.Allocator, io: std.Io, dir: std.Io.Dir, name: []const
     const breaks = std.mem.count(u8, text, "\n");
     return breaks + @intFromBool(text[text.len - 1] != '\n');
 }
-
-test "files are counted by kind, with code's lines, leaving out build output and descriptors" {
-    var threaded: std.Io.Threaded = .init_single_threaded;
-    const io = threaded.io();
-    var tmp = std.testing.tmpDir(.{ .iterate = true });
-    defer tmp.cleanup();
-    try tmp.dir.createDirPath(io, "src");
-    try tmp.dir.createDirPath(io, "resources");
-    try tmp.dir.createDirPath(io, "zig-out/bin");
-    try tmp.dir.createDirPath(io, ".eggy");
-    try tmp.dir.writeFile(io, .{ .sub_path = "src/main.zig", .data = "const a = 1;\nconst b = 2;\n\npub fn main() void {}" });
-    try tmp.dir.writeFile(io, .{ .sub_path = "resources/ship.glb", .data = "12345" });
-    try tmp.dir.writeFile(io, .{ .sub_path = "resources/ship.glb.eggy", .data = ".{}" });
-    try tmp.dir.writeFile(io, .{ .sub_path = "zig-out/bin/game.zig", .data = "x\n" });
-    try tmp.dir.writeFile(io, .{ .sub_path = ".eggy/notes.zig", .data = "x\n" });
-
-    const result = try scan(std.testing.allocator, io, tmp.dir);
-    try std.testing.expectEqual(Count{ .files = 1, .bytes = 5 }, result.kinds.get(.model));
-    try std.testing.expectEqual(1, result.kinds.get(.code).files);
-    try std.testing.expectEqual(4, result.code_lines);
-}

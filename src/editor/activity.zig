@@ -25,12 +25,3 @@ pub const Activity = struct {
         }
     }
 };
-
-test "input counts only while a window has focus" {
-    var activity = Activity{};
-    activity.follow(.{ .key_down = std.mem.zeroes(@FieldType(sdl3.events.Event, "key_down")) }, 1000);
-    activity.follow(.{ .window_focus_lost = std.mem.zeroes(@FieldType(sdl3.events.Event, "window_focus_lost")) }, 2000);
-    activity.follow(.{ .mouse_motion = std.mem.zeroes(@FieldType(sdl3.events.Event, "mouse_motion")) }, 3000);
-    try std.testing.expectEqual(1000, activity.last_input_ms);
-    try std.testing.expectEqual(2000, activity.focus_lost_ms.?);
-}

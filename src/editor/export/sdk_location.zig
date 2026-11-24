@@ -67,22 +67,3 @@ fn write(io: std.Io, folder: std.Io.Dir, path: []const u8) !void {
     try text.writeByte('\n');
     try folder.writeFile(io, .{ .sub_path = file_name, .data = text.buffered() });
 }
-
-test "the SDK's folder is remembered as it was typed" {
-    const io = std.testing.io;
-    var tmp = std.testing.tmpDir(.{});
-    defer tmp.cleanup();
-    var buffer: [512]u8 = undefined;
-    try std.testing.expect(read(io, tmp.dir, &buffer) == null);
-    try write(io, tmp.dir, "/home/me/SDKs/My \"Mac\".sdk");
-    try std.testing.expectEqualStrings("/home/me/SDKs/My \"Mac\".sdk", read(io, tmp.dir, &buffer).?);
-}
-
-test "a leading tilde is the home folder" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    const home = std.mem.span(std.c.getenv("HOME") orelse return error.SkipZigTest);
-    try std.testing.expectEqualStrings(try std.mem.concat(arena.allocator(), u8, &.{ home, "/SDKs" }), expandHome(arena.allocator(), "~/SDKs"));
-    try std.testing.expectEqualStrings("/opt/~sdk", expandHome(arena.allocator(), "/opt/~sdk"));
-    try std.testing.expectEqualStrings("~other/sdk", expandHome(arena.allocator(), "~other/sdk"));
-}

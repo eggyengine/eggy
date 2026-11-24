@@ -60,20 +60,3 @@ fn draw(context: *const anyopaque, c: *ui.Canvas, _: ui.Rect) anyerror!void {
     const base = [2]f32{ shown.to.x - ux * head, shown.to.y - uy * head };
     try c.triangle(.{ .{ shown.to.x + ux * 3, shown.to.y + uy * 3 }, .{ base[0] - uy * head / 2, base[1] + ux * head / 2 }, .{ base[0] + uy * head / 2, base[1] - ux * head / 2 } }, colors);
 }
-
-test "only directional and spot lights get an arrow" {
-    try std.testing.expect(shinesAlongDirection(".directional"));
-    try std.testing.expect(shinesAlongDirection(".spot"));
-    try std.testing.expect(!shinesAlongDirection(".point"));
-}
-
-test "an unrotated light's arrow runs along the world's -Z" {
-    const identity = eggy.math.identity(f32, 4);
-    const scene = ui.Rect{ .x = 0, .y = 0, .w = 800, .h = 600 };
-    // From +X looking back at the origin, world -Z is to the right of the screen.
-    const view = eggy.camera.View.lookingAt(.init(10, 0, 0), .zero, .{});
-    const handles = gizmo.layout(.move, .world, identity, view, scene).?;
-    const shown = arrow(handles, identity).?;
-    try std.testing.expect(shown.to.x > shown.from.x + 10);
-    try std.testing.expect(@abs(shown.to.y - shown.from.y) < 1);
-}

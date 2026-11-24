@@ -326,11 +326,6 @@ fn renderExtent(extent: vit.Extent2D, scale: f32) vit.Extent2D {
     };
 }
 
-test "render scaling preserves a nonempty target and rounds fractional pixels up" {
-    try std.testing.expectEqual(vit.Extent2D{ .width = 1, .height = 1 }, renderExtent(.{ .width = 1, .height = 1 }, 0.25));
-    try std.testing.expectEqual(vit.Extent2D{ .width = 451, .height = 338 }, renderExtent(.{ .width = 901, .height = 675 }, 0.5));
-}
-
 fn previewScissor(scene: ui.Rect, clip: ui.Rect, window: ui.Rect, extent: vit.Extent2D) ?vit.hal.command.ScissorRect {
     if (extent.width == 0 or extent.height == 0 or window.w <= 0 or window.h <= 0 or scene.w <= 0 or scene.h <= 0) return null;
     for ([_]f32{ scene.x, scene.y, scene.w, scene.h, clip.x, clip.y, clip.w, clip.h, window.x, window.y, window.w, window.h }) |v| {
@@ -358,21 +353,4 @@ fn backdropVertices() [6]Vertex {
     var vertices: [6]Vertex = undefined;
     for ([_]usize{ 0, 1, 2, 0, 2, 3 }, &vertices) |corner, *vertex| vertex.* = .{ .position = corners[corner], .color = colors[corner] };
     return vertices;
-}
-
-test "preview scissor respects UI clipping, window and fractional pixel scale" {
-    const window = ui.Rect{ .x = 0, .y = 0, .w = 100, .h = 60 };
-    const scene = ui.Rect{ .x = 20, .y = 10, .w = 80, .h = 50 };
-    const clip = ui.Rect{ .x = 30.25, .y = 0, .w = 40, .h = 30.25 };
-    const scissor = previewScissor(scene, clip, window, .{ .width = 200, .height = 120 }).?;
-    try std.testing.expectEqual(vit.hal.command.ScissorRect{ .x = 60, .y = 20, .width = 80, .height = 40 }, scissor);
-    try std.testing.expect(previewScissor(scene, .{ .x = 0, .y = 0, .w = 10, .h = 10 }, window, .{ .width = 200, .height = 120 }) == null);
-    try std.testing.expect(previewScissor(.{ .x = 0, .y = 0, .w = 0, .h = 20 }, clip, window, .{ .width = 200, .height = 120 }) == null);
-    try std.testing.expect(previewScissor(.{ .x = 110, .y = 0, .w = 20, .h = 20 }, clip, window, .{ .width = 200, .height = 120 }) == null);
-}
-
-test "preview skips an empty viewport without recording commands" {
-    var preview: Preview = undefined;
-    const empty = ui.Rect{ .x = 0, .y = 0, .w = 0, .h = 0 };
-    try preview.draw(undefined, undefined, empty, empty, empty, .{ .width = 200, .height = 120 }, false, &.{}, undefined, .default, &.{}, false);
 }

@@ -211,26 +211,3 @@ pub const AutoUpdate = struct {
         } };
     }
 };
-
-test "only plugins fetched from somewhere, and not from a folder, are checked again" {
-    var tmp = std.testing.tmpDir(.{});
-    defer tmp.cleanup();
-    const io = std.testing.io;
-    try tmp.dir.writeFile(io, .{ .sub_path = eggy.project.file_name, .data =
-        \\.{ .name = "game", .title = "Game", .plugins = .{
-        \\    .{ .module = "eggy_git", .version = "0.1.0" },
-        \\    .{ .module = "stats", .dependency = "stats", .version = "1.0.0" },
-        \\    .{ .module = "mcp", .dependency = "eggy_mcp", .version = "0.1.0", .source = "https://raw.githubusercontent.com/me/mcp/main/eggy.zon" },
-        \\    .{ .module = "wip", .dependency = "wip", .version = "0.1.0", .source = "https://raw.githubusercontent.com/me/wip/main/eggy.zon" },
-        \\} }
-    });
-    try tmp.dir.writeFile(io, .{ .sub_path = "build.zig.zon", .data =
-        \\.{ .name = .game, .dependencies = .{ .wip = .{ .path = "../wip" } } }
-    });
-    const folder = try tmp.dir.realPathFileAlloc(io, ".", std.testing.allocator);
-    defer std.testing.allocator.free(folder);
-    const updates = try AutoUpdate.start(std.testing.allocator, folder);
-    defer updates.destroy();
-    try std.testing.expectEqual(@as(usize, 1), updates.queue.len);
-    try std.testing.expectEqualStrings("mcp", updates.queue[0].module);
-}

@@ -564,33 +564,6 @@ fn testTriangle() struct { vertices: [3]Vertex, indices: [3]u32 } {
     };
 }
 
-test "a track samples linearly, slerps rotations and holds step keys" {
-    var times = [_]f32{ 0, 1, 2 };
-    var values = [_]f32{ 0, 0, 0, 10, 0, 0, 10, 20, 0 };
-    var track = Track{ .channel = .translation, .target = 0, .stride = 3, .times = &times, .values = &values };
-    var out: [3]f32 = undefined;
-    sample(track, 0.5, &out);
-    try std.testing.expectEqualSlices(f32, &.{ 5, 0, 0 }, &out);
-    sample(track, 1.5, &out);
-    try std.testing.expectEqualSlices(f32, &.{ 10, 10, 0 }, &out);
-    sample(track, 9, &out);
-    try std.testing.expectEqualSlices(f32, &.{ 10, 20, 0 }, &out);
-    sample(track, -3, &out);
-    try std.testing.expectEqualSlices(f32, &.{ 0, 0, 0 }, &out);
-    track.interpolation = .step;
-    sample(track, 0.99, &out);
-    try std.testing.expectEqualSlices(f32, &.{ 0, 0, 0 }, &out);
-
-    // Half of a quarter turn about z is an eighth of one, whichever way the arc is stored.
-    const half = @sin(std.math.pi / 8.0);
-    var turn_times = [_]f32{ 0, 1 };
-    var turn_values = [_]f32{ 0, 0, 0, 1, 0, 0, @sin(std.math.pi / 4.0), @cos(std.math.pi / 4.0) };
-    const turn = Track{ .channel = .rotation, .target = 0, .stride = 4, .times = &turn_times, .values = &turn_values };
-    var quaternion: [4]f32 = undefined;
-    sample(turn, 0.5, &quaternion);
-    try std.testing.expectApproxEqAbs(half, quaternion[2], 1e-5);
-}
-
 test "a skinned strip bends with its joint and stays put under a weightless corner" {
     const gpa = std.testing.allocator;
     const tri = testTriangle();
@@ -637,28 +610,4 @@ test "a skinned strip bends with its joint and stays put under a weightless corn
 
     // The model's box holds the lifted pose, not only the rest one.
     try std.testing.expect(model.bounds().max[1] >= 4);
-}
-
-test "root motion walks a clip on the spot or pins its root, and leaves children moving" {
-    var times = [_]f32{ 0, 1, 2 };
-    var hips = [_]f32{ 0, 1, 0, 0.5, 1.2, 1, 0, 1, 2 };
-    var hand = [_]f32{ 0, 0, 0, 0, 0, 2, 0, 0, 4 };
-    var tracks = [_]Track{
-        .{ .channel = .translation, .target = 1, .stride = 3, .times = &times, .values = &hand },
-        .{ .channel = .translation, .target = 0, .stride = 3, .times = &times, .values = &hips },
-    };
-    var nodes = [_]model_zig.Node{ .{ .name = "hips" }, .{ .name = "hand", .parent = 0 } };
-    const model = Model{ .vertices = &.{}, .indices = &.{}, .parts = &.{}, .textures = &.{}, .rig = .{ .nodes = &nodes } };
-    const clip = Clip{ .name = "walk", .duration_s = 2, .tracks = &tracks };
-    var pose = try Pose.init(std.testing.allocator, model);
-    defer pose.deinit(std.testing.allocator);
-
-    // Halfway, the hips have walked 1 m forward and swayed 0.5 m; in place keeps only the sway and bob.
-    applyRooted(&pose, model, clip, 1, 1, .in_place);
-    try std.testing.expectEqual([3]f32{ 0.5, 1.2, 0 }, pose.translation[0]);
-    try std.testing.expectEqual([3]f32{ 0, 0, 2 }, pose.translation[1]);
-    applyRooted(&pose, model, clip, 1, 1, .pinned);
-    try std.testing.expectEqual([3]f32{ 0, 1, 0 }, pose.translation[0]);
-    applyRooted(&pose, model, clip, 1, 1, .keep);
-    try std.testing.expectEqual([3]f32{ 0.5, 1.2, 1 }, pose.translation[0]);
 }

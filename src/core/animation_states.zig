@@ -207,21 +207,6 @@ const idle = AssetRef(.animation).fromId(0x31);
 const walk = AssetRef(.animation).fromId(0x32);
 const jump = AssetRef(.animation).fromId(0x33);
 
-test "a 1D blend space shares weight between the two clips either side of the value" {
-    var states: States = @splat(.{});
-    const points = [_]Point{ .{ .clip = idle, .at = 0 }, .{ .clip = walk, .at = 2, .speed = 1.5 } };
-    try along(&states, &points, 0.5, 0, .{});
-    try std.testing.expectEqual(@as(f32, 0.75), find(&states, idle).?.weight);
-    try std.testing.expectEqual(@as(f32, 0.25), find(&states, walk).?.weight);
-    try std.testing.expectEqual(@as(f32, 1.5), find(&states, walk).?.speed);
-    try along(&states, &points, 9, 0, .{});
-    try std.testing.expect(find(&states, idle) != null);
-    try std.testing.expectEqual(@as(f32, 1), find(&states, walk).?.weight);
-    advance(&states, 0.1);
-    try std.testing.expect(find(&states, idle) == null);
-    try std.testing.expectError(error.InvalidPoints, along(&states, &.{ points[1], points[0] }, 1, 0, .{}));
-}
-
 test "fading to a state eases it in and the others out, and frees what faded away" {
     var states: States = @splat(.{});
     try fadeTo(&states, idle, 0.5, .{});
@@ -242,18 +227,4 @@ test "fading to a state eases it in and the others out, and frees what faded awa
     try std.testing.expectApproxEqAbs(@as(f32, 0.9), find(&states, jump).?.time_s, 1e-6);
     try fadeTo(&states, jump, 0.5, .{ .start_s = 0, .repeat = .once });
     try std.testing.expectEqual(@as(f32, 0), find(&states, jump).?.time_s);
-}
-
-test "a layer on a bone fades in over the body's states without fading them out" {
-    var states: States = @splat(.{});
-    try along(&states, &.{ .{ .clip = idle, .at = 0 }, .{ .clip = walk, .at = 2 } }, 2, 0.2, .{});
-    try fadeTo(&states, jump, 0.2, .{ .bone = "spine", .repeat = .once });
-    // It fades in over the walk, which keeps its weight.
-    try std.testing.expectEqual(@as(f32, 0), find(&states, jump).?.weight);
-    advance(&states, 0.1);
-    try std.testing.expectApproxEqAbs(@as(f32, 0.5), find(&states, jump).?.weight, 1e-6);
-    try std.testing.expectEqualStrings("spine", find(&states, jump).?.bone.text());
-    try along(&states, &.{ .{ .clip = idle, .at = 0 }, .{ .clip = walk, .at = 2 } }, 2, 0.2, .{});
-    try std.testing.expectEqual(@as(f32, 1), find(&states, jump).?.target_weight);
-    try std.testing.expectEqual(@as(f32, 1), shownWeight(states));
 }

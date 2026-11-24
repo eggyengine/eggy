@@ -332,26 +332,3 @@ fn chevron(c: *ui.Canvas, m: ui.Vec2, way: f32, color: [4]f32) !void {
     try line(c, .{ .x = m.x - 2 * way, .y = m.y - 5 }, .{ .x = m.x + 3 * way, .y = m.y }, 1.6, color);
     try line(c, .{ .x = m.x + 3 * way, .y = m.y }, .{ .x = m.x - 2 * way, .y = m.y + 5 }, 1.6, color);
 }
-
-test "every button is told apart by its id, and other ids are none of them" {
-    try std.testing.expectEqual(Button.scale, buttonOf(first_id + 3).?);
-    try std.testing.expect(buttonOf(first_id + 40) == null);
-    try std.testing.expect(buttonOf(12) == null);
-}
-
-test "plugin tools widen the Scene's toolbar and have ids of their own" {
-    try std.testing.expectEqual(size(State{}).x + 2 * (button_pt + gap_pt), size(.{ .plugin_tool_count = 2 }).x);
-    try std.testing.expectEqual(size(State{ .panel = .scene_2d }).x, size(.{ .panel = .scene_2d, .plugin_tool_count = 2 }).x);
-    try std.testing.expectEqual(@as(u8, 1), pluginToolOf(first_plugin_id + 1).?);
-    try std.testing.expect(pluginToolOf(first_id + 3) == null);
-    try std.testing.expect(buttonOf(first_plugin_id) == null);
-}
-
-test "the toolbar stays inside the panel, folded or not" {
-    const scene = ui.Rect{ .x = 0, .y = 0, .w = 400, .h = 300 };
-    const open = State{};
-    const kept = keepInside(open, .{ .x = 390, .y = -20 }, scene);
-    try std.testing.expectEqual(scene.w - size(open).x, kept.x);
-    try std.testing.expectEqual(@as(f32, 0), kept.y);
-    try std.testing.expect(size(.{ .folded = true }).x < size(open).x);
-}

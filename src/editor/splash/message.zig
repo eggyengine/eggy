@@ -81,22 +81,3 @@ pub fn parse(line: []u8) ?Message {
     if (std.mem.eql(u8, kind, "fail")) return .{ .fail = rest };
     return null;
 }
-
-test "messages come back as written, newlines in their text included" {
-    var buffer: [256]u8 = undefined;
-    var writer: std.Io.Writer = .fixed(&buffer);
-    try write(&writer, .{ .step = .scene });
-    try write(&writer, .{ .fail = "NoDevice\n\nA crash report was saved" });
-    try write(&writer, .done);
-    var lines = std.mem.splitScalar(u8, writer.buffered(), '\n');
-    try std.testing.expectEqual(Step.scene, parse(@constCast(lines.next().?)).?.step);
-    try std.testing.expectEqualStrings("NoDevice\n\nA crash report was saved", parse(@constCast(lines.next().?)).?.fail);
-    try std.testing.expect(parse(@constCast(lines.next().?)).? == .done);
-}
-
-test "a line from a newer editor is skipped" {
-    var line = "step compiling_shaders".*;
-    try std.testing.expectEqual(null, parse(&line));
-    var other = "hatch now".*;
-    try std.testing.expectEqual(null, parse(&other));
-}

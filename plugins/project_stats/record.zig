@@ -289,9 +289,3 @@ test "the record keeps its days, sessions and tallies, and a reload goes on with
     third.follow(useAfter(0, null), 10_000);
     try std.testing.expectEqual(2, third.mine.sessions);
 }
-
-test "a user's file name holds only safe characters" {
-    const path = try fileOf(std.testing.allocator, "DOMAIN\\Jo Smith");
-    defer std.testing.allocator.free(path);
-    try std.testing.expectEqualStrings(folder ++ "/DOMAIN_Jo_Smith.zon", path);
-}

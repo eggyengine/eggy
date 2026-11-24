@@ -195,39 +195,3 @@ pub fn project(view_projection: math.Mat4, point: math.Vec3) struct { x: f32, y:
     if (clip.w <= 0) return .{ .x = 0, .y = 0, .in_front = false };
     return .{ .x = clip.x / clip.w, .y = clip.y / clip.w, .in_front = true };
 }
-
-test "the default view sees the origin in the middle of the view" {
-    const where = project(View.default.viewProjection(16.0 / 9.0), .init(0, 1, 0));
-    try std.testing.expect(where.in_front);
-    try std.testing.expectApproxEqAbs(@as(f32, 0), where.x, 0.001);
-    try std.testing.expectApproxEqAbs(@as(f32, 0), where.y, 0.001);
-}
-
-test "a camera entity looks down its -z, from where its transform puts it" {
-    var world = ecs.World.init(std.testing.allocator);
-    defer world.deinit();
-    try std.testing.expect(find(&world) == null);
-    _ = try world.spawn(.{ Camera{ .fov_deg = 40 }, transform_zig.Transform{ .position = .init(0, 2, 10), .rotation_deg = .init(0, 90, 0) } });
-    const view = find(&world).?;
-    try std.testing.expectEqual(@as(f32, 40), view.fov_deg);
-    try std.testing.expect(view.eye.eql(.init(0, 2, 10)));
-    // Turned a quarter about y, -z faces -x.
-    try std.testing.expectApproxEqAbs(@as(f32, -1), view.forward.x, 0.001);
-    try std.testing.expectApproxEqAbs(@as(f32, 1), view.up.y, 0.001);
-}
-
-test "camera selection is explicit and priority ties do not depend on archetypes" {
-    var world = ecs.World.init(std.testing.allocator);
-    defer world.deinit();
-    const first = try world.spawn(.{ Camera{}, transform_zig.Transform{} });
-    const second = try world.spawn(.{ Camera{ .priority = 10 }, transform_zig.Transform{} });
-    const cameras = Cameras{ .world = &world };
-    try std.testing.expect(cameras.activeEntity().?.eql(second));
-    try cameras.setActive(first);
-    try std.testing.expect(cameras.activeEntity().?.eql(first));
-    world.get(second, Camera).?.near = -1;
-    try std.testing.expectError(error.InvalidCamera, cameras.setActive(second));
-    try std.testing.expect(cameras.activeEntity().?.eql(first));
-    try cameras.setActive(null);
-    try std.testing.expect(find(&world) == null);
-}

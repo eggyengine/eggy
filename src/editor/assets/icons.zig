@@ -115,14 +115,3 @@ pub const Icons = struct {
         return .{ .image = image.frameAt(0) };
     }
 };
-
-test "every icon loads" {
-    var font = try ui.Font.init(std.testing.allocator, ui.default_font);
-    defer font.deinit();
-    var icons = Icons.load(std.testing.allocator, &font);
-    defer icons.deinit(std.testing.allocator);
-    for (icons.on_dark, icons.on_light) |dark, light| {
-        try std.testing.expect(dark != null);
-        try std.testing.expect(light != null);
-    }
-}

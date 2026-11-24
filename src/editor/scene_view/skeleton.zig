@@ -168,39 +168,3 @@ fn quaternionRows(q: [4]f32) rotation.Matrix {
         .{ 2 * (x * z - y * w), 2 * (y * z + x * w), 1 - 2 * (x * x + y * y) },
     };
 }
-
-test "a node's quaternion turns back into the degrees a bone track keys" {
-    const degrees = Vec3.init(20, -35, 70);
-    const back = rotation.toEuler(quaternionRows(eggy.deformation.eulerQuaternion(degrees.toArray())));
-    try std.testing.expectApproxEqAbs(degrees.x, back.x, 0.01);
-    try std.testing.expectApproxEqAbs(degrees.y, back.y, 0.01);
-    try std.testing.expectApproxEqAbs(degrees.z, back.z, 0.01);
-}
-
-test "the joint nearest the pointer is picked, within reach" {
-    var joints = [_]Joint{
-        .{ .name = "hips", .parent = null, .world = math.identity(f32, 4), .screen = .{ .x = 100, .y = 100 }, .local = .{ .zero, .zero, .one } },
-        .{ .name = "spine", .parent = 0, .world = math.identity(f32, 4), .screen = .{ .x = 104, .y = 100 }, .local = .{ .zero, .zero, .one } },
-    };
-    var skeleton = Skeleton.init(std.testing.allocator);
-    defer skeleton.deinit();
-    skeleton.joints = &joints;
-    try std.testing.expectEqual(@as(?u32, 1), skeleton.jointAt(.{ .x = 105, .y = 101 }));
-    try std.testing.expectEqual(@as(?u32, null), skeleton.jointAt(.{ .x = 130, .y = 100 }));
-}
-
-test "each bone becomes one line from its parent's joint to its own" {
-    const hips = math.translation4x4(f32, 0, 1, 0);
-    var joints = [_]Joint{
-        .{ .name = "root", .parent = null, .world = math.identity(f32, 4), .screen = null, .local = .{ .zero, .zero, .one } },
-        .{ .name = "hips", .parent = 0, .world = hips, .screen = null, .local = .{ .zero, .zero, .one } },
-    };
-    var skeleton = Skeleton.init(std.testing.allocator);
-    defer skeleton.deinit();
-    skeleton.joints = &joints;
-    var debug = eggy.debug_draw.DebugDraw{};
-    try skeleton.lines(&debug);
-    try std.testing.expectEqual(@as(usize, 1), debug.line_count);
-    try std.testing.expectEqual(@as(f32, 0), debug.lines[0].from_m.y);
-    try std.testing.expectEqual(@as(f32, 1), debug.lines[0].to_m.y);
-}

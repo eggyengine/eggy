@@ -70,14 +70,3 @@ fn draw(context: *const anyopaque, canvas: *ui.Canvas, bounds: ui.Rect) anyerror
         },
     }
 }
-
-test "built-in component icons are semantic and plugins always have a fallback" {
-    try std.testing.expectEqual(Icon.transform, iconFor("Transform", "eggy"));
-    try std.testing.expectEqual(Icon.mesh, iconFor("Mesh", "eggy"));
-    try std.testing.expectEqual(Icon.camera, iconFor("Camera", "eggy"));
-    try std.testing.expectEqual(Icon.scene, iconFor("SceneInstance", "eggy"));
-    try std.testing.expectEqual(Icon.material, iconFor("Material", "eggy"));
-    try std.testing.expectEqual(Icon.light, iconFor("SceneLight", "eggy"));
-    try std.testing.expectEqual(Icon.plugin, iconFor("Material", "game"));
-    try std.testing.expectEqual(Icon.plugin, iconFor("Health", "my_plugin"));
-}

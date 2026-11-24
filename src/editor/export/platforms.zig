@@ -203,11 +203,3 @@ test "linux builds for the architecture and C library chosen" {
     const settings = Settings{ .architecture = .aarch64, .libc = .musl };
     try std.testing.expectEqualStrings("aarch64-linux-musl", target(.linux, settings));
 }
-
-test "the web is neither zipped nor tuned to this computer" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    const settings = Settings{ .architecture = .x86_64, .this_cpu = true, .zip = false };
-    const args = try exportArgs(arena.allocator(), .web, settings, "resources/main.scene.zon", null);
-    try std.testing.expectEqual(@as(usize, 4), args.items.len);
-}

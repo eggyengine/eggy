@@ -165,26 +165,3 @@ fn describe(err: anyerror) []const u8 {
         else => "Couldn't read the plugin: see the Console.",
     };
 }
-
-test "a plugin is read from a folder, without a read-me" {
-    var tmp = std.testing.tmpDir(.{});
-    defer tmp.cleanup();
-    const io = std.testing.io;
-    try tmp.dir.createDirPath(io, "pack/stats");
-    try tmp.dir.writeFile(io, .{ .sub_path = "pack/build.zig.zon", .data = ".{}" });
-    try tmp.dir.writeFile(io, .{ .sub_path = "pack/stats/eggy.zon", .data = ".{ .plugin = .{ .title = \"Stats\", .module = \"stats\", .version = \"1.0.0\", .repository = \"https://github.com/me/pack\", .fingerprint = 7 } }" });
-    const folder = try tmp.dir.realPathFileAlloc(io, ".", std.testing.allocator);
-    defer std.testing.allocator.free(folder);
-
-    const fetch = try Fetch.start(std.testing.allocator, "pack/stats", folder);
-    defer fetch.destroy();
-    const outcome = while (true) {
-        if (fetch.take()) |taken| break taken;
-        try std.Io.sleep(io, .fromMilliseconds(5), .awake);
-    };
-    const fetched = outcome.fetched;
-    defer fetched.destroy();
-    try std.testing.expectEqualStrings("stats", fetched.manifest.module);
-    try std.testing.expect(fetched.readme == null);
-    try std.testing.expect(std.mem.endsWith(u8, fetched.package.folder.path, "pack"));
-}

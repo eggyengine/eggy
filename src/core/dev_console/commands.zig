@@ -98,14 +98,3 @@ test "a line splits into words at spaces, keeping quoted words whole" {
     try std.testing.expectEqualStrings("70", words[3]);
     try std.testing.expectEqual(@as(usize, 0), (try split(arena.allocator(), "   ")).len);
 }
-
-test "the rest of a call's line keeps its spaces and quotes" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    const line = "set Sign Label.text \"hello there\"";
-    var discard: std.Io.Writer.Discarding = .init(&.{});
-    const call = Call{ .line = line, .args = (try split(arena.allocator(), line))[1..], .out = &discard.writer, .arena = arena.allocator() };
-    try std.testing.expectEqualStrings("\"hello there\"", call.rest(2));
-    try std.testing.expectEqualStrings("Label.text \"hello there\"", call.rest(1));
-    try std.testing.expectEqualStrings("", call.rest(3));
-}

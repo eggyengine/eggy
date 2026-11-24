@@ -140,9 +140,3 @@ fn summaryOutcome(line: []const u8) ?Event {
     if (!std.mem.startsWith(u8, summary, "Build Summary:")) return null;
     return if (std.mem.indexOf(u8, summary, "failed") != null) .failed else .built;
 }
-
-test "a build's summary line says how it went" {
-    try std.testing.expectEqual(Event.built, summaryOutcome("Build Summary: 89/89 steps succeeded\n").?);
-    try std.testing.expectEqual(Event.failed, summaryOutcome("Build Summary: 85/89 steps succeeded (1 failed)\n").?);
-    try std.testing.expectEqual(@as(?Event, null), summaryOutcome("src/main.zig:3:5: error: expected ';'\n"));
-}

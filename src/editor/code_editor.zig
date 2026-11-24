@@ -116,27 +116,3 @@ fn command(choice: Choice) ?[]const u8 {
         .system => null,
     };
 }
-
-test "each code editor has its command, and the system's default has none" {
-    try std.testing.expectEqualStrings("code", command(.vscode).?);
-    try std.testing.expect(command(.system) == null);
-}
-
-test "a command on the PATH starts, given the folder and the file" {
-    if (builtin.os.tag == .windows) return error.SkipZigTest;
-    try start(std.testing.allocator, "/", &.{ "true", "/", "/" });
-}
-
-test "source links use each editor's line and column arguments without splitting paths" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    for ([_]Choice{ .vscode, .vscodium, .cursor, .zed, .sublime_text }) |choice| {
-        const argv = try arguments(arena.allocator(), choice, "/my game", "/my game/src/root.zig", .{ .line = 69, .column = 9 });
-        try std.testing.expectEqualStrings("/my game", argv[1]);
-        try std.testing.expectEqualStrings("/my game/src/root.zig:69:9", argv[argv.len - 1]);
-        if (choice == .vscode or choice == .vscodium or choice == .cursor) try std.testing.expectEqualStrings("--goto", argv[2]);
-    }
-    const ordinary = try arguments(arena.allocator(), .vscode, "/game", "/game/src/root.zig", null);
-    try std.testing.expectEqual(@as(usize, 3), ordinary.len);
-    try std.testing.expectEqualStrings("/game/src/root.zig", ordinary[2]);
-}

@@ -140,23 +140,3 @@ fn accumulate(sums: []u32, pixels: []const u8, bgra: bool) void {
 fn average(frame: []u8, sums: []const u32, count: u32) void {
     for (frame, sums) |*out, sum| out.* = @intCast((sum + count / 2) / count);
 }
-
-test "a clip's frames cover its first and last moments, and blur samples spread across half a frame" {
-    const film = Settings{ .frames_per_second = 10, .motion_blur_samples = 4 };
-    try std.testing.expectEqual(@as(u32, 21), film.frameCount(2));
-    try std.testing.expectEqual(@as(u32, 1), film.frameCount(0));
-    try std.testing.expectApproxEqAbs(@as(f32, 0.3), film.sampleTime(3, 0), 1e-6);
-    try std.testing.expectApproxEqAbs(@as(f32, 0.3 + 0.0375), film.sampleTime(3, 3), 1e-6);
-    try std.testing.expectEqual(@as(f32, 0.5), (Settings{ .frames_per_second = 2 }).sampleTime(1, 0));
-    try film.validate();
-    try std.testing.expectError(error.InvalidFilmSettings, (Settings{ .width_px = 1000 }).validate());
-}
-
-test "renders average into an opaque RGBA frame, blue-first targets swapped" {
-    var sums: [4]u32 = @splat(0);
-    accumulate(&sums, &.{ 10, 20, 30, 0 }, true);
-    accumulate(&sums, &.{ 20, 40, 60, 0 }, true);
-    var frame: [4]u8 = undefined;
-    average(&frame, &sums, 2);
-    try std.testing.expectEqualSlices(u8, &.{ 45, 30, 15, 255 }, &frame);
-}

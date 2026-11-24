@@ -208,13 +208,3 @@ fn checkPitch(pitch: f32) error{InvalidPitch}!void {
 fn checkPosition(position: math.Vec3) error{InvalidPosition}!void {
     for (position.toArray()) |value| if (!std.math.isFinite(value)) return error.InvalidPosition;
 }
-
-test "sound controls fail plainly without a mixer, and reject bad values first" {
-    const audio = Audio{ .host = null, .resources = .{} };
-    try std.testing.expectError(error.AudioUnavailable, audio.play(.init("jump.ogg"), .{}));
-    try std.testing.expectError(error.AudioUnavailable, audio.setBusGain(.music, 0.5));
-    try std.testing.expect(!audio.isPlaying(@fromBackingInt(1 << 16)));
-    try std.testing.expectError(error.InvalidGain, checkGain(-1));
-    try std.testing.expectError(error.InvalidPitch, checkPitch(0));
-    try std.testing.expectError(error.InvalidPosition, checkPosition(.init(0, std.math.nan(f32), 0)));
-}

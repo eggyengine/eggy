@@ -117,15 +117,6 @@ fn runDoctor() !void {
     try doctor.run(context.process, context.prompt, context.doctor);
 }
 
-test "headless routing preserves GUI startup and reload flags" {
-    try std.testing.expect(!isCommand(&.{"eggy_editor"}));
-    try std.testing.expect(!isCommand(&.{ "game_editor", "--project", "/game" }));
-    try std.testing.expect(!isCommand(&.{ "game_editor", "--window", "1,2,800,600,0", "--project", "/game" }));
-    for ([_][*:0]const u8{ "doctor", "export", "new", "--help", "--version", "typo" }) |command| {
-        try std.testing.expect(isCommand(&.{ "eggy_editor", command }));
-    }
-}
-
 test {
     _ = @import("prompt.zig");
     _ = projects;

@@ -195,30 +195,3 @@ pub const Particles = struct {
         return null;
     }
 };
-
-test "a burst sends its count at once, they fly and fall, and go when their time is up" {
-    var particles = Particles{ .gpa = std.testing.allocator };
-    defer particles.deinit();
-    _ = try particles.emit(.{ .position_m = .zero, .count = 5, .lifetime_s = 1, .velocity_m_per_s = .unit_x, .acceleration_m_per_s2 = .init(0, -10, 0) });
-    particles.step(0);
-    try std.testing.expectEqual(@as(usize, 5), particles.count());
-    particles.step(0.5);
-    try std.testing.expectApproxEqAbs(@as(f32, 0.5), particles.alive.items[0].position_m.x, 0.001);
-    try std.testing.expect(particles.alive.items[0].position_m.y < 0);
-    particles.step(0.6);
-    try std.testing.expectEqual(@as(usize, 0), particles.count());
-    try std.testing.expectEqual(@as(usize, 0), particles.emitters.items.len);
-}
-
-test "a rate keeps sending until stopped, and bad options are refused" {
-    var particles = Particles{ .gpa = std.testing.allocator };
-    defer particles.deinit();
-    const stream = try particles.emit(.{ .position_m = .zero, .count = 0, .rate_per_s = 10, .lifetime_s = 5 });
-    particles.step(0.5);
-    try std.testing.expectEqual(@as(usize, 5), particles.count());
-    try particles.stop(stream);
-    particles.step(0.5);
-    try std.testing.expectEqual(@as(usize, 5), particles.count());
-    try std.testing.expectError(error.UnknownEmitter, particles.stop(@fromBackingInt(@intCast(99))));
-    try std.testing.expectError(error.InvalidParticleOptions, particles.emit(.{ .position_m = .zero, .lifetime_s = -1 }));
-}

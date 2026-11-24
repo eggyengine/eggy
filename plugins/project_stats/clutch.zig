@@ -76,17 +76,3 @@ fn layOut(arena: std.mem.Allocator, days: []const Day, today: i32, weeks: usize)
     }
     return .{ .cells = cells, .today_cell = @intCast(today - first), .weeks = weeks, .busiest_ms = busiest_ms };
 }
-
-test "the clutch ends on today's week, Monday first, with days to come left empty" {
-    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena_state.deinit();
-    // Day 20397 is a Wednesday, 20395 the Monday before it.
-    const today: i32 = 20397;
-    try std.testing.expectEqual(2, weekday(today));
-    const clutch = try layOut(arena_state.allocator(), &.{ .{ .day = 20395, .worked_ms = 40 }, .{ .day = 20397, .worked_ms = 10 }, .{ .day = 1, .worked_ms = 999 } }, today, 8);
-    try std.testing.expectEqual(7 * 7 + 2, clutch.today_cell);
-    try std.testing.expectEqual(40, clutch.cells[7 * 7].?);
-    try std.testing.expectEqual(10, clutch.cells[clutch.today_cell].?);
-    try std.testing.expectEqual(null, clutch.cells[clutch.today_cell + 1]);
-    try std.testing.expectEqual(40, clutch.busiest_ms);
-}

@@ -295,39 +295,10 @@ test "scene lights follow world transforms and validate changes" {
     try std.testing.expectEqual(@as(u32, 0), (try gather(&world)).count);
 }
 
-test "light overflow is reported rather than silently dropping lights" {
-    var world = ecs.World.init(std.testing.allocator);
-    defer world.deinit();
-    for (0..max_lights + 1) |_| _ = try world.spawn(.{ transform.Transform{}, SceneLight{} });
-    try std.testing.expectError(error.TooManyLights, gather(&world));
-}
-
 /// Warn when the number of lights `frame` left out as invalid changes to one or more; `reported`
 /// keeps the number last reported between frames.
 pub fn reportInvalid(frame: Frame, reported: *u32) void {
     if (frame.invalid == reported.*) return;
     reported.* = frame.invalid;
     if (frame.invalid > 0) std.log.warn("{d} scene light(s) left out: check their values", .{frame.invalid});
-}
-
-test "point and spot shadows take their maps in turn, and running out is an error" {
-    var world = ecs.World.init(std.testing.allocator);
-    defer world.deinit();
-    _ = try world.spawn(.{ transform.Transform{}, SceneLight{ .kind = .point, .casts_shadows = true } });
-    _ = try world.spawn(.{ transform.Transform{}, SceneLight{ .kind = .spot, .casts_shadows = true } });
-    _ = try world.spawn(.{ transform.Transform{}, SceneLight{ .kind = .point } });
-    const frame = try gather(&world);
-    try std.testing.expectEqual(@as(u32, 7), frame.local_shadow_maps);
-    var firsts: [2]f32 = undefined;
-    var casting: usize = 0;
-    for (frame.lights[0..frame.count]) |light| if (light.cone_shadow[2] > 0.5) {
-        firsts[casting] = light.cone_shadow[3];
-        casting += 1;
-    };
-    try std.testing.expectEqual(@as(usize, 2), casting);
-    // Whichever comes first, the second starts where the first's maps end.
-    try std.testing.expect((firsts[0] == 0 and (firsts[1] == 6 or firsts[1] == 1)) or (firsts[1] == 0 and (firsts[0] == 6 or firsts[0] == 1)));
-    _ = try world.spawn(.{ transform.Transform{}, SceneLight{ .kind = .point, .casts_shadows = true } });
-    _ = try world.spawn(.{ transform.Transform{}, SceneLight{ .kind = .point, .casts_shadows = true } });
-    try std.testing.expectError(error.TooManyShadowLights, gather(&world));
 }

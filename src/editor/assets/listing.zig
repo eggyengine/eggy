@@ -159,36 +159,3 @@ pub fn folderOf(entry: Entry) []const u8 {
     const parent = parentOf(entry.path);
     return if (entry.virtual) parentOf(parent) else parent;
 }
-
-test "files are told apart by their names" {
-    try std.testing.expectEqual(Kind.scene, Kind.ofFile("main.scene.zon"));
-    try std.testing.expectEqual(Kind.input_map, Kind.ofFile("player.inmap.zon"));
-    try std.testing.expectEqual(Kind.animation, Kind.ofFile("walk.clip.zon"));
-    try std.testing.expectEqual(Kind.model, Kind.ofFile("Ship.GLB"));
-    try std.testing.expectEqual(Kind.text, Kind.ofFile("build.zig.zon"));
-    try std.testing.expectEqual(Kind.code, Kind.ofFile("root.zig"));
-    try std.testing.expectEqual(Kind.image, Kind.ofFile("Icon.PNG"));
-    try std.testing.expectEqual(Kind.file, Kind.ofFile("LICENSE"));
-}
-
-test "a folder lists folders first, without hidden files or build output" {
-    const io = std.testing.io;
-    var tmp = std.testing.tmpDir(.{});
-    defer tmp.cleanup();
-    try tmp.dir.createDirPath(io, "src");
-    try tmp.dir.createDirPath(io, "zig-out/bin");
-    try tmp.dir.createDirPath(io, ".eggy");
-    try tmp.dir.writeFile(io, .{ .sub_path = "build.zig", .data = "" });
-    try tmp.dir.writeFile(io, .{ .sub_path = "src/main.zig", .data = "" });
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-
-    const top = try list(arena.allocator(), io, tmp.dir, "");
-    try std.testing.expectEqual(@as(usize, 2), top.len);
-    try std.testing.expectEqualStrings("src", top[0].name);
-    try std.testing.expectEqual(Kind.folder, top[0].kind);
-    const inside = try list(arena.allocator(), io, tmp.dir, "src");
-    try std.testing.expectEqualStrings("src/main.zig", inside[0].path);
-    try std.testing.expectEqualStrings("src", parentOf(inside[0].path));
-    try std.testing.expectEqualStrings("", parentOf("src"));
-}

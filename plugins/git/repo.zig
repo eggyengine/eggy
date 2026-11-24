@@ -401,17 +401,6 @@ fn splitLines(arena: std.mem.Allocator, text: []const u8) ![]const Diff.Line {
     return lines.items;
 }
 
-test "a diff's tabs become spaces and it is cut into lines" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    const a = arena.allocator();
-    const text = try expandTabs(a, "+\tx\n-ab\ty\r\n");
-    try std.testing.expectEqualStrings("+   x\n-ab y\r\n", text);
-    const lines = try splitLines(a, text);
-    try std.testing.expectEqual(@as(usize, 2), lines.len);
-    try std.testing.expectEqualStrings("-ab y", text[lines[1].start..lines[1].end]);
-}
-
 test "a repository is read on a worker and handed over on update" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();

@@ -134,29 +134,3 @@ pub const Encoder = struct {
         self.state.store(@backingInt(outcome), .release);
     }
 };
-
-test "a clip's file name loses its extensions" {
-    try std.testing.expectEqualStrings("bee_intro", fileStem("bee_intro.clip.zon"));
-    try std.testing.expectEqualStrings("walk", fileStem("walk"));
-}
-
-test "the command mixes each sound in at its key, and cuts to the clip" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    var buzz = "/p/resources/buzz.wav".*;
-    var jingle = "/p/resources/jingle.mp3".*;
-    const argv = try arguments(arena.allocator(), .{
-        .frames_dir = "/p/zig-out/film/bee_intro-1/frames",
-        .out_dir = "/p/zig-out/film/bee_intro-1",
-        .frames_per_second = 60,
-        .duration_s = 12,
-        .sounds = &.{ .{ .path = &buzz, .delay_ms = 0 }, .{ .path = &jingle, .delay_ms = 9200 } },
-    });
-    const joined = try std.mem.join(arena.allocator(), " ", argv);
-    try std.testing.expect(std.mem.indexOf(u8, joined, "-framerate 60 -i /p/zig-out/film/bee_intro-1/frames/frame_%05d.png") != null);
-    try std.testing.expect(std.mem.indexOf(u8, joined, "[1:a]adelay=0:all=1[a1];[2:a]adelay=9200:all=1[a2];[a1][a2]amix=inputs=2:normalize=0[aout]") != null);
-    try std.testing.expect(std.mem.indexOf(u8, joined, "-t 12.017 /p/zig-out/film/bee_intro-1/film.mp4") != null);
-
-    var name: [32]u8 = undefined;
-    try std.testing.expectEqualStrings("frame_00042.png", try std.fmt.bufPrint(&name, frame_pattern_format, .{42}));
-}

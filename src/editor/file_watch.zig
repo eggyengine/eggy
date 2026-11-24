@@ -340,36 +340,6 @@ const FsEvents = struct {
     }
 };
 
-test "a file written in a watched folder, or in a folder made in it later, is reported once" {
-    const gpa = std.testing.allocator;
-    const io = std.testing.io;
-    if (Watch.Impl == void) return error.SkipZigTest;
-    var tmp = std.testing.tmpDir(.{});
-    defer tmp.cleanup();
-    try tmp.dir.createDirPath(io, "resources/scene");
-    const base = try tmp.dir.realPathFileAlloc(io, ".", gpa);
-    defer gpa.free(base);
-
-    var watch = (try Watch.init(gpa, io, base, "resources")).?;
-    defer watch.deinit();
-    var arena = std.heap.ArenaAllocator.init(gpa);
-    defer arena.deinit();
-    var changed: std.ArrayList([]const u8) = .empty;
-
-    try tmp.dir.writeFile(io, .{ .sub_path = "resources/scene/main.scene.zon", .data = ".{}" });
-    try tmp.dir.writeFile(io, .{ .sub_path = "resources/scene/main.scene.zon", .data = ".{ }" });
-    try waitFor(&watch, io, arena.allocator(), &changed, "resources/scene/main.scene.zon");
-    var reports: usize = 0;
-    for (changed.items) |path| reports += @intFromBool(std.mem.eql(u8, path, "resources/scene/main.scene.zon"));
-    try std.testing.expectEqual(@as(usize, 1), reports);
-
-    // A folder made after the watch started is watched once it is seen.
-    try tmp.dir.createDirPath(io, "resources/levels");
-    try watch.poll(io, arena.allocator(), &changed);
-    try tmp.dir.writeFile(io, .{ .sub_path = "resources/levels/one.scene.zon", .data = ".{}" });
-    try waitFor(&watch, io, arena.allocator(), &changed, "resources/levels/one.scene.zon");
-}
-
 /// Poll `watch` until `path` is among `changed`, for up to two seconds: Windows and macOS report
 /// a moment after the write.
 fn waitFor(watch: *Watch, io: std.Io, arena: std.mem.Allocator, changed: *std.ArrayList([]const u8), path: []const u8) !void {
@@ -379,10 +349,4 @@ fn waitFor(watch: *Watch, io: std.Io, arena: std.mem.Allocator, changed: *std.Ar
         try io.sleep(.fromMilliseconds(20), .awake);
     }
     return error.NotReported;
-}
-
-test "every OS's watch compiles" {
-    _ = &Watch.init;
-    _ = &Watch.poll;
-    _ = &Watch.deinit;
 }

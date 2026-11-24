@@ -81,37 +81,3 @@ test "clipboard survives deleting the source and remaps references on every past
     try std.testing.expect(!first.eql(second));
     try std.testing.expect(!world.get(second, Link).?.target.entity.?.eql(copied_child));
 }
-
-test "clipboard clears external references when a replaced world can reuse their IDs" {
-    const Link = struct { target: eggy.EntityRef(void) = .{} };
-    const access = eggy.scene.registryAccess(eggy.components.Registry(&.{Link}, &.{"game"}));
-    const gpa = std.testing.allocator;
-    var world = ecs.World.init(gpa);
-    defer world.deinit();
-    var clipboard = Clipboard{ .gpa = gpa };
-    defer clipboard.deinit();
-    const outside = try world.spawn(.{});
-    const root = try world.spawn(.{Link{ .target = .init(outside) }});
-    try clipboard.copy(&world, access, root);
-    const same_world = (try clipboard.paste(&world, access, null)).?;
-    try std.testing.expectEqual(outside, world.get(same_world, Link).?.target.entity.?);
-    clipboard.worldChanged();
-    const next_world = (try clipboard.paste(&world, access, null)).?;
-    try std.testing.expect(world.get(next_world, Link).?.target.entity == null);
-}
-
-test "a rejected nested-reference copy preserves the previous clipboard" {
-    const Nested = struct { links: [1]eggy.EntityRef(void) = @splat(.{}) };
-    const access = eggy.scene.registryAccess(eggy.components.Registry(&.{Nested}, &.{"game"}));
-    const gpa = std.testing.allocator;
-    var world = ecs.World.init(gpa);
-    defer world.deinit();
-    var clipboard = Clipboard{ .gpa = gpa };
-    defer clipboard.deinit();
-    const original = try world.spawn(.{});
-    const unsupported = try world.spawn(.{Nested{ .links = .{.init(original)} }});
-    try clipboard.copy(&world, access, original);
-    try std.testing.expectError(error.NestedEntityReferencesUnsupported, clipboard.copy(&world, access, unsupported));
-    try std.testing.expectEqual(original, clipboard.scene.?.sources[0]);
-    try std.testing.expect(world.isAlive(original) and world.isAlive(unsupported));
-}

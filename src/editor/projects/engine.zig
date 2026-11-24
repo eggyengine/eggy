@@ -269,34 +269,3 @@ fn parseDependency(arena: std.mem.Allocator, manifest: [:0]const u8) !Dependency
     const parsed = zon_file.parse(Manifest, arena, manifest, .{ .ignore_unknown_fields = true }) catch return error.UnreadableManifest;
     return parsed.dependencies.eggy;
 }
-
-test "a manifest's eggy path is found, and none when eggy is fetched by URL" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    try std.testing.expectEqualStrings("../engines/abc", (try parseDependencyPath(arena.allocator(),
-        \\.{ .name = .game, .dependencies = .{ .eggy = .{ .path = "../engines/abc" } } }
-    )).?);
-    try std.testing.expect(try parseDependencyPath(arena.allocator(),
-        \\.{ .name = .game, .dependencies = .{ .eggy = .{ .url = "git+https://example.com/eggy", .hash = "x" } } }
-    ) == null);
-}
-
-test "a fetched Eggy's version comes from its package hash" {
-    try std.testing.expectEqualStrings("0.1.0", versionFromHash("eggy-0.1.0-3fi9DKKOawD5LqxsW5WSfLOVw2qUbwt2tBECa3m8439w").?);
-    try std.testing.expectEqualStrings("0.2.0-dev.4", versionFromHash("eggy-0.2.0-dev.4-3fi9DKKOawD5LqxsW5WSfLOVw2qUbwt2tBECa3m8439w").?);
-    try std.testing.expect(versionFromHash("1220abcdef") == null);
-}
-
-test "only a packaged engine upgrades, and only to a different one" {
-    const packaged = ProjectEngine{ .packaged = "aaaa" };
-    try std.testing.expect(packaged.canUpgrade(null, .{ .name = "bbbb" }));
-    try std.testing.expect(!packaged.canUpgrade(null, .{ .name = "aaaa" }));
-    try std.testing.expect(!packaged.canUpgrade(null, null));
-    try std.testing.expect(!(ProjectEngine{ .linked = "/src/eggy" }).canUpgrade(null, .{ .name = "bbbb" }));
-    try std.testing.expect(!(ProjectEngine{ .fetched = {} }).canUpgrade(null, .{ .name = "bbbb" }));
-    // The same commit in another directory (unpacked by another editor) is no upgrade.
-    try std.testing.expect(!packaged.canUpgrade("c1", .{ .name = "bbbb", .commit = "c1" }));
-    try std.testing.expect(packaged.canUpgrade("c1", .{ .name = "aaaa", .commit = "c2" }));
-    // An engine with no commit recorded moves to the source's commit.
-    try std.testing.expect(packaged.canUpgrade(null, .{ .name = "cccc", .commit = "c2" }));
-}

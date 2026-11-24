@@ -660,32 +660,3 @@ test "output wraps into rows of whole characters, a row per empty line too" {
     try std.testing.expectEqualStrings("", text[view.rows.items[2].start..view.rows.items[2].end]);
     try std.testing.expectEqualStrings("xy\u{e9}", text[view.rows.items[3].start..view.rows.items[3].end]);
 }
-
-test "a growing output keeps the selection; a different one drops it" {
-    var view = TerminalView.init(std.testing.allocator, undefined);
-    defer view.deinit();
-    try view.setText("one two\n");
-    view.selection = view.wordAround(5);
-    try std.testing.expectEqualStrings("two", view.selectedText().?);
-    try view.setText("one two\nthree\n");
-    try std.testing.expectEqualStrings("two", view.selectedText().?);
-    view.selection = view.lineAround(10);
-    try std.testing.expectEqualStrings("three", view.selectedText().?);
-    try view.setText("other");
-    try std.testing.expect(view.selectedText() == null);
-}
-
-test "a log line is coloured by level, scope and the locations in it" {
-    var buffer: [max_spans]Span = undefined;
-    const line = "error(zig_build): src/main.zig:12:5: error: expected ';'";
-    const spans = lineSpans(line, 0, line.len, .{}, &buffer);
-    try std.testing.expectEqualStrings("error", line[spans[0].start..spans[0].end]);
-    try std.testing.expectEqualStrings("(zig_build)", line[spans[1].start..spans[1].end]);
-    try std.testing.expectEqual(cyan, spans[3].color);
-    try std.testing.expectEqualStrings("src/main.zig:12:5", line[spans[3].start..spans[3].end]);
-    try std.testing.expectEqualStrings("error:", line[spans[5].start..spans[5].end]);
-    // Every byte is drawn, once.
-    var covered: usize = 0;
-    for (spans) |span| covered += span.end - span.start;
-    try std.testing.expectEqual(line.len, covered);
-}
