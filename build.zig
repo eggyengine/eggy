@@ -18,6 +18,7 @@ const shared_libraries = @import("src/build/shared_libraries.zig");
 const mingw_fortify = @import("src/build/mingw_fortify.zig");
 const builtin_plugins = @import("src/build/builtin_plugins.zig");
 const audio_build = @import("src/build/audio.zig");
+const fast_library = @import("src/build/fast_library.zig");
 
 /// Configure Eggy's own runtime/editor, tests, package resources and API-reference steps.
 /// Zig owns `b` and invokes this once per build-graph evaluation; games use `addGame` instead.
@@ -181,6 +182,25 @@ pub fn addPlugin(b: *std.Build, options: PluginOptions) *std.Build.Module {
     // Missing until eggy's lazy dependencies are fetched; Zig then runs the build again.
     if (eggyDependency(b, target, optimize).builder.modules.get("eggy")) |eggy| plugin.addImport("eggy", eggy);
     return plugin;
+}
+
+pub const FastLibraryOptions = fast_library.Options;
+
+/// Build code that must run fast in a Debug build too (a game's terrain or noise, say) as a
+/// ReleaseFast static library and link it into `into`, the game's or a plugin's module, which
+/// declares its `export fn`s as `extern fn`. It may import pure modules such as eggenvector,
+/// never `eggy`. `target` defaults to `-Dtarget`.
+///
+/// ```zig
+/// _ = @import("eggy").addFastLibrary(b, game, .{
+///     .name = "terrain_gen",
+///     .root_source_file = b.path("src/terrain_gen.zig"),
+/// });
+/// ```
+pub fn addFastLibrary(b: *std.Build, into: *std.Build.Module, options: FastLibraryOptions) *std.Build.Step.Compile {
+    const target = into.resolved_target orelse b.standardTargetOptions(.{});
+    const optimize = into.optimize orelse b.standardOptimizeOption(.{});
+    return fast_library.add(b, eggyDependency(b, target, optimize), into, target, options);
 }
 
 /// Eggy as a dependency of `b`. `addGame` and `addPlugin` pass the same arguments, so a package

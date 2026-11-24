@@ -185,6 +185,39 @@ plugin.addImport("noise", noise.module("noise"));
 Don't fetch your own copy of Eggy this way: `addPlugin` already gives the plugin
 `@import("eggy")`, and it must be the game's Eggy.
 
+A dependency's `.optimize` doesn't make it fast in a Debug build. Zig optimizes a whole
+executable or library as its root module says, so a module asked for `.fast` inside a Debug
+game runs at Debug speed, and the editor builds games in Debug. Code that must be fast while
+you work, such as noise for terrain, goes in a fast library: `addFastLibrary` builds it on its
+own as an optimized static library, position independent for the editor's hot reload, and
+links it into the module you give it. That module calls it through `extern fn`:
+
+```zig title="build.zig"
+const fast_noise = b.dependency("noise", .{ .target = target, .optimize = .fast });
+_ = eggy.addFastLibrary(b, plugin, .{
+    .name = "noise_fast",
+    .root_source_file = b.path("src/noise_fast.zig"),
+    .imports = &.{.{ .name = "noise", .module = fast_noise.module("noise") }},
+});
+```
+
+```zig title="src/noise_fast.zig"
+const noise = @import("noise");
+
+export fn noiseAt(x: f32, z: f32) f32 {
+    return noise.perlin(x, z);
+}
+```
+
+```zig title="src/root.zig"
+extern fn noiseAt(x: f32, z: f32) f32;
+```
+
+Only C types cross: numbers, pointers and `extern struct`s, so pass a slice as its pointer and
+length. A fast library is given Eggy's eggenvector as `eggenvector`; it may import other pure
+modules, built for `.fast` or with no `.optimize` of their own, but never `eggy`, which `addFastLibrary` refuses: a second
+copy of the engine wouldn't share the game's.
+
 A library that also works without Eggy can pin its own Vitellus, Weeoui, Clutch or
 Eggenvector. Inside a game, every module the game and its plugins import gets Eggy's copy
 of these in place of its own, whatever version it pinned, so their types are the ones
