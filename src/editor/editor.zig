@@ -772,6 +772,10 @@ pub fn Editor(comptime project: type) type {
             self.ui.theme.small_text_size = 11;
             self.workspace.engine_label = self.upgrades.label;
             self.workspace.scene_name = if (self.open_scene) |*scene| scene.name() else null;
+            for (0..panels.max_copies) |copy| {
+                const path = if (copy == self.scene_tabs.applied) if (self.open_scene) |*scene| scene.path else null else self.scene_tabs.fileOf(@intCast(copy));
+                self.workspace.nameScene(@intCast(copy), if (path) |file| scene_file.titleOf(file) else null);
+            }
             // A few times a second (not while playing: Stop puts the scene back), compare the world
             // with the saved scene, for the status bar's `*`, and with the last undo step.
             // Nor while the Animation panel poses the scene: the pose is not an edit.

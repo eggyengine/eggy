@@ -182,6 +182,9 @@ pub const CloseGuard = struct {
     mayClose: *const fn (context: *anyopaque, closing: Closing) bool,
 };
 
+/// A 3D tab's title naming its scene, kept inline so the workspace needs no allocator for it.
+const SceneTitle = struct { bytes: [96:0]u8 = undefined, len: u8 = 0 };
+
 pub const Workspace = struct {
     dock: dock.DockSpace,
     /// The layouts side by side in the main window, each a tree of `dock`.
@@ -235,6 +238,8 @@ pub const Workspace = struct {
     scene_name: ?[]const u8 = null,
     /// Whether the world has changes the open scene doesn't: the status bar marks it with `*`.
     scene_unsaved: bool = false,
+    /// Each Scene copy's 3D tab title, naming its scene (`nameScene`).
+    scene_titles: [panels.max_copies]SceneTitle = @splat(.{}),
     /// Asked before a close takes Scene panels away, so the editor can offer to save their
     /// scenes first; null closes without asking.
     close_guard: ?CloseGuard = null,
@@ -1378,10 +1383,35 @@ pub const Workspace = struct {
         }
     }
 
-    /// Tab `index`'s name: its kind's, or for panels dragged onto the bar and asset tabs, its
-    /// first panel's (an Asset Preview's file).
+    /// Title Scene copy `copy`'s 3D tab after the scene `name` (`3D: main`), or plain `3D` for
+    /// null. A long name is cut short.
+    pub fn nameScene(self: *Workspace, copy: u8, name: ?[]const u8) void {
+        const title = &self.scene_titles[copy];
+        const shown = name orelse {
+            title.len = 0;
+            return;
+        };
+        const prefix = comptime workspace_tabs.Kind.scene_3d.title() ++ ": ";
+        var kept = shown[0..@min(shown.len, title.bytes.len - prefix.len)];
+        // Never end partway through a character.
+        while (kept.len < shown.len and kept.len > 0 and shown[kept.len] & 0xC0 == 0x80) kept = kept[0 .. kept.len - 1];
+        @memcpy(title.bytes[0..prefix.len], prefix);
+        @memcpy(title.bytes[prefix.len..][0..kept.len], kept);
+        title.len = @intCast(prefix.len + kept.len);
+        title.bytes[title.len] = 0;
+    }
+
+    /// Tab `index`'s name: its kind's (a 3D tab's with its scene's), or for panels dragged onto
+    /// the bar and asset tabs, its first panel's (an Asset Preview's file).
     fn tabTitleZ(self: *const Workspace, index: usize) [:0]const u8 {
         const tab = self.tabs.list[index] orelse return "Tab";
+        if (tab.kind == .scene_3d) {
+            var buffer: [64 * 16]u32 = undefined;
+            for (self.tabs.panelsOf(&self.dock, index, &buffer)) |id| if (panels.copyOf(id)) |found| if (found.panel == .scene) {
+                const title = &self.scene_titles[found.copy];
+                if (title.len > 0) return title.bytes[0..title.len :0];
+            };
+        }
         if (tab.kind != .panels and tab.kind != .asset) return tab.kind.title();
         var at = tab.root;
         while (self.dock.nodes[at].kind == .split) at = self.dock.nodes[at].first;
@@ -1679,6 +1709,17 @@ test "previewing an asset opens a tab of its own in a window, once, and closing 
     try std.testing.expect(workspace.dock.nodeOf(id) == null);
     try std.testing.expect(workspace.dock.nodeOf(@backingInt(Panel.asset_preview)) != null);
     try std.testing.expectEqual(@as(u8, 0), workspace.live.asset_preview);
+}
+
+test "a 3D tab is titled with its Scene's scene" {
+    var workspace = try testWorkspace();
+    defer workspace.deinit();
+    const shown = workspace.tabs.active.?;
+    try std.testing.expectEqualStrings("3D", workspace.tabTitleZ(shown));
+    workspace.nameScene(workspace.live.scene, "main");
+    try std.testing.expectEqualStrings("3D: main", workspace.tabTitleZ(shown));
+    workspace.nameScene(workspace.live.scene, null);
+    try std.testing.expectEqualStrings("3D", workspace.tabTitleZ(shown));
 }
 
 test "a file dropped on the tab bar opens in a new tab, shown" {

@@ -135,6 +135,17 @@ pub const SceneTabs = struct {
         }
     }
 
+    /// The scene file waiting for Scene copy `copy`'s tab, borrowed; null for none or a world
+    /// never saved.
+    pub fn fileOf(self: *const SceneTabs, copy: u8) ?[]const u8 {
+        const found = self.waiting[copy] orelse return null;
+        return switch (found) {
+            .file => |path| path,
+            .kept => |kept| if (kept.path.len == 0) null else kept.path,
+            .empty => null,
+        };
+    }
+
     /// Whether `live` is another copy than the applied one, so the open world must be put aside.
     pub fn changing(self: *const SceneTabs, live: u8) bool {
         return self.settled and live != self.applied;

@@ -12,6 +12,13 @@ const memory_path = ".eggy" ++ std.fs.path.sep_str ++ "scene.zon";
 const scenes_dir = eggy.project.scenes_dir;
 pub const extension = ".scene.zon";
 
+/// A scene file's name without `.scene.zon` ("main" for `resources/main.scene.zon`), borrowed
+/// from `path`.
+pub fn titleOf(path: []const u8) []const u8 {
+    const file = std.fs.path.basename(path);
+    return if (std.mem.endsWith(u8, file, extension)) file[0 .. file.len - extension.len] else file;
+}
+
 /// The scene open in the editor, if any: its path relative to the project. Owned.
 pub const OpenScene = struct {
     gpa: std.mem.Allocator,
@@ -58,8 +65,7 @@ pub const OpenScene = struct {
     /// if (open_scene.title()) |title| context.text(title); // "main"
     /// ```
     pub fn title(self: *const OpenScene) ?[]const u8 {
-        const file = self.name() orelse return null;
-        return if (std.mem.endsWith(u8, file, extension)) file[0 .. file.len - extension.len] else file;
+        return titleOf(self.path orelse return null);
     }
 
     /// Reopen the scene that was open last into `world`, if it still exists.
