@@ -21,10 +21,12 @@
 //!     }
 //!
 //! Clips are named by their asset keys (`AssetRef(.animation).key()`), states and parameters by
-//! name. A transition with an empty `from` leaves any state. Positions are where the editor
-//! draws each node, and change nothing at run time.
+//! name. A transition with an empty `from` leaves any state. A state may play nothing
+//! (`.motion = .none`), fading its layer out. Positions are where the editor draws each node,
+//! and change nothing at run time.
 const std = @import("std");
 const zon_file = @import("zon.zig");
+const RootMotion = @import("rig.zig").RootMotion;
 
 pub const extension = ".graph.zon";
 pub const format_version: u32 = 1;
@@ -96,11 +98,18 @@ pub const Motion = union(enum) {
     clip: ClipMotion,
     blend_1d: Blend1d,
     blend_2d: Blend2d,
+    /// Nothing: the layer's states fade out over the transition's blend, so a layer over a bone
+    /// can rest and let the layers before it show.
+    none,
 };
 
 pub const State = struct {
     name: []const u8,
     motion: Motion = .{ .clip = .{} },
+    /// What its clips do with the root bone.
+    root_motion: RootMotion = .keep,
+    /// Where its clips start when it is entered, in seconds into each.
+    start_s: f32 = 0,
     /// Where the editor draws it, in the graph's units.
     position: [2]f32 = .{ 0, 0 },
 };
@@ -205,6 +214,7 @@ pub const Graph = struct {
             for (layer.states, 0..) |state, index| {
                 if (state.name.len == 0) return error.UnnamedState;
                 if (layer.stateIndex(state.name) != index) return error.DuplicateName;
+                if (!(state.start_s >= 0) or !std.math.isFinite(state.start_s)) return error.InvalidNumber;
                 try self.validateMotion(state.motion);
             }
             for (layer.transitions) |transition| {
@@ -233,6 +243,7 @@ pub const Graph = struct {
                 for (blend.parameters) |parameter| try self.validateAxis(parameter);
                 try validatePoints(blend.points);
             },
+            .none => {},
         }
     }
 

@@ -191,7 +191,7 @@ fn moveAlong(component: *AnimationGraph, where: *LayerState, layer: format.Layer
         const target = layer.stateIndex(transition.to) orelse continue;
         if (from_any and target == where.state) continue;
         if (!holds(component, transition, graph)) continue;
-        if (transition.wait_for_end and !ended(current.motion, where.time_s, transition.blend_s, clips)) continue;
+        if (transition.wait_for_end and !ended(current, where.time_s, transition.blend_s, clips)) continue;
         spend(component, transition, graph);
         where.* = .{ .state = @intCast(target), .blend_s = transition.blend_s };
         return true;
@@ -223,30 +223,33 @@ fn spend(component: *AnimationGraph, transition: format.Transition, graph: forma
     }
 }
 
-/// Whether `motion`, `time_s` in, is within `blend_s` of its clip's end. A blend state goes by
-/// its first clip.
+/// Whether `state`, `time_s` after it was entered, is within `blend_s` of its clip's end, its
+/// clip having started `start_s` in. A blend state goes by its first clip; one that plays
+/// nothing has ended at once.
 // ponytail: a blend state ends by its first clip alone; time them by normalized time once blended clips are synced.
-fn ended(motion: format.Motion, time_s: f32, blend_s: f32, clips: *ClipCache) bool {
-    const key, const speed = switch (motion) {
+fn ended(state: format.State, time_s: f32, blend_s: f32, clips: *ClipCache) bool {
+    const key, const speed = switch (state.motion) {
         .clip => |clip| .{ clip.clip, clip.speed },
         .blend_1d => |blend| if (blend.points.len > 0) .{ blend.points[0].clip, blend.points[0].speed } else return true,
         .blend_2d => |blend| if (blend.points.len > 0) .{ blend.points[0].clip, blend.points[0].speed } else return true,
+        .none => return true,
     };
     if (key.len == 0) return true;
     const loaded = clips.get(key) orelse return true;
-    return time_s * @abs(speed) >= loaded.duration_s() - blend_s;
+    return state.start_s + time_s * @abs(speed) >= loaded.duration_s() - blend_s;
 }
 
 /// Set `animator`'s states for the state `where` is in. Problems are logged as the state is
 /// entered, so a broken state doesn't log every frame.
 fn drive(component: *const AnimationGraph, animator: *Animator, layer: format.Layer, where: LayerState, entering: bool) void {
     const state = layer.states[where.state];
-    const start_s: ?f32 = if (entering) 0 else null;
-    const options = states.Options{ .start_s = start_s, .bone = layer.bone };
+    const start_s: ?f32 = if (entering) state.start_s else null;
+    const options = states.Options{ .start_s = start_s, .root_motion = state.root_motion, .bone = layer.bone };
     const result = switch (state.motion) {
         .clip => |clip| playClip(animator, clip, where.blend_s, options),
         .blend_1d => |blend| blendAlong(component, animator, blend, where.blend_s, options),
         .blend_2d => |blend| blendAcross(component, animator, blend, where.blend_s, options),
+        .none => states.fadeOut(&animator.states, layer.bone, where.blend_s),
     };
     result catch |err| if (entering) std.log.warn("animation graph state {s} can't play: {t}", .{ state.name, err });
 }
@@ -321,4 +324,52 @@ test "a layer enters its entry state, and a trigger moves it along a transition 
     try std.testing.expectEqual(@as(f32, 0), component.parameter("jump").?);
     const jump = AssetRef(.animation).fromId(0x33);
     try std.testing.expectEqual(@as(f32, 1), states.find(&animator.states, jump).?.weight);
+}
+
+test "a state starts at start_s with its root motion, ends start_s early, and a none state fades its layer out" {
+    const gpa = std.testing.allocator;
+    const parsed = try format.parse(gpa,
+        \\.{
+        \\    .parameters = .{ .{ .name = "draw", .kind = .trigger } },
+        \\    .layers = .{
+        \\        .{ .name = "Base", .states = .{ .{ .name = "Idle", .motion = .{ .clip = .{ .clip = "0000000000000041" } } } } },
+        \\        .{
+        \\            .name = "Upper",
+        \\            .bone = "mixamorig:Spine",
+        \\            .states = .{
+        \\                .{ .name = "Rest", .motion = .none },
+        \\                .{ .name = "Draw", .motion = .{ .clip = .{ .clip = "0000000000000042", .repeat = .once } }, .root_motion = .in_place, .start_s = 0.25 },
+        \\            },
+        \\            .transitions = .{
+        \\                .{ .from = "Rest", .to = "Draw", .blend_s = 0, .conditions = .{ .{ .parameter = "draw" } } },
+        \\                .{ .from = "Draw", .to = "Rest", .blend_s = 0.25, .wait_for_end = true },
+        \\            },
+        \\        },
+        \\    },
+        \\}
+    );
+    defer parsed.deinit();
+    var clips: ClipCache = .{ .gpa = gpa };
+    defer clips.deinit();
+    // A 1 s clip: started 0.25 s in and fading out over 0.25 s, Draw ends 0.5 s after it begins.
+    try clips.replace("0000000000000042", .{ .duration_s = 1, .tracks = &.{} });
+    var component: AnimationGraph = .{};
+    var animator: Animator = .{};
+
+    run(&component, &animator, parsed.graph, &clips, 0.25);
+    try component.set("draw", 1);
+    run(&component, &animator, parsed.graph, &clips, 0.25);
+    const draw = states.find(&animator.states, AssetRef(.animation).fromId(0x42)).?;
+    try std.testing.expectEqual(@as(f32, 0.25), draw.time_s);
+    try std.testing.expectEqual(states.RootMotion.in_place, draw.root_motion);
+
+    for ([_]f32{ 0.25, 0.125 }) |delta_s| {
+        run(&component, &animator, parsed.graph, &clips, delta_s);
+        try std.testing.expectEqual(@as(u8, 1), component.layers[1].state);
+    }
+    run(&component, &animator, parsed.graph, &clips, 0.125);
+    try std.testing.expectEqual(@as(u8, 0), component.layers[1].state);
+    states.advance(&animator.states, 0.125);
+    try std.testing.expectEqual(@as(f32, 0.5), draw.weight);
+    try std.testing.expectEqual(@as(f32, 1), states.find(&animator.states, AssetRef(.animation).fromId(0x41)).?.weight);
 }

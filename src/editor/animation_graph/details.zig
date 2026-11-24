@@ -18,8 +18,9 @@ const remove_glyph = "\u{f00d}";
 const plus_glyph = "\u{f067}";
 const Edit = ui.TextEdit(64);
 
-const motion_labels = [_][]const u8{ "One clip", "Blend along one axis", "Blend across two axes" };
+const motion_labels = [_][]const u8{ "One clip", "Blend along one axis", "Blend across two axes", "None" };
 const repeat_labels = [_][]const u8{ "Once", "Loop" };
+const root_motion_labels = [_][]const u8{ "Keep", "In place", "Pinned" };
 const kind_labels = [_][]const u8{ "Float", "Bool", "Trigger" };
 const check_labels = [_][]const u8{ "is set", "is on", "is off", "is above", "is below" };
 
@@ -66,7 +67,7 @@ pub const Details = struct {
             else => return .{},
         };
         const list = switch (document.states()[index].motion) {
-            .clip => return .{},
+            .clip, .none => return .{},
             .blend_1d => |blend| blend.points,
             .blend_2d => |blend| blend.points,
         };
@@ -165,7 +166,8 @@ pub const Details = struct {
             each.motion = switch (kind) {
                 0 => .{ .clip = .{} },
                 1 => .{ .blend_1d = .{} },
-                else => .{ .blend_2d = .{} },
+                2 => .{ .blend_2d = .{} },
+                else => .none,
             };
             changed = true;
         }
@@ -210,11 +212,28 @@ pub const Details = struct {
                 }
                 rows.end(context);
             },
+            .none => {},
+        }
+        if (each.motion != .none) {
+            rows.begin(context, "Root motion", "");
+            var root_motion: usize = @backingInt(each.root_motion);
+            if (context.select("##graph state root motion", &root_motion_labels, &root_motion)) {
+                each.root_motion = @fromBackingInt(@intCast(root_motion));
+                changed = true;
+            }
+            restyle(context, .{ .width = SettingRows.control_width });
+            rows.end(context);
+            rows.begin(context, "Start (s)", "");
+            if (self.number(context, "state start", each.start_s)) |start_s| if (start_s >= 0) {
+                each.start_s = start_s;
+                changed = true;
+            };
+            rows.end(context);
         }
         setting_rows.endGroup(context);
 
         switch (each.motion) {
-            .clip => {},
+            .clip, .none => {},
             .blend_1d => |*blend| {
                 try self.plot.build(context, blend.points, 1, .{ blend.parameter, "" }, try pointLabels(context.builder().allocator, blend.points, clips), self.width - 32);
                 changed = try self.points(context, document, &blend.points, 1, clips) or changed;

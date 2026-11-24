@@ -101,6 +101,12 @@ pub fn fadeTo(states: *States, clip: AssetRef(.animation), fade_s: f32, options:
     fadeOthers(states, &.{clip}, options.bone, fade_s);
 }
 
+/// Ease every state of the layer `bone` (empty for the whole body) out over `fade_s`, playing
+/// nothing in their place.
+pub fn fadeOut(states: *States, bone: []const u8, fade_s: f32) void {
+    fadeOthers(states, &.{}, bone, fade_s);
+}
+
 /// A 1D blend space: the clips of `points` placed along an axis (`at` ascending), weighted by
 /// where `value` falls between the two either side of it (beyond the ends, the end clip alone).
 /// Every other state of the same layer (`options.bone`) fades out. All of them ease over `fade_s`.

@@ -317,6 +317,7 @@ fn detailOf(arena: std.mem.Allocator, motion: format.Motion) ![]const u8 {
         .clip => |clip| if (clip.clip.len == 0) "no clip" else if (clip.repeat == .once) "clip, once" else "clip",
         .blend_1d => |blend| try std.fmt.allocPrint(arena, "blend by {s}", .{if (blend.parameter.len == 0) "nothing" else blend.parameter}),
         .blend_2d => |blend| try std.fmt.allocPrint(arena, "blend by {s} and {s}", .{ if (blend.parameters[0].len == 0) "nothing" else blend.parameters[0], if (blend.parameters[1].len == 0) "nothing" else blend.parameters[1] }),
+        .none => "",
     };
 }
 

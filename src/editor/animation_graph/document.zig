@@ -338,7 +338,7 @@ pub fn defaultCheck(kind: format.ParameterKind) format.Check {
 /// Point a blend state's axes that name `old` at `new` (empty clears them).
 fn clearAxis(state: *format.State, old: []const u8, new: []const u8) void {
     switch (state.motion) {
-        .clip => {},
+        .clip, .none => {},
         .blend_1d => |*blend| if (std.mem.eql(u8, blend.parameter, old)) {
             blend.parameter = new;
         },
