@@ -82,6 +82,8 @@ pub const generated_meshes = @import("generated_meshes.zig");
 pub const GeneratedMeshes = generated_meshes.GeneratedMeshes;
 pub const heightfields = @import("heightfields.zig");
 pub const Heightfields = heightfields.Heightfields;
+pub const terrain = @import("terrain.zig");
+pub const Terrain = terrain.Terrain;
 pub const AnimationGraph = animation_graph.AnimationGraph;
 pub const animation_preview = @import("animation_preview.zig");
 /// How a model is posed and deformed by what its `Animator` plays.
@@ -176,6 +178,7 @@ test {
     _ = animation;
     _ = animation_graph;
     _ = generated_meshes;
+    _ = terrain;
     _ = @import("animation_states.zig");
     _ = animation_preview;
     _ = cutscene;

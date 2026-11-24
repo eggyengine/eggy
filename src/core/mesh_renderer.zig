@@ -28,6 +28,7 @@ const shadows = @import("shadows.zig");
 const camera_zig = @import("camera.zig");
 const render_settings = @import("render_settings.zig");
 const Sky = @import("sky.zig").Sky;
+const TerrainRenderer = @import("terrain_renderer.zig").TerrainRenderer;
 
 /// The most visible meshes in one pass; overflow is an explicit rendering error.
 pub const max_drawables = 4096;
@@ -121,6 +122,7 @@ pub const MeshRenderer = struct {
     blended: [max_drawables]Blended = undefined,
     /// The posed corners of animated models, one buffer each per entity.
     deformation: Deformation,
+    terrain: TerrainRenderer,
     /// What colour pipelines need beyond the built-in one: one per material surface shader.
     device: vit.Device,
     format: vit.Format,
@@ -215,6 +217,9 @@ pub const MeshRenderer = struct {
         const shadow_pipeline_layout = try vit.PipelineLayout.init(device, .{ .label = "shadow layout", .bind_group_layouts = &.{ shadow.layout, texture_layout, maps_layout } });
         errdefer shadow_pipeline_layout.deinit();
         const shadow_pipeline = try makePipeline(device, format, shadow_pipeline_layout, shaderSource, "shadow", shaders.mesh_vertex, "vertexMain", shaders.mesh_shadow_fragment, "fragmentShadow", .shadow, 1);
+        errdefer shadow_pipeline.deinit();
+        var terrain = try TerrainRenderer.init(std.heap.c_allocator, device, format, shaderSource, group_layout, maps_layout, texture_layout, shadow.layout, sample_count);
+        errdefer terrain.deinit();
         return .{
             .vertices = vertices,
             .indices = indices,
@@ -234,6 +239,7 @@ pub const MeshRenderer = struct {
             .shadow_pipeline_layout = shadow_pipeline_layout,
             .shadow_pipeline = shadow_pipeline,
             .deformation = Deformation.init(std.heap.c_allocator, device),
+            .terrain = terrain,
             .device = device,
             .format = format,
             .sample_count = sample_count,
@@ -250,6 +256,7 @@ pub const MeshRenderer = struct {
     /// ```
     pub fn deinit(self: *MeshRenderer) void {
         self.surfaces.deinit();
+        self.terrain.deinit();
         self.deformation.deinit();
         self.shadow_pipeline.deinit();
         self.shadow_pipeline_layout.deinit();
@@ -297,6 +304,7 @@ pub const MeshRenderer = struct {
         self.sky.update(sources.textures, if (lights.sky_file) |file| file[0..lights.sky_file_len] else null);
         // Animated models are posed once here, for the shadow, colour and selection passes alike.
         self.deformation.prepare(drawables, sources.models, sources.textures, sources.clips);
+        self.terrain.prepare(drawables, &sources.models.heightfields, sources.textures.uploads, sources.textures.graveyard);
     }
 
     /// Draw the sky, if the lights have one, and up to `max_drawables` visible meshes,
@@ -333,13 +341,7 @@ pub const MeshRenderer = struct {
         try upload(self.instances[self.slot], std.mem.sliceAsBytes(sorted));
         try upload(self.uniforms[self.slot], std.mem.asBytes(&self.cameraUniforms(sources, view, aspect, viewport_px, srgb)));
 
-        // Vitellus binds groups through the pipeline set, so a colour pipeline goes first; the
-        // rest share its layout and keep the groups. WebGPU wants every set bound before a draw.
-        cmd.setGraphicsPipeline(self.pipelines[0]);
-        cmd.setBindGroup(0, self.groups[self.slot], &.{});
-        cmd.setBindGroup(1, sources.textures.white.group, &.{});
-        if (sources.textures.mapsGroup(@splat(null), 0.01)) |neutral| cmd.setBindGroup(2, neutral, &.{});
-        cmd.setBindGroup(3, (sky orelse sources.textures.white).group, &.{});
+        self.bindScene(cmd, sources);
         if (sky_drawn) {
             cmd.setGraphicsPipeline(self.sky_pipeline);
             cmd.setVertexBuffer(0, self.sky_vertices, 0);
@@ -347,6 +349,18 @@ pub const MeshRenderer = struct {
             sources.stats.draw_calls += 1;
         }
         if (sorted.len == 0) return;
+
+        // Terrain first, the nearest of everything over most of the view; its layout differs
+        // at set 1, so the meshes' groups go back after it.
+        const terrain_drawn = try self.terrain.draw(cmd, sorted, &sources.models.heightfields, .colour, self.slot, view.eye, .{ .colour = .{
+            .clip_from_world = view_projection,
+            .camera = self.groups[self.slot],
+            .maps = sources.textures.mapsGroup(@splat(null), 0.01),
+            .sky = (sky orelse sources.textures.white).group,
+        } });
+        sources.stats.draw_calls += terrain_drawn.draw_calls;
+        sources.stats.triangles += terrain_drawn.triangles;
+        if (terrain_drawn.draw_calls > 0) self.bindScene(cmd, sources);
         cmd.setVertexBuffer(1, self.instances[self.slot], 0);
 
         // One instanced draw per run of the same shape or model file and texture, per part.
@@ -369,6 +383,17 @@ pub const MeshRenderer = struct {
                 self.drawRun(cmd, sources, drawable, @intCast(i), 1, .{ .all = pipeline });
             }
         };
+    }
+
+    /// Bind a colour pipeline and every set it reads: the camera, white paint, neutral maps and
+    /// the sky. Vitellus binds groups through the pipeline set, so a colour pipeline goes first;
+    /// the rest share its layout and keep the groups. WebGPU wants every set bound before a draw.
+    fn bindScene(self: *MeshRenderer, cmd: vit.CommandBuffer, sources: Sources) void {
+        cmd.setGraphicsPipeline(self.pipelines[0]);
+        cmd.setBindGroup(0, self.groups[self.slot], &.{});
+        cmd.setBindGroup(1, sources.textures.white.group, &.{});
+        if (sources.textures.mapsGroup(@splat(null), 0.01)) |neutral| cmd.setBindGroup(2, neutral, &.{});
+        cmd.setBindGroup(3, (self.sky.texture orelse sources.textures.white).group, &.{});
     }
 
     fn cameraUniforms(self: *const MeshRenderer, sources: Sources, view: camera_zig.View, aspect: f32, viewport_px: math.Vec2, srgb: bool) CameraUniforms {
@@ -458,7 +483,7 @@ pub const MeshRenderer = struct {
     /// spot lights', each with storage of its own for in-flight shadow draws.
     pub fn renderShadow(self: *MeshRenderer, cmd: vit.CommandBuffer, drawables: []mesh.Drawable, sources: Sources, view: camera_zig.View, aspect: f32, settings: render_settings.Settings) !void {
         try self.renderDirectionalShadow(cmd, drawables, sources, view, aspect, settings);
-        try self.renderLocalShadows(cmd, drawables, sources, settings);
+        try self.renderLocalShadows(cmd, drawables, sources, view.eye, settings);
     }
 
     // The directional light's cascades, in the squares of its texture.
@@ -480,15 +505,13 @@ pub const MeshRenderer = struct {
             cmd.setGraphicsPipeline(self.shadow_pipeline);
             cmd.setVertexBuffer(1, map.instances[slot], 0);
             for (map.matrices, 0..) |matrix, cascade| {
-                const square = map.rect(cascade);
-                cmd.setViewport(.{ .x = @floatFromInt(square.x), .y = @floatFromInt(square.y), .width = @floatFromInt(square.width), .height = @floatFromInt(square.height) });
-                cmd.setScissor(square);
-                cmd.setBindGroup(0, map.groups[slot], &.{shadows.cameraOffset(cascade)});
+                bindCascade(map, cmd, cascade);
                 const seen_from = math.fromArray(f32, 4, 4, matrix);
                 for (casters, 0..) |drawable, index| if (visibleThrough(drawable, sources, seen_from)) {
                     self.drawRun(cmd, sources, drawable, @intCast(index), 1, .shadow);
                 };
             }
+            _ = try self.terrain.draw(cmd, casters, &sources.models.heightfields, .directional_shadow, slot, view.eye, .{ .shadow = .{ .cameras = map.matrices.len, .context = map, .bind = bindCascade } });
         }
         cmd.endRenderPass();
         try cmd.barrier(&.{.{ .texture = .{ .texture = map.texture, .before = .depth_stencil_write, .after = .sampled } }});
@@ -496,7 +519,7 @@ pub const MeshRenderer = struct {
     }
 
     // Each point and spot light's maps, in the squares of their shared texture.
-    fn renderLocalShadows(self: *MeshRenderer, cmd: vit.CommandBuffer, drawables: []mesh.Drawable, sources: Sources, settings: render_settings.Settings) !void {
+    fn renderLocalShadows(self: *MeshRenderer, cmd: vit.CommandBuffer, drawables: []mesh.Drawable, sources: Sources, eye: math.Vec3, settings: render_settings.Settings) !void {
         const local = &self.local_shadow;
         const count = if (settings.shadow_quality == .off) 0 else local.fit(sources.lights);
         local.count = count;
@@ -515,25 +538,42 @@ pub const MeshRenderer = struct {
             cmd.setGraphicsPipeline(self.shadow_pipeline);
             cmd.setVertexBuffer(1, local.instances[slot], 0);
             for (local.matrices[0..count], 0..) |matrix, map| {
-                const square = local.rect(map);
-                cmd.setViewport(.{ .x = @floatFromInt(square.x), .y = @floatFromInt(square.y), .width = @floatFromInt(square.width), .height = @floatFromInt(square.height) });
-                cmd.setScissor(square);
-                cmd.setBindGroup(0, local.groups[slot], &.{shadows.cameraOffset(map)});
+                bindLocalMap(local, cmd, map);
                 const seen_from = math.fromArray(f32, 4, 4, matrix);
                 for (casters, 0..) |drawable, index| if (visibleThrough(drawable, sources, seen_from)) {
                     self.drawRun(cmd, sources, drawable, @intCast(index), 1, .shadow);
                 };
             }
+            _ = try self.terrain.draw(cmd, casters, &sources.models.heightfields, .local_shadow, slot, eye, .{ .shadow = .{ .cameras = count, .context = local, .bind = bindLocalMap } });
         }
         cmd.endRenderPass();
         try cmd.barrier(&.{.{ .texture = .{ .texture = local.texture, .before = .depth_stencil_write, .after = .sampled } }});
         local.initialized = true;
     }
 
+    /// Set 0 and the viewport for cascade `index` of the directional map `context`.
+    fn bindCascade(context: *const anyopaque, cmd: vit.CommandBuffer, index: usize) void {
+        const map: *const shadows.Map = @ptrCast(@alignCast(context));
+        bindShadowSquare(cmd, map.rect(index), map.groups[map.slot], index);
+    }
+
+    /// Set 0 and the viewport for map `index` of the point and spot lights' `context`.
+    fn bindLocalMap(context: *const anyopaque, cmd: vit.CommandBuffer, index: usize) void {
+        const local: *const shadows.Local = @ptrCast(@alignCast(context));
+        bindShadowSquare(cmd, local.rect(index), local.groups[local.slot], index);
+    }
+
+    fn bindShadowSquare(cmd: vit.CommandBuffer, square: anytype, group: vit.BindGroup, index: usize) void {
+        cmd.setViewport(.{ .x = @floatFromInt(square.x), .y = @floatFromInt(square.y), .width = @floatFromInt(square.width), .height = @floatFromInt(square.height) });
+        cmd.setScissor(square);
+        cmd.setBindGroup(0, group, &.{shadows.cameraOffset(index)});
+    }
+
     /// Draw `count` instances from `first` of `drawable`'s shape or model file, each part (that
     /// `pass` draws) with its textures and maps. A model file that can't be drawn draws nothing.
     fn drawRun(self: *MeshRenderer, cmd: vit.CommandBuffer, sources: Sources, drawable: mesh.Drawable, first: u32, count: u32, pass: Pass) void {
-        if (drawable.material_failed) return;
+        // Terrain has a renderer of its own.
+        if (drawable.material_failed or drawable.terrain != null) return;
         const own = if (drawable.textureFile()) |file| sources.textures.get(file) else null;
         if (drawable.modelFile()) |file| {
             const model = sources.models.get(file, sources.textures) orelse return;
@@ -667,6 +707,8 @@ fn visibleFirst(drawables: []mesh.Drawable, sources: Sources, matrix: math.Mat4)
 /// drawn.
 fn visibleThrough(drawable: mesh.Drawable, sources: Sources, matrix: math.Mat4) bool {
     if (drawable.material_failed) return false;
+    // Terrain leaves out its own patches out of sight.
+    if (drawable.terrain != null) return true;
     const bounds = if (drawable.modelFile()) |path| block: {
         const cached = sources.models.get(path, sources.textures) orelse return false;
         // A posed model is measured as posed; others by the box holding every pose they reach.
@@ -682,6 +724,8 @@ fn visibleThrough(drawable: mesh.Drawable, sources: Sources, matrix: math.Mat4) 
 /// and those alike by texture. Two that neither comes before are drawn in one go.
 fn drawnBefore(_: void, a: mesh.Drawable, b: mesh.Drawable) bool {
     if (a.material_failed != b.material_failed) return !a.material_failed;
+    // Terrain after the rest, so no run of shapes starts with one.
+    if ((a.terrain != null) != (b.terrain != null)) return a.terrain == null;
     const by_look = std.math.order(lookKey(a), lookKey(b));
     if (by_look != .eq) return by_look == .lt;
     const by_shader = std.mem.order(u8, a.shaderFile() orelse "", b.shaderFile() orelse "");

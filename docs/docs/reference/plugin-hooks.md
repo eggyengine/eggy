@@ -134,7 +134,7 @@ character, marks it there and in the Inspector.
 
 A component's `dependencies`
 are added with it when editing or loading a scene; the Inspector prevents removing a
-component still needed by another. `Mesh`, `Camera`, `SceneLight`, `Sprite`, `Tilemap`,
+component still needed by another. `Mesh`, `Camera`, `SceneLight`, `Sprite`, `Tilemap`, `Terrain`,
 `UiBillboard`, and `SceneInstance` depend on `Transform`, `SpriteAnimator` on `Sprite`, and
 `PostProcess` on `Camera`.
 

@@ -14,6 +14,7 @@ const Animator = @import("animation.zig").Animator;
 const Sprite = @import("sprite.zig").Sprite;
 const SpriteAnimator = @import("sprite_animator.zig").SpriteAnimator;
 const Tilemap = @import("tilemap.zig").Tilemap;
+const Terrain = @import("terrain.zig").Terrain;
 const Name = @import("name.zig").Name;
 
 /// The shapes there are, each about a metre across, centred on the entity. A `plane` faces up
@@ -113,6 +114,9 @@ pub const Drawable = extern struct {
     alpha_blend: u32 = 0,
     /// 1 when its back faces are drawn too.
     double_sided: u32 = 0,
+    /// The entity's `Terrain`, when this is one, drawn from its height grid rather than as a
+    /// shape; borrowed like `animator`.
+    terrain: ?*const Terrain = null,
 
     /// Reconstruct the source entity ID by value, without checking that it is still alive.
     /// Resolve it only against the world from which this drawable was gathered.
@@ -206,6 +210,12 @@ pub fn gather(world: *ecs.World, out: []Drawable) usize {
         out[count] = tilemapDrawable(world, view.entity, view.get(*const Tilemap)) orelse continue;
         count += 1;
     }
+    var terrains = world.query(.{ *const Terrain, *const Transform });
+    while (terrains.next()) |view| {
+        if (count == out.len) break;
+        out[count] = terrainDrawable(world, view.entity, view.get(*const Terrain)) orelse continue;
+        count += 1;
+    }
     return count;
 }
 
@@ -233,7 +243,24 @@ pub fn gatherAlloc(gpa: std.mem.Allocator, world: *ecs.World) ![]Drawable {
     while (tilemaps.next()) |view| {
         try result.append(gpa, tilemapDrawable(world, view.entity, view.get(*const Tilemap)) orelse continue);
     }
+    var terrains = world.query(.{ *const Terrain, *const Transform });
+    while (terrains.next()) |view| {
+        try result.append(gpa, terrainDrawable(world, view.entity, view.get(*const Terrain)) orelse continue);
+    }
     return result.toOwnedSlice(gpa);
+}
+
+/// A terrain, placed where its entity is; none without a grid named.
+fn terrainDrawable(world: *ecs.World, entity: ecs.EntityId, terrain: *const Terrain) ?Drawable {
+    if (terrain.heights.len == 0) return null;
+    return .{
+        .model = transform_zig.columns(transform_zig.worldMatrix(world, entity)),
+        .color = .{ terrain.color[0], terrain.color[1], terrain.color[2], 1 },
+        .shape = .cube,
+        .entity_id = entity.id,
+        .entity_generation = entity.generation,
+        .terrain = terrain,
+    };
 }
 
 /// A tilemap as its map file's model, unlit and painted with its tileset; none without both.

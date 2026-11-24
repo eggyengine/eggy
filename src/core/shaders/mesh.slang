@@ -1,7 +1,8 @@
 // Metallic/roughness surfaces with their maps, lit by scene lights (with soft shadows: the
 // directional light's cascades and point and spot lights' shared map) and by the sky or a flat
-// ambient, through height fog; and the sky behind them. A material's surface shader is put in at "eggy: surface"
-// (`compose.zig`), replacing `defaultSurface`.
+// ambient, through height fog; terrain lifted from a height grid and lit the same way; and the
+// sky behind them. A material's surface shader is put in at "eggy: surface" (`compose.zig`),
+// replacing `defaultSurface`.
 #include "eggy.slang"
 
 // No semantics on the varyings: Slang's WGSL numbers semantic'd inputs its own way, ignoring
@@ -332,6 +333,76 @@ Surface surface(SurfaceInput input) {
 }
 #endif
 
+// How `shown` looks at `world` lit by the scene, through the fog, at the view's exposure:
+// `normal` and `roughness` are its own, worked out before anything was discarded (derivatives
+// need it); `geometric` is the face's normal before maps bent it. `authored`: an authored
+// material, which the fallback light lights as a surface rather than a plain colour.
+float4 shade(Surface shown, float3 normal, float roughness, float3 geometric, float3 world, float3 view, float occlusion, bool authored, float2 pixel) {
+    float3 base = max(shown.base_color, 0.0);
+    float metallic = saturate(shown.metallic);
+    float ndv = max(dot(normal, view), 0.0001);
+    float3 fresnel0 = lerp(float3(0.04, 0.04, 0.04), base, metallic);
+    float2 brdf = environmentBrdf(roughness, ndv);
+    float3 energy = multipleScattering(fresnel0, brdf);
+    float3 color = base;
+    if (!shown.unlit) {
+        float3 specular = (fresnel0 * brdf.x + brdf.y) * energy * specularOcclusion(ndv, occlusion, roughness);
+        if (sky_rays[0].w > 0.5) {
+            // Lit by the sky: dimly from every side, and reflecting it, blurrier when rougher. A
+            // reflection that would come from inside the surface fades out.
+            float3 mirrored = reflect(-view, normal);
+            float horizon = saturate(1.0 + dot(mirrored, geometric));
+            float3 reflected = skyColor(mirrored, roughness * max(sky.z - 1.0, 0.0)) * specular * horizon * horizon;
+            color = (base * (1.0 - metallic) * skyLight(normal) * occlusion + reflected) * sky.y;
+        } else {
+            // A flat ambient lights evenly and is reflected evenly.
+            color = ambient.rgb * ambient.w * (base * (1.0 - metallic) * occlusion + specular);
+        }
+        if (light_info.x < 0.5 && environment.y > 0.5) {
+            // Keep scenes without authored lights visible in both the editor and runtime.
+            if (authored || metallic > 0.0 || shown.roughness < 0.999) {
+                color += surfaceLight(base, metallic, roughness, normal, view, unit(light.xyz), float3(3.0, 3.0, 3.0), energy);
+            } else {
+                float lit = 0.3 + 0.7 * max(dot(normal, unit(light.xyz)), 0.0);
+                color = base * lit;
+            }
+        }
+        for (int i = 0; i < int(light_info.x); ++i) {
+            SceneLight current = lights[i];
+            float3 incoming = -current.direction_range.xyz;
+            float attenuation = 1.0;
+            if (current.position_kind.w > 0.5) {
+                float3 offset = current.position_kind.xyz - world;
+                float distance2 = dot(offset, offset);
+                float distance = sqrt(distance2);
+                incoming = unit(offset);
+                float falloff = saturate(1.0 - pow(distance / max(current.direction_range.w, 0.001), 4.0));
+                attenuation = falloff * falloff / max(distance2, 0.01);
+                if (current.position_kind.w > 1.5) {
+                    float cone = dot(-incoming, current.direction_range.xyz);
+                    attenuation *= smoothstep(current.cone_shadow.y, current.cone_shadow.x, cone);
+                }
+            }
+            if (shadow_params.w > 0.5 && i == int(shadow_params.z))
+                attenuation *= visibility(world, geometric, dot(geometric, incoming), pixel);
+            else if (current.position_kind.w > 0.5 && current.cone_shadow.z > 0.5 && attenuation > 0.0)
+                attenuation *= localVisibility(current, world, geometric, pixel);
+            float3 radiance = current.color_intensity.rgb * current.color_intensity.w * 0.001 * attenuation;
+            color += surfaceLight(base, metallic, roughness, normal, view, incoming, radiance, energy);
+        }
+    }
+    color += max(shown.emissive, 0.0);
+    color = lerp(color, fog.rgb, fogAmount(world));
+    color *= environment.x;
+    // Fit HDR direct lighting into the output range without hard-clipping bright surfaces,
+    // unless the post pass maps the whole image's tones.
+    if (!shown.unlit && environment.w < 0.5)
+        color = saturate((color * (2.51 * color + 0.03)) / (color * (2.43 * color + 0.59) + 0.14));
+    // sRGB targets encode linear output themselves; other targets need explicit encoding.
+    color = options.x > 0.5 ? color : pow(max(color, 0.0), float3(1.0 / 2.2, 1.0 / 2.2, 1.0 / 2.2));
+    return float4(color, shown.alpha);
+}
+
 [shader("pixel")]
 float4 fragmentMain(VertexOutput input) : SV_Target0 {
     // The point as the material and its maps (and its surface shader) describe it. Every map is
@@ -357,74 +428,124 @@ float4 fragmentMain(VertexOutput input) : SV_Target0 {
     float3 normal = unit(shown.normal);
     // Derivatives before anything is discarded, as above.
     float roughness = clamp(stableRoughness(normal, clamp(shown.roughness, 0.05, 1.0)), 0.05, 1.0);
-    float alpha = shown.alpha;
     // An authored material's cutoff comes with the instance, an imported surface's with its maps.
     float cutoff = input.material.w > 0.5 ? input.emissive_cutoff.w : map_flags.y;
-    if (alpha < cutoff) discard;
-    float3 base = max(shown.base_color, 0.0);
-    float3 view = described.view_direction;
-    float metallic = saturate(shown.metallic);
-    float ndv = max(dot(normal, view), 0.0001);
-    float3 fresnel0 = lerp(float3(0.04, 0.04, 0.04), base, metallic);
-    float2 brdf = environmentBrdf(roughness, ndv);
-    float3 energy = multipleScattering(fresnel0, brdf);
-    float3 color = base;
-    if (!shown.unlit) {
-        float3 specular = (fresnel0 * brdf.x + brdf.y) * energy * specularOcclusion(ndv, occlusion, roughness);
-        if (sky_rays[0].w > 0.5) {
-            // Lit by the sky: dimly from every side, and reflecting it, blurrier when rougher. A
-            // reflection that would come from inside the surface fades out.
-            float3 mirrored = reflect(-view, normal);
-            float horizon = saturate(1.0 + dot(mirrored, geometric));
-            float3 reflected = skyColor(mirrored, roughness * max(sky.z - 1.0, 0.0)) * specular * horizon * horizon;
-            color = (base * (1.0 - metallic) * skyLight(normal) * occlusion + reflected) * sky.y;
-        } else {
-            // A flat ambient lights evenly and is reflected evenly.
-            color = ambient.rgb * ambient.w * (base * (1.0 - metallic) * occlusion + specular);
-        }
-        if (light_info.x < 0.5 && environment.y > 0.5) {
-            // Keep scenes without authored lights visible in both the editor and runtime.
-            if (input.material.w > 0.5 || metallic > 0.0 || shown.roughness < 0.999) {
-                color += surfaceLight(base, metallic, roughness, normal, view, unit(light.xyz), float3(3.0, 3.0, 3.0), energy);
-            } else {
-                float lit = 0.3 + 0.7 * max(dot(normal, unit(light.xyz)), 0.0);
-                color = base * lit;
-            }
-        }
-        for (int i = 0; i < int(light_info.x); ++i) {
-            SceneLight current = lights[i];
-            float3 incoming = -current.direction_range.xyz;
-            float attenuation = 1.0;
-            if (current.position_kind.w > 0.5) {
-                float3 offset = current.position_kind.xyz - input.world;
-                float distance2 = dot(offset, offset);
-                float distance = sqrt(distance2);
-                incoming = unit(offset);
-                float falloff = saturate(1.0 - pow(distance / max(current.direction_range.w, 0.001), 4.0));
-                attenuation = falloff * falloff / max(distance2, 0.01);
-                if (current.position_kind.w > 1.5) {
-                    float cone = dot(-incoming, current.direction_range.xyz);
-                    attenuation *= smoothstep(current.cone_shadow.y, current.cone_shadow.x, cone);
-                }
-            }
-            if (shadow_params.w > 0.5 && i == int(shadow_params.z))
-                attenuation *= visibility(input.world, geometric, dot(geometric, incoming), input.position.xy);
-            else if (current.position_kind.w > 0.5 && current.cone_shadow.z > 0.5 && attenuation > 0.0)
-                attenuation *= localVisibility(current, input.world, geometric, input.position.xy);
-            float3 radiance = current.color_intensity.rgb * current.color_intensity.w * 0.001 * attenuation;
-            color += surfaceLight(base, metallic, roughness, normal, view, incoming, radiance, energy);
-        }
-    }
-    color += max(shown.emissive, 0.0);
-    color = lerp(color, fog.rgb, fogAmount(input.world));
-    color *= environment.x;
-    // Fit HDR direct lighting into the output range without hard-clipping bright surfaces,
-    // unless the post pass maps the whole image's tones.
-    if (!shown.unlit && environment.w < 0.5)
-        color = saturate((color * (2.51 * color + 0.03)) / (color * (2.43 * color + 0.59) + 0.14));
-    // sRGB targets encode linear output themselves; other targets need explicit encoding.
-    color = options.x > 0.5 ? color : pow(max(color, 0.0), float3(1.0 / 2.2, 1.0 / 2.2, 1.0 / 2.2));
-    return float4(color, alpha);
+    if (shown.alpha < cutoff) discard;
+    return shade(shown, normal, roughness, geometric, input.world, described.view_direction, occlusion, input.material.w > 0.5, input.position.xy);
+}
+
+// Terrain: one flat patch of corners drawn once per `terrain.Patch`, each corner lifted to its
+// height in the grid, read from `paint`, where the grid's one-channel texture is bound in the
+// colour texture's place. Each face is shaded flat, coloured by its height and slope.
+
+// No semantics, and locations in order, as on `VertexInput`.
+struct TerrainInput {
+    [[vk::location(0)]] float3 corner; // column and row in the patch; y 1 on a skirt's lower edge
+    [[vk::location(1)]] float4 model0; // from the grid's column, height and row to the world, by column
+    [[vk::location(2)]] float4 model1;
+    [[vk::location(3)]] float4 model2;
+    [[vk::location(4)]] float4 model3;
+    [[vk::location(5)]] float4 patch;   // its first column and row, corners per cell, skirt depth
+    [[vk::location(6)]] float4 color;   // between the bands: rgb, and each face's shade either way
+    [[vk::location(7)]] float4 low;     // rgb, and the height in metres it is below
+    [[vk::location(8)]] float4 high;    // rgb, and the height in metres it is above
+    [[vk::location(9)]] float4 steep;   // rgb, and the upward part of a normal it is below
+    [[vk::location(10)]] float4 surface; // roughness, cells across a patch
+};
+
+struct TerrainOutput {
+    float4 position : SV_Position;
+    [[vk::location(0)]] float3 world;
+    [[vk::location(1)]] float3 local; // column, height, row
+    [[vk::location(2)]] nointerpolation float4 patch;
+    [[vk::location(3)]] nointerpolation float4 color;
+    [[vk::location(4)]] nointerpolation float4 low;
+    [[vk::location(5)]] nointerpolation float4 high;
+    [[vk::location(6)]] nointerpolation float4 steep;
+    [[vk::location(7)]] nointerpolation float4 surface;
+    [[vk::location(8)]] nointerpolation float4 model_y; // each model column's y, for a world height
+};
+
+float heightAt(float2 at) {
+    uint columns, rows;
+    paint.GetDimensions(columns, rows);
+    int2 texel = int2(clamp(at, float2(0.0, 0.0), float2(float(columns - 1), float(rows - 1))));
+    return paint.Load(int3(texel, 0)).r;
+}
+
+[shader("vertex")]
+TerrainOutput vertexTerrain(TerrainInput input) {
+    uint columns, rows;
+    paint.GetDimensions(columns, rows);
+    // Corners past the grid's edge fold onto it, so a patch hanging over draws nothing there.
+    float2 at = min(input.patch.xy + input.corner.xz * input.patch.z, float2(float(columns - 1), float(rows - 1)));
+    float height = paint.Load(int3(int2(at), 0)).r;
+    // A skirt hangs from every patch edge, covering gaps between patches drawn at different
+    // detail; along the grid's own edges it walls in the space the others hang in.
+    float3 local = float3(at.x, height - input.corner.y * input.patch.w, at.y);
+    float4 world = input.model0 * local.x + input.model1 * local.y + input.model2 * local.z + input.model3;
+    TerrainOutput output;
+    output.position = toClip(world);
+    output.world = world.xyz;
+    output.local = local;
+    output.patch = input.patch;
+    output.color = input.color;
+    output.low = input.low;
+    output.high = input.high;
+    output.steep = input.steep;
+    output.surface = input.surface;
+    output.model_y = float4(input.model0.y, input.model1.y, input.model2.y, input.model3.y);
+    return output;
+}
+
+// -1 to 1, the same every time for the same face.
+float faceNoise(float2 corner, float upper) {
+    uint hash = uint(corner.x) * 0x27d4eb2du ^ uint(corner.y) * 0x165667b1u ^ uint(upper) * 0x9e3779b9u;
+    hash ^= hash >> 15;
+    hash *= 0x2c1b3c6du;
+    hash ^= hash >> 12;
+    return float(hash & 0xffffu) / 32767.5 - 1.0;
+}
+
+[shader("pixel")]
+float4 fragmentTerrain(TerrainOutput input) : SV_Target0 {
+    // The face's own normal, from how the point moves across the pixel, towards the camera.
+    float3 geometric = unit(cross(ddx(input.world), ddy(input.world)));
+    if (dot(geometric, eye.xyz - input.world) < 0.0) geometric = -geometric;
+    // The face under the point at this patch's detail: its cell, and which of the cell's two
+    // triangles (split from its first corner to the one across, as `terrain.zig` says).
+    float step = input.patch.z;
+    float2 in_cells = (input.local.xz - input.patch.xy) / step;
+    float2 cell = clamp(floor(in_cells), 0.0, input.surface.y - 1.0);
+    float2 inside = saturate(in_cells - cell);
+    float upper = inside.x > inside.y ? 1.0 : 0.0;
+    float2 first = input.patch.xy + cell * step;
+    float2 second = first + (upper > 0.5 ? float2(step, 0.0) : float2(0.0, step));
+    float2 across = first + step;
+    float2 centre = (first + second + across) / 3.0;
+    float face_height = (heightAt(first) + heightAt(second) + heightAt(across)) / 3.0;
+    float face_y = dot(input.model_y, float4(centre.x, face_height, centre.y, 1.0));
+    // Steep faces are rock whatever their height; the rest go by how high they are.
+    float3 color = input.color.rgb;
+    if (face_y < input.low.w) color = input.low.rgb;
+    else if (face_y > input.high.w) color = input.high.rgb;
+    if (geometric.y < input.steep.w) color = input.steep.rgb;
+    color *= 1.0 + faceNoise(first, upper) * input.color.w;
+    SurfaceInput described;
+    described.world_position = input.world;
+    described.normal = geometric;
+    described.view_direction = unit(eye.xyz - input.world);
+    described.uv = input.local.xz;
+    described.color = float4(pow(max(color, 0.0), float3(2.2, 2.2, 2.2)), 1.0);
+    described.metallic = 0.0;
+    described.roughness = input.surface.x;
+    described.emissive = float3(0.0, 0.0, 0.0);
+    described.unlit = false;
+    described.time_s = light_info.y;
+    Surface shown = defaultSurface(described);
+    float3 normal = unit(shown.normal);
+    float roughness = clamp(stableRoughness(normal, clamp(shown.roughness, 0.05, 1.0)), 0.05, 1.0);
+    return shade(shown, normal, roughness, geometric, input.world, described.view_direction, 1.0, true, input.position.xy);
 }
 
 [shader("pixel")]

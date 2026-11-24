@@ -30,7 +30,12 @@ pub fn pick(drawn: []const eggy.mesh.Drawable, models: *const eggy.model_cache.M
         const to_local = math.inverse4x4(f32, math.fromArray(f32, 4, 4, drawable.model)) orelse continue;
         const origin = math.transformPoint4x4(f32, to_local, ray.origin);
         const along = math.transformDirection4x4(f32, to_local, ray.direction);
-        const hit: ?f32 = if (drawable.modelFile()) |file| blk: {
+        const hit: ?f32 = if (drawable.terrain) |terrain| blk: {
+            // A terrain by the box round its grid, its first corner at the origin.
+            const grid = models.heightfields.get(terrain.heights.text()) orelse continue;
+            const far_m = math.Vec3.init(@floatFromInt(grid.columns - 1), 0, @floatFromInt(grid.rows() - 1)).scale(grid.cell_m);
+            break :blk hitBox(origin, along, .init(0, grid.min_m, 0), .init(far_m.x, grid.max_m, far_m.z));
+        } else if (drawable.modelFile()) |file| blk: {
             const box = models.bounds(file) orelse continue;
             break :blk hitBox(origin, along, .fromArray(box.min), .fromArray(box.max));
         } else switch (drawable.shape) {
