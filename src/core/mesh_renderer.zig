@@ -538,14 +538,14 @@ pub const MeshRenderer = struct {
         if (drawable.modelFile()) |file| {
             const model = sources.models.get(file, sources.textures) orelse return;
             cmd.setVertexBuffer(0, self.deformation.vertices(drawable) orelse model.vertices, 0);
-            cmd.setIndexBuffer(model.indices, .uint32, 0);
+            if (model.indices) |indices| cmd.setIndexBuffer(indices, .uint32, 0);
             for (model.parts) |part| {
                 const look = lookOf(drawable, part);
                 if (!self.usePipeline(cmd, drawable, look, pass, sources)) continue;
                 const paint = own orelse part.texture orelse sources.textures.white;
                 cmd.setBindGroup(1, paint.group, &.{});
                 if (mapsOf(drawable, part, sources)) |group| cmd.setBindGroup(2, group, &.{});
-                cmd.drawIndexed(part.index_count, count, part.first_index, 0, first);
+                if (model.indices == null) cmd.draw(part.index_count, count, part.first_index, first) else cmd.drawIndexed(part.index_count, count, part.first_index, 0, first);
                 sources.stats.draw_calls += 1;
                 sources.stats.triangles += @as(u64, part.index_count / 3) * count;
             }

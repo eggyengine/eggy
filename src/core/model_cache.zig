@@ -2,7 +2,8 @@
 //! are painted with, loaded through `loader` the first time a `Mesh` shows it, then kept. The
 //! editor's loader imports model files with assimp; the runtime's reads what packaging made of
 //! them (`.eggmodel`). Meshes a game makes in code (`generated`) are uploaded from there by
-//! name, and again whenever the game sets one anew.
+//! name, once for each time the game sets one: new buffers, filled from staging memory by a
+//! copy submitted before the frame that first draws them, which doesn't wait for the GPU.
 const std = @import("std");
 const vit = @import("vitellus");
 const assets = @import("eggy_assets");
@@ -21,7 +22,8 @@ pub const Loader = struct {
 /// A model's triangles on the GPU, in parts each painted with its own texture (or not).
 pub const Gpu = struct {
     vertices: vit.Buffer,
-    indices: vit.Buffer,
+    /// Null when the triangles are the vertices in order, drawn without one.
+    indices: ?vit.Buffer,
     /// Owned by the cache.
     parts: []const Part,
     /// The box round its vertices in its own space, widened to hold every pose its clips reach.
@@ -33,6 +35,7 @@ pub const Gpu = struct {
     generated_version: u32 = 0,
 
     pub const Part = struct {
+        /// Its first vertex and vertex count when the model has no index buffer.
         first_index: u32,
         index_count: u32,
         /// One of `textures`; null to paint it with the `Mesh`'s texture, or white.
@@ -60,7 +63,7 @@ pub const Gpu = struct {
             gpa.destroy(kept);
         }
         // Freed once the GPU finishes the frames drawing them, with the textures.
-        textures.graveyard.retire(self.indices);
+        if (self.indices) |indices| textures.graveyard.retire(indices);
         textures.graveyard.retire(self.vertices);
     }
 };
@@ -238,17 +241,19 @@ pub const ModelCache = struct {
     }
 
     fn uploadModel(self: *ModelCache, path: []const u8, model: assets.Model, textures: *TextureCache) !Gpu {
-        // A rigged model's stored corners are in their own space; draw it as its rest pose places them.
-        const rest = try assets.rig.restVertices(self.gpa, model);
-        defer self.gpa.free(rest);
+        // A rigged model's stored corners are in their own space; draw it as its rest pose places
+        // them. Any other is uploaded as it is.
+        const rest = if (model.isRigged()) try assets.rig.restVertices(self.gpa, model) else model.vertices;
+        defer if (model.isRigged()) self.gpa.free(rest);
         // In GPU memory, copied in with the next frame's submit; retired on failure, since a
         // pending copy may already reference them.
         const vertices = try vit.Buffer.init(self.device, .{ .label = "model vertices", .size = rest.len * @sizeOf(assets.model.Vertex), .usage = .{ .vertex = true, .transfer_dst = true } });
         errdefer textures.graveyard.retire(vertices);
         try textures.uploads.writeBuffer(.{ .buffer = vertices, .data = std.mem.sliceAsBytes(rest), .after = .vertex });
-        const indices = try vit.Buffer.init(self.device, .{ .label = "model indices", .size = model.indices.len * @sizeOf(u32), .usage = .{ .index = true, .transfer_dst = true } });
-        errdefer textures.graveyard.retire(indices);
-        try textures.uploads.writeBuffer(.{ .buffer = indices, .data = std.mem.sliceAsBytes(model.indices), .after = .index });
+        // A generated mesh without indices lists its triangles in order.
+        const indices: ?vit.Buffer = if (model.indices.len == 0) null else try vit.Buffer.init(self.device, .{ .label = "model indices", .size = model.indices.len * @sizeOf(u32), .usage = .{ .index = true, .transfer_dst = true } });
+        errdefer if (indices) |buffer| textures.graveyard.retire(buffer);
+        if (indices) |buffer| try textures.uploads.writeBuffer(.{ .buffer = buffer, .data = std.mem.sliceAsBytes(model.indices), .after = .index });
 
         // Its textures, then its parts painted with them; a model without parts is one.
         const made = try self.gpa.alloc(?texture_cache.Gpu, model.textures.len);
@@ -256,7 +261,7 @@ pub const ModelCache = struct {
         @memset(made, null);
         errdefer for (made) |texture| if (texture) |gpu| textures.release(gpu);
         for (model.textures, made) |texture, *gpu| gpu.* = try textures.make(texture, path);
-        const whole = [_]assets.model.Part{.{ .first_index = 0, .index_count = @intCast(model.indices.len) }};
+        const whole = [_]assets.model.Part{.{ .first_index = 0, .index_count = @intCast(if (indices == null) model.vertices.len else model.indices.len) }};
         const source = if (model.parts.len > 0) model.parts else &whole;
         const parts = try self.gpa.alloc(Gpu.Part, source.len);
         for (source, parts) |part, *gpu| gpu.* = .{

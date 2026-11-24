@@ -92,8 +92,8 @@ pub const Host = struct {
                 var model = try resources.loadModel(gpa, file);
                 defer model.deinit(gpa);
                 // A rigged model's stored corners are in its bones' space; collide with it as drawn at rest.
-                const rest = try @import("eggy_assets").rig.restVertices(gpa, model);
-                defer gpa.free(rest);
+                const rest = if (model.isRigged()) try @import("eggy_assets").rig.restVertices(gpa, model) else model.vertices;
+                defer if (model.isRigged()) gpa.free(rest);
                 break :blk try triangles(gpa, rest, model.indices, drawn.local_transform.matrix());
             },
             .generated => |*name| blk: {
@@ -105,8 +105,9 @@ pub const Host = struct {
     }
 };
 
-/// `vertices` and `indices` as a collider's triangles, where `local` (a `Mesh`'s
-/// `local_transform`) draws them; owned by `gpa`, as humpty frees them.
+/// `vertices` and `indices` (empty: the vertices in order, three by three) as a collider's
+/// triangles, where `local` (a `Mesh`'s `local_transform`) draws them; owned by `gpa`, as humpty
+/// frees them.
 fn triangles(gpa: std.mem.Allocator, vertices: []const @import("eggy_assets").model.Vertex, indices: []const u32, local: math.Matrix(f32, 4, 4)) !humpty.ecs.MeshSource {
     const positions = try gpa.alloc([3]f32, vertices.len);
     errdefer gpa.free(positions);
@@ -114,8 +115,12 @@ fn triangles(gpa: std.mem.Allocator, vertices: []const @import("eggy_assets").mo
         const at = math.transformPoint4x4(f32, local, .init(v.position[0], v.position[1], v.position[2]));
         p.* = .{ at.x, at.y, at.z };
     }
-    const corners = try gpa.alloc([3]u32, indices.len / 3);
-    for (corners, 0..) |*triangle, i| triangle.* = indices[i * 3 ..][0..3].*;
+    const in_order = indices.len == 0;
+    const corners = try gpa.alloc([3]u32, if (in_order) vertices.len / 3 else indices.len / 3);
+    for (corners, 0..) |*triangle, i| {
+        const first: u32 = @intCast(i * 3);
+        triangle.* = if (in_order) .{ first, first + 1, first + 2 } else indices[i * 3 ..][0..3].*;
+    }
     return .{ .triangles = .{ .positions = positions, .indices = corners } };
 }
 
