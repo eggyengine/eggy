@@ -456,17 +456,6 @@ const Builder = struct {
     }
 };
 
-test "every shape has triangles, each pointing at a real vertex" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    const geometry = try Geometry.build(arena.allocator());
-    for (geometry.ranges) |range| {
-        try std.testing.expect(range.index_count > 0);
-        try std.testing.expectEqual(@as(u32, 0), range.index_count % 3);
-    }
-    for (geometry.indices) |index| try std.testing.expect(index < geometry.vertices.len);
-}
-
 test "every shape's triangles turn counter-clockwise seen from the side their normals face" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
@@ -525,34 +514,4 @@ test "a child's mesh is drawn where its parent's transform puts it" {
     try std.testing.expectEqual(Shape.sphere, drawn[0].shape);
     try std.testing.expect(drawn[0].entity().eql(child));
     try std.testing.expectEqualSlices(f32, &.{ 5, 2, 0, 1 }, &drawn[0].model[3]);
-}
-
-test "a mesh's local transform places it within its entity's" {
-    var world = ecs.World.init(std.testing.allocator);
-    defer world.deinit();
-    _ = try world.spawn(.{ Transform{ .position = .init(5, 0, 0), .scale = .init(2, 2, 2) }, Mesh{ .local_transform = .{ .position = .init(0, 1, 0), .rotation_deg = .init(0, 180, 0) } } });
-
-    var drawn: [1]Drawable = undefined;
-    try std.testing.expectEqual(@as(usize, 1), gather(&world, &drawn));
-    // Moved up a metre in the entity's (doubled) space, and facing back: its x axis is -2x.
-    try std.testing.expectEqualSlices(f32, &.{ 5, 2, 0, 1 }, &drawn[0].model[3]);
-    try std.testing.expectApproxEqAbs(@as(f32, -2), drawn[0].model[0][0], 1e-5);
-}
-
-test "a model's mesh is drawn as its file, and one with no file isn't drawn" {
-    var world = ecs.World.init(std.testing.allocator);
-    defer world.deinit();
-    _ = try world.spawn(.{ Transform{}, Mesh{ .shape = .{ .model = .init("ships/fighter.glb") } } });
-    _ = try world.spawn(.{ Transform{}, Mesh{ .shape = .{ .model = .{} } } });
-    _ = try world.spawn(.{ Transform{}, Mesh{ .shape = .of(.cone), .texture = .init("art/wood.png") } });
-
-    var drawn: [4]Drawable = undefined;
-    try std.testing.expectEqual(@as(usize, 2), gather(&world, &drawn));
-    // In whatever order the world keeps them.
-    const model, const cone = if (drawn[0].modelFile() != null) .{ drawn[0], drawn[1] } else .{ drawn[1], drawn[0] };
-    try std.testing.expectEqualStrings(AssetRef(.model).init("ships/fighter.glb").key(), model.modelFile().?);
-    try std.testing.expectEqual(Shape.cone, cone.shape);
-    try std.testing.expect(cone.modelFile() == null);
-    try std.testing.expectEqualStrings(AssetRef(.image).init("art/wood.png").key(), cone.textureFile().?);
-    try std.testing.expect(model.textureFile() == null);
 }

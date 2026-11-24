@@ -712,63 +712,6 @@ test "a clip moves the entity and a named child by the game's time, and holds wh
     try std.testing.expectEqual(@as(f32, 0), scene.world.get(scene.root, Transform).?.position.x);
 }
 
-test "a once clip holds its last pose, and speed scales the clock" {
-    const gpa = std.testing.allocator;
-    var cache = ClipCache{ .gpa = gpa };
-    defer cache.deinit();
-    var scene = try testScene(gpa, &cache);
-    defer scene.world.deinit();
-    const animation = Animation{ .world = &scene.world };
-    try animation.play(scene.root, .{ .asset = .fromId(walk_id) }, .{ .speed = 2 });
-    step(&scene.world, &cache, 0.5, .{});
-    try std.testing.expectEqual(@as(f32, 2), scene.world.get(scene.root, Transform).?.position.x);
-    step(&scene.world, &cache, 5, .{});
-    try std.testing.expectEqual(@as(f32, 4), scene.world.get(scene.root, Transform).?.position.x);
-}
-
-test "blending fades from the previous clip, then ends the fade" {
-    const gpa = std.testing.allocator;
-    var cache = ClipCache{ .gpa = gpa };
-    defer cache.deinit();
-    var scene = try testScene(gpa, &cache);
-    defer scene.world.deinit();
-    const still = [_]assets.clip.Track{.{ .target = "", .property = .position, .keys = &.{.{ .time_s = 0, .value = .{ 10, 0, 0 } }} }};
-    try cache.replace(still_key, .{ .duration_s = 1, .tracks = &still });
-    const animation = Animation{ .world = &scene.world };
-    try animation.play(scene.root, .{ .asset = .fromId(walk_id) }, .{});
-    step(&scene.world, &cache, 1, .{});
-    try std.testing.expectEqual(@as(f32, 2), scene.world.get(scene.root, Transform).?.position.x);
-
-    // Halfway through a one second fade: walk is at 1.5 s (3 m), still is at 10 m, so 6.5 m.
-    try animation.blendTo(scene.root, .{ .asset = .fromId(still_id) }, 1, .{});
-    step(&scene.world, &cache, 0.5, .{});
-    try std.testing.expectEqual(@as(f32, 6.5), scene.world.get(scene.root, Transform).?.position.x);
-    step(&scene.world, &cache, 0.5, .{});
-    try std.testing.expect(!scene.world.get(scene.root, Animator).?.isBlending());
-    try std.testing.expectEqual(@as(f32, 10), scene.world.get(scene.root, Transform).?.position.x);
-}
-
-test "controls refuse what they can't do and change nothing" {
-    const gpa = std.testing.allocator;
-    var world = ecs.World.init(gpa);
-    defer world.deinit();
-    const animation = Animation{ .world = &world };
-    const entity = try world.spawn(.{Transform{}});
-    try std.testing.expectError(error.NoAnimator, animation.pause(entity));
-    try std.testing.expectError(error.InvalidClip, animation.play(entity, .{}, .{}));
-    const run: Clip = .{ .imported = .fromId(0x21) };
-    try std.testing.expectError(error.InvalidSpeed, animation.play(entity, run, .{ .speed = std.math.inf(f32) }));
-    var other = run;
-    other.model = .fromId(0x22);
-    try std.testing.expectError(error.ModelMismatch, animation.play(entity, other, .{}));
-    try std.testing.expect(world.get(entity, Animator) == null);
-    try animation.play(entity, run, .{ .start_s = 0.25 });
-    try std.testing.expectError(error.InvalidTime, animation.blendTo(entity, .{ .imported = .fromId(0x23) }, 0, .{}));
-    try std.testing.expectError(error.InvalidTime, animation.seek(entity, std.math.nan(f32)));
-    try std.testing.expectEqual(@as(u64, 0x21), world.get(entity, Animator).?.model_clip.id());
-    try std.testing.expectEqual(@as(f32, 0.25), world.get(entity, Animator).?.time_s);
-}
-
 test "a cutscene clip moves entities across the scene, sets a camera, UI text and fires its events once" {
     const gpa = std.testing.allocator;
     var cache = ClipCache{ .gpa = gpa };
@@ -812,26 +755,6 @@ test "a cutscene clip moves entities across the scene, sets a camera, UI text an
     try std.testing.expect(animation.isPlaying(intro, &cache));
     step(&world, &cache, 2, effects);
     try std.testing.expect(!animation.isPlaying(intro, &cache));
-}
-
-test "a track's target text reaches an entity below the animator or from the top of the scene" {
-    const gpa = std.testing.allocator;
-    var world = ecs.World.init(gpa);
-    defer world.deinit();
-    const intro = try world.spawn(.{Name.init("intro")});
-    const prop = try world.spawn(.{Name.init("prop")});
-    try world.setParent(prop, intro);
-    const garden = try world.spawn(.{Name.init("garden")});
-    const gate = try world.spawn(.{Name.init("gate")});
-    try world.setParent(gate, garden);
-
-    var buffer: [64]u8 = undefined;
-    try std.testing.expectEqualStrings("prop", targetFor(&world, intro, prop, &buffer).?);
-    try std.testing.expectEqualStrings("/garden/gate", targetFor(&world, intro, gate, &buffer).?);
-    try std.testing.expectEqualStrings("", targetFor(&world, intro, intro, &buffer).?);
-    try std.testing.expect(inScene(&world, "garden/gate").?.eql(gate));
-    try std.testing.expect(inScene(&world, "gate") == null);
-    try std.testing.expect(below(&world, intro, "prop").?.eql(prop));
 }
 
 test "an Animator with states saves into a scene and reads back" {

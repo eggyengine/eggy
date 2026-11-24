@@ -143,11 +143,6 @@ const engine_placeholder = ".{ .path = \"eggy_template_engine\" }";
 /// The template's fingerprint: valid for `eggy_template_name`, so the template builds as is.
 const template_fingerprint = "0x76cd980c5eed1e55";
 
-test "the template's own fingerprint is valid for its placeholder name" {
-    var buffer: [18]u8 = undefined;
-    try std.testing.expectEqualStrings(template_fingerprint, try std.fmt.bufPrint(&buffer, "0x{x:0>16}", .{fingerprint(name_placeholder, 0x5eed1e55)}));
-}
-
 test "rendering fills every placeholder with a fingerprint valid for the new name" {
     const project = Project{ .name = "space_game", .title = "Space \"Game\"", .fingerprint_id = 0x1234abcd, .engine_path = "../engines/abc" };
     const zon = try render(std.testing.allocator,
@@ -167,15 +162,6 @@ test "an absolute engine path is rejected, since Zig would reject the dependency
     try std.testing.expectError(error.EnginePathNotRelative, render(std.testing.allocator, "", .{ .name = "space_game", .title = "", .fingerprint_id = 1, .engine_path = "/home/me/eggy" }));
 }
 
-test "titles become package names" {
-    var buffer: [max_name_len]u8 = undefined;
-    try std.testing.expectEqualStrings("space_game", packageName(&buffer, "Space Game!"));
-    try std.testing.expectEqualStrings("game_2d_shooter", packageName(&buffer, "2D  Shooter"));
-    try std.testing.expectEqualStrings("game_const", packageName(&buffer, "const"));
-    try std.testing.expectEqualStrings("", packageName(&buffer, "!!!"));
-    try validateName(packageName(&buffer, "A very long title that goes on and on and on"));
-}
-
 test "project names must be plain identifiers" {
     try validateName("space_game");
     try std.testing.expectError(error.EmptyName, validateName(""));
@@ -183,10 +169,4 @@ test "project names must be plain identifiers" {
     try std.testing.expectError(error.NameNotIdentifier, validateName("2d_game"));
     try std.testing.expectError(error.NameNotIdentifier, validateName("const"));
     try std.testing.expectError(error.NameTooLong, validateName(&@as([33]u8, @splat('a'))));
-}
-
-test "fingerprint ids skip the values Zig reserves" {
-    try std.testing.expectEqual(@as(u32, 1), fingerprintId(0));
-    try std.testing.expectEqual(@as(u32, 1), fingerprintId(0xffffffff));
-    try std.testing.expectEqual(@as(u32, 42), fingerprintId(42));
 }

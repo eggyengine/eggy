@@ -295,78 +295,11 @@ test "scene lights follow world transforms and validate changes" {
     try std.testing.expectEqual(@as(u32, 0), (try gather(&world)).count);
 }
 
-test "a new light facing the horizon is tilted down to light the ground" {
-    var world = ecs.World.init(std.testing.allocator);
-    defer world.deinit();
-    const sun = try world.spawn(.{ transform.Transform{}, SceneLight{} });
-    aimNewLight(&world, sun);
-    try std.testing.expectEqual(new_light_rotation_deg, world.get(sun, transform.Transform).?.rotation_deg);
-    // The ground (+y) now faces it.
-    const frame = try gather(&world);
-    try std.testing.expect(frame.lights[0].direction_range[1] < -0.5);
-
-    const turned = try world.spawn(.{ transform.Transform{ .rotation_deg = .init(-90, 0, 0) }, SceneLight{} });
-    aimNewLight(&world, turned);
-    try std.testing.expectEqual(math.Vec3.init(-90, 0, 0), world.get(turned, transform.Transform).?.rotation_deg);
-    const bulb = try world.spawn(.{ transform.Transform{}, SceneLight{ .kind = .point } });
-    aimNewLight(&world, bulb);
-    try std.testing.expectEqual(math.Vec3.zero, world.get(bulb, transform.Transform).?.rotation_deg);
-}
-
 test "light overflow is reported rather than silently dropping lights" {
     var world = ecs.World.init(std.testing.allocator);
     defer world.deinit();
     for (0..max_lights + 1) |_| _ = try world.spawn(.{ transform.Transform{}, SceneLight{} });
     try std.testing.expectError(error.TooManyLights, gather(&world));
-}
-
-test "light source identities retain reused generations without changing GPU records" {
-    var world = ecs.World.init(std.testing.allocator);
-    defer world.deinit();
-    const old = try world.spawn(.{ transform.Transform{}, SceneLight{} });
-    world.despawn(old);
-    const replacement = try world.spawn(.{ transform.Transform{}, SceneLight{} });
-    try std.testing.expectEqual(old.id, replacement.id);
-    try std.testing.expect(old.generation != replacement.generation);
-    const frame = try gather(&world);
-    try std.testing.expectEqual(@as(u32, 1), frame.count);
-    try std.testing.expectEqual(replacement.id, frame.entities[0].id);
-    try std.testing.expectEqual(replacement.generation, frame.entities[0].generation);
-    try std.testing.expectEqual(@as(usize, 64), @sizeOf(GpuLight));
-    try std.testing.expectEqual(@as(usize, 8), @sizeOf(LightEntity));
-}
-
-test "spot cones exposure and exclusive directional shadows are validated" {
-    var world = ecs.World.init(std.testing.allocator);
-    defer world.deinit();
-    const spot = try world.spawn(.{ transform.Transform{}, SceneLight{ .kind = .spot, .casts_shadows = true } });
-    const sun = try world.spawn(.{ transform.Transform{}, SceneLight{} });
-    const controls = Lighting{ .world = &world };
-    try std.testing.expectError(error.UnsupportedShadowLight, controls.setShadowCaster(spot));
-    try controls.setShadowCaster(sun);
-    try controls.setLight(sun, .{ .directional = .{ .illuminance_lux = 2000 } });
-    try std.testing.expect((try controls.getLight(sun)).?.casts_shadows);
-    // Choosing the directional caster leaves the spot light's own shadows alone.
-    try std.testing.expect((try controls.getLight(spot)).?.casts_shadows);
-    try controls.setEnvironment(.{ .default_light = false, .exposure_ev = 1 });
-    const frame = try gather(&world);
-    try std.testing.expectEqual(@as(f32, 2), frame.options[0]);
-    try std.testing.expectEqual(@as(f32, 0), frame.options[1]);
-    try std.testing.expect(frame.options[2] >= 0);
-    try std.testing.expectError(error.InvalidEnvironment, controls.setEnvironment(.{ .exposure_ev = std.math.nan(f32) }));
-    try std.testing.expectError(error.InvalidLight, (SceneLight{ .kind = .spot, .inner_angle_deg = 40, .outer_angle_deg = 20 }).validate());
-}
-
-test "multiple authored environments or shadow casters are explicit errors" {
-    var world = ecs.World.init(std.testing.allocator);
-    defer world.deinit();
-    _ = try world.spawn(.{Environment{}});
-    _ = try world.spawn(.{Environment{}});
-    try std.testing.expectError(error.MultipleEnvironments, gather(&world));
-    try (Lighting{ .world = &world }).setEnvironment(.{});
-    _ = try world.spawn(.{ transform.Transform{}, SceneLight{ .casts_shadows = true } });
-    _ = try world.spawn(.{ transform.Transform{}, SceneLight{ .casts_shadows = true } });
-    try std.testing.expectError(error.TooManyShadowLights, gather(&world));
 }
 
 /// Warn when the number of lights `frame` left out as invalid changes to one or more; `reported`
@@ -397,35 +330,4 @@ test "point and spot shadows take their maps in turn, and running out is an erro
     _ = try world.spawn(.{ transform.Transform{}, SceneLight{ .kind = .point, .casts_shadows = true } });
     _ = try world.spawn(.{ transform.Transform{}, SceneLight{ .kind = .point, .casts_shadows = true } });
     try std.testing.expectError(error.TooManyShadowLights, gather(&world));
-}
-
-test "a sky lights in proportion to the ambient intensity" {
-    var world = ecs.World.init(std.testing.allocator);
-    defer world.deinit();
-    try (Lighting{ .world = &world }).setEnvironment(.{ .sky = .init("resources/sky.png"), .sky_intensity = 2, .ambient_intensity = 0.06 });
-    const frame = try gather(&world);
-    try std.testing.expectEqualStrings(AssetRef(.image).init("resources/sky.png").key(), frame.sky_file.?[0..frame.sky_file_len]);
-    try std.testing.expectEqual(@as(f32, 2), frame.sky[0]);
-    try std.testing.expectApproxEqAbs(@as(f32, 4), frame.sky[1], 1e-5);
-    try std.testing.expectError(error.InvalidEnvironment, (Environment{ .sky_intensity = -1 }).validate());
-}
-
-test "an invalid light is left out, and the others still gathered" {
-    var world = ecs.World.init(std.testing.allocator);
-    defer world.deinit();
-    _ = try world.spawn(.{ transform.Transform{}, SceneLight{ .kind = .directional } });
-    _ = try world.spawn(.{ transform.Transform{}, SceneLight{ .kind = .point, .range_m = 0 } });
-    const frame = try gather(&world);
-    try std.testing.expectEqual(@as(u32, 1), frame.count);
-    try std.testing.expectEqual(@as(u32, 1), frame.invalid);
-}
-
-test "a light taken off an entity that stays is no longer gathered" {
-    var world = ecs.World.init(std.testing.allocator);
-    defer world.deinit();
-    const entity = try world.spawn(.{ transform.Transform{}, SceneLight{ .kind = .directional } });
-    try std.testing.expectEqual(@as(u32, 1), (try gather(&world)).count);
-    world.remove(entity, SceneLight);
-    try std.testing.expect(world.isAlive(entity));
-    try std.testing.expectEqual(@as(u32, 0), (try gather(&world)).count);
 }

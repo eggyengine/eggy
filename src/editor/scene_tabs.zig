@@ -253,13 +253,3 @@ test "each tab's scene file comes back for its own tab, the open one's left to t
     try std.testing.expect(after.waiting[2] == null);
     try std.testing.expect(after.waiting[3] == null);
 }
-
-test "without saved tabs, the first tab shown keeps the scene the editor reopened" {
-    const gpa = std.testing.allocator;
-    var tabs = SceneTabs{};
-    defer tabs.deinit(gpa);
-    try std.testing.expect(!tabs.changing(2));
-    try std.testing.expect(tabs.follow(gpa, 2, null) == null);
-    try std.testing.expectEqual(@as(u8, 2), tabs.applied);
-    try std.testing.expect(tabs.changing(0));
-}

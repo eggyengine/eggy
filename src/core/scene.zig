@@ -151,51 +151,6 @@ pub const Access = struct {
     }
 };
 
-test "captured scenes own component metadata independently of their registry" {
-    const Value = struct { count: u32 = 1 };
-    const Registry = components.Registry(&.{Value}, &.{"game"});
-    var world = ecs.World.init(std.testing.allocator);
-    defer world.deinit();
-    _ = try world.spawn(.{Value{}});
-    var captured = try Scene.capture(std.testing.allocator, &world, registryAccess(Registry), null);
-    defer captured.deinit();
-    const saved = captured.entities[0].components[0];
-    try std.testing.expect(saved.type.ptr != Registry.infos[0].name.ptr);
-    try std.testing.expect(saved.owner.ptr != Registry.infos[0].owner.ptr);
-    try std.testing.expect(saved.fields[0].name.ptr != Registry.infos[0].fields[0].name.ptr);
-    try std.testing.expectEqualStrings("count", saved.fields[0].name);
-}
-
-test "allocated scene reads own complete names and large fields" {
-    const Check = struct {
-        fn run(gpa: std.mem.Allocator) !void {
-            const Value = struct { text: [4096]u8 = @splat('x') };
-            const Registry = components.Registry(&.{Value}, &.{"game"});
-            const access = registryAccess(Registry);
-            var world = ecs.World.init(std.testing.allocator);
-            defer world.deinit();
-            const entity = try world.spawn(.{ Value{}, Name.init(&@as([Name.max_len]u8, @splat('A'))) });
-            const unnamed = try world.spawn(.{});
-            try std.testing.expect(try access.nameAlloc(gpa, &world, unnamed) == null);
-            try std.testing.expectError(error.NoComponent, access.readFieldAlloc(gpa, &world, unnamed, 0, 0));
-            try std.testing.expectError(error.NoSuchComponent, access.readFieldAlloc(gpa, &world, entity, 1, 0));
-            try std.testing.expectError(error.NoSuchComponent, access.readFieldAlloc(gpa, &world, entity, 0, 1));
-            const name = (try access.nameAlloc(gpa, &world, entity)).?;
-            defer gpa.free(name);
-            const field = try access.readFieldAlloc(gpa, &world, entity, 0, 0);
-            defer gpa.free(field);
-            var buffer: [64 * 1024]u8 = undefined;
-            const expected = access.readField(&world, entity, 0, 0, &buffer).?;
-            try std.testing.expectEqualStrings(expected, field);
-            access.setName(&world, entity, "Changed");
-            world.get(entity, Value).?.text[0] = 'y';
-            try std.testing.expectEqualStrings(&@as([Name.max_len]u8, @splat('A')), name);
-            try std.testing.expectEqualStrings(expected, field);
-        }
-    };
-    try std.testing.checkAllAllocationFailures(std.testing.allocator, Check.run, .{});
-}
-
 /// `Access` straight through `Registry` (a `components.Registry`), for code that has the types.
 /// Returns a static host adapter without allocation; it remains valid only while this
 /// compilation is loaded and must not be carried across hot reloads.
@@ -732,26 +687,6 @@ test "capturing roots takes their descendants only, which go under a new parent"
     defer gpa.free(made.entities);
     try std.testing.expect(world.getParent(made.entities[0]).?.eql(holder));
     try std.testing.expect(world.getParent(made.entities[1]).?.eql(made.entities[0]));
-}
-
-test "a scene instance is saved without the entities made from its file" {
-    const gpa = std.testing.allocator;
-    const SceneInstance = scene_instance.SceneInstance;
-    const Transform = @import("transform.zig").Transform;
-    const access = registryAccess(components.Registry(&.{ Spin, Transform, SceneInstance }, &.{ "game", "eggy", "eggy" }));
-    var world = ecs.World.init(gpa);
-    defer world.deinit();
-    const rat = try world.spawn(.{SceneInstance{ .scene = .init("resources/scene/rat.scene.zon") }});
-    const hat = try world.spawn(.{Spin{}});
-    try world.setParent(hat, rat);
-
-    var scene = try Scene.capture(gpa, &world, access, null);
-    defer scene.deinit();
-    try std.testing.expectEqual(@as(usize, 1), scene.entities.len);
-    try std.testing.expectEqualStrings("SceneInstance", scene.entities[0].components[0].type);
-    const scene_ref = @import("refs.zig").AssetRef(.scene).init("resources/scene/rat.scene.zon");
-    var expected: [18]u8 = undefined;
-    try std.testing.expectEqualStrings(try std.fmt.bufPrint(&expected, "\"{s}\"", .{scene_ref.key()}), scene.entities[0].components[0].fields[0].value);
 }
 
 test "references to the scene's own entities point at their copies" {

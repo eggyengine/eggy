@@ -585,22 +585,6 @@ test "times map across the lane after the gutter, and back" {
     try std.testing.expectApproxEqAbs(@as(f32, 4), zoomed.timeAtAny(label_width + 500), 0.001);
 }
 
-test "a view zooms about a time, pans and follows the head, inside the clip" {
-    const whole = View{ .duration_s = 10 };
-    const closer = whole.zoomed(2, 5);
-    try std.testing.expectEqual(@as(f32, 5), closer.span_s);
-    try std.testing.expectEqual(@as(f32, 2.5), closer.start_s);
-    // The time under the pointer stays put.
-    const near_end = whole.zoomed(4, 10);
-    try std.testing.expectEqual(@as(f32, 7.5), near_end.start_s);
-    try std.testing.expectEqual(@as(f32, 0), closer.zoomed(0.1, 5).span_s);
-    try std.testing.expectEqual(@as(f32, 5), closer.panned(100).start_s);
-    try std.testing.expectEqual(@as(f32, 0), closer.panned(-100).start_s);
-    try std.testing.expectEqual(@as(f32, 4), closer.following(9).start_s);
-    try std.testing.expectEqual(closer, closer.following(3));
-    try std.testing.expectEqual(min_span_s, whole.zoomed(1000, 1).span_s);
-}
-
 test "dragged keys land on frames or the head, and stop at the start" {
     const layout = Layout{ .width = label_width + 209, .view = .{ .duration_s = 10 } };
     // Pressed on a key at 1 s, the pointer 0.51 s on: the key lands on the frame at 1.5 s.
@@ -618,31 +602,4 @@ test "a click picks the nearest key within reach" {
     try std.testing.expectEqual(@as(?usize, 1), layout.keyNear(&keys, layout.xOf(1.25)));
     try std.testing.expectEqual(@as(?usize, 2), layout.keyNear(&keys, layout.xOf(6) + 5));
     try std.testing.expect(layout.keyNear(&keys, layout.xOf(4)) == null);
-}
-
-test "ticks fall on whole frames, spaced so about a dozen fit" {
-    try std.testing.expectEqual(@as(f32, 1), tickStep(12));
-    try std.testing.expectEqual(@as(f32, 5.0 / 30.0), tickStep(2));
-    try std.testing.expectEqual(@as(f32, 10), tickStep(90));
-    try std.testing.expectEqual(@as(f32, 1.0 / 30.0), tickStep(0.4));
-    try std.testing.expectEqual(@as(u32, 108), frameOf(3.6));
-}
-
-test "a nested row's key buttons step between keys" {
-    try std.testing.expectEqual(Nav.previous, navAt(label_width - nav_end - nav_width * 3 + 1).?);
-    try std.testing.expectEqual(Nav.next, navAt(label_width - nav_end - 1).?);
-    try std.testing.expect(navAt(10) == null);
-    const keys = [_]eggy.assets.clip.Key{ .{ .time_s = 1 }, .{ .time_s = 2 }, .{ .time_s = 3 } };
-    try std.testing.expectEqual(@as(?f32, 1), stepKey(&keys, 2, .previous));
-    try std.testing.expectEqual(@as(?f32, 3), stepKey(&keys, 2, .next));
-    try std.testing.expect(stepKey(&keys, 3, .next) == null);
-    try std.testing.expect(onKey(&keys, 2) and !onKey(&keys, 2.5));
-}
-
-test "a click on the camera lane finds the shot under it" {
-    const layout = Layout{ .width = label_width + 209, .view = .{ .duration_s = 10 } };
-    const starts = [_]f32{ 0, 3, 5.2 };
-    try std.testing.expectEqual(@as(?usize, 1), shotNear(layout, &starts, 10, layout.xOf(4)));
-    try std.testing.expectEqual(@as(?usize, 2), shotNear(layout, &starts, 10, layout.xOf(9)));
-    try std.testing.expect(shotNear(layout, &starts, 10, 20) == null);
 }

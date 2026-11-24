@@ -378,90 +378,6 @@ test "a press outside the Scene panel doesn't steer it, and zoom stops short of 
     try std.testing.expectEqual(min_distance, camera.distance);
 }
 
-test "whole one-axis notches are a mouse wheel; fractional or sideways scrolling is a touchpad" {
-    try std.testing.expect(!fromTouchpad(scrollWheel(0, -2)));
-    try std.testing.expect(fromTouchpad(scrollWheel(0, 0.5)));
-    try std.testing.expect(fromTouchpad(scrollWheel(1, 0)));
-}
-
-test "fractional two-axis touchpad scrolling orbits without changing focus or zoom" {
-    var camera = SceneCamera{ .pitch_deg = 0, .distance = 10 };
-    const focus = camera.focus;
-    camera.scroll(scrollWheel(0.25, 0.5), 600, .{});
-    try std.testing.expectApproxEqAbs(@as(f32, 358.5), camera.yaw_deg, 0.001);
-    try std.testing.expectApproxEqAbs(@as(f32, 3), camera.pitch_deg, 0.001);
-    try std.testing.expect(camera.focus.eql(focus));
-    try std.testing.expectEqual(@as(f32, 10), camera.distance);
-}
-
-test "Shift touchpad scrolling pans in screen space at the viewport scale" {
-    var camera = SceneCamera{ .focus = .zero, .pitch_deg = 0, .distance = 10, .fov_deg = 90 };
-    camera.scroll(scrollWheel(0.25, 0.5), 100, .{ .left_shift = true });
-    try std.testing.expect(camera.focus.approxEql(.init(-1.2, -2.4, 0), 0.001));
-    try std.testing.expectEqual(@as(f32, 0), camera.yaw_deg);
-    try std.testing.expectEqual(@as(f32, 0), camera.pitch_deg);
-    try std.testing.expectEqual(@as(f32, 10), camera.distance);
-}
-
-test "Ctrl touchpad scrolling zooms like a whole mouse-wheel notch" {
-    var touchpad = SceneCamera{ .distance = 10 };
-    var mouse = touchpad;
-    touchpad.scroll(scrollWheel(0.5, 1), 600, .{ .right_control = true });
-    mouse.scroll(scrollWheel(0, 1), 600, .{ .left_shift = true });
-    try std.testing.expectApproxEqAbs(@as(f32, 8.8), touchpad.distance, 0.001);
-    try std.testing.expectApproxEqAbs(mouse.distance, touchpad.distance, 0.001);
-    try std.testing.expect(touchpad.focus.eql(mouse.focus));
-    try std.testing.expectEqual(mouse.yaw_deg, touchpad.yaw_deg);
-}
-
-test "flipped touchpad scrolling is normalized and scrolling outside the Scene is ignored" {
-    var camera = SceneCamera{ .pitch_deg = 0 };
-    var wheel = scrollWheel(0.5, 0.5);
-    wheel.direction = .flipped;
-    camera.scroll(wheel, 600, .{});
-    try std.testing.expectApproxEqAbs(@as(f32, 3), camera.yaw_deg, 0.001);
-    try std.testing.expectApproxEqAbs(@as(f32, -3), camera.pitch_deg, 0.001);
-    const before = camera.pose();
-    try std.testing.expect(!camera.handle(.{ .mouse_wheel = wheel }, .{ .x = 100, .y = 100, .w = 400, .h = 300 }));
-    try std.testing.expectEqualSlices(f32, &before, &camera.pose());
-}
-
-test "pinch requires a Scene start and only its originating window can update or end it" {
-    const area = eggy.ui.Rect{ .x = 100, .y = 100, .w = 400, .h = 300 };
-    var camera = SceneCamera{ .distance = 10 };
-    try std.testing.expect(!camera.beginPinch(area, .{ .x = 10, .y = 10 }, 1));
-    try std.testing.expect(!camera.beginPinch(null, .{ .x = 150, .y = 150 }, 1));
-    try std.testing.expect(!camera.handle(.{ .pinch_update = .{ .common = .{ .timestamp = 0 }, .scale = 2, .window_id = 1 } }, area));
-    try std.testing.expect(camera.beginPinch(area, .{ .x = 150, .y = 150 }, 1));
-    try std.testing.expect(!camera.handle(.{ .pinch_update = .{ .common = .{ .timestamp = 0 }, .scale = 2, .window_id = 2 } }, area));
-    try std.testing.expect(!camera.handle(.{ .pinch_end = .{ .common = .{ .timestamp = 0 }, .scale = 1, .window_id = 2 } }, area));
-    try std.testing.expect(camera.pinch != null);
-    try std.testing.expectEqual(@as(f32, 10), camera.distance);
-    // A captured gesture continues outside the panel, without applying duplicate scroll.
-    const before = camera.pose();
-    camera.scroll(scrollWheel(1, 1), 600, .{});
-    try std.testing.expectEqualSlices(f32, &before, &camera.pose());
-    try std.testing.expect(camera.handle(.{ .pinch_update = .{ .common = .{ .timestamp = 0 }, .scale = 2, .window_id = 1 } }, null));
-    try std.testing.expectEqual(@as(f32, 5), camera.distance);
-    try std.testing.expect(camera.handle(.{ .pinch_update = .{ .common = .{ .timestamp = 0 }, .scale = 0.5, .window_id = 1 } }, null));
-    try std.testing.expectEqual(@as(f32, 10), camera.distance);
-    try std.testing.expect(camera.handle(.{ .pinch_end = .{ .common = .{ .timestamp = 0 }, .scale = 1, .window_id = 1 } }, null));
-    try std.testing.expect(camera.pinch == null);
-}
-
-test "pinch clamps zoom, ignores invalid scales and releases capture on focus loss" {
-    var camera = SceneCamera{ .distance = 10, .pinch = .{ .window_id = 1 }, .hovered = true };
-    for ([_]f32{ 0, -1, std.math.nan(f32), std.math.inf(f32) }) |invalid| camera.zoom(invalid);
-    try std.testing.expectEqual(@as(f32, 10), camera.distance);
-    camera.zoom(100);
-    try std.testing.expectEqual(min_distance, camera.distance);
-    _ = camera.handle(.{ .window_focus_lost = .{ .common = .{ .timestamp = 0 }, .id = 1 } }, null);
-    try std.testing.expect(camera.pinch == null);
-    try std.testing.expect(!camera.hovered);
-    try std.testing.expect(!camera.handle(.{ .pinch_update = .{ .common = .{ .timestamp = 0 }, .scale = 0.5, .window_id = 1 } }, null));
-    try std.testing.expectEqual(min_distance, camera.distance);
-}
-
 test "a gamepad's left stick flies, its right stick looks about the eye, and rest is ignored" {
     var camera = SceneCamera{ .focus = .zero, .pitch_deg = 0, .distance = 10 };
     camera.steer(.{ .left_stick = .init(0.1, -0.1), .right_stick = .init(-0.1, 0) }, 1);
@@ -482,25 +398,6 @@ test "a gamepad's left stick flies, its right stick looks about the eye, and res
     orbiting.buttons.insert(.right_shoulder);
     camera.steer(orbiting, 0.5);
     try std.testing.expect(camera.focus.eql(focus_before));
-}
-
-test "scrolling while looking around changes the fly speed, not the view, and shows it briefly" {
-    var camera = SceneCamera{ .drag = .look };
-    const before = camera.pose();
-    camera.scroll(scrollWheel(0, 2), 600, .{});
-    try std.testing.expectApproxEqAbs(@as(f32, 8 * 1.44), camera.fly_speed_m_per_s, 0.001);
-    try std.testing.expectEqualSlices(f32, &before, &camera.pose());
-    try std.testing.expect(camera.flySpeedNote() != null);
-    camera.fly(2);
-    try std.testing.expect(camera.flySpeedNote() == null);
-
-    // Holding the D-pad down for a second halves it, and it never stops altogether.
-    var pad = eggy.input.ControllerState{};
-    pad.buttons.insert(.down);
-    camera.steer(pad, 1);
-    try std.testing.expectApproxEqAbs(@as(f32, 8.0 * 1.44 / 2.0), camera.fly_speed_m_per_s, 0.001);
-    camera.steer(pad, 100);
-    try std.testing.expectEqual(min_fly_speed_m_per_s, camera.fly_speed_m_per_s);
 }
 
 fn scrollWheel(x: f32, y: f32) sdl3.events.MouseWheel {

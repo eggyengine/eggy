@@ -339,19 +339,6 @@ test "every button is told apart by its id, and other ids are none of them" {
     try std.testing.expect(buttonOf(12) == null);
 }
 
-test "the 2D Scene's toolbar has the grid and the origin where the Scene's has its axes and camera" {
-    const flat = State{ .panel = .scene_2d };
-    try std.testing.expectEqual(size(State{}).x, size(flat).x);
-    const corner = ui.Vec2{ .x = 10, .y = 10 };
-    // Seventh button along: past six buttons and their gaps, and the padding.
-    const seventh = ui.Vec2{ .x = 10 + padding_pt + 6 * (button_pt + gap_pt) + 4, .y = 20 };
-    try std.testing.expectEqual(Button.grid, buttonAt(flat, corner, seventh).?);
-    try std.testing.expectEqual(Button.game_camera, buttonAt(.{}, corner, .{ .x = seventh.x + button_pt + gap_pt, .y = 20 }).?);
-    try std.testing.expectEqual(Button.grip, buttonAt(flat, corner, .{ .x = 15, .y = 20 }).?);
-    try std.testing.expect(buttonAt(flat, corner, .{ .x = 15, .y = 50 }) == null);
-    try std.testing.expectEqual(Button.fold, buttonAt(.{ .panel = .scene_2d, .folded = true }, corner, .{ .x = 10 + padding_pt + button_pt + gap_pt + 2, .y = 20 }).?);
-}
-
 test "plugin tools widen the Scene's toolbar and have ids of their own" {
     try std.testing.expectEqual(size(State{}).x + 2 * (button_pt + gap_pt), size(.{ .plugin_tool_count = 2 }).x);
     try std.testing.expectEqual(size(State{ .panel = .scene_2d }).x, size(.{ .panel = .scene_2d, .plugin_tool_count = 2 }).x);

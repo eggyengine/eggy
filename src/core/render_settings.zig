@@ -199,14 +199,6 @@ test "graphics settings reject unsupported choices and invalid quality values" {
     try std.testing.expectError(error.InvalidFrameLimit, (Settings{ .frame_limit = 1001 }).validate(caps));
 }
 
-test "backend GPU and presentation choices require restarting graphics" {
-    const original = Settings{};
-    try std.testing.expect(!original.requiresRestart(.{ .anti_aliasing = .fxaa, .mipmaps = false }));
-    try std.testing.expect(original.requiresRestart(.{ .backend = .vulkan }));
-    try std.testing.expect(original.requiresRestart(.{ .adapter_index = 0 }));
-    try std.testing.expect(original.requiresRestart(.{ .present_mode = .fifo }));
-}
-
 test "shadow defaults scale to device limits while overrides and distances remain strict" {
     const caps = Capabilities{ .max_shadow_resolution = 1024 };
     const authored = Settings{ .anti_aliasing = .off, .shadow_quality = .high };

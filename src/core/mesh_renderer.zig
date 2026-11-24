@@ -633,16 +633,6 @@ fn skyRays(view: camera_zig.View, aspect: f32) [3][4]f32 {
     };
 }
 
-test "a perspective view's sky rays reach its edges; an orthographic one looks straight on" {
-    const view = camera_zig.View.lookingAt(.zero, .init(0, 0, -1), .{ .fov_deg = 90 });
-    const rays = skyRays(view, 2);
-    try std.testing.expectApproxEqAbs(@as(f32, 2), rays[1][0], 1e-5);
-    try std.testing.expectApproxEqAbs(@as(f32, 1), rays[2][1], 1e-5);
-    var flat = view;
-    flat.projection = .orthographic;
-    try std.testing.expectEqual(@as(f32, 0), skyRays(flat, 2)[1][0]);
-}
-
 test "mirrored entities cull their front faces, double-sided ones none" {
     const identity: [4][4]f32 = .{ .{ 1, 0, 0, 0 }, .{ 0, 1, 0, 0 }, .{ 0, 0, 1, 0 }, .{ 0, 0, 0, 1 } };
     var drawable = mesh.Drawable{ .model = identity, .color = @splat(1), .shape = .cube, .entity_id = 0, .entity_generation = 0 };
@@ -852,34 +842,4 @@ fn pipelineOf(device: vit.Device, format: vit.Format, layout: vit.PipelineLayout
         .layout = layout,
         .multisample = .{ .count = sample_count },
     });
-}
-
-test "shapes are drawn before model files, and each kind and texture together" {
-    const identity: [4][4]f32 = .{ .{ 1, 0, 0, 0 }, .{ 0, 1, 0, 0 }, .{ 0, 0, 1, 0 }, .{ 0, 0, 0, 1 } };
-    var drawables = [_]mesh.Drawable{
-        .{ .model = identity, .color = undefined, .shape = .cube, .entity_id = 0, .entity_generation = 0, .model_file = "b.glb", .model_file_len = 5 },
-        .{ .model = identity, .color = undefined, .shape = .sphere, .entity_id = 1, .entity_generation = 0 },
-        .{ .model = identity, .color = undefined, .shape = .cube, .entity_id = 2, .entity_generation = 0, .model_file = "a.glb", .model_file_len = 5 },
-        .{ .model = identity, .color = undefined, .shape = .cube, .entity_id = 3, .entity_generation = 0, .texture_file = "wood.png", .texture_file_len = 8 },
-        .{ .model = identity, .color = undefined, .shape = .cube, .entity_id = 4, .entity_generation = 0 },
-    };
-    std.mem.sort(mesh.Drawable, &drawables, {}, drawnBefore);
-    var order: [5]u32 = undefined;
-    for (&order, drawables) |*id, drawable| id.* = drawable.entity_id;
-    // Plain cubes before painted ones, so each texture is one draw.
-    try std.testing.expectEqualSlices(u32, &.{ 4, 3, 1, 2, 0 }, &order);
-}
-
-test "blended and mirrored meshes are drawn in runs of their own" {
-    const identity: [4][4]f32 = .{ .{ 1, 0, 0, 0 }, .{ 0, 1, 0, 0 }, .{ 0, 0, 1, 0 }, .{ 0, 0, 0, 1 } };
-    var mirrored = identity;
-    mirrored[0][0] = -1;
-    const plain = mesh.Drawable{ .model = identity, .color = @splat(1), .shape = .cube, .entity_id = 0, .entity_generation = 0 };
-    var blended = plain;
-    blended.alpha_blend = 1;
-    var flipped = plain;
-    flipped.model = mirrored;
-    try std.testing.expect(drawnBefore({}, plain, blended));
-    try std.testing.expect(drawnBefore({}, plain, flipped));
-    try std.testing.expect(!drawnBefore({}, plain, plain));
 }

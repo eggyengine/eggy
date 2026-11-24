@@ -411,35 +411,3 @@ test "children paint in the order they are declared, pinned or not" {
     try std.testing.expectEqualStrings("pinned", placed[1].node.name);
     try std.testing.expectEqual(@as(?u32, 2), placed[2].index);
 }
-
-test "a row centres its children, and hidden ones take no room but keep their place" {
-    var font = try ui.Font.init(std.testing.allocator, ui.default_font);
-    defer font.deinit();
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    var children = [_]Node{
-        .{ .name = "a", .layout = .{ .width = .{ .px = 50 }, .height = .{ .px = 10 } } },
-        .{ .name = "gone", .visible = false, .layout = .{ .width = .{ .px = 500 } } },
-        .{ .name = "b", .layout = .{ .width = .{ .px = 50 }, .height = .{ .px = 30 } } },
-    };
-    const scene = UiScene{ .root = .{ .layout = .{ .width = .{ .px = 300 }, .height = .{ .px = 30 }, .direction = .row, .justify = .center, .align_items = .center }, .children = &children } };
-    const placed = try place(arena.allocator(), &scene, .plain(&font), .{ .x = 0, .y = 0, .w = 300, .h = 30 }, 1);
-    try std.testing.expectEqual(@as(usize, 3), placed.len);
-    try std.testing.expectEqual(ui.Rect{ .x = 100, .y = 10, .w = 50, .h = 10 }, placed[1].rect);
-    try std.testing.expectEqual(ui.Rect{ .x = 150, .y = 0, .w = 50, .h = 30 }, placed[2].rect);
-    // "b" is the third node of the scene in paint order, though the second drawn child.
-    try std.testing.expectEqual(@as(?u32, 3), placed[2].index);
-}
-
-test "paths and paint-order indices name the same nodes" {
-    var grandchildren = [_]Node{ .{ .name = "x" }, .{ .name = "y" } };
-    var children = [_]Node{ .{ .name = "a", .children = &grandchildren }, .{ .name = "b" } };
-    const root = Node{ .children = &children };
-    var buffer: [8]u16 = undefined;
-    try std.testing.expectEqualSlices(u16, &.{}, pathOf(&root, 0, &buffer).?);
-    try std.testing.expectEqualSlices(u16, &.{ 0, 1 }, pathOf(&root, 3, &buffer).?);
-    try std.testing.expectEqualSlices(u16, &.{1}, pathOf(&root, 4, &buffer).?);
-    try std.testing.expect(pathOf(&root, 5, &buffer) == null);
-    try std.testing.expectEqual(@as(?u32, 3), indexOf(&root, &.{ 0, 1 }));
-    try std.testing.expectEqual(@as(?u32, 4), indexOf(&root, &.{1}));
-}

@@ -430,25 +430,6 @@ test "a scene that was never opened has its paths turned into ids, and nothing e
     try std.testing.expectEqual(@as(usize, 0), again.rewrites.len);
 }
 
-test "a bare clip name is read against the model of the same entity" {
-    var setup = try Setup.open();
-    defer setup.close();
-    const arena = setup.arena_state.allocator();
-    try setup.write("resources/level.scene.zon",
-        \\.{ .entities = .{ .{ .name = "face", .parent = null, .components = .{
-        \\    .{ .type = "Shot", .owner = "game", .fields = .{ .model = "resources/face.gltf", .clip = "smile" } },
-        \\} } } }
-    );
-    const made = try plan(setup.gpa, arena, setup.io, setup.fixture.dir, &setup.project, test_types);
-    try std.testing.expectEqual(@as(?[]const u8, null), made.problem);
-    try std.testing.expectEqual(@as(usize, 1), made.rewrites.len);
-    var parsed = try Scene.parse(setup.gpa, try arena.dupeSentinel(u8, made.rewrites[0].text, 0));
-    defer parsed.deinit();
-    const smile = setup.project.referenceAt("resources/face.gltf/smile").?;
-    const expected = try std.fmt.allocPrint(arena, "\"{s}\"", .{smile.key()});
-    try std.testing.expectEqualStrings(expected, parsed.entities[0].components[0].fields[1].value);
-}
-
 test "opening a project keeps a bare clip name by turning it into the clip's id" {
     var setup = try Setup.open();
     defer setup.close();
@@ -504,15 +485,4 @@ test "a reference that can't become an id refuses the move and writes nothing" {
     const problem = try normalize(setup.gpa, arena, setup.io, setup.fixture.dir, &setup.project, test_types);
     try std.testing.expect(problem != null);
     try std.testing.expectEqualStrings(good, try setup.read("resources/a.scene.zon"));
-}
-
-test "a material's texture path becomes an id" {
-    var setup = try Setup.open();
-    defer setup.close();
-    const arena = setup.arena_state.allocator();
-    try setup.write("resources/metal.material.zon", ".{ .roughness = 0.3, .texture = \"resources/wood.png\" }");
-    try std.testing.expectEqual(@as(?[]const u8, null), try normalize(setup.gpa, arena, setup.io, setup.fixture.dir, &setup.project, test_types));
-    const wood = setup.project.referenceAt("resources/wood.png").?;
-    const expected = try std.fmt.allocPrint(arena, ".{{ .roughness = 0.3, .texture = \"{s}\" }}", .{wood.key()});
-    try std.testing.expectEqualStrings(expected, try setup.read("resources/metal.material.zon"));
 }

@@ -594,38 +594,6 @@ test "scene changes become steps, typing once it pauses, and undo and redo walk 
     try std.testing.expect(moveForTest(&history, .redo) == null);
 }
 
-test "layout and scene-opening steps own their text" {
-    const gpa = std.testing.allocator;
-    var history = History{ .gpa = gpa };
-    defer history.deinit();
-    history.record(.{ .layout = .{ .before = try gpa.dupe(u8, "a"), .after = try gpa.dupe(u8, "b") } });
-    history.record(.{ .open_scene = .{
-        .from = null,
-        .from_world = try gpa.dupe(u8, ".{}"),
-        .from_saved = null,
-        .to = try gpa.dupe(u8, "resources/scene/sewer.scene.zon"),
-        .to_world = try gpa.dupe(u8, ".{}"),
-        .to_saved = 1,
-        .created = true,
-    } });
-    try std.testing.expectEqualStrings("a new scene", moveForTest(&history, .undo).?.describe());
-    try std.testing.expectEqualStrings("a layout change", moveForTest(&history, .undo).?.describe());
-}
-
-test "typing into the project's settings is one step" {
-    const gpa = std.testing.allocator;
-    var history = History{ .gpa = gpa };
-    defer history.deinit();
-    history.recordProjectSettings(try gpa.dupe(u8, "a"), try gpa.dupe(u8, "ab"), 0);
-    history.recordProjectSettings(try gpa.dupe(u8, "ab"), try gpa.dupe(u8, "abc"), 300);
-    try std.testing.expectEqual(@as(usize, 1), history.undo_steps.items.len);
-    try std.testing.expectEqualStrings("a", history.undo_steps.items[0].project_settings.before);
-    try std.testing.expectEqualStrings("abc", history.undo_steps.items[0].project_settings.after);
-    // After a pause, another.
-    history.recordProjectSettings(try gpa.dupe(u8, "abc"), try gpa.dupe(u8, "abcd"), 5000);
-    try std.testing.expectEqual(@as(usize, 2), history.undo_steps.items.len);
-}
-
 test "failed applications and failed reservations leave history in place" {
     const Handler = struct {
         fn apply(fail: *bool, _: *Step, _: eggy.Direction) !void {

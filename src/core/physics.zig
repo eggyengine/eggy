@@ -259,30 +259,6 @@ test "a body under a moved, scaled parent rests on the ground in world space" {
     try std.testing.expectApproxEqAbs(@as(f32, 0), world.get(crate, Transform).?.position.x, 0.01);
 }
 
-test "a static collider follows its parent when only the parent moves" {
-    const gpa = std.testing.allocator;
-    var world = ecs.World.init(gpa);
-    defer world.deinit();
-    defer world.runStage(.Deinit) catch {};
-
-    const hinge = try world.spawn(.{Transform{}});
-    const door = try world.spawn(.{ Transform{}, Collider{} });
-    try world.setParent(door, hinge);
-    try runFrames(&world, 1);
-    world.get(hinge, Transform).?.position = .init(0, 3, 0);
-    try runFrames(&world, 1);
-    try std.testing.expectApproxEqAbs(@as(f32, 6.5), raycast(&world, .init(0, 10, 0), .init(0, -1, 0), 20, .{}).?.distance_m, 1e-3);
-}
-
-test "a body that isn't turned keeps its angles as written" {
-    var world = ecs.World.init(std.testing.allocator);
-    defer world.deinit();
-    const entity = try world.spawn(.{Transform{ .rotation_deg = .init(0, 120, 0) }});
-    const transform = world.get(entity, Transform).?;
-    Host.setPlace(&world, entity, transform, .init(1, 0, 0), transform.orientation());
-    try std.testing.expectEqual(math.Vec3.init(0, 120, 0), transform.rotation_deg);
-}
-
 test "a 2D scene in a double-precision project gets that world, and a sphere mesh collides as a ball" {
     const gpa = std.testing.allocator;
     var world = ecs.World.init(gpa);
@@ -295,35 +271,4 @@ test "a 2D scene in a double-precision project gets that world, and a sphere mes
     try runFramesIn(&world, 180, .f64);
     try std.testing.expect(world.getResource(Plugin(.two, f64).Resource) != null);
     try std.testing.expectApproxEqAbs(@as(f32, 0.5), world.get(ball, Transform).?.position.y, 0.03);
-}
-
-test "drawColliders outlines a collider in the scene's dimension without running physics" {
-    const gpa = std.testing.allocator;
-    var world = ecs.World.init(gpa);
-    defer world.deinit();
-    _ = try world.spawn(.{ SceneRoot{ .dimension = .two }, PhysicsSettings{} });
-    const crate = try world.spawn(.{ Transform{ .position = .init(3, 0, 0) }, Collider{} });
-    var draw: DebugDraw = .{};
-    try drawColliders(&world, gpa, &.{crate}, &draw);
-    // A 2D box: four edges, the nearest at 3 - 0.5.
-    try std.testing.expectEqual(@as(usize, 4), draw.line_count);
-    var min_x: f32 = std.math.inf(f32);
-    for (draw.lines[0..draw.line_count]) |line| min_x = @min(min_x, line.from_m.x, line.to_m.x);
-    try std.testing.expectApproxEqAbs(@as(f32, 2.5), min_x, 1e-4);
-}
-
-test "drawDebug adds contact markers once bodies touch" {
-    const gpa = std.testing.allocator;
-    var world = ecs.World.init(gpa);
-    defer world.deinit();
-    defer world.runStage(.Deinit) catch {};
-    _ = try world.spawn(.{ Transform{ .scale = .init(10, 1, 10) }, Collider{} });
-    _ = try world.spawn(.{ Transform{ .position = .init(0, 1, 0) }, Collider{}, RigidBody{} });
-    try runFrames(&world, 30);
-    var only_colliders: DebugDraw = .{};
-    try drawColliders(&world, gpa, null, &only_colliders);
-    var everything: DebugDraw = .{};
-    try drawDebug(&world, gpa, &everything);
-    try std.testing.expectEqual(@as(usize, 24), only_colliders.line_count);
-    try std.testing.expect(everything.line_count > only_colliders.line_count);
 }

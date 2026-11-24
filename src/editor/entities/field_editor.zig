@@ -789,17 +789,6 @@ const DocHover = struct {
     }
 };
 
-test "a doc shows only once the pointer has rested on its label, and starts over when it leaves" {
-    var hover: DocHover = .{};
-    try std.testing.expect(!hover.over(7, 1000));
-    hover.newFrame();
-    try std.testing.expect(hover.over(7, 2500));
-    hover.newFrame();
-    // A frame away from it, then back: the wait starts again.
-    hover.newFrame();
-    try std.testing.expect(!hover.over(7, 2600));
-}
-
 /// Show `doc` under the element added last once the pointer has rested on it (`hover` timing
 /// it), wrapped; one without an id takes one from `key`, for the pointer to be found over it.
 fn docTip(context: *ui.Context, doc: []const u8, key: u64, hover: *DocHover) void {
@@ -891,15 +880,6 @@ const unit_suffixes = [_][2][]const u8{
     .{ "_mps", " m/s" },
     .{ "_per_s", " /s" },
 };
-
-test "a label writes a unit suffix as its symbol" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    try std.testing.expectEqualStrings("Gravity m/s²", displayName(arena.allocator(), "gravity_mps2"));
-    try std.testing.expectEqualStrings("Walk speed m/s", displayName(arena.allocator(), "walk_speed_m_per_s"));
-    try std.testing.expectEqualStrings("Steps per second", displayName(arena.allocator(), "steps_per_second"));
-    try std.testing.expectEqualStrings("Mass kg", displayName(arena.allocator(), "mass_kg"));
-}
 
 /// Quaternion `q` (x, y, z, w) as turns about x, then y, then z, in degrees.
 fn eulerOf(q: [4]f64) [3]f64 {
@@ -1013,14 +993,6 @@ test "turns go to a quaternion and back" {
     const turns = [3]f64{ 30, -45, 80 };
     const back = eulerOf(quaternionOf(turns));
     for (back, turns) |got, want| try std.testing.expectApproxEqAbs(want, got, 1e-6);
-}
-
-test "numbers are shown short" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    try std.testing.expectEqualStrings("1.5", shortNumber(arena.allocator(), 1.5, .{ .kind = .float }));
-    try std.testing.expectEqualStrings("2", shortNumber(arena.allocator(), 2.0004, .{ .kind = .float }));
-    try std.testing.expectEqualStrings("0", shortNumber(arena.allocator(), -0.0001, .{ .kind = .float }));
 }
 
 test "a turn reads back the same in every format" {

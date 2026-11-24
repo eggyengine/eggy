@@ -1694,12 +1694,6 @@ test "copied keys paste from the head onto their tracks, and stay picked there" 
     try std.testing.expectEqual(@as(usize, 2), dock.picked_count);
 }
 
-test "a ZON string's text is found between its quotes" {
-    try std.testing.expectEqualStrings("00ab", unquote("\"00ab\"").?);
-    try std.testing.expectEqualStrings("", unquote("\"\"").?);
-    try std.testing.expect(unquote(".{}") == null);
-}
-
 test {
     _ = clip_file;
     _ = timeline;

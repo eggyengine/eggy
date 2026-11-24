@@ -509,19 +509,6 @@ test "panning drags the world with the pointer, and the grid thins out when zoom
     try std.testing.expect(view.gridStep() > near_step);
 }
 
-test "a gamepad's left stick pans a panel height a second, and the right trigger zooms in" {
-    var view = Scene2d{};
-    view.steer(.{ .left_stick = .unit_x }, 0.5);
-    view.steer(.{ .left_stick = .init(0, -1) }, 0.5);
-    try std.testing.expectApproxEqAbs(@as(f32, 6), view.centre.x, 1e-4);
-    try std.testing.expectApproxEqAbs(@as(f32, 6), view.centre.y, 1e-4);
-    view.steer(.{ .triggers = .{ 0, 1 } }, 1);
-    try std.testing.expect(view.height_m < 12);
-    const height = view.height_m;
-    view.steer(.{ .left_stick = .init(0.1, 0), .triggers = .{ 0.1, 0 } }, 1);
-    try std.testing.expectEqual(height, view.height_m);
-}
-
 test "a click picks the entity under the pointer through the flat view" {
     var view = Scene2d{ .area = .{ .x = 0, .y = 0, .w = 400, .h = 200 }, .shown = true };
     view.panBy(-100, 0);

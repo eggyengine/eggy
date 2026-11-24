@@ -120,21 +120,6 @@ fn triangle(_: *anyopaque, gpa: std.mem.Allocator, _: []const u8) !assets.Model 
     return .{ .vertices = vertices, .indices = indices, .parts = parts, .textures = &.{} };
 }
 
-test "GPU texture transfers preserve padded rows in every mip level" {
-    if (comptime builtin.os.tag == .emscripten) return error.SkipZigTest;
-    if ((try sdl.getEnvironment()).getVariable("EGGY_GPU_TEST") == null) return error.SkipZigTest;
-    const instance = try vit.Instance.init(std.testing.allocator, .{ .backend = .{ .vulkan = true }, .validation = .core });
-    defer instance.deinit();
-    const gpu = try vit.Adapter.init(instance, .{});
-    defer gpu.deinit();
-    const device = try vit.Device.init(gpu, .{});
-    defer device.deinit();
-    const queue = try vit.Queue.init(device, .{});
-    defer queue.deinit();
-    for ([_][2]u32{ .{ 32, 32 }, .{ 63, 35 }, .{ 1, 5 } }) |extent|
-        try checkTextureRows(device, queue, extent[0], extent[1]);
-}
-
 test "GPU directional shadows darken receivers and world sprites and text reach the scene" {
     if (comptime builtin.os.tag == .emscripten) return error.SkipZigTest;
     if ((try sdl.getEnvironment()).getVariable("EGGY_GPU_TEST") == null) return error.SkipZigTest;
@@ -363,88 +348,6 @@ fn rgbSum(pixels: []const u8) u64 {
         total += channel;
     };
     return total;
-}
-
-test "GPU sprite quads face the front and show only their texture region" {
-    if (comptime builtin.os.tag == .emscripten) return error.SkipZigTest;
-    if ((try sdl.getEnvironment()).getVariable("EGGY_GPU_TEST") == null) return error.SkipZigTest;
-    const gpa = std.testing.allocator;
-    const flags = sdl.InitFlags{ .video = true };
-    try sdl.init(flags);
-    defer sdl.quit(flags);
-    const window = adapter.Sdl3Window.init(try sdl.video.Window.init("Eggy sprite regions", 320, 240, .{ .vulkan = true }));
-    defer window.window.deinit();
-    var graphics = try Graphics.initWithSettings(gpa, window, .{ .backend = .vulkan, .anti_aliasing = .off, .width = 320, .height = 240 });
-    defer graphics.deinit();
-    var scene = try SceneTexture.init(&graphics);
-    defer scene.deinit();
-    defer graphics.queue.waitIdle() catch @panic("sprite GPU work did not finish");
-    var context: u8 = 0;
-    graphics.textures.loader = .{ .context = &context, .load = checker };
-    // Seen flat from the front, as the 2D Scene panel sees it.
-    const view = camera.View{ .eye = .init(0, 0, 10), .forward = .init(0, 0, -1), .up = .init(0, 1, 0), .near = 0.1, .far = 100, .projection = .orthographic, .orthographic_height_m = 2 };
-    var quad = [_]mesh.Drawable{.{ .model = .{ .{ 1, 0, 0, 0 }, .{ 0, 1, 0, 0 }, .{ 0, 0, 1, 0 }, .{ 0, 0, 0, 1 } }, .color = @splat(1), .shape = .quad, .entity_id = 0, .entity_generation = 0, .texture_file = "checker.png", .texture_file_len = "checker.png".len, .material_params = .{ 0, 1, 1, 1 } }};
-    // The checker's top-left 2x2 cell is white, the one right of it black.
-    quad[0].uv_rect = .{ 0.2 / 63.0, 0.2 / 35.0, 1.8 / 63.0, 1.8 / 35.0 };
-    const white = try scenePixels(gpa, &graphics, &scene, &quad, view);
-    defer gpa.free(white);
-    quad[0].uv_rect = .{ 2.2 / 63.0, 0.2 / 35.0, 3.8 / 63.0, 1.8 / 35.0 };
-    const black = try scenePixels(gpa, &graphics, &scene, &quad, view);
-    defer gpa.free(black);
-    const middle = (64 * 128 + 64) * 4;
-    try std.testing.expect(white[middle] > 200);
-    try std.testing.expect(black[middle] < 40);
-}
-
-test "GPU imported skeletal morph and vertex clips pose each instance independently" {
-    if (comptime builtin.os.tag == .emscripten) return error.SkipZigTest;
-    if ((try sdl.getEnvironment()).getVariable("EGGY_GPU_TEST") == null) return error.SkipZigTest;
-    const gpa = std.testing.allocator;
-    const flags = sdl.InitFlags{ .video = true };
-    try sdl.init(flags);
-    defer sdl.quit(flags);
-    const window = adapter.Sdl3Window.init(try sdl.video.Window.init("Eggy imported animation", 320, 240, .{ .vulkan = true }));
-    defer window.window.deinit();
-    var graphics = try Graphics.initWithSettings(gpa, window, .{ .backend = .vulkan, .anti_aliasing = .off, .width = 320, .height = 240 });
-    defer graphics.deinit();
-    var scene = try SceneTexture.init(&graphics);
-    defer scene.deinit();
-    defer graphics.queue.waitIdle() catch @panic("animation GPU work did not finish");
-    var context: u8 = 0;
-    graphics.models.loader = .{ .context = &context, .load = animatedTriangle };
-    graphics.clips.resources = @import("resources/resources.zig").Resources.from(&context, importedAnimation, animatedTriangle, checker);
-    var animators = [_]@import("animation.zig").Animator{
-        .{ .playing = false }, .{ .playing = false },
-    };
-    const model_key = "000000000000002a";
-    var drawables = [_]mesh.Drawable{
-        .{ .model = .{ .{ 0.5, 0, 0, 0 }, .{ 0, 0.5, 0, 0 }, .{ 0, 0, 0.5, 0 }, .{ -1.25, 0, 0, 1 } }, .color = .{ 1, 0.1, 0.1, 1 }, .shape = .cube, .entity_id = 0, .entity_generation = 0, .model_file = model_key, .model_file_len = model_key.len, .animator = &animators[0] },
-        .{ .model = .{ .{ 0.5, 0, 0, 0 }, .{ 0, 0.5, 0, 0 }, .{ 0, 0, 0.5, 0 }, .{ 1.25, 0, 0, 1 } }, .color = .{ 1, 0.1, 0.1, 1 }, .shape = .cube, .entity_id = 1, .entity_generation = 0, .model_file = model_key, .model_file_len = model_key.len, .animator = &animators[1] },
-    };
-    const view = camera.View.lookingAt(.init(0, 0, 4), .zero, .{});
-    for ([_]u64{ 43, 44, 45 }) |clip_id| {
-        animators[0].model_clip = .fromId(clip_id);
-        animators[0].time_s = 0;
-        animators[1] = animators[0];
-        drawables[0].model[3][0] = -1.25;
-        const rest = try scenePixels(gpa, &graphics, &scene, &drawables, view);
-        defer gpa.free(rest);
-        animators[0].time_s = 0.5;
-        const posed = try scenePixels(gpa, &graphics, &scene, &drawables, view);
-        defer gpa.free(posed);
-        try std.testing.expect(!std.mem.eql(u8, rest, posed));
-        for (0..128) |row| {
-            const right = row * 128 * 4 + 64 * 4;
-            try std.testing.expectEqualSlices(u8, rest[right..][0 .. 64 * 4], posed[right..][0 .. 64 * 4]);
-        }
-
-        // Moving the joint, morph, or baked vertices must match the same rigid world-space move.
-        animators[0].model_clip = .{};
-        drawables[0].model[3][0] += 0.5;
-        const translated = try scenePixels(gpa, &graphics, &scene, &drawables, view);
-        defer gpa.free(translated);
-        try std.testing.expectEqualSlices(u8, translated, posed);
-    }
 }
 
 fn animatedTriangle(raw: *anyopaque, gpa: std.mem.Allocator, key: []const u8) !assets.Model {

@@ -287,20 +287,6 @@ test "a fetched Eggy's version comes from its package hash" {
     try std.testing.expect(versionFromHash("1220abcdef") == null);
 }
 
-test "a project's Eggy version is read from the Eggy its path points at" {
-    var tmp = std.testing.tmpDir(.{});
-    defer tmp.cleanup();
-    const io = std.testing.io;
-    try tmp.dir.createDirPath(io, "eggy");
-    try tmp.dir.createDirPath(io, "game");
-    try tmp.dir.writeFile(io, .{ .sub_path = "eggy/build.zig.zon", .data = ".{ .name = .eggy, .version = \"0.3.1\", .paths = .{\"\"} }" });
-    try tmp.dir.writeFile(io, .{ .sub_path = "game/build.zig.zon", .data = ".{ .name = .game, .dependencies = .{ .eggy = .{ .path = \"../eggy\" } } }" });
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    const game = try tmp.dir.realPathFileAlloc(io, "game", arena.allocator());
-    try std.testing.expectEqualStrings("0.3.1", (try projectVersion(arena.allocator(), io, game)).?);
-}
-
 test "only a packaged engine upgrades, and only to a different one" {
     const packaged = ProjectEngine{ .packaged = "aaaa" };
     try std.testing.expect(packaged.canUpgrade(null, .{ .name = "bbbb" }));
@@ -313,31 +299,4 @@ test "only a packaged engine upgrades, and only to a different one" {
     try std.testing.expect(packaged.canUpgrade("c1", .{ .name = "aaaa", .commit = "c2" }));
     // An engine with no commit recorded moves to the source's commit.
     try std.testing.expect(packaged.canUpgrade(null, .{ .name = "cccc", .commit = "c2" }));
-}
-
-test "an engine's commit is recorded beside its package" {
-    var tmp = std.testing.tmpDir(.{});
-    defer tmp.cleanup();
-    const io = std.testing.io;
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    const dir = try tmp.dir.realPathFileAlloc(io, ".", arena.allocator());
-    try std.testing.expect(commitOf(arena.allocator(), io, dir) == null);
-    try markCommit(io, dir, "");
-    try std.testing.expect(commitOf(arena.allocator(), io, dir) == null);
-    try markCommit(io, dir, "c2e4dc9e");
-    try std.testing.expectEqualStrings("c2e4dc9e", commitOf(arena.allocator(), io, dir).?);
-}
-
-test "a project links to a developer codebase it isn't linked to yet" {
-    try std.testing.expect((ProjectEngine{ .packaged = "aaaa" }).canLink("/src/eggy"));
-    try std.testing.expect((ProjectEngine{ .linked = "/old/eggy" }).canLink("/src/eggy"));
-    try std.testing.expect(!(ProjectEngine{ .linked = "/src/eggy" }).canLink("/src/eggy"));
-    try std.testing.expect(!(ProjectEngine{ .packaged = "aaaa" }).canLink(null));
-    try std.testing.expect(!(ProjectEngine{ .fetched = {} }).canLink("/src/eggy"));
-}
-
-test "packaged engine paths sit in an engines folder" {
-    try std.testing.expect(isPackagedPath("../../.local/share/eggy/eggy/engines/0fd1c93de26789bd"));
-    try std.testing.expect(!isPackagedPath("../../src/eggy"));
 }

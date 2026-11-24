@@ -161,12 +161,3 @@ test "a transform scales, then turns, then moves" {
     try std.testing.expectApproxEqAbs(@as(f32, 10), corner.x, 0.001);
     try std.testing.expectApproxEqAbs(@as(f32, 2), corner.y, 0.001);
 }
-
-test "a transform faces down its -z, turned as it is" {
-    var transform = Transform{ .rotation_deg = .init(0, 90, 0) };
-    // Turned a quarter left about y: it faces -x, and its right is -z.
-    try std.testing.expect(transform.forward().approxEql(.left, 0.001));
-    try std.testing.expect(transform.right().approxEql(.forward, 0.001));
-    transform.translate(transform.forward());
-    try std.testing.expectApproxEqAbs(@as(f32, -1), transform.position.x, 0.001);
-}

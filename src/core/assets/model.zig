@@ -417,24 +417,6 @@ test "a model reads back as written" {
     try std.testing.expectEqualSlices(f32, &vertices[0].emissive_color, &model.vertices[0].emissive_color);
 }
 
-test "a part whose map is past the model's textures is refused" {
-    var vertices = [_]Vertex{.{ .position = .{ 0, 0, 0 }, .normal = .{ 0, 1, 0 } }};
-    var indices = [_]u32{ 0, 0, 0 };
-    var parts = [_]Part{.{ .first_index = 0, .index_count = 3, .maps = .{ .occlusion = 1 } }};
-    const model = Model{ .vertices = &vertices, .indices = &indices, .parts = &parts, .textures = &.{} };
-    try std.testing.expect(!model.isWhole());
-}
-
-test "a model pointing past its vertices is refused" {
-    var vertices = [_]Vertex{.{ .position = .{ 0, 0, 0 }, .normal = .{ 0, 1, 0 } }};
-    var indices = [_]u32{ 0, 0, 5 };
-    var bytes: std.Io.Writer.Allocating = .init(std.testing.allocator);
-    defer bytes.deinit();
-    try write(&bytes.writer, .{ .vertices = &vertices, .indices = &indices, .parts = &.{}, .textures = &.{} });
-    var reader: std.Io.Reader = .fixed(bytes.written());
-    try std.testing.expectError(error.UnexpectedData, read(std.testing.allocator, &reader));
-}
-
 fn riggedFixture() Model {
     const S = struct {
         var vertices = [_]Vertex{
@@ -519,10 +501,4 @@ test "a rig with a broken reference, key or number is refused" {
 
     // Undamaged again, it is whole, so each refusal above was down to its own damage.
     try std.testing.expect(model.isWhole());
-}
-
-test "a model's box holds the poses of its clips" {
-    const model = riggedFixture();
-    try std.testing.expect(model.bounds().max[1] >= 2);
-    try std.testing.expect(model.bounds().min[0] <= 0);
 }

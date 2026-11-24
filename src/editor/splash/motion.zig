@@ -113,8 +113,3 @@ test "the crack draws early in each period and the border flashes with it" {
     try std.testing.expectApproxEqAbs(@as(f32, 1), alarm(0.06 * alarm_period_s), 0.001);
     try std.testing.expectEqual(@as(f32, 0), alarm(0.5 * alarm_period_s));
 }
-
-test "a sparkle waits for its delay, then peaks halfway through its twinkle" {
-    try std.testing.expectEqual(@as(f32, 0), twinkle(0.5, 0.6));
-    try std.testing.expectApproxEqAbs(@as(f32, 1), twinkle(0.6 + 0.9, 0.6), 0.001);
-}

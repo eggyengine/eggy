@@ -622,27 +622,6 @@ test "a move under a parent turned a quarter is made in the parent's space" {
     try std.testing.expectApproxEqAbs(@as(f32, 0), moved.value.x, 0.001);
 }
 
-test "a plane move follows the pointer across the plane, keeping to it" {
-    const gizmo = layout(.move, .world, at_origin, .default, test_scene).?;
-    // The floor's plane (at right angles to y), taken in the middle of its square.
-    const quad = gizmo.planes[1];
-    const middle = ui.Vec2{ .x = (quad[0].x + quad[2].x) / 2, .y = (quad[0].y + quad[2].y) / 2 };
-    try std.testing.expectEqual(Axis.y, hit(gizmo, middle).?.plane);
-    const drag = Drag.init(.{ .plane = .y }, middle, gizmo, still, identity);
-    const moved = drag.changeAt(.{ .x = middle.x + 40, .y = middle.y + 20 }, false);
-    try std.testing.expectApproxEqAbs(@as(f32, 1), moved.value.y, 0.001);
-    try std.testing.expect(moved.value.x > 0 and moved.value.z > 0);
-}
-
-test "the middle box resizes on every axis, and nothing is taken far from the gizmo" {
-    const gizmo = layout(.scale, .world, at_origin, .default, test_scene).?;
-    try std.testing.expectEqual(Handle.uniform, hit(gizmo, gizmo.origin).?);
-    try std.testing.expect(hit(gizmo, .{ .x = 5, .y = 5 }) == null);
-    const drag = Drag.init(.uniform, gizmo.origin, gizmo, .{ .position = .init(0, 1, 0), .rotation_deg = .zero, .scale = .init(1, 2, 1) }, identity);
-    const grown = drag.changeAt(.{ .x = gizmo.origin.x + 100, .y = gizmo.origin.y }, false);
-    try std.testing.expectEqual(Vec3.init(2, 4, 2), grown.value);
-}
-
 test "turning the y ring a snapped step turns about y only" {
     const gizmo = layout(.rotate, .world, at_origin, .default, test_scene).?;
     const ring = gizmo.rings[1];

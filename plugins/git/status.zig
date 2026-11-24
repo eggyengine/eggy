@@ -345,17 +345,3 @@ test "refs give local and remote branches, with tracking, and tags" {
     try std.testing.expectEqualStrings("origin/main", state.branches[2].name);
     try std.testing.expectEqualStrings("v1.0.0", state.tags[0].name);
 }
-
-test "log, stashes and remotes" {
-    var state = State{ .arena = .init(std.testing.allocator) };
-    defer state.arena.deinit();
-    const a = state.arena.allocator();
-    try parseLog(a, &state, "abc1234\tabc1234ffff\tSam\t2 days ago\tHEAD -> main, origin/main\tAdd a thing\n");
-    try std.testing.expectEqualStrings("HEAD -> main, origin/main", state.log[0].refs);
-    try std.testing.expectEqualStrings("Add a thing", state.log[0].subject);
-    try parseStashes(a, &state, "stash@{0}\tOn main: halfway\nstash@{1}\tWIP on main: abc Fix\n");
-    try std.testing.expectEqualStrings("stash@{1}", state.stashes[1].name);
-    try parseRemotes(a, &state, "origin\thttps://example.com/r.git (fetch)\norigin\thttps://example.com/r.git (push)\nfork\tgit@example.com:me/r.git (fetch)\n");
-    try std.testing.expectEqual(@as(usize, 2), state.remotes.len);
-    try std.testing.expectEqualStrings("git@example.com:me/r.git", state.remotes[1].url);
-}

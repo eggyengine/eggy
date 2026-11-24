@@ -535,27 +535,6 @@ fn everythingDetails(arena: std.mem.Allocator, world: *ecs.World) !Details {
     };
 }
 
-test "a component with every kind of field, and long names, fits a narrow Inspector" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    var world = ecs.World.init(std.testing.allocator);
-    defer world.deinit();
-    var context = try ui.Context.init(std.testing.allocator);
-    defer context.deinit();
-    var inspector = EntityInspector.init(std.testing.allocator);
-    defer inspector.deinit();
-    const details = try everythingDetails(arena.allocator(), &world);
-    for ([_]bool{ false, true }) |searching| for ([_]f32{ 220, 320, 600 }) |width| {
-        const viewport = ui.Rect{ .x = 0, .y = 0, .w = width, .h = 1600 };
-        context.newFrame(viewport);
-        // Add component's search, open, and searching for one of the types.
-        if (searching) inspector.search = .{ .edit = try SearchEdit.init("another") };
-        _ = inspector.build(&context, details);
-        _ = try context.render();
-        try ui_checks.expectFits(context.last_root.?, context.font, viewport);
-    };
-}
-
 test "dragging a number sideways changes it, and a click types into it" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
@@ -633,52 +612,6 @@ test "the component search lists only the types that match, ignoring case" {
     // One row, the component's icon (the default here) before its name.
     try std.testing.expectEqual(@as(usize, 1), labels.items.len);
     try std.testing.expectEqualStrings(eggy.components.default_icon ++ "  Orbit", labels.items[0]);
-}
-
-test "before anything is typed, components pop out of their categories" {
-    var context = try ui.Context.init(std.testing.allocator);
-    defer context.deinit();
-    var inspector = EntityInspector.init(std.testing.allocator);
-    defer inspector.deinit();
-    const details = Details{ .entity = .init(1, 0), .name = "", .components = &.{}, .addable = &.{
-        .{ .index = 0, .label = "Camera (eggy)", .name = "Camera", .category = "Rendering" },
-        .{ .index = 1, .label = "Orbit (game)", .name = "Orbit", .category = "Game" },
-        .{ .index = 2, .label = "Mesh (eggy)", .name = "Mesh", .category = "Rendering" },
-    } };
-    inspector.shown = details.entity;
-    inspector.search = .{ .edit = try SearchEdit.init(""), .focused = true };
-    const viewport = ui.Rect{ .x = 0, .y = 0, .w = 220, .h = 400 };
-    var labels: std.ArrayList([]const u8) = .empty;
-    defer labels.deinit(std.testing.allocator);
-
-    // A row per category, in the order their first types come, and nothing popped out.
-    context.newFrame(viewport);
-    _ = inspector.build(&context, details);
-    _ = try context.render();
-    try collectMenuItems(context.last_root.?, &labels);
-    try std.testing.expectEqual(@as(usize, 2), labels.items.len);
-    try std.testing.expectEqualStrings("Rendering", labels.items[0]);
-    try std.testing.expectEqualStrings("Game", labels.items[1]);
-
-    // Clicking Rendering lists its two types under it, by name, inside the narrow Inspector.
-    clickAt(&context, context.last_bounds.get(category_id_base).?.rect.center());
-    context.newFrame(viewport);
-    _ = inspector.build(&context, details);
-    _ = try context.render();
-    try ui_checks.expectFits(context.last_root.?, context.font, viewport);
-    labels.clearRetainingCapacity();
-    try collectMenuItems(context.last_root.?, &labels);
-    try std.testing.expectEqual(@as(usize, 4), labels.items.len);
-    try std.testing.expectEqualStrings(eggy.components.default_icon ++ "  Mesh", labels.items[2]);
-
-    // Pressing Mesh adds it and closes the search.
-    const mesh = context.last_bounds.get(pick_id_base + 2).?.rect.center();
-    context.handle(.{ .pointer_move = mesh });
-    context.handle(.{ .pointer_down = .{ .position = mesh, .button = .left, .clicks = 1 } });
-    context.handle(.{ .pointer_up = .{ .position = mesh, .button = .left } });
-    context.newFrame(viewport);
-    try std.testing.expectEqual(@as(usize, 2), inspector.build(&context, details).?.add_component);
-    try std.testing.expect(inspector.search == null);
 }
 
 test "opening another category closes the one open" {

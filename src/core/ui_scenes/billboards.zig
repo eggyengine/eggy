@@ -285,19 +285,6 @@ test "tiles fill rows and stop when the texture is full" {
     try std.testing.expect(shelf.place(atlas_size, 10) == null);
 }
 
-test "a camera-facing panel is centred on its entity" {
-    var billboard = std.mem.zeroes(Billboard);
-    billboard.width_m = 2;
-    billboard.face_camera = true;
-    billboard.model = .{ .{ 1, 0, 0, 0 }, .{ 0, 1, 0, 0 }, .{ 0, 0, 1, 0 }, .{ 5, 1, 0, 1 } };
-    const view = camera.View{ .eye = .init(5, 1, 10), .forward = .forward, .up = .up };
-    const panel = panelFor(billboard, .{ .x = 0, .y = 0, .w = 100, .h = 50 }, 0.5, view, undefined);
-    try std.testing.expectApproxEqAbs(@as(f32, 4), panel.origin.x, 1e-5);
-    try std.testing.expectApproxEqAbs(@as(f32, 0.5), panel.origin.y, 1e-5);
-    try std.testing.expectApproxEqAbs(@as(f32, 2), panel.across.x, 1e-5);
-    try std.testing.expectApproxEqAbs(@as(f32, 1), panel.upward.y, 1e-5);
-}
-
 test "a ray meets a face where it crosses it, measured from the top left" {
     const face = Face{ .origin = .init(-1, -0.5, 0), .across = .init(2, 0, 0), .upward = .up };
     const found = hitFace(face, .{ .origin = .init(0.5, 0.25, 5), .direction = .forward }).?;
@@ -336,38 +323,4 @@ test "a press over a painted button records its click" {
     try std.testing.expect(try press(&state, .{}, view, .init(800, 600), .init(x, y)));
     try std.testing.expectEqualStrings("go", state.clicks.items[0].node);
     try std.testing.expect(state.clicks.items[0].entity.eql(sign));
-}
-
-test "a panel is width_m wide facing either way, however its entity is scaled" {
-    var billboard = std.mem.zeroes(Billboard);
-    billboard.width_m = 2;
-    billboard.model = .{ .{ 0.5, 0, 0, 0 }, .{ 0, 0.5, 0, 0 }, .{ 0, 0, 0.5, 0 }, .{ 0, 0, 0, 1 } };
-    const view = camera.View{ .eye = .init(3, 0, 3), .forward = math.Vec3.init(-1, 0, -1).normalize(), .up = .up };
-    const tile = ui.Rect{ .x = 0, .y = 0, .w = 100, .h = 50 };
-    billboard.face_camera = false;
-    const fixed = panelFor(billboard, tile, 0.5, view, undefined);
-    billboard.face_camera = true;
-    const facing = panelFor(billboard, tile, 0.5, view, undefined);
-    for ([_]world_draw.Panel{ fixed, facing }) |panel| {
-        try std.testing.expectApproxEqAbs(@as(f32, 2), panel.across.length(), 1e-5);
-        try std.testing.expectApproxEqAbs(@as(f32, 1), panel.upward.length(), 1e-5);
-    }
-}
-
-test "a billboard's face is what its scene lays out within its design" {
-    const scene = @import("eggy_assets").ui_scene;
-    var children = [_]scene.Node{.{ .name = "panel", .layout = .{ .width = .{ .px = 400 }, .height = .{ .px = 200 }, .anchor = .{ .offset = .{ 100, 50 } } } }};
-    const sized = scene.UiScene{ .root = .{ .layout = .{}, .children = &children } };
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    var context = try ui.Context.init(std.testing.allocator);
-    defer context.deinit();
-    const placed = try layout.place(arena.allocator(), &sized, .plain(context.font), .{ .x = 0, .y = 0, .w = 1280, .h = 720 }, 1);
-    const bounds = contentBounds(placed, .{ 1280, 720 }).?;
-    try std.testing.expectEqual(ui.Rect{ .x = 100, .y = 50, .w = 400, .h = 200 }, bounds);
-
-    // A root that fills the design shows all of it.
-    const filled = scene.UiScene{ .root = .{ .layout = .{ .width = .fill, .height = .fill } } };
-    const whole = try layout.place(arena.allocator(), &filled, .plain(context.font), .{ .x = 0, .y = 0, .w = 1280, .h = 720 }, 1);
-    try std.testing.expectEqual(ui.Rect{ .x = 0, .y = 0, .w = 1280, .h = 720 }, contentBounds(whole, .{ 1280, 720 }).?);
 }

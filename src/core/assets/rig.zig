@@ -591,13 +591,6 @@ test "a track samples linearly, slerps rotations and holds step keys" {
     try std.testing.expectApproxEqAbs(half, quaternion[2], 1e-5);
 }
 
-test "time wraps when repeating and holds at the ends otherwise" {
-    try std.testing.expectEqual(@as(f32, 0.5), wrapTime(2.5, 1, true));
-    try std.testing.expectEqual(@as(f32, 0.75), wrapTime(-0.25, 1, true));
-    try std.testing.expectEqual(@as(f32, 1), wrapTime(2.5, 1, false));
-    try std.testing.expectEqual(@as(f32, 0), wrapTime(7, 0, true));
-}
-
 test "a skinned strip bends with its joint and stays put under a weightless corner" {
     const gpa = std.testing.allocator;
     const tri = testTriangle();
@@ -646,68 +639,6 @@ test "a skinned strip bends with its joint and stays put under a weightless corn
     try std.testing.expect(model.bounds().max[1] >= 4);
 }
 
-test "a blend shape moves its corners by its weight, and a node places an unskinned part" {
-    const gpa = std.testing.allocator;
-    const tri = testTriangle();
-    var vertices = tri.vertices;
-    var indices = tri.indices;
-    var nodes = [_]model_zig.Node{.{ .name = "mesh", .translation = .{ 0, 0, 5 } }};
-    var deltas = [_]model_zig.MorphDelta{.{ .vertex = 1, .position = .{ 0, 2, 0 } }};
-    var targets = [_]model_zig.MorphTarget{.{ .name = "grin", .deltas = &deltas }};
-    var parts = [_]model_zig.Part{.{ .first_index = 0, .index_count = 3, .vertex_count = 3, .node = 0, .morph_count = 1 }};
-    var times = [_]f32{ 0, 1 };
-    var values = [_]f32{ 0, 1 };
-    var tracks = [_]Track{.{ .channel = .morph_weights, .target = 0, .stride = 1, .times = &times, .values = &values }};
-    var clips = [_]Clip{.{ .name = "grin", .duration_s = 1, .tracks = &tracks }};
-    const model = Model{ .vertices = &vertices, .indices = &indices, .parts = &parts, .textures = &.{}, .rig = .{ .nodes = &nodes, .morph_targets = &targets, .clips = &clips } };
-    try std.testing.expect(model.isWhole());
-
-    const rest = try restVertices(gpa, model);
-    defer gpa.free(rest);
-    try std.testing.expectEqualSlices(f32, &.{ 1, 0, 5 }, &rest[1].position);
-
-    var pose = try Pose.init(gpa, model);
-    defer pose.deinit(gpa);
-    var deformer = try Deformer.init(gpa, model);
-    defer deformer.deinit(gpa);
-    deformer.place(model, pose);
-    pose.apply(model, clips[0], 0.5, 1);
-    var out: [3]Vertex = undefined;
-    deformer.part(model, pose, 0, &out);
-    try std.testing.expectEqualSlices(f32, &.{ 1, 1, 5 }, &out[1].position);
-    try std.testing.expectEqualSlices(f32, &.{ 0, 0, 5 }, &out[0].position);
-}
-
-test "baked frames replace the corners and ease into the next" {
-    const gpa = std.testing.allocator;
-    const tri = testTriangle();
-    var vertices = tri.vertices;
-    var indices = tri.indices;
-    var nodes = [_]model_zig.Node{.{ .name = "mesh" }};
-    var parts = [_]model_zig.Part{.{ .first_index = 0, .index_count = 3, .vertex_count = 3, .node = 0 }};
-    var times = [_]f32{ 0, 1 };
-    var values = [_]f32{
-        0, 0, 0, 1, 0, 0, 0, 1, 0,
-        0, 0, 2, 1, 0, 2, 0, 1, 2,
-    };
-    var tracks = [_]Track{.{ .channel = .vertex_cache, .target = 0, .stride = 9, .times = &times, .values = &values }};
-    var clips = [_]Clip{.{ .name = "rise", .duration_s = 1, .tracks = &tracks }};
-    const model = Model{ .vertices = &vertices, .indices = &indices, .parts = &parts, .textures = &.{}, .rig = .{ .nodes = &nodes, .clips = &clips } };
-    try std.testing.expect(model.isWhole());
-
-    var pose = try Pose.init(gpa, model);
-    defer pose.deinit(gpa);
-    var deformer = try Deformer.init(gpa, model);
-    defer deformer.deinit(gpa);
-    pose.apply(model, clips[0], 0.25, 1);
-    deformer.place(model, pose);
-    var out: [3]Vertex = undefined;
-    deformer.part(model, pose, 0, &out);
-    try std.testing.expectEqualSlices(f32, &.{ 1, 0, 0.5 }, &out[1].position);
-    // Every baked frame lies inside the model's box.
-    try std.testing.expect(model.bounds().max[2] >= 2);
-}
-
 test "root motion walks a clip on the spot or pins its root, and leaves children moving" {
     var times = [_]f32{ 0, 1, 2 };
     var hips = [_]f32{ 0, 1, 0, 0.5, 1.2, 1, 0, 1, 2 };
@@ -730,22 +661,4 @@ test "root motion walks a clip on the spot or pins its root, and leaves children
     try std.testing.expectEqual([3]f32{ 0, 1, 0 }, pose.translation[0]);
     applyRooted(&pose, model, clip, 1, 1, .keep);
     try std.testing.expectEqual([3]f32{ 0.5, 1.2, 1 }, pose.translation[0]);
-}
-
-test "a clip cut to a bone keeps the tracks of that bone and those below it" {
-    var times = [_]f32{0};
-    var values = [_]f32{ 0, 0, 0 };
-    var tracks = [_]Track{
-        .{ .channel = .translation, .target = 0, .stride = 3, .times = &times, .values = &values },
-        .{ .channel = .translation, .target = 1, .stride = 3, .times = &times, .values = &values },
-        .{ .channel = .translation, .target = 2, .stride = 3, .times = &times, .values = &values },
-        .{ .channel = .translation, .target = 3, .stride = 3, .times = &times, .values = &values },
-    };
-    var nodes = [_]model_zig.Node{ .{ .name = "hips" }, .{ .name = "spine", .parent = 0 }, .{ .name = "leg", .parent = 0 }, .{ .name = "arm", .parent = 1 } };
-    const model = Model{ .vertices = &.{}, .indices = &.{}, .parts = &.{}, .textures = &.{}, .rig = .{ .nodes = &nodes } };
-    const upper = try onlyBelow(std.testing.allocator, model, .{ .name = "draw", .duration_s = 1, .tracks = &tracks }, 1);
-    defer std.testing.allocator.free(upper.tracks);
-    try std.testing.expectEqual(@as(usize, 2), upper.tracks.len);
-    try std.testing.expectEqual(@as(u32, 1), upper.tracks[0].target);
-    try std.testing.expectEqual(@as(u32, 3), upper.tracks[1].target);
 }

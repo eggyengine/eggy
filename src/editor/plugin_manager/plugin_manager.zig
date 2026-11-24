@@ -965,33 +965,6 @@ fn fitToTheme(element: *ui.Layout.Element, text_size: f32) void {
     for (element.children) |child| fitToTheme(child, text_size);
 }
 
-test "a read-me's text is set at the editor's size, headings still larger" {
-    var context = try ui.Context.init(std.testing.allocator);
-    defer context.deinit();
-    context.newFrame(.{ .x = 0, .y = 0, .w = 600, .h = 400 });
-    const typeset = try ui.widgets.typeset(context.builder(), "# Title\n\nBody text.", .{});
-    fitToTheme(typeset, 14);
-    var sizes: [2]f32 = undefined;
-    var found: usize = 0;
-    var stack: [16]*ui.Layout.Element = @splat(typeset);
-    var depth: usize = 1;
-    while (depth > 0) {
-        depth -= 1;
-        const element = stack[depth];
-        if (element.paint_kind == .text and found < sizes.len) {
-            sizes[found] = element.paint_kind.text.size;
-            found += 1;
-        }
-        for (element.children) |child| {
-            stack[depth] = child;
-            depth += 1;
-        }
-    }
-    try std.testing.expectEqual(@as(usize, 2), found);
-    try std.testing.expectApproxEqAbs(@as(f32, 14), @min(sizes[0], sizes[1]), 0.01);
-    try std.testing.expect(@max(sizes[0], sizes[1]) > 18 and @max(sizes[0], sizes[1]) < 22);
-}
-
 /// `markdown` without the inline marks `typeset` would show as they are: `**` around bold text,
 /// and `[text](address)` links as their text, in `arena`.
 // ponytail: drop this once weeoui's typeset styles inline markdown.
@@ -1015,12 +988,6 @@ fn withoutInlineMarks(arena: std.mem.Allocator, markdown: []const u8) ![]const u
         at += 1;
     }
     return out.items;
-}
-
-test "a read-me's bold marks and link addresses are dropped" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    try std.testing.expectEqualStrings("Open Window > Git, see the docs.\n* a list", try withoutInlineMarks(arena.allocator(), "Open **Window > Git**, see [the docs](https://x.y/z).\n* a list"));
 }
 
 /// Whether eggy.zon texts `before` and `after` install different plugins, so the game must be

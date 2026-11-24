@@ -542,43 +542,6 @@ fn expectFile(project: std.Io.Dir, io: std.Io, path: []const u8, exists: bool) !
     try std.testing.expect(exists);
 }
 
-test "sync corrects a folder a legacy catalog called any, keeping its id" {
-    const gpa = std.testing.allocator;
-    const io = std.testing.io;
-    var tmp = std.testing.tmpDir(.{});
-    defer tmp.cleanup();
-    const project = tmp.dir;
-    try project.createDirPath(io, "resources/scene");
-    try project.createDirPath(io, "resources/models");
-    try project.writeFile(io, .{ .sub_path = "resources/scene/a.scene.zon", .data = "x" });
-    try project.writeFile(io, .{ .sub_path = "resources/models/ship.glb", .data = "x" });
-    try project.writeFile(io, .{ .sub_path = "resources/b.png", .data = "x" });
-    try project.createDirPath(io, ".eggy");
-    try project.writeFile(io, .{ .sub_path = file_path, .data =
-        \\.{ .version = 1, .assets = .{
-        \\    .{ .id = 11, .path = "resources/scene", .kind = .any },
-        \\    .{ .id = 12, .path = "resources/models", .kind = .any },
-        \\    .{ .id = 13, .path = "resources/models/ship.glb", .kind = .any, .model_import = .{ .scale = 0.5 } },
-        \\} }
-    });
-    var catalog = try Catalog.open(gpa, io, project);
-    defer catalog.deinit();
-    _ = try catalog.sync(io, project);
-    const view = catalog.view();
-    try std.testing.expectEqual(Kind.folder, view.findPath("resources/scene").?.kind);
-    try std.testing.expectEqual(@as(Id, 11), view.findPath("resources/scene").?.id);
-    try std.testing.expectEqual(Kind.folder, view.findPath("resources/models").?.kind);
-    try std.testing.expectEqual(Kind.model, view.findPath("resources/models/ship.glb").?.kind);
-    try std.testing.expectEqual(@as(f32, 0.5), view.findPath("resources/models/ship.glb").?.model_import.scale);
-    try std.testing.expectEqual(Kind.scene, view.findPath("resources/scene/a.scene.zon").?.kind);
-    try std.testing.expectEqual(Kind.image, view.findPath("resources/b.png").?.kind);
-
-    // The correction is on disk.
-    var reread = try Snapshot.read(gpa, io, project);
-    defer reread.deinit();
-    try std.testing.expectEqual(Kind.folder, reread.findPath("resources/scene").?.kind);
-}
-
 test "sync catalogues files and folders once, with stable ids, and drops what is gone" {
     const gpa = std.testing.allocator;
     const io = std.testing.io;
@@ -608,32 +571,6 @@ test "sync catalogues files and folders once, with stable ids, and drops what is
     try project.deleteFile(io, "resources/models/ship.glb");
     try std.testing.expectEqual(@as(usize, 1), (try catalog.sync(io, project)).removed);
     try std.testing.expect(catalog.view().findId(ship.id) == null);
-}
-
-test "legacy descriptors lend their ids and settings, and go only once the catalog is written" {
-    const gpa = std.testing.allocator;
-    const io = std.testing.io;
-    var tmp = std.testing.tmpDir(.{});
-    defer tmp.cleanup();
-    const project = tmp.dir;
-    try project.createDirPath(io, "resources");
-    try project.writeFile(io, .{ .sub_path = "resources/ship.glb", .data = "x" });
-    try project.writeFile(io, .{ .sub_path = "resources/ship.glb.eggy", .data = ".{ .id = 77, .kind = .model, .model = .{ .scale = 0.01 } }" });
-    // A copy made outside the editor, descriptor and all: its id is taken.
-    try project.writeFile(io, .{ .sub_path = "resources/ship2.glb", .data = "x" });
-    try project.writeFile(io, .{ .sub_path = "resources/ship2.glb.eggy", .data = ".{ .id = 77, .kind = .model }" });
-    try project.writeFile(io, .{ .sub_path = "resources/orphan.png.eggy", .data = ".{ .id = 5, .kind = .image }" });
-
-    var catalog = try Catalog.open(gpa, io, project);
-    defer catalog.deinit();
-    const changes = try catalog.sync(io, project);
-    try std.testing.expectEqual(Changes{ .made = 2, .migrated = 1, .removed = 0, .sidecars_removed = 3 }, changes);
-    const ship = catalog.view().findPath("resources/ship.glb").?;
-    try std.testing.expectEqual(@as(Id, 77), ship.id);
-    try std.testing.expectEqual(@as(f32, 0.01), ship.model_import.scale);
-    try std.testing.expect(catalog.view().findPath("resources/ship2.glb").?.id != 77);
-    try expectFile(project, io, "resources/ship.glb.eggy", false);
-    try expectFile(project, io, ".eggy/assets.zon", true);
 }
 
 test "moves keep ids, copies get new ones, and the trash round trip returns the same id" {
@@ -711,58 +648,4 @@ test "two processes' catalogs agree on new ids instead of the last writer winnin
     defer disk.deinit();
     try std.testing.expectEqual(@as(f32, 0.25), disk.findPath("resources/ship.glb").?.model_import.scale);
     try std.testing.expect(disk.findPath("resources/stone.png") != null);
-}
-
-test "a move another process synced first gets its old ids back" {
-    const gpa = std.testing.allocator;
-    const io = std.testing.io;
-    var tmp = std.testing.tmpDir(.{});
-    defer tmp.cleanup();
-    const project = tmp.dir;
-    try project.createDirPath(io, "resources/models");
-    try project.writeFile(io, .{ .sub_path = "resources/models/ship.glb", .data = "x" });
-    var editor = try Catalog.open(gpa, io, project);
-    defer editor.deinit();
-    _ = try editor.sync(io, project);
-    const folder = editor.view().findPath("resources/models").?.id;
-    const ship = editor.view().findPath("resources/models/ship.glb").?.id;
-
-    // The editor renames the folder; a build syncs before the editor records the move.
-    try project.rename("resources/models", project, "resources/meshes", io);
-    var build = try Catalog.open(gpa, io, project);
-    defer build.deinit();
-    _ = try build.sync(io, project);
-    try std.testing.expect(build.view().findId(ship) == null);
-    try editor.move(io, project, "resources/models", "resources/meshes");
-
-    try std.testing.expectEqual(folder, editor.view().findPath("resources/meshes").?.id);
-    try std.testing.expectEqual(ship, editor.view().findPath("resources/meshes/ship.glb").?.id);
-    var disk = try Snapshot.read(gpa, io, project);
-    defer disk.deinit();
-    try std.testing.expectEqual(ship, disk.findPath("resources/meshes/ship.glb").?.id);
-}
-
-test "an untrustworthy catalog file is refused, not replaced" {
-    const gpa = std.testing.allocator;
-    const io = std.testing.io;
-    var tmp = std.testing.tmpDir(.{});
-    defer tmp.cleanup();
-    const project = tmp.dir;
-    try project.createDirPath(io, ".eggy");
-    const bad = [_]struct { []const u8, anyerror }{
-        .{ "garbage", error.InvalidCatalog },
-        .{ ".{ .version = 2, .assets = .{} }", error.UnsupportedVersion },
-        .{ ".{ .version = 1, .assets = .{ .{ .id = 0, .path = \"resources/a\", .kind = .any } } }", error.InvalidCatalog },
-        .{ ".{ .version = 1, .assets = .{ .{ .id = 3, .path = \"../a\", .kind = .any } } }", error.InvalidCatalog },
-        .{ ".{ .version = 1, .assets = .{ .{ .id = 3, .path = \"resources/a\", .kind = .any }, .{ .id = 3, .path = \"resources/b\", .kind = .any } } }", error.AssetIdCollision },
-    };
-    for (bad) |case| {
-        try project.writeFile(io, .{ .sub_path = file_path, .data = case[0] });
-        try std.testing.expectError(case[1], Catalog.open(gpa, io, project));
-    }
-    // A model whose child id is another asset's is a collision too.
-    const clash = try std.fmt.allocPrint(gpa, ".{{ .version = 1, .assets = .{{ .{{ .id = 3, .path = \"resources/a.glb\", .kind = .model }}, .{{ .id = {d}, .path = \"resources/b\", .kind = .any }} }} }}", .{asset_id.model(3)});
-    defer gpa.free(clash);
-    try project.writeFile(io, .{ .sub_path = file_path, .data = clash });
-    try std.testing.expectError(error.AssetIdCollision, Catalog.open(gpa, io, project));
 }

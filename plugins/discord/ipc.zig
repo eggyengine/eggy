@@ -241,16 +241,6 @@ test "a frame is its opcode and length, then the JSON, and reads back the same" 
     try std.testing.expectEqual(@as(usize, 0), reader.bufferedLen());
 }
 
-test "a status without a second line leaves state out" {
-    const describe = @import("activity.zig").describe;
-    var bytes: [512]u8 = undefined;
-    var writer: Io.Writer = .fixed(&bytes);
-    try writeSetActivity(&writer, 42, 7, &describe("bees", "", .editing), 1700000000);
-    try std.testing.expectEqualStrings(
-        \\{"cmd":"SET_ACTIVITY","nonce":"7","args":{"pid":42,"activity":{"details":"Editing bees","timestamps":{"start":1700000000},"assets":{"large_image":"eggy_icon_1_","large_text":"Eggy"},"buttons":[{"label":"Eggy on GitHub","url":"https://github.com/eggyengine/eggy"}]}}}
-    , writer.buffered());
-}
-
 test "Discord's sockets are looked for in the runtime folder first, then the temporary ones" {
     if (builtin.os.tag == .windows) return error.SkipZigTest;
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);

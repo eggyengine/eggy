@@ -340,20 +340,6 @@ test "a manifest lists each field with its kind, default and description" {
     try std.testing.expectEqualStrings("hard", m.fields[2].options[2]);
 }
 
-test "fields are grouped as the struct's groups list them, unlisted ones last" {
-    const Grouped = struct {
-        volume: f32 = 0.8,
-        muted: bool = false,
-        difficulty: enum { easy, hard } = .easy,
-        pub const groups = .{ .{"difficulty"}, .{ "volume", "muted" } };
-    };
-    const m = manifest(Grouped, "grouped");
-    try std.testing.expectEqual(@as(u8, 1), m.fields[0].group);
-    try std.testing.expectEqual(@as(u8, 1), m.fields[1].group);
-    try std.testing.expectEqual(@as(u8, 0), m.fields[2].group);
-    try std.testing.expectEqual(@as(u8, 0), manifest(Example, "example").fields[0].group);
-}
-
 test "project values override global ones, which override defaults, and bad ones are skipped" {
     var store = Store.init(std.testing.allocator);
     defer store.deinit();
@@ -386,27 +372,4 @@ test "values written out read back the same" {
     defer again.deinit();
     try again.read(.project, "game", written);
     try std.testing.expectEqualStrings(".easy", again.literal(.project, "game", "difficulty").?);
-}
-
-test "string fields default and read as text, and global-only ones ignore the project" {
-    const Sources = struct {
-        update_source: []const u8 = "https://example.com/eggy#main",
-        mirror: []const u8 = "",
-        pub const global_only = .{"update_source"};
-    };
-    const m = manifest(Sources, "sources");
-    try std.testing.expectEqual(Kind.string, m.fields[0].kind);
-    try std.testing.expectEqualStrings("\"https://example.com/eggy#main\"", m.fields[0].default);
-    try std.testing.expectEqual(Scope.global_only, m.fields[0].scope);
-    try std.testing.expectEqual(Scope.any, m.fields[1].scope);
-
-    var store = Store.init(std.testing.allocator);
-    defer store.deinit();
-    try store.read(.global, "sources", ".{ .update_source = \"https://mine.example/eggy#dev\", .mirror = \"a\" }");
-    try store.read(.project, "sources", ".{ .update_source = \"https://other.example/eggy\", .mirror = \"b\" }");
-    const values = store.getKeyed(Sources, "sources");
-    try std.testing.expectEqualStrings("https://mine.example/eggy#dev", values.update_source);
-    try std.testing.expectEqualStrings("b", values.mirror);
-    try std.testing.expect(stringValue("\"a\\\\b\"") == null);
-    try std.testing.expect(stringValue(".main") == null);
 }

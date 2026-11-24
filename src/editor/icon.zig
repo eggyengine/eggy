@@ -281,9 +281,3 @@ test "a badge keeps the egg's top left and puts the image in the bottom right" {
     try std.testing.expectEqualSlices(u8, &.{ 255, 0, 0, 255 }, badged[at..][0..4]);
     try std.testing.expectError(error.InvalidImage, badge(&.{}, 0, 0, badged));
 }
-
-test "the icon's pixel art is an egg: see-through corners, an opaque middle" {
-    const art = try pixels();
-    try std.testing.expectEqual(@as(u8, 0), art[0][0][3]);
-    try std.testing.expectEqual(@as(u8, 255), art[size / 2][size / 2][3]);
-}

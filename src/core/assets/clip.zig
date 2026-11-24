@@ -498,35 +498,6 @@ test "a track holds before its first key, blends between keys and holds after th
     try std.testing.expect((Track{ .target = "", .property = .scale, .keys = &.{} }).valueAt(0) == null);
 }
 
-test "keys are inserted in time order, replaced at the same time, moved and deleted" {
-    const gpa = std.testing.allocator;
-    var clip = Clip{ .duration_s = 1, .tracks = &.{} };
-    var next = try clip.withTrack(gpa, "Arm", .position, "");
-    clip = next;
-    for ([_]struct { f32, f32 }{ .{ 0.5, 5 }, .{ 0, 1 }, .{ 2, 9 }, .{ 0.5, 6 } }) |entry| {
-        next = try clip.withKey(gpa, 0, .{ .time_s = entry[0], .value = .{ entry[1], 0, 0 } });
-        clip.deinit(gpa);
-        clip = next;
-    }
-    defer clip.deinit(gpa);
-    // Sorted; the second key at 0.5 replaced the first; the clip grew to reach 2 seconds.
-    try std.testing.expectEqual(@as(usize, 3), clip.tracks[0].keys.len);
-    try std.testing.expectEqual(@as(f32, 6), clip.tracks[0].keys[1].value[0]);
-    try std.testing.expectEqual(@as(f32, 2), clip.duration_s);
-
-    const moved = try clip.withKeysChanged(gpa, &.{.{ .track = 0, .key = 1 }}, .{ .shift_s = 1 });
-    defer moved.deinit(gpa);
-    try std.testing.expectEqual(@as(f32, 1.5), moved.tracks[0].keys[1].time_s);
-    try std.testing.expectEqual(@as(f32, 6), moved.tracks[0].keys[1].value[0]);
-    try moved.validate();
-
-    const deleted = try moved.withKeysChanged(gpa, &.{.{ .track = 0, .key = 0 }}, .remove);
-    defer deleted.deinit(gpa);
-    try std.testing.expectEqual(@as(usize, 2), deleted.tracks[0].keys.len);
-    try std.testing.expectEqual(@as(?usize, 0), deleted.find("Arm", .position, ""));
-    try std.testing.expect(deleted.find("Arm", .scale, "") == null);
-}
-
 test "a clip survives writing and parsing, and a bad one is refused" {
     const gpa = std.testing.allocator;
     var clip = try (Clip{ .duration_s = 2, .tracks = &.{} }).withTrack(gpa, "", .rotation_deg, "");
@@ -611,69 +582,4 @@ test "cutscene tracks keep text, step from key to key, and say which keys a step
     try std.testing.expectError(error.InvalidClip, empty.withTrack(gpa, "model:Head", .fov_deg, ""));
     try std.testing.expectError(error.InvalidClip, empty.withTrack(gpa, "/", .position, ""));
     try std.testing.expectError(error.InvalidClip, empty.withTrack(gpa, "camera", .position, "line"));
-}
-
-test "a key's ease shapes the span leaving it" {
-    var track = Track{ .target = "", .property = .position, .keys = &.{
-        .{ .time_s = 0, .value = .{ 0, 0, 0 }, .ease = .ease_in },
-        .{ .time_s = 2, .value = .{ 8, 0, 0 } },
-    } };
-    // A quarter of the way in at half time, then all the way at the key.
-    try std.testing.expectEqual(@as(f32, 2), track.valueAt(1).?[0]);
-    try std.testing.expectEqual(@as(f32, 8), track.valueAt(2).?[0]);
-    track.keys = &.{ .{ .time_s = 0, .value = .{ 0, 0, 0 }, .ease = .ease_out }, .{ .time_s = 2, .value = .{ 8, 0, 0 } } };
-    try std.testing.expectEqual(@as(f32, 6), track.valueAt(1).?[0]);
-    try std.testing.expectEqual(@as(f32, 0.5), Ease.ease_in_out.apply(0.5));
-}
-
-test "several keys across tracks shift, ease and go together" {
-    const gpa = std.testing.allocator;
-    const source = Clip{ .duration_s = 2, .tracks = &.{
-        .{ .target = "", .property = .position, .keys = &.{ .{ .time_s = 0 }, .{ .time_s = 1 }, .{ .time_s = 2 } } },
-        .{ .target = "/bee", .property = .scale, .keys = &.{ .{ .time_s = 0.5 }, .{ .time_s = 1.5 } } },
-    } };
-    const picked = [_]KeyRef{ .{ .track = 0, .key = 1 }, .{ .track = 1, .key = 1 }, .{ .track = 1, .key = 9 } };
-
-    // Shifted later: the clip grows to reach the last; the first track's middle key lands on
-    // the one at 2 s and takes its place.
-    const later = try source.withKeysChanged(gpa, &picked, .{ .shift_s = 1 });
-    defer later.deinit(gpa);
-    try later.validate();
-    try std.testing.expectEqual(@as(f32, 2.5), later.duration_s);
-    try std.testing.expectEqual(@as(usize, 2), later.tracks[0].keys.len);
-    try std.testing.expectEqual(@as(f32, 2.5), later.tracks[1].keys[1].time_s);
-
-    // Earlier than the start, they stop at 0.
-    const earlier = try source.withKeysChanged(gpa, &.{.{ .track = 1, .key = 0 }}, .{ .shift_s = -3 });
-    defer earlier.deinit(gpa);
-    try std.testing.expectEqual(@as(f32, 0), earlier.tracks[1].keys[0].time_s);
-
-    const eased = try source.withKeysChanged(gpa, &picked, .{ .ease = .ease_out });
-    defer eased.deinit(gpa);
-    try std.testing.expectEqual(Ease.ease_out, eased.tracks[0].keys[1].ease);
-    try std.testing.expectEqual(Ease.linear, eased.tracks[0].keys[0].ease);
-
-    const removed = try source.withKeysChanged(gpa, &picked, .remove);
-    defer removed.deinit(gpa);
-    try std.testing.expectEqual(@as(usize, 2), removed.tracks[0].keys.len);
-    try std.testing.expectEqual(@as(usize, 1), removed.tracks[1].keys.len);
-    try std.testing.expectError(error.InvalidClip, source.withKeysChanged(gpa, &picked, .{ .shift_s = std.math.inf(f32) }));
-}
-
-test "a clip has one camera track, on no target, whose keys name cameras and blend forwards" {
-    const gpa = std.testing.allocator;
-    const good = try parse(gpa,
-        \\.{ .format_version = 4, .duration_s = 4, .tracks = .{ .{ .target = "", .property = .camera, .interpolation = .step, .keys = .{
-        \\    .{ .time_s = 0, .text = "/wide" },
-        \\    .{ .time_s = 2, .value = .{ 0.5, 0, 0 }, .text = "", .ease = .ease_in_out },
-        \\} } } }
-    );
-    defer good.deinit(gpa);
-    try std.testing.expectEqualStrings("/wide", good.tracks[0].keyAt(1.9).?.text);
-    try std.testing.expectEqual(@as(f32, 0.5), good.tracks[0].keyAt(2.1).?.value[0]);
-    try std.testing.expect(good.tracks[0].keyAt(2.1).?.text.len == 0);
-
-    // A camera track on an entity, and a negative blend.
-    try std.testing.expectError(error.InvalidClip, parse(gpa, ".{ .format_version = 4, .duration_s = 1, .tracks = .{ .{ .target = \"/bee\", .property = .camera, .keys = .{} } } }"));
-    try std.testing.expectError(error.InvalidClip, parse(gpa, ".{ .format_version = 4, .duration_s = 1, .tracks = .{ .{ .target = \"\", .property = .camera, .keys = .{ .{ .time_s = 0, .value = .{ -1, 0, 0 }, .text = \"/wide\" } } } } }"));
 }

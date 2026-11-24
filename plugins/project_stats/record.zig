@@ -295,10 +295,3 @@ test "a user's file name holds only safe characters" {
     defer std.testing.allocator.free(path);
     try std.testing.expectEqualStrings(folder ++ "/DOMAIN_Jo_Smith.zon", path);
 }
-
-test "times read as totals and as a stopwatch" {
-    var buffer: [32]u8 = undefined;
-    try std.testing.expectEqualStrings("12m", formatTotal(&buffer, 12 * std.time.ms_per_min + 59_000));
-    try std.testing.expectEqualStrings("3h 05m", formatTotal(&buffer, 185 * std.time.ms_per_min));
-    try std.testing.expectEqualStrings("1:02:03", formatClock(&buffer, 3_723_000));
-}

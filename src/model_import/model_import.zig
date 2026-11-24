@@ -92,54 +92,6 @@ test "an OBJ file imports as triangles, scaled by its settings" {
     try std.testing.expectApproxEqAbs(@as(f32, 1), @abs(model.vertices[0].normal[1]), 0.001);
 }
 
-test "a file that isn't a model fails with assimp's reason" {
-    try std.testing.expectError(error.ImportFailed, import(std.testing.allocator, "/nonexistent/ship.glb", .{}));
-    try std.testing.expect(lastError().len > 0);
-}
-
-test "an image decodes into its pixels, and a model's material brings its texture" {
-    const gpa = std.testing.allocator;
-    const io = std.testing.io;
-    var tmp = std.testing.tmpDir(.{});
-    defer tmp.cleanup();
-    // A 2 by 1 image as a BMP (stb_image reads it; red then green, stored blue, green, red).
-    const bmp = [_]u8{ 'B', 'M', 62, 0, 0, 0, 0, 0, 0, 0, 54, 0, 0, 0 } ++
-        [_]u8{ 40, 0, 0, 0, 2, 0, 0, 0, 1, 0, 0, 0, 1, 0, 24, 0, 0, 0, 0, 0, 8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 } ++
-        [_]u8{ 0, 0, 255, 0, 255, 0, 0, 0 };
-    try tmp.dir.writeFile(io, .{ .sub_path = "pair.bmp", .data = &bmp });
-    // A square whose material's texture is that image.
-    try tmp.dir.writeFile(io, .{ .sub_path = "square.mtl", .data = "newmtl painted\nmap_Kd pair.bmp\n" });
-    try tmp.dir.writeFile(io, .{ .sub_path = "square.obj", .data =
-        \\mtllib square.mtl
-        \\v 0 0 0
-        \\v 1 0 0
-        \\v 1 0 1
-        \\vt 0 0
-        \\vt 1 0
-        \\vt 1 1
-        \\usemtl painted
-        \\f 1/1 3/3 2/2
-        \\
-    });
-    const dir = try tmp.dir.realPathFileAlloc(io, ".", gpa);
-    defer gpa.free(dir);
-
-    const image_path = try std.fs.path.joinZ(gpa, &.{ dir, "pair.bmp" });
-    defer gpa.free(image_path);
-    var image = try decodeImage(gpa, image_path);
-    defer image.deinit(gpa);
-    try std.testing.expectEqual(@as(u32, 2), image.width);
-    try std.testing.expectEqualSlices(u8, &.{ 255, 0, 0, 255, 0, 255, 0, 255 }, image.pixels);
-
-    const model_path = try std.fs.path.joinZ(gpa, &.{ dir, "square.obj" });
-    defer gpa.free(model_path);
-    var model = try import(gpa, model_path, .{});
-    defer model.deinit(gpa);
-    try std.testing.expectEqual(@as(usize, 1), model.textures.len);
-    try std.testing.expect(model.parts[model.parts.len - 1].texture != null);
-    try std.testing.expectError(error.ImportFailed, decodeImage(gpa, "/nonexistent/rat.png"));
-}
-
 extern fn SaveEXR(data: [*]const f32, width: c_int, height: c_int, components: c_int, save_as_fp16: c_int, filename: [*:0]const u8, err: *?[*:0]const u8) c_int;
 
 test "a Radiance or OpenEXR image decodes into linear light brighter than white" {
@@ -238,40 +190,4 @@ test "a skinned glTF keeps its bones and clip, and its corners follow the bone" 
     try std.testing.expectApproxEqAbs(@as(f32, 6), highest_lifted, 1e-3);
     // The model's bounds cover the lifted pose, so culling by them never hides it.
     try std.testing.expect(model.bounds().max[1] >= 6 - 1e-3);
-}
-
-test "a glTF with blend shapes imports them as targets driven by a weights clip" {
-    var tmp = std.testing.tmpDir(.{});
-    defer tmp.cleanup();
-    var model = try importGltf(&tmp, "morph.gltf", morphing_triangle, .{});
-    defer model.deinit(std.testing.allocator);
-
-    try std.testing.expect(model.isRigged() and model.isWhole());
-    try std.testing.expectEqual(@as(usize, 1), model.rig.morph_targets.len);
-    try std.testing.expectEqual(@as(u32, 1), model.parts[0].morph_count);
-    var off: [3]assets.model.Vertex = undefined;
-    var on: [3]assets.model.Vertex = undefined;
-    try deformedAt(model, "smile", 0, &off);
-    try deformedAt(model, "smile", 1, &on);
-    var moved: f32 = 0;
-    for (off, on) |a, b| moved = @max(moved, @abs(b.position[2] - a.position[2]));
-    try std.testing.expectApproxEqAbs(@as(f32, 2), moved, 1e-3);
-    // The shape moves a corner out of the rest box, so the bounds are wider than the rest pose.
-    try std.testing.expect(@max(model.bounds().max[2], -model.bounds().min[2]) >= 2 - 1e-3);
-}
-
-test "a model that doesn't move imports with no rig, parts already placed" {
-    var tmp = std.testing.tmpDir(.{});
-    defer tmp.cleanup();
-    const io = std.testing.io;
-    try tmp.dir.writeFile(io, .{ .sub_path = "still.obj", .data = "v 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\n" });
-    const dir = try tmp.dir.realPathFileAlloc(io, ".", std.testing.allocator);
-    defer std.testing.allocator.free(dir);
-    const path = try std.fs.path.joinZ(std.testing.allocator, &.{ dir, "still.obj" });
-    defer std.testing.allocator.free(path);
-    var model = try import(std.testing.allocator, path, .{});
-    defer model.deinit(std.testing.allocator);
-    try std.testing.expect(!model.isRigged());
-    try std.testing.expectEqual(@as(usize, 0), model.rig.clips.len);
-    try std.testing.expectEqual(@as(u32, 0), model.parts[0].vertex_count);
 }

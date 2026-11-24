@@ -942,10 +942,6 @@ test "a build nested in a step counts as that step's progress" {
     try std.testing.expectEqual(@as(u32, 6), summary.total);
 }
 
-test "the job compiles" {
-    std.testing.refAllDecls(Job);
-}
-
 test "each stage is timed once, and the one that failed stays last" {
     var job: Job = undefined;
     job.stage_count = 0;

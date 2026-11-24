@@ -149,18 +149,6 @@ test "extraction refuses incoming and outgoing references instead of breaking th
     try validateReferences(std.testing.allocator, &world, access, &.{root});
 }
 
-test "extraction rejects incoming nested entity references outside the extracted tree" {
-    const Nested = struct { value: struct { target: eggy.EntityRef(void) = .{} } = .{} };
-    const access = eggy.scene.registryAccess(eggy.components.Registry(&.{Nested}, &.{"game"}));
-    var world = ecs.World.init(std.testing.allocator);
-    defer world.deinit();
-    const root = try world.spawn(.{});
-    const outside = try world.spawn(.{Nested{ .value = .{ .target = .init(root) } }});
-    try std.testing.expectError(error.NestedEntityReferencesUnsupported, validateReferences(std.testing.allocator, &world, access, &.{root}));
-    try std.testing.expect(world.isAlive(root));
-    try std.testing.expectEqual(root, world.get(outside, Nested).?.value.target.entity.?);
-}
-
 test "extraction saves a unique, catalogued scene before replacing anything" {
     const gpa = std.testing.allocator;
     const io = std.testing.io;

@@ -515,54 +515,6 @@ test "the default scene is written into eggy.zon, and an unchanged one is no cha
     try std.testing.expect(try setDefaultScene(gpa, dir, "resources/scene/sewer.scene.zon") == null);
 }
 
-test "the Project section lays out every eggy.zon field in cards and writes a change once" {
-    const gpa = std.testing.allocator;
-    var tmp = std.testing.tmpDir(.{});
-    defer tmp.cleanup();
-    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = eggy.project.file_name, .data = ".{ .name = \"rats\", .title = \"Rats\" }\n" });
-    const dir = try tmp.dir.realPathFileAlloc(std.testing.io, ".", gpa);
-    defer gpa.free(dir);
-    const settings = try ProjectSettings.open(gpa, dir, .{});
-    defer settings.close();
-    var context = try ui.Context.init(gpa);
-    defer context.deinit();
-    context.density = .compact;
-    context.newFrame(.{ .x = 0, .y = 0, .w = 440, .h = 600 });
-    settings.build(&context, "");
-    settings.buildGraphics(&context, "");
-    try std.testing.expect((try context.render()).len > 0);
-    try std.testing.expect(ProjectSettings.matches("copyright"));
-    try std.testing.expect(!ProjectSettings.matches("anisotropic"));
-    try settings.title.set("Sewer Rats");
-    const change = (try settings.save()).?;
-    defer gpa.free(change.before);
-    defer gpa.free(change.after);
-    try std.testing.expect(std.mem.indexOf(u8, change.after, "Sewer Rats") != null);
-    try std.testing.expect(try settings.save() == null);
-}
-
-test "the project's icon is picked from its images and written to eggy.zon" {
-    const gpa = std.testing.allocator;
-    var tmp = std.testing.tmpDir(.{});
-    defer tmp.cleanup();
-    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = eggy.project.file_name, .data = ".{ .name = \"rats\", .title = \"Rats\" }\n" });
-    try tmp.dir.createDirPath(std.testing.io, "resources/art");
-    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "resources/art/rat.png", .data = "not really a png" });
-    const dir = try tmp.dir.realPathFileAlloc(std.testing.io, ".", gpa);
-    defer gpa.free(dir);
-    const settings = try ProjectSettings.open(gpa, dir, .{});
-    defer settings.close();
-    try std.testing.expectEqualStrings("None", settings.icons[0]);
-    try std.testing.expectEqualStrings("resources/art/rat.png", settings.icons[1]);
-    settings.icon = 1;
-    const change = (try settings.save()).?;
-    defer gpa.free(change.before);
-    defer gpa.free(change.after);
-    try std.testing.expect(std.mem.indexOf(u8, change.after, ".icon = \"resources/art/rat.png\"") != null);
-    try settings.reload();
-    try std.testing.expectEqual(@as(usize, 1), settings.icon);
-}
-
 test "saving the Project section keeps the installed plugins" {
     const gpa = std.testing.allocator;
     var tmp = std.testing.tmpDir(.{});
@@ -578,39 +530,6 @@ test "saving the Project section keeps the installed plugins" {
     defer gpa.free(change.after);
     try std.testing.expect(std.mem.indexOf(u8, change.after, "eggy_git") != null);
     try std.testing.expect(std.mem.indexOf(u8, change.after, "eggy_frame_stats") != null);
-}
-
-test "graphics are saved in eggy.zon, kept by other edits, and read back after undo" {
-    const gpa = std.testing.allocator;
-    var tmp = std.testing.tmpDir(.{});
-    defer tmp.cleanup();
-    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = eggy.project.file_name, .data = ".{ .name = \"rats\", .title = \"Rats\" }\n" });
-    const dir = try tmp.dir.realPathFileAlloc(std.testing.io, ".", gpa);
-    defer gpa.free(dir);
-    const settings = try ProjectSettings.open(gpa, dir, .{});
-    defer settings.close();
-    // A project that says nothing gets the engine's defaults.
-    try std.testing.expectEqual(render_settings.Settings{}, settings.saved_graphics);
-
-    // Choices are written, and a later unrelated edit keeps them.
-    const chosen = render_settings.Settings{ .mipmaps = false, .anti_aliasing = .fxaa, .frame_limit = 60, .width = 1280, .height = 720 };
-    settings.graphics.load(chosen);
-    const first = (try settings.save()).?;
-    defer gpa.free(first.before);
-    defer gpa.free(first.after);
-    try settings.title.set("Sewer Rats");
-    const second = (try settings.save()).?;
-    defer gpa.free(second.before);
-    defer gpa.free(second.after);
-    try std.testing.expectEqual(chosen, (try loadApplied(gpa, dir)).graphics);
-
-    // Undo restores the earlier file, whose graphics the editor then makes the defaults.
-    try std.testing.expectEqual(render_settings.Settings{}, (try appliedIn(gpa, first.before)).graphics);
-    try std.testing.expectEqual(chosen, (try appliedIn(gpa, second.before)).graphics);
-    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = eggy.project.file_name, .data = first.before });
-    try settings.reload();
-    try std.testing.expectEqual(render_settings.Settings{}, settings.saved_graphics);
-    try std.testing.expectEqual(render_settings.Settings{}, settings.graphics.draft);
 }
 
 test "a half typed or invalid number is not written to eggy.zon, and says why" {

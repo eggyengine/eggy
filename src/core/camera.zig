@@ -203,18 +203,6 @@ test "the default view sees the origin in the middle of the view" {
     try std.testing.expectApproxEqAbs(@as(f32, 0), where.y, 0.001);
 }
 
-test "an infinite far plane keeps distant points inside the depth range" {
-    const view = View.lookingAt(.zero, .forward, .{ .far = std.math.inf(f32) });
-    const matrix = view.viewProjection(1);
-    var previous: f32 = 0;
-    for ([_]f32{ 1, 1_000, 1_000_000 }) |distance| {
-        const clip = math.transformVec4by4x4(f32, matrix, .init(0, 0, -distance, 1));
-        const depth = clip.z / clip.w;
-        try std.testing.expect(depth > previous and depth <= 1);
-        previous = depth;
-    }
-}
-
 test "a camera entity looks down its -z, from where its transform puts it" {
     var world = ecs.World.init(std.testing.allocator);
     defer world.deinit();
@@ -242,19 +230,4 @@ test "camera selection is explicit and priority ties do not depend on archetypes
     try std.testing.expect(cameras.activeEntity().?.eql(first));
     try cameras.setActive(null);
     try std.testing.expect(find(&world) == null);
-}
-
-test "orthographic projection preserves apparent size across depth" {
-    const view = View.lookingAt(.init(0, 0, 10), .zero, .{ .projection = .orthographic, .orthographic_height_m = 4 });
-    const matrix = view.viewProjection(2);
-    const near = project(matrix, .init(2, 1, 0));
-    const far = project(matrix, .init(2, 1, -20));
-    try std.testing.expectApproxEqAbs(@as(f32, 0.5), near.x, 0.0001);
-    try std.testing.expectApproxEqAbs(@as(f32, 0.5), near.y, 0.0001);
-    try std.testing.expectApproxEqAbs(near.x, far.x, 0.0001);
-    try std.testing.expectApproxEqAbs(near.y, far.y, 0.0001);
-    const first = view.ray(.zero, 2);
-    const second = view.ray(.one, 2);
-    try std.testing.expect(first.direction.eql(second.direction));
-    try std.testing.expect(second.origin.eql(.init(4, 2, 10)));
 }

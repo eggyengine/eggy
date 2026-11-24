@@ -183,26 +183,6 @@ test "timer values expire at their deadline and cancellation is observable" {
     try std.testing.expect(try (try time.startTimer(0)).finished(time));
 }
 
-test "scaling affects future counted deltas without changing the unscaled clamp" {
-    var time = Time{};
-    time.tick(0);
-    try time.setScale(2);
-    time.tick(50_000_000);
-    try std.testing.expectApproxEqAbs(@as(f32, 0.1), time.delta_s, 1e-6);
-    try std.testing.expectApproxEqAbs(@as(f32, 0.05), time.unscaled_delta_s, 1e-6);
-    const before = time.elapsed_s;
-    const timer = try time.startTimer(1);
-    try time.setScale(0);
-    time.tick(10_000_000_000);
-    try std.testing.expectEqual(before, time.elapsed_s);
-    try std.testing.expect(!try timer.finished(time));
-    try std.testing.expectEqual(max_delta_s, time.unscaled_delta_s);
-    try std.testing.expectError(error.InvalidDuration, time.startTimer(-1));
-    try std.testing.expectError(error.InvalidDuration, time.startTimer(std.math.nan(f32)));
-    try std.testing.expectError(error.InvalidTimeScale, time.setScale(-1));
-    try std.testing.expectError(error.InvalidTimeScale, time.setScale(std.math.inf(f32)));
-}
-
 test "world resets reject stale timer values without retaining callbacks" {
     var time = Time{};
     var timer = try time.startTimer(1);

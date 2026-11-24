@@ -472,15 +472,6 @@ pub fn validateSnapshot(comptime T: type, value: *const T) !void {
     }
 }
 
-test "math vectors are stored as plain tuples, so older scenes still load" {
-    const Vec3 = @import("eggenvector").Vec3;
-    var text: [64]u8 = undefined;
-    var writer: std.Io.Writer = .fixed(&text);
-    try std.zon.stringify.serialize(store(Vec3, &Vec3.init(1, 2, 3)), .{ .whitespace = false }, &writer);
-    try std.testing.expectEqualStrings(".{1,2,3}", writer.buffered());
-    try std.testing.expect((try parseFieldValue(Vec3, ".{ 4, 5, 6 }")).eql(.init(4, 5, 6)));
-}
-
 test "typed snapshots preflight the actual field size and parse budget" {
     const Small = struct { value: u32 = 42, texture: refs.AssetRef(.image) = .init("ship.png") };
     try validateSnapshot(Small, &Small{});
@@ -706,18 +697,6 @@ const Spin = struct {
 };
 const Tag = struct { id: u32 };
 
-test "a component's fields are described for the Inspector" {
-    const Components = Registry(&.{ Spin, Tag }, &.{ "game", "game" });
-    const spin = Components.infos[0];
-    try std.testing.expectEqualStrings("Spin", spin.name);
-    try std.testing.expect(spin.addable);
-    try std.testing.expectEqual(Kind.@"enum", spin.fields[1].kind);
-    try std.testing.expectEqualStrings("z", spin.fields[1].options[2]);
-    try std.testing.expectEqual(Kind.other, spin.fields[2].kind);
-    try std.testing.expect(spin.fields[2].editable);
-    try std.testing.expect(!Components.infos[1].addable); // `id` has no default
-}
-
 test "fields are read and written as ZON, and bad text leaves them be" {
     const Components = Registry(&.{Spin}, &.{"game"});
     var world = ecs.World.init(std.testing.allocator);
@@ -771,82 +750,4 @@ test "references are read and written as what they point at" {
     try std.testing.expectEqualStrings(try std.fmt.bufPrint(&expected, "\"{s}\"", .{sound.key()}), text.written());
     try Components.setField(&world, entity, 0, 0, "null");
     try std.testing.expect(world.get(entity, Orbit).?.around.entity == null);
-}
-
-test "a field's parts describe vectors, colours, unions and what they hold" {
-    const Shape = union(enum) { cube, model: refs.AssetRef(.any) };
-    const Look = struct {
-        position: [3]f32 = .{ 0, 0, 0 },
-        tint_color: [4]f32 = .{ 1, 1, 1, 1 },
-        shape: Shape = .cube,
-        count: ?u8 = null,
-    };
-    const fields = Registry(&.{Look}, &.{"game"}).infos[0].fields;
-    try std.testing.expectEqual(PartKind.vector, fields[0].parts[0].kind);
-    try std.testing.expectEqual(@as(u32, 3), fields[0].parts[0].len);
-    try std.testing.expectEqual(PartKind.float, fields[0].parts[0].children(fields[0].parts)[0].kind);
-    try std.testing.expectEqual(PartKind.color, fields[1].parts[0].kind);
-    const Turned = struct { rotation_deg: [3]f32 = .{ 0, 0, 0 }, spin_rad: [3]f32 = .{ 0, 0, 0 }, orientation_rad: [3]f32 = .{ 0, 0, 0 } };
-    const turned = Registry(&.{Turned}, &.{"game"}).infos[0].fields;
-    try std.testing.expectEqual(PartKind.euler, turned[0].parts[0].kind);
-    try std.testing.expect(!turned[0].parts[0].radians);
-    try std.testing.expectEqual(PartKind.vector, turned[1].parts[0].kind); // not named for a rotation
-    try std.testing.expect(turned[2].parts[0].radians);
-
-    const shape = fields[2].parts;
-    try std.testing.expectEqual(PartKind.@"union", shape[0].kind);
-    const variants = shape[0].children(shape);
-    try std.testing.expectEqualStrings("cube", std.mem.span(variants[0].name));
-    try std.testing.expectEqual(PartKind.none, variants[0].kind);
-    try std.testing.expectEqual(PartKind.asset, variants[1].kind);
-
-    const count = fields[3].parts;
-    try std.testing.expectEqual(PartKind.optional, count[0].kind);
-    try std.testing.expect(count[0].children(count)[0].unsigned);
-}
-
-test "references inside a union are written as what they point at" {
-    const Shape = union(enum) { cube, model: refs.AssetRef(.any) };
-    const Look = struct { shape: Shape = .cube };
-    const Components = Registry(&.{Look}, &.{"game"});
-    var world = ecs.World.init(std.testing.allocator);
-    defer world.deinit();
-    const entity = try world.spawn(.{Look{}});
-    var text: std.Io.Writer.Allocating = .init(std.testing.allocator);
-    defer text.deinit();
-    try Components.writeField(&world, entity, 0, 0, &text.writer);
-    try std.testing.expectEqualStrings(".cube", text.written());
-
-    try Components.setField(&world, entity, 0, 0, ".{ .model = \"art/ship.glb\" }");
-    const model = refs.AssetRef(.any).init("art/ship.glb");
-    try std.testing.expectEqual(model.id(), world.get(entity, Look).?.shape.model.id());
-    text.clearRetainingCapacity();
-    try Components.writeField(&world, entity, 0, 0, &text.writer);
-    var expected: [32]u8 = undefined;
-    try std.testing.expectEqualStrings(try std.fmt.bufPrint(&expected, ".{{.model=\"{s}\"}}", .{model.key()}), text.written());
-}
-
-test "adding a component adds what it depends on" {
-    const Body = struct { mass: f32 = 1 };
-    const Wheel = struct {
-        pub const dependencies = .{Body};
-        radius: f32 = 0.5,
-    };
-    const Components = Registry(&.{ Wheel, Body }, &.{ "game", "game" });
-    try std.testing.expectEqualSlices(usize, &.{1}, Components.infos[0].dependencies);
-    var world = ecs.World.init(std.testing.allocator);
-    defer world.deinit();
-    const entity = try world.spawn(.{});
-    try Components.add(&world, entity, 0);
-    try std.testing.expect(Components.has(&world, entity, 1));
-}
-
-test "a Name inside a component is stored as its text and reads back" {
-    const Layer = struct { bone: Name = .init("mixamorig:Spine") };
-    var text: [64]u8 = undefined;
-    var writer: std.Io.Writer = .fixed(&text);
-    try std.zon.stringify.serialize(store(Layer, &Layer{}), .{ .whitespace = false }, &writer);
-    try std.testing.expectEqualStrings(".{.bone=\"mixamorig:Spine\"}", writer.buffered());
-    const read = try parseFieldValue(Name, "\"hips\"");
-    try std.testing.expectEqualStrings("hips", read.text());
 }

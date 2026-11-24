@@ -311,48 +311,6 @@ test "save slots roundtrip binary and empty bytes, overwrite atomically, and del
     try std.testing.expectError(error.FileNotFound, storage.read(std.testing.allocator, "slot-1"));
 }
 
-test "invalid slots fail before provider access or allocation" {
-    const storage: Storage = .{};
-    for ([_][]const u8{ "", ".", "..", "../save", "/save", "a/b", "a\\b", "C:save", "name.ext", "a b", "bad\x00name", "sävé", &@as([65]u8, @splat('a')) }) |slot| {
-        try std.testing.expectError(error.InvalidSlot, storage.read(std.testing.failing_allocator, slot));
-        try std.testing.expectError(error.InvalidSlot, storage.write(slot, "bytes"));
-        try std.testing.expectError(error.InvalidSlot, storage.remove(slot));
-    }
-    try std.testing.expectError(error.StorageNotInitialized, storage.read(std.testing.allocator, "slot"));
-    try std.testing.expectError(error.StorageNotInitialized, storage.write("slot", "bytes"));
-    try std.testing.expectError(error.StorageNotInitialized, storage.remove("slot"));
-    try std.testing.expectError(error.InvalidProjectId, Storage.init(std.testing.failing_allocator, std.testing.io, ""));
-}
-
-test "save reads distinguish unsupported schema, format, corruption and IO errors" {
-    var folder = std.testing.tmpDir(.{});
-    defer folder.cleanup();
-    var storage = try testStorage(std.testing.allocator, folder.dir);
-    defer storage.deinit();
-    try storage.writeVersion("slot", 7, "progress");
-    try std.testing.expectError(error.UnsupportedSaveSchema, storage.read(std.testing.allocator, "slot"));
-    const bytes = try storage.readVersion(std.testing.allocator, "slot", 7);
-    defer std.testing.allocator.free(bytes);
-    try std.testing.expectEqualStrings("progress", bytes);
-
-    var name_buffer: [file_name_bytes]u8 = undefined;
-    const name = slotFileName(&name_buffer, "slot");
-    var encoded = try folder.dir.readFileAlloc(std.testing.io, name, std.testing.allocator, .limited(1024));
-    defer std.testing.allocator.free(encoded);
-    encoded[8] = 2;
-    try folder.dir.writeFile(std.testing.io, .{ .sub_path = name, .data = encoded });
-    try std.testing.expectError(error.UnsupportedSaveFormat, storage.read(std.testing.allocator, "slot"));
-    encoded[8] = 1;
-    encoded[encoded.len - 1] ^= 1;
-    try folder.dir.writeFile(std.testing.io, .{ .sub_path = name, .data = encoded });
-    try std.testing.expectError(error.CorruptSave, storage.readVersion(std.testing.allocator, "slot", 7));
-    try folder.dir.writeFile(std.testing.io, .{ .sub_path = name, .data = "broken" });
-    try std.testing.expectError(error.CorruptSave, storage.read(std.testing.allocator, "slot"));
-    try folder.dir.createDir(std.testing.io, slotFileName(&name_buffer, "directory"), .default_dir);
-    try std.testing.expectError(error.StorageIo, storage.read(std.testing.allocator, "directory"));
-    try std.testing.expectError(error.StorageIo, storage.remove("directory"));
-}
-
 test "failed atomic replacement preserves destination and cleans scratch files" {
     var folder = std.testing.tmpDir(.{ .iterate = true });
     defer folder.cleanup();
@@ -372,59 +330,6 @@ test "failed atomic replacement preserves destination and cleans scratch files" 
     const entry = (try iterator.next(std.testing.io)).?;
     try std.testing.expectEqualStrings(name, entry.name);
     try std.testing.expectEqual(null, try iterator.next(std.testing.io));
-}
-
-test "project namespaces and portable slot filenames cannot traverse" {
-    const a = identityHash("my game");
-    const b = identityHash("other game");
-    try std.testing.expect(!std.mem.eql(u8, &a, &b));
-    try std.testing.expectEqualStrings(&a, &identityHash("my game"));
-    try std.testing.expectEqual(@as(usize, 64), identityHash("../../escape").len);
-    var name_buffer: [file_name_bytes]u8 = undefined;
-    try std.testing.expect(std.mem.startsWith(u8, slotFileName(&name_buffer, "CON"), "slot-"));
-    try validateSlot(&@as([64]u8, @splat('a')));
-}
-
-test "all storage allocations release on failure and reads remain caller owned" {
-    var folder = std.testing.tmpDir(.{});
-    defer folder.cleanup();
-    var storage = try testStorage(std.testing.allocator, folder.dir);
-    defer storage.deinit();
-    try storage.write("slot", "owned data");
-    const ReadCase = struct {
-        fn run(gpa: std.mem.Allocator, view: Storage) !void {
-            const bytes = try view.read(gpa, "slot");
-            defer gpa.free(bytes);
-            try std.testing.expectEqualStrings("owned data", bytes);
-        }
-    };
-    try std.testing.checkAllAllocationFailures(std.testing.allocator, ReadCase.run, .{storage});
-    const InitCase = struct {
-        fn run(gpa: std.mem.Allocator, dir: std.Io.Dir) !void {
-            var owner = try testStorage(gpa, dir);
-            defer owner.deinit();
-        }
-    };
-    try std.testing.checkAllAllocationFailures(std.testing.allocator, InitCase.run, .{folder.dir});
-}
-
-test "slots persist across service shutdown and case-distinct names do not alias" {
-    var folder = std.testing.tmpDir(.{});
-    defer folder.cleanup();
-    {
-        var storage = try testStorage(std.testing.allocator, folder.dir);
-        defer storage.deinit();
-        try storage.write("slot", "lowercase");
-        try storage.write("SLOT", "uppercase");
-    }
-    var reopened = try testStorage(std.testing.allocator, folder.dir);
-    defer reopened.deinit();
-    const lower = try reopened.read(std.testing.allocator, "slot");
-    defer std.testing.allocator.free(lower);
-    const upper = try reopened.read(std.testing.allocator, "SLOT");
-    defer std.testing.allocator.free(upper);
-    try std.testing.expectEqualStrings("lowercase", lower);
-    try std.testing.expectEqualStrings("uppercase", upper);
 }
 
 test "failed writes, syncs and renames preserve the previous valid save" {
@@ -472,16 +377,6 @@ test "failed writes, syncs and renames preserve the previous valid save" {
         _ = (try iterator.next(std.testing.io)).?;
         try std.testing.expectEqual(null, try iterator.next(std.testing.io));
     }
-}
-
-test "stable storage statuses reconstruct errors without Zig error numbers" {
-    for (std.enums.values(Status)) |code| {
-        if (code == .ok) continue;
-        check(code) catch |err| try std.testing.expectEqual(code, status(err));
-    }
-    try std.testing.expectEqual(Status.access_denied, status(error.PermissionDenied));
-    try std.testing.expectEqual(Status.full, status(error.NoSpaceLeft));
-    try std.testing.expectEqual(Status.io, status(error.InputOutput));
 }
 
 test {

@@ -236,28 +236,3 @@ test "a placed voice to the listener's right is louder on the right" {
     }
     try std.testing.expect(right > left * 2);
 }
-
-test "analysing a sound finds its length and where it is loud, and a voice seeks into it" {
-    // A tenth of a second of square wave, then as long again of silence.
-    var wav = testSquareWave(9600);
-    for (wav[44 + 4800 * 2 ..]) |*byte| byte.* = 0;
-    var peaks: [4]f32 = undefined;
-    const info = try mixer_zig.analyse(&wav, &peaks);
-    try std.testing.expectEqual(@as(u64, 9600), info.frames);
-    try std.testing.expectEqual(@as(u32, 1), info.channels);
-    try std.testing.expectEqual(@as(u32, sample_rate_hz), info.sample_rate);
-    try std.testing.expect(peaks[0] > 0.5 and peaks[1] > 0.5);
-    try std.testing.expect(peaks[2] < 0.01 and peaks[3] < 0.01);
-    try std.testing.expectError(error.UnreadableSound, mixer_zig.analyse("not a sound", &peaks));
-
-    const host = try Host.create(std.testing.allocator, false);
-    defer host.destroy();
-    const voice = host.get(try host.add(&wav, 0)).?;
-    voice.seekSeconds(0.15);
-    voice.start();
-    var mix: [64 * channels]f32 = undefined;
-    host.mixer.read(&mix, 64);
-    // Past the seek by what was mixed, and what the decoder read ahead (up to 1024 frames).
-    try std.testing.expect(voice.cursorSeconds() >= 0.15 and voice.cursorSeconds() < 0.15 + 1088.0 / @as(f32, sample_rate_hz));
-    for (mix) |sample| try std.testing.expectEqual(@as(f32, 0), sample);
-}

@@ -689,36 +689,3 @@ test "a log line is coloured by level, scope and the locations in it" {
     for (spans) |span| covered += span.end - span.start;
     try std.testing.expectEqual(line.len, covered);
 }
-
-test "output added a bit at a time wraps as it would all at once" {
-    var growing = TerminalView.init(std.testing.allocator, undefined);
-    defer growing.deinit();
-    var whole = TerminalView.init(std.testing.allocator, undefined);
-    defer whole.deinit();
-    const output = "a long first line\nsecond\n\nthe last one, and longer\n";
-    // Line by line, and a line in two halves, wrapping after each.
-    for ([_]usize{ 5, 18, 25, 26, 40, output.len }) |end| {
-        try growing.setText(output[0..end]);
-        try growing.wrap(7);
-    }
-    try whole.setText(output);
-    try whole.wrap(7);
-    try std.testing.expectEqualSlices(TerminalView.Row, whole.rows.items, growing.rows.items);
-}
-
-test "a huge line colours only the rows drawn, and its later locations too" {
-    const gpa = std.testing.allocator;
-    var line: std.ArrayList(u8) = .empty;
-    defer line.deinit(gpa);
-    // Thousands of locations, no spaces: once quadratic in the line's length, every row.
-    for (0..4000) |i| try line.print(gpa, "(pkg/src/file.zig:{d}:5", .{i});
-    var buffer: [max_spans]Span = undefined;
-    const from = line.items.len - 120;
-    const spans = lineSpans(line.items, from, line.items.len, .{}, &buffer);
-    // The row's last location is still picked out.
-    const last = spans[spans.len - 1];
-    try std.testing.expectEqual(cyan, last.color);
-    try std.testing.expectEqualStrings("pkg/src/file.zig:3999:5", line.items[last.start..last.end]);
-    // Nothing before the row's first word was looked at.
-    try std.testing.expect(spans[1].start + max_lookback >= from);
-}

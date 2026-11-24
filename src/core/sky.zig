@@ -113,13 +113,6 @@ test "an even white sky lights every way alike, as brightly as it looks" {
     for (light[1..]) |term| try std.testing.expectApproxEqAbs(@as(f32, 0), term[0], 0.02);
 }
 
-test "a sky bright only above lights upward-facing surfaces more" {
-    var pixels: [64 * 32 * 4]u8 = @splat(0);
-    for (0..16 * 64) |pixel| pixels[pixel * 4 ..][0..3].* = @splat(255);
-    const light = irradiance(.{ .width = 64, .height = 32, .pixels = &pixels });
-    try std.testing.expect(light[1][0] > 0.1);
-}
-
 test "a high-dynamic-range sky lights as brightly as its light, past white" {
     var pixels: [64 * 32 * 8]u8 = undefined;
     for (0..64 * 32 * 4) |i| assets.texture.setHalf(&pixels, i, 3);

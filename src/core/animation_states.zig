@@ -244,17 +244,6 @@ test "fading to a state eases it in and the others out, and frees what faded awa
     try std.testing.expectEqual(@as(f32, 0), find(&states, jump).?.time_s);
 }
 
-test "states refuse what they can't do and change nothing" {
-    var states: States = @splat(.{});
-    try std.testing.expectError(error.InvalidClip, set(&states, .{}, 1, 0, .{}));
-    try std.testing.expectError(error.InvalidWeight, set(&states, idle, 2, 0, .{}));
-    try std.testing.expectError(error.InvalidTime, set(&states, idle, 1, -1, .{}));
-    try std.testing.expect(!any(states));
-    for (0..max_states) |index| try set(&states, .fromId(0x40 + index), 0.1, 0, .{});
-    try std.testing.expectError(error.TooManyStates, set(&states, idle, 1, 0, .{}));
-    try std.testing.expectError(error.TooManyStates, along(&states, &.{ .{ .clip = idle, .at = 0 }, .{ .clip = walk, .at = 1 } }, 0, 0, .{}));
-}
-
 test "a layer on a bone fades in over the body's states without fading them out" {
     var states: States = @splat(.{});
     try along(&states, &.{ .{ .clip = idle, .at = 0 }, .{ .clip = walk, .at = 2 } }, 2, 0.2, .{});

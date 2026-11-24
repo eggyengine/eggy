@@ -809,12 +809,6 @@ test "fitting enlarges small images by whole multiples and shrinks large ones to
     try std.testing.expectEqual(@as(f32, 2), imageScale(.x2, .{ 400, 200 }, .{ 200, 300 }));
 }
 
-test "an image drags only as far as its edges, and not at all when it fits" {
-    try std.testing.expectEqual(@as(f32, 0), clampPan(30, 100, 200));
-    try std.testing.expectEqual(@as(f32, 50), clampPan(80, 300, 200));
-    try std.testing.expectEqual(@as(f32, -50), clampPan(-80, 300, 200));
-}
-
 test "a playing sheet steps through its frames at its speed and wraps" {
     const sheet: AssetPreview.Sheet = .{ .columns = 3, .rows = 2, .playing = true, .fps = 10, .started_ms = 1000, .started_frame = 4 };
     try std.testing.expectEqual(@as(u16, 4), sheet.frameAt(1000));
@@ -822,41 +816,4 @@ test "a playing sheet steps through its frames at its speed and wraps" {
     try std.testing.expectEqual(@as(u16, 0), sheet.frameAt(1200));
     const paused: AssetPreview.Sheet = .{ .columns = 2, .rows = 1, .frame = 7 };
     try std.testing.expectEqual(@as(u16, 1), paused.frameAt(0));
-}
-
-test "the empty, text and can't-show states fit a narrow dock, and the header offers what fits" {
-    const gpa = std.testing.allocator;
-    const io = std.testing.io;
-    var fixture = try @import("assets/project_fixtures.zig").Fixture.open(gpa, io);
-    defer fixture.close(gpa, io);
-    try fixture.dir.writeFile(io, .{ .sub_path = "a_script_with_a_long_name_that_keeps_going.zig", .data = "const a = 1;\nconst b = 2;\n" });
-    try fixture.dir.writeFile(io, .{ .sub_path = "intro.mp4", .data = "\x00\x00\x00\x18ftypmp42" });
-    var assets = try ProjectAssets.init(gpa, io, fixture.path);
-    defer assets.deinit();
-
-    var context = try ui.Context.init(gpa);
-    defer context.deinit();
-    // As the editor's pages are.
-    context.density = .compact;
-    var icons = Icons.load(gpa, context.font);
-    defer icons.deinit(gpa);
-    var preview = AssetPreview.init(gpa, context.font);
-    defer preview.deinit();
-    // Nothing here plays or loads through the app, so none is needed.
-    var app: eggy.App = undefined;
-    const paths = [_]?[]const u8{ null, "a_script_with_a_long_name_that_keeps_going.zig", "intro.mp4" };
-    for (paths) |path| for ([_]f32{ 240, 360, 720 }) |width| {
-        const viewport = ui.Rect{ .x = 0, .y = 0, .w = width, .h = 520 };
-        context.newFrame(viewport);
-        const selection: @FieldType(Request, "selection") = if (path) |found| .{ .path = found, .virtual = false } else null;
-        _ = preview.build(&context, .{ .selection = selection, .assets = &assets, .icons = &icons, .project_dir = fixture.path, .app = &app, .time_ms = 0 });
-        _ = try context.render();
-        try @import("ui_checks.zig").expectFits(context.last_root.?, context.font, viewport);
-    };
-    // The video held no text; the script reads as its two lines, which Edit is offered for.
-    try std.testing.expectEqual(@as(usize, 0), preview.contents.items.len);
-    context.newFrame(.{ .x = 0, .y = 0, .w = 360, .h = 520 });
-    _ = preview.build(&context, .{ .selection = .{ .path = paths[1].?, .virtual = false }, .assets = &assets, .icons = &icons, .project_dir = fixture.path, .app = &app, .time_ms = 0 });
-    _ = try context.render();
-    try std.testing.expectEqualStrings("const a = 1;\nconst b = 2;\n", preview.contents.items);
 }

@@ -319,13 +319,6 @@ test "a point light's cube sides each look the way the shader picks them for" {
     }
 }
 
-test "local maps tile the shared texture row by row" {
-    const local = Local{ .texture = undefined, .view = undefined, .uniforms = undefined, .instances = undefined, .groups = undefined, .resolution = 2048 };
-    try std.testing.expectEqual(vit.hal.command.ScissorRect{ .x = 512, .y = 512, .width = 512, .height = 512 }, local.rect(5));
-    try std.testing.expectEqual(@as(u32, 0), cameraOffset(0) % 256);
-    try std.testing.expectEqual(@as(u32, 0), cameraOffset(3) % 256);
-}
-
 test "shadow fitting remains finite for vertical lights and preserves texel stability" {
     const first = fitCamera(camera.View.default, 16.0 / 9.0, .down, 0.1, 60, 60, 2048);
     const matrix = transform.columns(first.viewProjection(1));

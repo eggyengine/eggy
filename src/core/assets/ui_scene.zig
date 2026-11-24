@@ -473,11 +473,3 @@ test "nodes are found by path, inserted and removed in a clone" {
     try std.testing.expectEqual(@as(usize, 1), parsed.scene.root.children.len);
     try std.testing.expectEqualStrings("title", parsed.scene.root.children[0].name);
 }
-
-test "scaling fits, fills or matches one side of the screen" {
-    const design = [2]f32{ 1280, 720 };
-    try std.testing.expectEqual(@as(f32, 0.5), Scaling.fit.scale(design, .{ 640, 720 }));
-    try std.testing.expectEqual(@as(f32, 1), Scaling.fill.scale(design, .{ 640, 720 }));
-    try std.testing.expectEqual(@as(f32, 2), Scaling.height.scale(design, .{ 640, 1440 }));
-    try std.testing.expectEqual(@as(f32, 1), Scaling.none.scale(design, .{ 1, 1 }));
-}

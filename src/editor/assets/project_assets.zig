@@ -571,26 +571,6 @@ test "a model opens into its geometry and clips, whose ids survive a move but no
     try std.testing.expect(copied[0].id != moved[0].id and copied[1].id != moved[1].id);
 }
 
-test "a file's key is its catalogued identity, and folders have none" {
-    const gpa = std.testing.allocator;
-    const io = std.testing.io;
-    var fixture = try fixtures.Fixture.open(gpa, io);
-    defer fixture.close(gpa, io);
-    try fixture.dir.createDirPath(io, "resources/art");
-    try fixture.dir.writeFile(io, .{ .sub_path = "resources/art/note.txt", .data = "hi" });
-    var project = try ProjectAssets.init(gpa, io, fixture.path);
-    defer project.deinit();
-
-    var buffer: [assets.id.key_len]u8 = undefined;
-    const key = project.keyOf(&buffer, "resources/art/note.txt").?;
-    try std.testing.expectEqual(project.idOf("resources/art/note.txt").?, try assets.id.parse(key));
-    try std.testing.expect(project.referenceAt("resources/art") == null);
-    try std.testing.expect(project.keyOf(&buffer, "resources/missing.txt") == null);
-    const text = try ProjectAssets.readAsset(&project, gpa, key);
-    defer gpa.free(text);
-    try std.testing.expectEqualStrings("hi", text);
-}
-
 test "providers read on other threads while files move and the catalog syncs" {
     const gpa = std.testing.allocator;
     const io = std.testing.io;

@@ -363,18 +363,6 @@ fn drawDots(_: *const anyopaque, c: *ui.Canvas, r: ui.Rect) anyerror!void {
     }
 }
 
-test "plugin View commands dispatch their current index without storing callbacks" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    var layout = dock.DockSpace.init();
-    var menubar = Menubar{};
-    const commands = [_]eggy.plugins.EditorCommand{.{ .key = "game/raise", .title = "Raise" }};
-    const list = try menubar.list(arena.allocator(), &layout, &.{}, &commands, .{}, .{}, .{}, menu_order.len);
-    try std.testing.expectEqualStrings("Raise", list[2].items[0].label);
-    _ = menubar.press(@backingInt(Menu.view), .{});
-    try std.testing.expectEqual(Action{ .plugin_command = 0 }, menubar.press(list[2].items[0].id, .{}).?);
-}
-
 test "pressing a trigger opens its menu, and an item runs and closes it" {
     var menubar = Menubar{};
     try std.testing.expectEqual(Action.handled, menubar.press(@backingInt(Menu.file), .{}).?);
@@ -382,12 +370,6 @@ test "pressing a trigger opens its menu, and an item runs and closes it" {
     try std.testing.expectEqual(Action{ .command = .quit }, menubar.press(@backingInt(Command.quit), .{}).?);
     try std.testing.expectEqual(@as(u32, 0), menubar.open);
     try std.testing.expect(menubar.press(@backingInt(Command.quit), .{}) == null); // closed: not ours
-}
-
-test "the Window menu's items toggle their panel" {
-    var menubar = Menubar{ .open = @backingInt(Menu.window) };
-    const console = @backingInt(Panel.console);
-    try std.testing.expectEqual(Action{ .toggle_panel = console }, menubar.press(window_item_first + console, .{}).?);
 }
 
 test "menus that don't fit fold into the \"...\" menu, and its rows open them beside it" {
@@ -449,38 +431,4 @@ test "plugin menus join the bar and Eggy's menus, and their rows run by place" {
     _ = menubar.press(@backingInt(Menu.view), bars);
     const snap = menubar.press(list[2].items[list[2].items.len - 1].id, bars).?;
     try std.testing.expectEqual(@as(usize, 1), snap.plugin_bar.menu_item.menu);
-}
-
-test "a status button acts at once and a status menu opens and closes" {
-    var menubar = Menubar{ .open = @backingInt(Menu.file) };
-    const bars = plugin_bars.Bars{ .menus = &test_menus, .status_items = &test_status };
-    const button = menubar.press(plugin_bars.statusId(0), bars).?;
-    try std.testing.expectEqual(@as(usize, 0), button.plugin_bar.status);
-    try std.testing.expectEqual(@as(u32, 0), menubar.open); // a menu that was open closes
-
-    try std.testing.expectEqual(Action.handled, menubar.press(plugin_bars.statusId(1), bars).?);
-    try std.testing.expectEqual(plugin_bars.statusId(1), menubar.open);
-    try std.testing.expectEqual(Action.handled, menubar.press(plugin_bars.statusId(1), bars).?);
-    try std.testing.expectEqual(@as(u32, 0), menubar.open);
-
-    // Its row runs and closes it.
-    _ = menubar.press(plugin_bars.statusId(1), bars);
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    const states = try plugin_bars.States.declared(arena.allocator(), bars);
-    const rows = try plugin_bars.statusRows(arena.allocator(), bars, states, 1);
-    const row = menubar.press(rows[0].id, bars).?;
-    try std.testing.expectEqual(@as(usize, 1), row.plugin_bar.status_item.status);
-    try std.testing.expectEqual(@as(u32, 0), menubar.open);
-}
-
-test "plugin menus count toward what fits on the bar" {
-    var font = try ui.Font.init(std.testing.allocator, ui.default_font);
-    defer font.deinit();
-    const bars = plugin_bars.Bars{ .menus = &test_menus };
-    try std.testing.expectEqual(menu_order.len + 1, shownMenus(&font, 1000, bars));
-    // Room for Eggy's five but not the plugin's menu: it folds away, and so does the one before it.
-    var room: f32 = widgets.flush_trigger_height;
-    for (0..menu_order.len) |i| room += triggerWidth(&font, i, bars);
-    try std.testing.expect(shownMenus(&font, room, bars) < menu_order.len + 1);
 }

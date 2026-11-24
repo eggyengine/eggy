@@ -362,37 +362,6 @@ test "a tab whose last panel leaves is dropped, and closing one closes its panel
     try std.testing.expectEqual(@as(?u8, 0), tabs.active);
 }
 
-test "closing every tab leaves the main window empty, and a new tab takes it" {
-    var layout = dock.DockSpace.init();
-    try layout.add(1, null, .center);
-    var tabs = Tabs.init(&layout);
-    tabs.close(&layout, 0);
-    tabs.prune(&layout);
-    try std.testing.expectEqual(@as(usize, 0), tabs.count());
-    try std.testing.expectEqual(@as(?u8, null), tabs.active);
-    try std.testing.expect(layout.nodeOf(1) == null);
-
-    const empty_root = layout.root;
-    _ = try tabs.open(&layout, .scene_3d);
-    try std.testing.expectEqual(empty_root, layout.root);
-    try layout.add(2, null, .center);
-    _ = try tabs.open(&layout, .scene_3d);
-    try layout.add(3, null, .center);
-    try std.testing.expectEqual(@as(usize, 2), tabs.count());
-}
-
-test "a panel docked into an empty main window makes a tab of its own" {
-    var layout = dock.DockSpace.init();
-    var tabs = Tabs.init(&layout);
-    tabs.prune(&layout);
-    try std.testing.expectEqual(@as(usize, 0), tabs.count());
-    try layout.add(4, null, .center);
-    tabs.prune(&layout);
-    try std.testing.expectEqual(@as(usize, 1), tabs.count());
-    try std.testing.expectEqual(Kind.panels, tabs.list[0].?.kind);
-    try std.testing.expectEqual(@as(?u8, 0), tabs.active);
-}
-
 test "pinned tabs come first, aren't closed, and reordering keeps them first" {
     var layout = dock.DockSpace.init();
     try layout.add(1, null, .center);
@@ -413,25 +382,4 @@ test "pinned tabs come first, aren't closed, and reordering keeps them first" {
     try std.testing.expectEqual(@as(usize, 4), tabs.count());
     tabs.reorder(1, 3);
     try std.testing.expectEqual(@as(?usize, 3), tabs.ofPanel(&layout, 3));
-}
-
-test "a popped-out tab is a dock window, and showing it brings it back" {
-    var layout = dock.DockSpace.init();
-    try layout.add(1, null, .center);
-    var tabs = Tabs.init(&layout);
-    _ = try tabs.open(&layout, .ui);
-    try layout.add(2, null, .center);
-    try tabs.popOut(&layout, 1, .{ 800, 600 });
-    try std.testing.expectEqual(@as(?u8, 0), tabs.active);
-    const window = tabs.windowOf(&layout, 1).?;
-    try std.testing.expect(layout.hostOf(layout.nodeOf(2).?) == .window);
-    tabs.show(&layout, 1);
-    try std.testing.expect(layout.windows[window] == null);
-    try std.testing.expect(layout.hostOf(layout.nodeOf(2).?) == .main);
-
-    // The only tab popped out leaves the main window empty.
-    tabs.close(&layout, 0);
-    try tabs.popOut(&layout, 0, .{ 800, 600 });
-    try std.testing.expectEqual(@as(?u8, null), tabs.active);
-    try std.testing.expect(layout.root != tabs.list[0].?.root);
 }

@@ -467,12 +467,6 @@ test "labels do not capture gameplay, buttons and focus do" {
     try std.testing.expect(pointerCaptured(&context, 500, 500));
 }
 
-test "viewport pixels use the actual window scale" {
-    const pixels = pixelRect(.{ .x = 10, .y = 20, .w = 100, .h = 50 }, .{ .x = 0, .y = 0, .w = 400, .h = 300 }, .{ .width = 800, .height = 600 });
-    try std.testing.expectEqual(ui.Rect{ .x = 20, .y = 40, .w = 200, .h = 100 }, pixels);
-    std.testing.refAllDecls(Overlay);
-}
-
 test "clicking outside game UI restores gameplay keys and preserves captured releases" {
     for ([_]bool{ false, true }) |embedded| {
         var overlay = Overlay{

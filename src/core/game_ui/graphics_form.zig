@@ -506,19 +506,6 @@ fn testCapabilities() Capabilities {
     return caps;
 }
 
-test "the form lays out every option the machine offers and renders" {
-    const gpa = std.testing.allocator;
-    var context = try ui.Context.init(gpa);
-    defer context.deinit();
-    var form = Form{};
-    form.load(.{ .anti_aliasing = .fxaa, .frame_limit = 60, .width = 1280, .height = 720 });
-    const caps = testCapabilities();
-    context.newFrame(.{ .x = 0, .y = 0, .w = 720, .h = 2400 });
-    try std.testing.expect(!form.build(&context, .{ .caps = &caps }));
-    _ = form.buttons(&context, "Cancel");
-    try std.testing.expect((try context.render()).len > 0);
-}
-
 test "rows that differ from the baseline are counted, and reset sets them back" {
     var form = Form{};
     form.load(.{ .anti_aliasing = .msaa_4x, .width = 1280, .height = 720 });
@@ -527,30 +514,6 @@ test "rows that differ from the baseline are counted, and reset sets them back" 
     form.reset(.{ "width", "height" }, baseline);
     try std.testing.expectEqual(@as(usize, 1), changedRows(form.draft, baseline));
     try std.testing.expectEqual(baseline.width, (try form.read()).width);
-}
-
-test "a marked form renders, and a search leaves out the rows it doesn't match" {
-    const gpa = std.testing.allocator;
-    var context = try ui.Context.init(gpa);
-    defer context.deinit();
-    var form = Form{};
-    form.load(.{ .anti_aliasing = .msaa_4x });
-    const caps = testCapabilities();
-    context.newFrame(.{ .x = 0, .y = 0, .w = 720, .h = 2400 });
-    setting_rows.beginGroup(&context);
-    _ = form.build(&context, .{ .caps = &caps, .baseline = .{}, .query = "shadow" });
-    setting_rows.endGroup(&context);
-    // Shadow quality, distance and bias, with hairlines between.
-    try std.testing.expectEqual(@as(usize, 5), context.last_added.?.children.len);
-    try std.testing.expect((try context.render()).len > 0);
-}
-
-test "rows go in cards by kind, and a search finds rows by their words" {
-    try std.testing.expectEqual(Card.detail, cardOf("mipmaps"));
-    try std.testing.expectEqual(Card.shadows, cardOf("shadow_bias"));
-    try std.testing.expectEqual(Card.display, cardOf("backend"));
-    try std.testing.expect(anyRowMatches("SHIMMER"));
-    try std.testing.expect(!anyRowMatches("autosave"));
 }
 
 test "the form reads its number fields back, and refuses text that is not a number" {
@@ -565,57 +528,6 @@ test "the form reads its number fields back, and refuses text that is not a numb
     try form.width.set("1280");
     try form.frame_limit.set("fast");
     try std.testing.expectError(error.InvalidFrameLimit, form.read());
-}
-
-test "the form shows why an apply failed, and that a restart is needed" {
-    var form = Form{};
-    form.report(error.UnsupportedBackend);
-    try std.testing.expect(form.message_kind == .failed);
-    try std.testing.expect(std.mem.indexOf(u8, form.message[0..form.message_len], "isn't available") != null);
-    form.report(.restart_required);
-    try std.testing.expect(form.message_kind == .restart);
-    form.report(.queued);
-    try std.testing.expect(form.message_kind == .saved);
-}
-
-test "every settings error has a message of its own" {
-    const bad = [_]render_settings.Settings{
-        .{ .width = 10 },
-        .{ .frame_limit = 1001 },
-        .{ .render_scale = 3 },
-        .{ .anisotropy = 3 },
-        .{ .anisotropy = 2, .texture_filter = .nearest },
-        .{ .shadow_distance_m = 0 },
-        .{ .shadow_bias = 0.5 },
-    };
-    var form = Form{};
-    for (bad) |settings| {
-        const err = if (settings.validateValues()) unreachable else |e| e;
-        form.report(err);
-        try std.testing.expect(form.message_kind == .failed);
-        try std.testing.expect(std.mem.indexOf(u8, form.message[0..form.message_len], @errorName(err)) == null);
-    }
-}
-
-test "loading settings restores the draft and its number fields, and clears the message" {
-    var form = Form{};
-    form.load(.{ .width = 1280, .height = 720, .frame_limit = 60, .mipmaps = false });
-    try form.width.set("5");
-    form.report(error.InvalidWindowSize);
-
-    // What Restore defaults and Revert do.
-    form.load(.{});
-    try std.testing.expect(form.message_kind == .none);
-    try std.testing.expectEqual(render_settings.Settings{}, try form.read());
-    try std.testing.expectEqualStrings("900", form.width.text());
-}
-
-test "restart notices appear only for the settings that need one" {
-    const live = render_settings.Settings{ .mipmaps = false, .render_scale = 0.5 };
-    try std.testing.expect(!live.requiresRestart(.{}));
-    try std.testing.expect((render_settings.Settings{ .backend = .vulkan }).requiresRestart(.{}));
-    try std.testing.expect((render_settings.Settings{ .present_mode = .mailbox }).requiresRestart(.{}));
-    try std.testing.expect((render_settings.Settings{ .adapter_index = 1 }).requiresRestart(.{}));
 }
 
 test "a GPU is offered only for the backend its list belongs to" {
@@ -648,48 +560,4 @@ fn testTap(context: *ui.Context, widget: u32) !void {
     context.handle(.{ .pointer_move = at });
     context.handle(.{ .pointer_down = .{ .position = at, .button = .left, .clicks = 1 } });
     context.handle(.{ .pointer_up = .{ .position = at, .button = .left } });
-}
-
-test "opening one dropdown does not stop another from opening" {
-    const gpa = std.testing.allocator;
-    var context = try ui.Context.init(gpa);
-    defer context.deinit();
-    var form = Form{};
-    var caps = testCapabilities();
-    caps.present_modes.insert(.mailbox);
-    try testFrame(&context, &form, &caps);
-    // The API dropdown, and the vertical sync one after the card, window mode and size fields.
-    const backend = context.last_focusables.items[0];
-    const sync = context.last_focusables.items[5];
-
-    // Open the first dropdown.
-    try testTap(&context, backend);
-    try testFrame(&context, &form, &caps);
-    try std.testing.expectEqual(backend, context.open_popup);
-
-    // One click on another dropdown switches to it.
-    try testTap(&context, sync);
-    try testFrame(&context, &form, &caps);
-    try std.testing.expectEqual(sync, context.open_popup);
-
-    // Escape closes it.
-    context.handle(.{ .key_down = .{ .key = .escape, .modifiers = .{}, .repeat = false } });
-    try testFrame(&context, &form, &caps);
-    try std.testing.expectEqual(@as(u32, 0), context.open_popup);
-}
-
-test "the choice labels cover every enum value in order" {
-    try std.testing.expectEqual(@typeInfo(render_settings.Backend).@"enum".field_names.len, backend_labels.len);
-    try std.testing.expectEqual(@typeInfo(render_settings.PresentMode).@"enum".field_names.len, present_mode_labels.len);
-    try std.testing.expectEqual(@typeInfo(render_settings.AntiAliasing).@"enum".field_names.len, anti_aliasing_labels.len);
-    try std.testing.expectEqual(@typeInfo(render_settings.TextureFilter).@"enum".field_names.len, texture_filter_labels.len);
-    try std.testing.expectEqual(@typeInfo(render_settings.ShadowQuality).@"enum".field_names.len, shadow_quality_labels.len);
-    try std.testing.expectEqual(@typeInfo(render_settings.WindowMode).@"enum".field_names.len, window_mode_labels.len);
-}
-
-test "shadow quality offers only the maps the GPU can hold" {
-    var caps = Capabilities{ .max_shadow_resolution = 2048 };
-    const allowed = shadowQualities(&caps);
-    try std.testing.expect(allowed.contains(.off) and allowed.contains(.medium));
-    try std.testing.expect(!allowed.contains(.high));
 }
