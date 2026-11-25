@@ -9,6 +9,7 @@ const Name = @import("name.zig").Name;
 const Transform = @import("transform.zig").Transform;
 const Bounds = @import("bounds.zig").Bounds;
 const Grid = @import("heightfields.zig").Heightfields.Grid;
+const AssetRef = @import("refs.zig").AssetRef;
 
 pub const Terrain = struct {
     /// Marks it in the editor (nf-md-terrain).
@@ -37,10 +38,21 @@ pub const Terrain = struct {
     roughness: f32 = 0.9,
     /// How near the viewer, in its own widths, a patch is split into four with twice the corners.
     detail_distance: f32 = 2,
+    /// Hang a wall down from each patch's edges, hiding the cracks where a finer patch meets a
+    /// coarser one, or the world's edge. Off saves the triangles when nothing shows them: grids
+    /// of one patch each (`patch_cells` cells a side), laid edge to edge with their neighbours.
+    skirts: bool = true,
+    /// A terrain shader (`Surface terrainSurface(TerrainSurfaceInput input)`) that changes how
+    /// each face looks before it is lit; without one, faces take the colours above.
+    shader: AssetRef(.shader) = .{},
+    /// Handed to `shader` as `TerrainSurfaceInput.values`, such as what the weather is doing.
+    values: [4][4]f32 = @splat(@splat(0)),
 };
 
 /// Cells along each side of a patch.
 pub const patch_cells = 32;
+/// Indices of a patch's own triangles, which come before its skirts'.
+pub const surface_indices = patch_cells * patch_cells * 6;
 
 /// One patch as the GPU draws it (`vertexTerrain` in `mesh.slang` reads it per instance).
 pub const Patch = extern struct {
@@ -57,6 +69,8 @@ pub const Patch = extern struct {
     steep: [4]f32,
     /// Roughness, and `patch_cells`.
     surface: [4]f32,
+    /// `Terrain.values`.
+    values: [4][4]f32,
 };
 
 /// The most patches one terrain draws in a view; further ones are left out.
@@ -89,6 +103,7 @@ pub fn patches(out: []Patch, terrain: Terrain, grid: Grid, world_matrix: math.Ma
         .high = .{ terrain.high_color[0], terrain.high_color[1], terrain.high_color[2], terrain.high_above_m },
         .steep = .{ terrain.steep_color[0], terrain.steep_color[1], terrain.steep_color[2], terrain.steep_normal_y },
         .surface = .{ terrain.roughness, patch_cells, 0, 0 },
+        .values = terrain.values,
     };
 
     // A quadtree, depth first: a patch near enough to the eye is drawn as its four quarters.

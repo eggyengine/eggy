@@ -1,7 +1,8 @@
-//! Draws `Terrain`s for `MeshRenderer`: each height grid it shows as a one-channel float texture,
-//! uploaded again when the game sets the grid anew, and one flat patch of corners drawn once per
-//! `terrain.Patch` the view needs, lifted and shaded on the GPU (`vertexTerrain` and
-//! `fragmentTerrain` in `mesh.slang`), into the colour pass and the shadow maps alike.
+//! Draws `Terrain`s for `MeshRenderer`: each height grid it shows as a one-channel float texture
+//! with its attributes beside it, uploaded again when the game sets the grid anew, and one flat
+//! patch of corners drawn once per `terrain.Patch` the view needs, lifted and shaded on the GPU
+//! (`vertexTerrain` and `fragmentTerrain` in `mesh.slang`, or a terrain shader in the latter's
+//! place), into the colour pass and the shadow maps alike.
 const std = @import("std");
 const vit = @import("vitellus");
 const math = @import("eggenvector");
@@ -9,6 +10,8 @@ const shaders = @import("scene_shaders");
 const mesh = @import("mesh.zig");
 const terrain = @import("terrain.zig");
 const Heightfields = @import("heightfields.zig").Heightfields;
+const ShaderCache = @import("shader_cache.zig").ShaderCache;
+const ShaderPipelines = @import("shader_pipelines.zig").ShaderPipelines;
 const frames_in_flight = @import("weeoui_vitellus").frames_in_flight;
 const log = std.log.scoped(.terrain);
 
@@ -21,22 +24,31 @@ const max_terrains = 64;
 /// buffers so one never overwrites what another's frames still read.
 pub const Pass = enum { colour, directional_shadow, local_shadow };
 
-/// One terrain's patches in the pass's instance buffer.
-const Run = struct { heights: vit.BindGroup, first: u32, count: u32, mirrored: bool };
+/// One terrain's patches in the pass's instance buffer, and its terrain shader's pipeline in
+/// the colour pass (null: Eggy's own).
+/// `indices`: how many of a patch's to draw, its skirts' or not.
+const Run = struct { heights: vit.BindGroup, first: u32, count: u32, indices: u32, mirrored: bool, pipeline: ?vit.GraphicsPipeline };
 
-/// A height grid's texture, as uploaded from `version`.
+/// A height grid's textures, its heights and its attributes, as uploaded from `version`.
 const Heights = struct {
     texture: vit.Texture,
     view: vit.TextureView,
+    attributes: vit.Texture,
+    attributes_view: vit.TextureView,
     group: vit.BindGroup,
     version: u32,
 
     pub fn deinit(self: Heights) void {
         self.group.deinit();
+        self.attributes_view.deinit();
+        self.attributes.deinit();
         self.view.deinit();
         self.texture.deinit();
     }
 };
+
+/// Front faces culled when a terrain is mirrored, back faces otherwise; by `Run.mirrored`.
+const culls = [_]vit.hal.pipeline.CullMode{ .back, .front };
 
 /// What a `draw` drew, for the frame's stats.
 pub const Drawn = struct { draw_calls: usize = 0, triangles: u64 = 0 };
@@ -61,6 +73,13 @@ pub const TerrainRenderer = struct {
     /// made on) and runs, rebuilt by each `draw`.
     patches: []terrain.Patch,
     runs: [max_terrains]Run = undefined,
+    /// What colour pipelines for terrain shaders need, and those made, by shader and mirroring.
+    format: vit.Format,
+    sample_count: u32,
+    shaderSource: *const fn ([]const u8, []const u8) vit.ShaderModule,
+    surfaces: ShaderPipelines = .{},
+    /// The last terrain shader reported as not a terrain shader, so it is logged once.
+    wrong_role_reported: u64 = 0,
 
     /// Pipelines drawing into `format` through `camera_layout` (set 0 of the colour pass),
     /// `maps_layout` and `texture_layout` (sets 2 and 3, the maps and the sky), and into shadow
@@ -74,9 +93,11 @@ pub const TerrainRenderer = struct {
         const indices = try vit.Buffer.init(device, .{ .label = "terrain patch indices", .size = patch.indices.len * @sizeOf(u32), .usage = .{ .index = true }, .initial_data = std.mem.sliceAsBytes(patch.indices) });
         errdefer indices.deinit();
 
-        // The grid's heights, read by both stages, where the colour texture usually is.
+        // The grid's heights, read by both stages, where the colour texture usually is; its
+        // attributes, read by the terrain's colour.
         const heights_layout = try vit.BindGroupLayout.init(device, .{ .entries = &.{
             .{ .binding = 0, .kind = .{ .sampled_texture = .{ .sample_type = .float_unfilterable } }, .visibility = .{ .vertex = true, .fragment = true } },
+            .{ .binding = 2, .kind = .{ .sampled_texture = .{ .sample_type = .float_unfilterable } }, .visibility = .{ .fragment = true } },
         } });
         errdefer heights_layout.deinit();
         const colour_layout = try vit.PipelineLayout.init(device, .{ .label = "terrain layout", .bind_group_layouts = &.{ camera_layout, heights_layout, maps_layout, texture_layout } });
@@ -89,9 +110,9 @@ pub const TerrainRenderer = struct {
         const fs = try vit.Shader.init(device, .{ .label = "terrain", .stage = .fragment, .source = shaderSource(shaders.terrain_fragment, "fragmentTerrain") });
         defer fs.deinit();
         var colour_pipelines: [2]vit.GraphicsPipeline = undefined;
-        for (&colour_pipelines, [_]vit.hal.pipeline.CullMode{ .back, .front }, 0..) |*made, cull, i| {
+        for (&colour_pipelines, culls, 0..) |*made, cull, i| {
             errdefer for (colour_pipelines[0..i]) |earlier| earlier.deinit();
-            made.* = try pipelineOf(device, colour_layout, vs, fs, &.{.{ .format = format }}, .{ .format = .d32_float, .depth_write = true, .depth_compare = .less }, cull, sample_count);
+            made.* = try colourPipelineOf(device, colour_layout, vs, fs, format, cull, sample_count);
         }
         errdefer for (colour_pipelines) |made| made.deinit();
         // Depth only, both sides, as the meshes' shadows are.
@@ -120,6 +141,9 @@ pub const TerrainRenderer = struct {
             .shadow_pipeline = shadow_pipeline,
             .instances = instances,
             .patches = patches,
+            .format = format,
+            .sample_count = sample_count,
+            .shaderSource = shaderSource,
         };
     }
 
@@ -132,6 +156,7 @@ pub const TerrainRenderer = struct {
         }
         self.grids.deinit(self.gpa);
         self.gpa.free(self.patches);
+        self.surfaces.deinit();
         for (self.instances) |per_pass| for (per_pass) |buffer| buffer.deinit();
         self.shadow_pipeline.deinit();
         self.shadow_layout.deinit();
@@ -197,7 +222,13 @@ pub const TerrainRenderer = struct {
             };
             const picked = terrain.patches(self.patches[patch_count..], shown.*, grid.*, world, eye, clip);
             if (picked.len == 0) continue;
-            self.runs[run_count] = .{ .heights = gpu.group, .first = @intCast(patch_count), .count = @intCast(picked.len), .mirrored = mirrored(drawable.model) };
+            const is_mirrored = mirrored(drawable.model);
+            const pipeline = switch (target) {
+                .colour => |colour| if (shown.shader.len == 0) null else self.shaderPipeline(shown.shader.key(), is_mirrored, colour.shaders),
+                .shadow => null,
+            };
+            const indices = if (shown.skirts) self.index_count else terrain.surface_indices;
+            self.runs[run_count] = .{ .heights = gpu.group, .first = @intCast(patch_count), .count = @intCast(picked.len), .indices = indices, .mirrored = is_mirrored, .pipeline = pipeline };
             run_count += 1;
             patch_count += picked.len;
         }
@@ -214,33 +245,58 @@ pub const TerrainRenderer = struct {
         var drawn: Drawn = .{};
         switch (target) {
             .colour => |colour| for (self.runs[0..run_count]) |run| {
-                cmd.setGraphicsPipeline(self.colour_pipelines[@intFromBool(run.mirrored)]);
+                cmd.setGraphicsPipeline(run.pipeline orelse self.colour_pipelines[@intFromBool(run.mirrored)]);
                 cmd.setBindGroup(0, colour.camera, &.{});
                 cmd.setBindGroup(1, run.heights, &.{});
                 if (colour.maps) |maps| cmd.setBindGroup(2, maps, &.{});
                 cmd.setBindGroup(3, colour.sky, &.{});
-                cmd.drawIndexed(self.index_count, run.count, 0, 0, run.first);
+                cmd.drawIndexed(run.indices, run.count, 0, 0, run.first);
                 drawn.draw_calls += 1;
-                drawn.triangles += @as(u64, self.index_count / 3) * run.count;
+                drawn.triangles += @as(u64, run.indices / 3) * run.count;
             },
             .shadow => |shadow| for (0..shadow.cameras) |camera| {
                 cmd.setGraphicsPipeline(self.shadow_pipeline);
                 shadow.bind(shadow.context, cmd, camera);
                 for (self.runs[0..run_count]) |run| {
                     cmd.setBindGroup(1, run.heights, &.{});
-                    cmd.drawIndexed(self.index_count, run.count, 0, 0, run.first);
+                    cmd.drawIndexed(run.indices, run.count, 0, 0, run.first);
                     drawn.draw_calls += 1;
-                    drawn.triangles += @as(u64, self.index_count / 3) * run.count;
+                    drawn.triangles += @as(u64, run.indices / 3) * run.count;
                 }
             },
         }
         return drawn;
     }
 
+    /// The colour pipeline for terrain shader `key`, made the first time; null (Eggy's own
+    /// colouring) when it doesn't load or isn't a terrain shader.
+    fn shaderPipeline(self: *TerrainRenderer, key: []const u8, is_mirrored: bool, cache: *ShaderCache) ?vit.GraphicsPipeline {
+        const loaded = cache.get(key) orelse return null;
+        const variant: u32 = @intFromBool(is_mirrored);
+        if (self.surfaces.get(key, variant, cache)) |known| return known;
+        if (loaded.role != .terrain) {
+            const hash = std.hash.Wyhash.hash(0, key);
+            if (self.wrong_role_reported != hash) log.err("terrain shader {s} is a {t} shader, not a terrain shader: drawn without it", .{ key, loaded.role });
+            self.wrong_role_reported = hash;
+            return null;
+        }
+        const vs = vit.Shader.init(self.device, .{ .label = "terrain", .stage = .vertex, .source = self.shaderSource(shaders.terrain_vertex, "vertexTerrain") }) catch |err| {
+            log.err("cannot make terrain shader {s}: {t}", .{ key, err });
+            return null;
+        };
+        defer vs.deinit();
+        const pipeline = colourPipelineOf(self.device, self.colour_layout, vs, loaded.fragment, self.format, culls[variant], self.sample_count) catch |err| {
+            log.err("cannot make terrain shader {s}: {t}", .{ key, err });
+            return null;
+        };
+        return self.surfaces.put(key, variant, pipeline);
+    }
+
     /// Where `draw` draws: the colour pass with its groups, or a shadow pass's cameras.
     pub const Target = union(enum) {
-        /// `maps` is null only where no neutral maps group could be made.
-        colour: struct { clip_from_world: math.Mat4, camera: vit.BindGroup, maps: ?vit.BindGroup, sky: vit.BindGroup },
+        /// `maps` is null only where no neutral maps group could be made. `shaders` holds the
+        /// terrains' own shaders.
+        colour: struct { clip_from_world: math.Mat4, camera: vit.BindGroup, maps: ?vit.BindGroup, sky: vit.BindGroup, shaders: *ShaderCache },
         shadow: struct {
             cameras: usize,
             context: *const anyopaque,
@@ -256,21 +312,41 @@ fn mirrored(m: [4][4]f32) bool {
     return determinant < 0;
 }
 
-/// `grid` as a texture, one float a corner, its rows padded as uploads need.
+/// `grid` as textures: its heights, one float a corner, and its attributes, four bytes a corner
+/// (one zero corner for a grid without any).
 fn upload(device: vit.Device, layout: vit.BindGroupLayout, grid: Heightfields.Grid, name: []const u8, uploads: *vit.Uploader, graveyard: *vit.Graveyard) !Heights {
     const rows = grid.rows();
-    const row_bytes = std.mem.alignForward(u32, grid.columns * @sizeOf(f32), 256);
+    const heights = try uploadTexture(device, name, .r32_float, grid.columns, rows, std.mem.sliceAsBytes(grid.heights), uploads, graveyard);
+    // Retired, not destroyed: a pending upload may already copy into it.
+    errdefer graveyard.retire(heights.texture);
+    errdefer heights.view.deinit();
+    const no_attributes = [_][4]u8{@splat(0)};
+    const given = grid.attributes orelse &no_attributes;
+    const attribute_size: u32 = if (grid.attributes == null) 1 else grid.columns;
+    const attributes = try uploadTexture(device, name, .rgba8_unorm, attribute_size, @intCast(given.len / attribute_size), std.mem.sliceAsBytes(given), uploads, graveyard);
+    errdefer graveyard.retire(attributes.texture);
+    errdefer attributes.view.deinit();
+    const group = try vit.BindGroup.init(device, .{ .layout = layout, .entries = &.{
+        .{ .binding = 0, .resource = .{ .texture_view = heights.view } },
+        .{ .binding = 2, .resource = .{ .texture_view = attributes.view } },
+    } });
+    return .{ .texture = heights.texture, .view = heights.view, .attributes = attributes.texture, .attributes_view = attributes.view, .group = group, .version = grid.version };
+}
+
+/// A `columns` by `rows` texture of `format`, filled from `data` (row by row, unpadded) with
+/// its rows padded as uploads need.
+fn uploadTexture(device: vit.Device, label: []const u8, format: vit.Format, columns: u32, rows: u32, data: []const u8, uploads: *vit.Uploader, graveyard: *vit.Graveyard) !struct { texture: vit.Texture, view: vit.TextureView } {
+    const corner_bytes: u32 = @intCast(data.len / (@as(usize, columns) * rows));
+    const row_bytes = std.mem.alignForward(u32, columns * corner_bytes, 256);
     const bytes = try std.heap.c_allocator.alloc(u8, @as(usize, row_bytes) * rows);
     defer std.heap.c_allocator.free(bytes);
-    for (0..rows) |row| @memcpy(bytes[row * row_bytes ..][0 .. grid.columns * @sizeOf(f32)], std.mem.sliceAsBytes(grid.heights[row * grid.columns ..][0..grid.columns]));
-    const texture = try vit.Texture.init(device, .{ .label = name, .width = grid.columns, .height = rows, .format = .r32_float, .usage = .{ .sampled = true, .transfer_dst = true } });
+    for (0..rows) |row| @memcpy(bytes[row * row_bytes ..][0 .. columns * corner_bytes], data[row * columns * corner_bytes ..][0 .. columns * corner_bytes]);
+    const texture = try vit.Texture.init(device, .{ .label = label, .width = columns, .height = rows, .format = format, .usage = .{ .sampled = true, .transfer_dst = true } });
     // Retired, not destroyed: a pending upload may already copy into it.
     errdefer graveyard.retire(texture);
-    try uploads.writeTexture(.{ .texture = texture, .data = bytes, .levels = &.{.{ .bytes_per_row = row_bytes, .width = grid.columns, .height = rows }} });
+    try uploads.writeTexture(.{ .texture = texture, .data = bytes, .levels = &.{.{ .bytes_per_row = row_bytes, .width = columns, .height = rows }} });
     const view = try vit.TextureView.init(device, .{ .texture = texture });
-    errdefer view.deinit();
-    const group = try vit.BindGroup.init(device, .{ .layout = layout, .entries = &.{.{ .binding = 0, .resource = .{ .texture_view = view } }} });
-    return .{ .texture = texture, .view = view, .group = group, .version = grid.version };
+    return .{ .texture = texture, .view = view };
 }
 
 /// One patch's corners and triangles: `terrain.patch_cells` cells a side, each split from its
@@ -312,9 +388,15 @@ fn patchGeometry(arena: std.mem.Allocator) !struct { corners: []const [3]f32, in
     return .{ .corners = corners.items, .indices = indices.items };
 }
 
+/// A colour pass pipeline drawing terrain into `format`, with fragment stage `fs`.
+fn colourPipelineOf(device: vit.Device, layout: vit.PipelineLayout, vs: vit.Shader, fs: vit.Shader, format: vit.Format, cull: vit.hal.pipeline.CullMode, sample_count: u32) !vit.GraphicsPipeline {
+    return pipelineOf(device, layout, vs, fs, &.{.{ .format = format }}, .{ .format = .d32_float, .depth_write = true, .depth_compare = .less }, cull, sample_count);
+}
+
 fn pipelineOf(device: vit.Device, layout: vit.PipelineLayout, vs: vit.Shader, fs: ?vit.Shader, targets: []const vit.hal.pipeline.ColorTargetState, depth: vit.hal.pipeline.DepthStencilState, cull: vit.hal.pipeline.CullMode, sample_count: u32) !vit.GraphicsPipeline {
     const patch_attributes = [_]vit.hal.pipeline.VertexAttribute{.{ .location = 0, .format = .float32x3, .offset = 0 }};
-    var instance_attributes: [10]vit.hal.pipeline.VertexAttribute = undefined;
+    // Every float4 of `terrain.Patch`, in order, from location 1.
+    var instance_attributes: [@sizeOf(terrain.Patch) / 16]vit.hal.pipeline.VertexAttribute = undefined;
     for (&instance_attributes, 0..) |*attribute, i| attribute.* = .{ .location = @intCast(i + 1), .format = .float32x4, .offset = @intCast(i * 16) };
     return vit.GraphicsPipeline.init(device, .{
         .label = "terrain",

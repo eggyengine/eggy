@@ -138,14 +138,49 @@ the material describes it; start from it and change what you need.
 Shadows ignore a surface shader's `alpha`: they follow the material's own colour and
 texture.
 
+## Write a terrain shader
+
+A terrain shader colours a [Terrain](procedural-terrain.md)'s faces before they are lit. Make
+a `.slang` file whose function is called `terrainSurface`, and drag it onto the Terrain's
+**shader** slot:
+
+```slang
+#include "eggy.slang"
+
+Surface terrainSurface(TerrainSurfaceInput input) {
+    Surface shown = defaultTerrainSurface(input);
+    // Snow on faces above values[0].x metres that are flat enough to hold it.
+    float snow = step(input.values[0].x, input.face_position.y) * step(0.7, input.normal.y);
+    shown.base_color = lerp(shown.base_color, float3(0.9, 0.92, 0.95), snow);
+    return shown;
+}
+```
+
+`defaultTerrainSurface(input)` is the face as the Terrain's own colours paint it. Colour by
+what is the same across a face, and the ground keeps its facets.
+
+| In `TerrainSurfaceInput` | Meaning |
+| --- | --- |
+| `world_position`, `view_direction` | The point in the world, and towards the camera |
+| `normal` | Which way the face looks, unit length |
+| `face_position` | The middle of the face, in the world |
+| `face_random` | -1 to 1, the same every time for the same face |
+| `color`, `roughness` | The Terrain's own colour for the face, in linear light, and its roughness |
+| `attributes` | The grid's four bytes at the face's first corner, each 0 to 1; 0 without any |
+| `values` | The Terrain's `values`, four `float4`s |
+| `time_s` | Seconds the game has run |
+
+It returns a `Surface`, as a surface shader does. Shadows ignore it.
+
 ## When a shader has a mistake
 
 The editor compiles a shader the first time something uses it, and again when you come back
 to the editor after changing it. If it doesn't compile, the Console shows Slang's message,
 pointing at the line in your file, and the mesh or pass is drawn without it.
 
-A shader is a post shader if it takes a `PostInput`, and a surface shader if it takes a
-`SurfaceInput`. Putting one in the other's slot is reported in the Console and skipped.
+A shader is a post shader if it takes a `PostInput`, a surface shader if it takes a
+`SurfaceInput`, and a terrain shader if it takes a `TerrainSurfaceInput`. Putting one in
+another's slot is reported in the Console and skipped.
 
 When you build or export the game, every shader is compiled ahead of time for the platform,
 web included, so a mistake stops the build with the same message.

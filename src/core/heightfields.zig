@@ -19,6 +19,9 @@ pub const Heightfields = struct {
     /// its first corner to the one across.
     pub const Grid = struct {
         heights: []f32,
+        /// Four bytes a corner, in `heights`' order, that a Terrain's shader reads
+        /// (`TerrainSurfaceInput.attributes`); none reads as zero.
+        attributes: ?[][4]u8 = null,
         columns: u32,
         cell_m: f32,
         /// The lowest and highest of `heights`.
@@ -45,8 +48,13 @@ pub const Heightfields = struct {
 
     pub fn deinit(self: *Heightfields) void {
         var it = self.grids.entries.valueIterator();
-        while (it.next()) |grid| self.gpa.free(grid.heights);
+        while (it.next()) |grid| self.free(grid.*);
         self.grids.deinit(self.gpa);
+    }
+
+    fn free(self: *Heightfields, grid: Grid) void {
+        self.gpa.free(grid.heights);
+        if (grid.attributes) |attributes| self.gpa.free(attributes);
     }
 
     /// Make the grid `name` `heights` (row by row, `columns` along x), `cell_m` apart, copied,
@@ -58,9 +66,17 @@ pub const Heightfields = struct {
     /// _ = try app.world.spawn(.{ eggy.Transform{}, eggy.Terrain{ .heights = .init("ground") }, eggy.physics.Collider{ .shape = .{ .heightfield = .init("ground") } } });
     /// ```
     pub fn set(self: *Heightfields, name: []const u8, heights: []const f32, columns: u32, cell_m: f32) Error!void {
+        return self.setWithAttributes(name, heights, null, columns, cell_m);
+    }
+
+    /// As `set`, with `attributes` too: four bytes a corner, as many as `heights` and in the
+    /// same order, which a Terrain's shader reads as 0 to 1 (`TerrainSurfaceInput.attributes`),
+    /// such as moisture or a biome. Physics ignores them.
+    pub fn setWithAttributes(self: *Heightfields, name: []const u8, heights: []const f32, attributes: ?[]const [4]u8, columns: u32, cell_m: f32) Error!void {
         try ByName(Grid).check(name);
         if (columns < 2 or heights.len < 2 * @as(usize, columns) or heights.len % columns != 0) return error.InvalidGrid;
         if (!(cell_m > 0) or !std.math.isFinite(cell_m)) return error.InvalidGrid;
+        if (attributes) |given| if (given.len != heights.len) return error.InvalidGrid;
         var low: f32 = heights[0];
         var high: f32 = heights[0];
         for (heights) |h| {
@@ -70,14 +86,16 @@ pub const Heightfields = struct {
         }
         const owned = try self.gpa.dupe(f32, heights);
         errdefer self.gpa.free(owned);
-        const old = try self.grids.put(self.gpa, name, .{ .heights = owned, .columns = columns, .cell_m = cell_m, .min_m = low, .max_m = high });
-        if (old) |replaced| self.gpa.free(replaced.heights);
+        const owned_attributes = if (attributes) |given| try self.gpa.dupe([4]u8, given) else null;
+        errdefer if (owned_attributes) |made| self.gpa.free(made);
+        const old = try self.grids.put(self.gpa, name, .{ .heights = owned, .attributes = owned_attributes, .columns = columns, .cell_m = cell_m, .min_m = low, .max_m = high });
+        if (old) |replaced| self.free(replaced);
     }
 
     /// Forget the grid `name`; `Terrain`s naming it draw nothing, and colliders made from it go.
     pub fn remove(self: *Heightfields, name: []const u8) void {
         const removed = self.grids.remove(self.gpa, name) orelse return;
-        self.gpa.free(removed.heights);
+        self.free(removed);
     }
 
     /// The grid `name`, borrowed until it is next set or removed.

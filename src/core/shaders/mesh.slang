@@ -333,6 +333,13 @@ Surface surface(SurfaceInput input) {
 }
 #endif
 
+// eggy: terrain
+#ifndef EGGY_TERRAIN
+Surface terrainSurface(TerrainSurfaceInput input) {
+    return defaultTerrainSurface(input);
+}
+#endif
+
 // How `shown` looks at `world` lit by the scene, through the fog, at the view's exposure:
 // `normal` and `roughness` are its own, worked out before anything was discarded (derivatives
 // need it); `geometric` is the face's normal before maps bent it. `authored`: an authored
@@ -403,6 +410,8 @@ float4 shade(Surface shown, float3 normal, float roughness, float3 geometric, fl
     return float4(color, shown.alpha);
 }
 
+// A terrain shader is compiled for `fragmentMain` too, as the terrain's (below).
+#ifndef EGGY_TERRAIN
 [shader("pixel")]
 float4 fragmentMain(VertexOutput input) : SV_Target0 {
     // The point as the material and its maps (and its surface shader) describe it. Every map is
@@ -433,10 +442,17 @@ float4 fragmentMain(VertexOutput input) : SV_Target0 {
     if (shown.alpha < cutoff) discard;
     return shade(shown, normal, roughness, geometric, input.world, described.view_direction, occlusion, input.material.w > 0.5, input.position.xy);
 }
+#endif
 
 // Terrain: one flat patch of corners drawn once per `terrain.Patch`, each corner lifted to its
 // height in the grid, read from `paint`, where the grid's one-channel texture is bound in the
-// colour texture's place. Each face is shaded flat, coloured by its height and slope.
+// colour texture's place. Each face is shaded flat, coloured by its height and slope, then by
+// its terrain shader (`terrainSurface`).
+
+// The grid's attributes, four bytes a corner, bound beside its heights; 1 by 1 and zero for a
+// grid without any.
+[[vk::binding(2, 1)]]
+Texture2D terrain_attributes : register(t2, space1);
 
 // No semantics, and locations in order, as on `VertexInput`.
 struct TerrainInput {
@@ -451,6 +467,10 @@ struct TerrainInput {
     [[vk::location(8)]] float4 high;    // rgb, and the height in metres it is above
     [[vk::location(9)]] float4 steep;   // rgb, and the upward part of a normal it is below
     [[vk::location(10)]] float4 surface; // roughness, cells across a patch
+    [[vk::location(11)]] float4 values0; // the Terrain's values, for its shader
+    [[vk::location(12)]] float4 values1;
+    [[vk::location(13)]] float4 values2;
+    [[vk::location(14)]] float4 values3;
 };
 
 struct TerrainOutput {
@@ -463,7 +483,14 @@ struct TerrainOutput {
     [[vk::location(5)]] nointerpolation float4 high;
     [[vk::location(6)]] nointerpolation float4 steep;
     [[vk::location(7)]] nointerpolation float4 surface;
-    [[vk::location(8)]] nointerpolation float4 model_y; // each model column's y, for a world height
+    // The model's rows: each column's x, y and z, to place a point of the grid in the world.
+    [[vk::location(8)]] nointerpolation float4 model_x;
+    [[vk::location(9)]] nointerpolation float4 model_y;
+    [[vk::location(10)]] nointerpolation float4 model_z;
+    [[vk::location(11)]] nointerpolation float4 values0;
+    [[vk::location(12)]] nointerpolation float4 values1;
+    [[vk::location(13)]] nointerpolation float4 values2;
+    [[vk::location(14)]] nointerpolation float4 values3;
 };
 
 float heightAt(float2 at) {
@@ -471,6 +498,13 @@ float heightAt(float2 at) {
     paint.GetDimensions(columns, rows);
     int2 texel = int2(clamp(at, float2(0.0, 0.0), float2(float(columns - 1), float(rows - 1))));
     return paint.Load(int3(texel, 0)).r;
+}
+
+float4 attributesAt(float2 at) {
+    uint columns, rows;
+    terrain_attributes.GetDimensions(columns, rows);
+    int2 texel = int2(clamp(at, float2(0.0, 0.0), float2(float(columns - 1), float(rows - 1))));
+    return terrain_attributes.Load(int3(texel, 0));
 }
 
 [shader("vertex")]
@@ -494,7 +528,13 @@ TerrainOutput vertexTerrain(TerrainInput input) {
     output.high = input.high;
     output.steep = input.steep;
     output.surface = input.surface;
+    output.model_x = float4(input.model0.x, input.model1.x, input.model2.x, input.model3.x);
     output.model_y = float4(input.model0.y, input.model1.y, input.model2.y, input.model3.y);
+    output.model_z = float4(input.model0.z, input.model1.z, input.model2.z, input.model3.z);
+    output.values0 = input.values0;
+    output.values1 = input.values1;
+    output.values2 = input.values2;
+    output.values3 = input.values3;
     return output;
 }
 
@@ -507,8 +547,8 @@ float faceNoise(float2 corner, float upper) {
     return float(hash & 0xffffu) / 32767.5 - 1.0;
 }
 
-[shader("pixel")]
-float4 fragmentTerrain(TerrainOutput input) : SV_Target0 {
+// A point on a terrain, coloured by its bands and its terrain shader, then lit.
+float4 terrainColor(TerrainOutput input) {
     // The face's own normal, from how the point moves across the pixel, towards the camera.
     float3 geometric = unit(cross(ddx(input.world), ddy(input.world)));
     if (dot(geometric, eye.xyz - input.world) < 0.0) geometric = -geometric;
@@ -524,29 +564,46 @@ float4 fragmentTerrain(TerrainOutput input) : SV_Target0 {
     float2 across = first + step;
     float2 centre = (first + second + across) / 3.0;
     float face_height = (heightAt(first) + heightAt(second) + heightAt(across)) / 3.0;
-    float face_y = dot(input.model_y, float4(centre.x, face_height, centre.y, 1.0));
+    float4 face_local = float4(centre.x, face_height, centre.y, 1.0);
+    float3 face_world = float3(dot(input.model_x, face_local), dot(input.model_y, face_local), dot(input.model_z, face_local));
     // Steep faces are rock whatever their height; the rest go by how high they are.
     float3 color = input.color.rgb;
-    if (face_y < input.low.w) color = input.low.rgb;
-    else if (face_y > input.high.w) color = input.high.rgb;
+    if (face_world.y < input.low.w) color = input.low.rgb;
+    else if (face_world.y > input.high.w) color = input.high.rgb;
     if (geometric.y < input.steep.w) color = input.steep.rgb;
-    color *= 1.0 + faceNoise(first, upper) * input.color.w;
-    SurfaceInput described;
+    float face_random = faceNoise(first, upper);
+    color *= 1.0 + face_random * input.color.w;
+    TerrainSurfaceInput described;
     described.world_position = input.world;
     described.normal = geometric;
     described.view_direction = unit(eye.xyz - input.world);
-    described.uv = input.local.xz;
-    described.color = float4(pow(max(color, 0.0), float3(2.2, 2.2, 2.2)), 1.0);
-    described.metallic = 0.0;
+    described.face_position = face_world;
+    described.face_random = face_random;
+    described.color = pow(max(color, 0.0), float3(2.2, 2.2, 2.2));
     described.roughness = input.surface.x;
-    described.emissive = float3(0.0, 0.0, 0.0);
-    described.unlit = false;
+    described.attributes = attributesAt(first);
+    described.values[0] = input.values0;
+    described.values[1] = input.values1;
+    described.values[2] = input.values2;
+    described.values[3] = input.values3;
     described.time_s = light_info.y;
-    Surface shown = defaultSurface(described);
+    Surface shown = terrainSurface(described);
     float3 normal = unit(shown.normal);
     float roughness = clamp(stableRoughness(normal, clamp(shown.roughness, 0.05, 1.0)), 0.05, 1.0);
     return shade(shown, normal, roughness, geometric, input.world, described.view_direction, 1.0, true, input.position.xy);
 }
+
+[shader("pixel")]
+float4 fragmentTerrain(TerrainOutput input) : SV_Target0 {
+    return terrainColor(input);
+}
+
+#ifdef EGGY_TERRAIN
+[shader("pixel")]
+float4 fragmentMain(TerrainOutput input) : SV_Target0 {
+    return terrainColor(input);
+}
+#endif
 
 [shader("pixel")]
 void fragmentShadow(VertexOutput input) {

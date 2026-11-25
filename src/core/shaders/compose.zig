@@ -17,6 +17,9 @@ pub const Role = enum(u32) {
     post,
     /// `Surface surface(SurfaceInput input)`: how a material's surface looks before lighting.
     surface,
+    /// `Surface terrainSurface(TerrainSurfaceInput input)`: how a Terrain's faces look before
+    /// lighting.
+    terrain,
 
     /// The entry point the composed source is compiled for.
     pub const entry_point = "fragmentMain";
@@ -24,7 +27,7 @@ pub const Role = enum(u32) {
     fn wrapper(self: Role) []const u8 {
         return switch (self) {
             .post => post_wrapper,
-            .surface => surface_wrapper,
+            .surface, .terrain => surface_wrapper,
         };
     }
 
@@ -32,6 +35,16 @@ pub const Role = enum(u32) {
         return switch (self) {
             .post => "// eggy: post\n",
             .surface => "// eggy: surface\n",
+            .terrain => "// eggy: terrain\n",
+        };
+    }
+
+    /// What the wrapper is told, so it leaves out its own function in the project's place.
+    fn define(self: Role) []const u8 {
+        return switch (self) {
+            .post => "",
+            .surface => "#define EGGY_SURFACE 1\n",
+            .terrain => "#define EGGY_TERRAIN 1\n",
         };
     }
 };
@@ -39,19 +52,23 @@ pub const Role = enum(u32) {
 pub const Error = error{
     /// The shader doesn't `#include "eggy.slang"`.
     MissingEggyInclude,
-    /// It takes neither a `PostInput` nor a `SurfaceInput`.
+    /// It takes none of `PostInput`, `SurfaceInput` and `TerrainSurfaceInput`.
     UnknownShaderRole,
-    /// It mentions both, so it can't be told which it is.
+    /// It mentions more than one, so it can't be told which it is.
     AmbiguousShaderRole,
 };
 
 /// What `source` is, by which of Eggy's inputs it mentions.
 pub fn roleOf(source: []const u8) Error!Role {
     const post = std.mem.indexOf(u8, source, "PostInput") != null;
-    const surface = std.mem.indexOf(u8, source, "SurfaceInput") != null;
-    if (post and surface) return error.AmbiguousShaderRole;
+    // Every `TerrainSurfaceInput` holds a `SurfaceInput`, so only those beyond it count.
+    const terrain_count = std.mem.count(u8, source, "TerrainSurfaceInput");
+    const terrain = terrain_count > 0;
+    const surface = std.mem.count(u8, source, "SurfaceInput") > terrain_count;
+    if (@as(u2, @intFromBool(post)) + @intFromBool(surface) + @intFromBool(terrain) > 1) return error.AmbiguousShaderRole;
     if (post) return .post;
     if (surface) return .surface;
+    if (terrain) return .terrain;
     return error.UnknownShaderRole;
 }
 
@@ -76,7 +93,7 @@ pub fn compose(gpa: std.mem.Allocator, source: []const u8, name: []const u8) (Er
     writer.writeAll(std.mem.trimStart(u8, library[std.mem.indexOf(u8, library, "#pragma once\n").? + "#pragma once\n".len ..], "\n")) catch return error.OutOfMemory;
     writer.writeAll(wrapper[included + library_include.len .. marked]) catch return error.OutOfMemory;
     // The project's shader, numbered as its own file.
-    if (role == .surface) writer.writeAll("#define EGGY_SURFACE 1\n") catch return error.OutOfMemory;
+    writer.writeAll(role.define()) catch return error.OutOfMemory;
     writer.print("#line 1 \"{s}\"\n", .{name}) catch return error.OutOfMemory;
     writer.writeAll(source[0..include]) catch return error.OutOfMemory;
     writer.writeAll(source[include + include_len ..]) catch return error.OutOfMemory;
@@ -84,4 +101,11 @@ pub fn compose(gpa: std.mem.Allocator, source: []const u8, name: []const u8) (Er
     writer.print("\n#line {d} \"eggy {t}\"\n", .{ std.mem.count(u8, wrapper[0..marked], "\n") + 1, role }) catch return error.OutOfMemory;
     writer.writeAll(wrapper[marked..]) catch return error.OutOfMemory;
     return out.toOwnedSliceSentinel(0);
+}
+
+test "a shader's role is told by its input, a terrain's apart from a surface's" {
+    try std.testing.expectEqual(Role.terrain, try roleOf("Surface terrainSurface(TerrainSurfaceInput input) {}"));
+    try std.testing.expectEqual(Role.surface, try roleOf("Surface surface(SurfaceInput input) {}"));
+    try std.testing.expectEqual(Role.post, try roleOf("float4 post(PostInput input) {}"));
+    try std.testing.expectError(error.AmbiguousShaderRole, roleOf("TerrainSurfaceInput a; SurfaceInput b;"));
 }

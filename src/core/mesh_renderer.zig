@@ -357,6 +357,7 @@ pub const MeshRenderer = struct {
             .camera = self.groups[self.slot],
             .maps = sources.textures.mapsGroup(@splat(null), 0.01),
             .sky = (sky orelse sources.textures.white).group,
+            .shaders = sources.shaders,
         } });
         sources.stats.draw_calls += terrain_drawn.draw_calls;
         sources.stats.triangles += terrain_drawn.triangles;

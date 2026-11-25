@@ -225,6 +225,30 @@ coloured by its own height and slope: rock where it tilts past `steep_normal_y`,
 than the next by `shade_variation`. A Terrain takes no Material or texture; for those, make mesh
 chunks.
 
+Grids of 33 by 33 corners laid edge to edge, such as a streamed world's chunks, are a single
+patch each and meet their neighbours exactly, so their skirts never show: turn `skirts` off to
+save their triangles, about one in nine.
+
+To colour the ground by more than height and slope, such as wet valleys, dry plains or snow
+that creeps down in winter, give the grid four bytes a corner beside its heights, and the
+Terrain a [terrain shader](post-processing-and-shaders.md#write-a-terrain-shader) that reads them:
+
+```zig
+const attributes = try gpa.alloc([4]u8, side * side);
+defer gpa.free(attributes);
+for (0..side) |row| for (0..side) |column| {
+    // Wetter low down: the shader reads it as 0 to 1 in `attributes.r`.
+    const wet = std.math.clamp(0.5 - heights[row * side + column] / 20, 0, 1);
+    attributes[row * side + column] = .{ @intFromFloat(wet * 255), 0, 0, 0 };
+};
+try app.heightfields().setWithAttributes("ground", heights, attributes, side, 1);
+```
+
+The shader sees the attributes of each face's first corner, so every face keeps one colour.
+The Terrain's `values` reach it too, four sets of four numbers you can change every frame, such
+as how far the snow has come down; changing them costs nothing but the numbers. Physics ignores
+the attributes.
+
 The collider's triangles are the ones drawn, and it tests only the cells under what touches it,
 so a grid of a million corners costs physics no more than a small one. Setting the name again
 uploads the new heights before the next frame and rebuilds the collider.
