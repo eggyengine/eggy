@@ -1,0 +1,15 @@
+.{
+    .name = .vehicle_sandbox,
+    .version = "0.1.0",
+    .fingerprint = 0xf999ac087ee35a6b,
+    .minimum_zig_version = "0.17.0",
+    .dependencies = .{
+        .eggy = .{ .path = "../.." },
+    },
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "eggy.zon",
+        "src",
+    },
+}

@@ -205,6 +205,9 @@ fn paintNode(canvas: *ui.Canvas, frame: Frame, themes: *Themes, index: usize) !u
             if (widget.widget.len == 0 or !frame.widgets.paint(frame.widgets.context, &.{ .key_ptr = widget.widget.ptr, .key_len = widget.widget.len, .value_ptr = widget.value.ptr, .value_len = widget.value.len, .canvas = canvas, .rect = .{ content.x, content.y, content.w, content.h }, .scale = scale, .time_ms = frame.time_ms })) {
                 try placeholder(canvas, content, theme, if (widget.widget.len == 0) "No widget" else widget.widget, scale);
             }
+            // A widget that filled the canvas reports itself drawn; fail the paint so the caller
+            // grows the canvas and paints again, or every node after it would go missing.
+            if (canvas.out_of_vertices) return error.OutOfVertices;
         },
     }
 

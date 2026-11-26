@@ -26,6 +26,7 @@ pub const Plugin = struct {
     pub fn deinit(self: *Self) void { ... }
     pub fn event(self: *Self, app: *eggy.App, event: eggy.Event) !void { ... }
     pub fn update(self: *Self, app: *eggy.App) !void { ... }
+    pub fn fixedUpdate(self: *Self, app: *eggy.App, step_s: f32) !void { ... }
     pub fn animationEvent(self: *Self, app: *eggy.App, event: eggy.animation.Event) !void { ... }
     pub fn gameUi(self: *Self, app: *eggy.App, ui: *eggy.ui.Context) !void { ... }
     pub fn draw(self: *Self, app: *eggy.App, target: eggy.DrawContext) !void { ... }
@@ -51,6 +52,7 @@ pub const Plugin = struct {
 | `deinit` | Before a started instance is discarded, including shutdown, restarts, and reloads. Release the instance's resources; Eggy owns the App and world. |
 | `event` | Gameplay input not consumed by UI, plus platform/window events. In the editor, only while playing and not paused. |
 | `update` | Each running frame, before ECS Update systems and rendering. In the editor, only while playing and not paused. `app.viewer()` is where last frame was seen from: the game's camera, or the Scene panel's while simulating. |
+| `fixedUpdate` | Inside each fixed physics step of `step_s` seconds, before it moves anything: none, one or several a frame, after ECS Update systems. Forces applied here last that step. Read and change components, but don't spawn or despawn. See [Vehicles and joints](../physics/vehicles-and-joints.md#every-step). |
 | `animationEvent` | Once for each `event` key a playing clip passed this frame, after the ECS Update systems and the animation step, in the order passed. `event.name` is the key's text, `event.animator` the entity playing the clip and `event.target` the one the track names. The name belongs to the clip; copy it to keep it. In the editor, only while playing. See [Cutscenes](../animation/cutscenes.md). |
 | `draw` | After the scene and before `gameUi`, including paused editor Play. The borrowed target is outside a render pass; Eggy submits the frame. |
 | `gameUi` | After scene/custom drawing, including paused editor Play. Builds Weeoui game content. |

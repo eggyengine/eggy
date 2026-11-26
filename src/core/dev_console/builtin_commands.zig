@@ -18,7 +18,7 @@ pub const list = [_]Command{
     .{ .name = "get", .help = "Show a component's field as ZON", .usage = "<entity> <Component.field>" },
     .{ .name = "set", .help = "Set a component's field from ZON", .usage = "<entity> <Component.field> <zon>" },
     .{ .name = "timescale", .help = "Show or set how fast game time passes (1 is normal)", .usage = "[scale]" },
-    .{ .name = "physics", .help = "Show physics, or draw every collider and contact (debug on) or not", .usage = "[debug [on|off]]" },
+    .{ .name = "physics", .help = "Show physics, or draw every collider and contact (debug), or wheels, joints and forces (debug vehicles)", .usage = "[debug [vehicles] [on|off]]" },
 };
 
 /// Run `builtin` (all but `clear`, which the console carries out) on `app`. `game_commands` are
@@ -53,14 +53,18 @@ pub fn run(builtin: Builtin, app: *App, call: *Call, game_commands: []const Comm
             app.time.scale = scale;
         },
         .physics => {
-            const what = call.arg(0) orelse return call.print("{t} precision, collider drawing {s}", .{ app.physics_precision, onOff(app.physics_debug) });
+            const shown = &app.physics_debug;
+            const what = call.arg(0) orelse return call.print("{t} precision, collider drawing {s}, vehicle drawing {s}", .{ app.physics_precision, onOff(shown.colliders), onOff(shown.vehicles) });
             if (!std.mem.eql(u8, what, "debug")) return usage(call, builtin);
-            // Bare `debug` flips it.
-            const to = call.arg(1) orelse {
-                app.physics_debug = !app.physics_debug;
-                return call.print("collider drawing {s}", .{onOff(app.physics_debug)});
+            const vehicles = if (call.arg(1)) |next| std.mem.eql(u8, next, "vehicles") else false;
+            const flag = if (vehicles) &shown.vehicles else &shown.colliders;
+            const label = if (vehicles) "vehicle" else "collider";
+            // Bare, it flips.
+            const to = call.arg(if (vehicles) 2 else 1) orelse {
+                flag.* = !flag.*;
+                return call.print("{s} drawing {s}", .{ label, onOff(flag.*) });
             };
-            if (std.mem.eql(u8, to, "on")) app.physics_debug = true else if (std.mem.eql(u8, to, "off")) app.physics_debug = false else return usage(call, builtin);
+            if (std.mem.eql(u8, to, "on")) flag.* = true else if (std.mem.eql(u8, to, "off")) flag.* = false else return usage(call, builtin);
         },
     }
 }

@@ -1,7 +1,8 @@
-//! Physics: humpty run as a clutch plugin over Eggy's world. Entities with a `Collider` (and a
-//! `RigidBody` to move) are simulated in 2D or 3D, as the scene's root says, in the project's
-//! precision (`f32` or `f64`), with the root's `PhysicsSettings`; their `Transform`s follow
-//! their bodies.
+//! Physics: humpty run as a clutch plugin over Eggy's world. Entities with a `RigidBody` (shaped
+//! by the `Collider`s on them and below them) or a lone `Collider` are simulated in 2D or 3D, as
+//! the scene's root says, in the project's precision (`f32` or `f64`), with the root's
+//! `PhysicsSettings`; their `Transform`s follow their bodies. In 3D, `Joint`s hold bodies
+//! together and `Vehicle`s drive on `Wheel`s.
 const std = @import("std");
 const ecs = @import("clutch");
 const math = @import("eggenvector");
@@ -26,11 +27,22 @@ pub const CollisionStarted = humpty.ecs.CollisionStarted;
 pub const CollisionEnded = humpty.ecs.CollisionEnded;
 pub const PhysicsStage = humpty.ecs.PhysicsStage;
 pub const RayFilter = humpty.ecs.RayFilter;
+pub const Joint = humpty.ecs.Joint;
+pub const JointState = humpty.ecs.JointState;
+pub const Vehicle = humpty.ecs.Vehicle;
+pub const VehicleInput = humpty.ecs.VehicleInput;
+pub const VehicleState = humpty.ecs.VehicleState;
+pub const Wheel = humpty.ecs.Wheel;
+pub const WheelState = humpty.ecs.WheelState;
+/// Where `applyForce` and `applyImpulse` push.
+pub const At = humpty.ecs.At;
+/// The hook a host runs inside each fixed step (`App.fixed_update` installs it).
+pub const FixedStep = humpty.ecs.FixedStep;
 /// The name of the height grid (`app.heightfields()`) a `.heightfield` collider stands on.
 pub const GridName = humpty.ecs.GridName;
 
 /// The physics components every project has.
-pub const components = .{ RigidBody, Collider, LinearVelocity, AngularVelocity, CollidingEntities, PhysicsSettings };
+pub const components = .{ RigidBody, Collider, LinearVelocity, AngularVelocity, CollidingEntities, PhysicsSettings, Joint, JointState, Vehicle, VehicleInput, VehicleState, Wheel, WheelState };
 
 /// The plugin for each space a scene can pick; `Plugin(.three, f32).Resource` is its world.
 pub fn Plugin(comptime dim: humpty.Dim, comptime T: type) type {
@@ -211,6 +223,16 @@ pub fn install(world: *ecs.World, gpa: std.mem.Allocator, precision: Precision) 
 
 pub const Hit = struct { entity: ecs.EntityId, point: math.Vec3, normal: math.Vec3, distance_m: f32 };
 
+/// Runs `call` with the world's physics plugin `P`, or returns `otherwise` without physics.
+fn withPlugin(world: *ecs.World, otherwise: anytype, context: anytype, comptime call: anytype) @TypeOf(otherwise) {
+    const installed = world.getResource(Installed) orelse return otherwise;
+    switch (installed.dimension) {
+        inline else => |dim| switch (installed.precision) {
+            inline else => |precision| return call(Plugin(dim, precision.Type()), context),
+        },
+    }
+}
+
 /// The nearest entity a ray from `origin` along unit `direction` meets, in whichever space the
 /// world's physics runs; null without physics.
 ///
@@ -220,17 +242,97 @@ pub const Hit = struct { entity: ecs.EntityId, point: math.Vec3, normal: math.Ve
 /// const grounded = physics.raycast(&app.world, feet, down, 0.1, .{ .exclude = player }) != null;
 /// ```
 pub fn raycast(world: *ecs.World, origin: math.Vec3, direction: math.Vec3, max_distance_m: f32, filter: RayFilter) ?Hit {
-    const installed = world.getResource(Installed) orelse return null;
-    switch (installed.dimension) {
-        inline else => |dim| switch (installed.precision) {
-            inline else => |precision| {
-                const P = Plugin(dim, precision.Type());
-                const res = world.getResource(P.Resource) orelse return null;
-                const hit = res.raycast(origin, direction, max_distance_m, filter) orelse return null;
-                return .{ .entity = hit.entity, .point = hit.point, .normal = hit.normal, .distance_m = hit.distance_m };
-            },
-        },
-    }
+    const Args = struct { world: *ecs.World, origin: math.Vec3, direction: math.Vec3, max_distance_m: f32, filter: RayFilter };
+    return withPlugin(world, @as(?Hit, null), Args{ .world = world, .origin = origin, .direction = direction, .max_distance_m = max_distance_m, .filter = filter }, struct {
+        fn run(comptime P: type, args: Args) ?Hit {
+            const res = args.world.getResource(P.Resource) orelse return null;
+            const hit = res.raycast(args.origin, args.direction, args.max_distance_m, args.filter) orelse return null;
+            return .{ .entity = hit.entity, .point = hit.point, .normal = hit.normal, .distance_m = hit.distance_m };
+        }
+    }.run);
+}
+
+pub const ShapeHit = struct { entity: ecs.EntityId, point: math.Vec3, normal: math.Vec3, distance_m: f32, time_of_impact: f32 };
+
+/// The first entity `shape` meets moving from `origin`, turned by `rotation`, `max_distance_m`
+/// along unit `direction`, at its own size: a ball, cuboid, capsule, cylinder or cone (the last
+/// two 3D only). `filter.exclude` leaves out every collider of that entity's body, as a wheel's
+/// cast leaves out its own chassis. Null without physics or a hit.
+///
+/// ```zig
+/// const below = physics.shapecast(&app.world, .{ .ball = .{ .radius_m = 0.3 } }, feet, .identity(), down, 1, .{ .exclude = player });
+/// ```
+pub fn shapecast(world: *ecs.World, shape: Collider.Shape, origin: math.Vec3, rotation: math.UnitQuat, direction: math.Vec3, max_distance_m: f32, filter: RayFilter) ?ShapeHit {
+    const Args = struct { world: *ecs.World, shape: Collider.Shape, origin: math.Vec3, rotation: math.UnitQuat, direction: math.Vec3, max_distance_m: f32, filter: RayFilter };
+    return withPlugin(world, @as(?ShapeHit, null), Args{ .world = world, .shape = shape, .origin = origin, .rotation = rotation, .direction = direction, .max_distance_m = max_distance_m, .filter = filter }, struct {
+        fn run(comptime P: type, args: Args) ?ShapeHit {
+            const res = args.world.getResource(P.Resource) orelse return null;
+            const hit = res.shapecast(args.shape, args.origin, args.rotation, args.direction, args.max_distance_m, args.filter) orelse return null;
+            return .{ .entity = hit.entity, .point = hit.point, .normal = hit.normal, .distance_m = hit.distance_m, .time_of_impact = hit.time_of_impact };
+        }
+    }.run);
+}
+
+const Push = struct { world: *ecs.World, entity: ecs.EntityId, amount: math.Vec3, at: At };
+
+/// Pushes `entity`'s body (its own, or the one its collider is on) with `force_n` (N, world
+/// space) through every physics step of this frame, or, from `fixedUpdate`, that step. Only
+/// dynamic bodies move.
+///
+/// ```zig
+/// physics.applyForce(&app.world, boat, .init(0, 0, -2000), .center_of_mass);
+/// ```
+pub fn applyForce(world: *ecs.World, entity: ecs.EntityId, force_n: math.Vec3, at: At) void {
+    withPlugin(world, {}, Push{ .world = world, .entity = entity, .amount = force_n, .at = at }, struct {
+        fn run(comptime P: type, push: Push) void {
+            P.applyForce(push.world, push.entity, push.amount, push.at);
+        }
+    }.run);
+}
+
+/// Turns `entity`'s body with `torque_nm` (N·m, world space; about z in 2D) as `applyForce` pushes.
+pub fn applyTorque(world: *ecs.World, entity: ecs.EntityId, torque_nm: math.Vec3) void {
+    withPlugin(world, {}, Push{ .world = world, .entity = entity, .amount = torque_nm, .at = .center_of_mass }, struct {
+        fn run(comptime P: type, push: Push) void {
+            P.applyTorque(push.world, push.entity, push.amount);
+        }
+    }.run);
+}
+
+/// Pushes `entity`'s body by `impulse_ns` (N·s, world space) at once, as a hit or a jump does.
+pub fn applyImpulse(world: *ecs.World, entity: ecs.EntityId, impulse_ns: math.Vec3, at: At) void {
+    withPlugin(world, {}, Push{ .world = world, .entity = entity, .amount = impulse_ns, .at = at }, struct {
+        fn run(comptime P: type, push: Push) void {
+            P.applyImpulse(push.world, push.entity, push.amount, push.at);
+        }
+    }.run);
+}
+
+/// What an entity stands on.
+pub const Ground = struct {
+    entity: ecs.EntityId,
+    point: math.Vec3,
+    /// Out of the ground.
+    normal: math.Vec3,
+    /// How fast the ground moves where it is stood on, in m/s: add it to a character's own
+    /// walking to ride a moving deck.
+    velocity: math.Vec3,
+};
+
+/// What `entity`'s body stood on in the last physics step, no steeper than `max_slope_deg`
+/// from straight up (+y); null when in the air or without physics.
+///
+/// ```zig
+/// const riding = if (physics.groundVelocity(&app.world, player, 50)) |ground| ground.velocity else .zero;
+/// ```
+pub fn groundVelocity(world: *ecs.World, entity: ecs.EntityId, max_slope_deg: f32) ?Ground {
+    const Args = struct { world: *ecs.World, entity: ecs.EntityId, max_slope_deg: f32 };
+    return withPlugin(world, @as(?Ground, null), Args{ .world = world, .entity = entity, .max_slope_deg = max_slope_deg }, struct {
+        fn run(comptime P: type, args: Args) ?Ground {
+            const found = P.groundOf(args.world, args.entity, .init(0, 1, 0), args.max_slope_deg) orelse return null;
+            return .{ .entity = found.entity, .point = found.point, .normal = found.normal, .velocity = found.velocity };
+        }
+    }.run);
 }
 
 /// Wireframes of the colliders on `only` (every collider when null) into `draw`, coloured by
@@ -245,13 +347,23 @@ pub fn drawColliders(world: *ecs.World, gpa: std.mem.Allocator, only: ?[]const e
     try drawWith(world, draw, .{ .colliders = only, .gpa = gpa });
 }
 
-/// Every collider, as `drawColliders` draws them, and where they touched in the last step, in
-/// red: what the console's `physics debug on` shows each frame.
-pub fn drawDebug(world: *ecs.World, gpa: std.mem.Allocator, draw: *DebugDraw) !void {
-    try drawWith(world, draw, .{ .colliders = null, .gpa = gpa, .contacts = true });
+/// What the console's `physics debug` draws each frame.
+pub const DebugShown = struct {
+    /// Every collider, as `drawColliders` draws them, and where they touched in the last step,
+    /// in red.
+    colliders: bool = false,
+    /// Wheels' casts and suspension, joints' anchors, axes and limits, centres of mass, and how
+    /// hard contacts and wheels push.
+    vehicles: bool = false,
+};
+
+/// What `shown` asks for, into `draw`.
+pub fn drawDebug(world: *ecs.World, gpa: std.mem.Allocator, draw: *DebugDraw, shown: DebugShown) !void {
+    if (shown.colliders) try drawWith(world, draw, .{ .colliders = null, .gpa = gpa, .contacts = true });
+    if (shown.vehicles) try drawWith(world, draw, .{ .colliders = &.{}, .gpa = gpa, .mechanics = true });
 }
 
-const Drawn = struct { colliders: ?[]const ecs.EntityId, gpa: std.mem.Allocator, contacts: bool = false };
+const Drawn = struct { colliders: ?[]const ecs.EntityId, gpa: std.mem.Allocator, contacts: bool = false, mechanics: bool = false };
 
 fn drawWith(world: *ecs.World, draw: *DebugDraw, drawn: Drawn) !void {
     // A running world says which plugin it is; otherwise its scene says the dimension, and
@@ -269,6 +381,10 @@ fn drawWith(world: *ecs.World, draw: *DebugDraw, drawn: Drawn) !void {
                     else => return err,
                 };
                 if (drawn.contacts) P.drawContacts(world, draw) catch |err| switch (err) {
+                    error.DebugDrawCapacity => return,
+                    else => return err,
+                };
+                if (drawn.mechanics) P.drawMechanics(world, draw) catch |err| switch (err) {
                     error.DebugDrawCapacity => return,
                     else => return err,
                 };
@@ -300,14 +416,14 @@ test "a crate falls onto ground made in code, its Transform follows, and setting
     try world.insertResource(generated_meshes.Ref{ .meshes = &meshes });
 
     // Ten metres square at height `y`, facing up.
-    const Ground = struct {
+    const Floor = struct {
         fn at(y: f32) [4]generated_meshes.Vertex {
             const up = [3]f32{ 0, 1, 0 };
             return .{ .{ .position = .{ -5, y, -5 }, .normal = up }, .{ .position = .{ 5, y, -5 }, .normal = up }, .{ .position = .{ 5, y, 5 }, .normal = up }, .{ .position = .{ -5, y, 5 }, .normal = up } };
         }
     };
     const quad = [_]u32{ 0, 2, 1, 0, 3, 2 };
-    try meshes.set("ground", &Ground.at(0), &quad);
+    try meshes.set("ground", &Floor.at(0), &quad);
     const ground = try world.spawn(.{ Transform{}, Mesh{ .shape = .{ .generated = .init("ground") } }, Collider{ .shape = .mesh } });
     const crate = try world.spawn(.{ Transform{ .position = .init(0, 3, 0) }, Collider{}, RigidBody{} });
     try runFrames(&world, 180);
@@ -321,7 +437,7 @@ test "a crate falls onto ground made in code, its Transform follows, and setting
     try std.testing.expect(raycast(&world, .init(3, 5, 0), .init(0, -1, 0), 10, .{ .exclude = ground }) == null);
 
     // The ground set a metre higher is collided with there once remeshed.
-    try meshes.set("ground", &Ground.at(1), &quad);
+    try meshes.set("ground", &Floor.at(1), &quad);
     try remesh(&world, meshes.takeChanged());
     try runFrames(&world, 1);
     try std.testing.expectApproxEqAbs(@as(f32, 4), raycast(&world, .init(3, 5, 0), .init(0, -1, 0), 10, .{}).?.distance_m, 0.03);

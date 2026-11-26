@@ -85,8 +85,11 @@ pub const App = struct {
     /// The scalar physics computes in, as the project's `eggy.zon` says; a world takes it when
     /// physics first runs in it.
     physics_precision: @import("physics.zig").Precision = .f32,
-    /// Whether every collider is drawn as a wireframe each frame (`physics debug` in the console).
-    physics_debug: bool = false,
+    /// What physics draws as wireframes each frame (`physics debug` in the console).
+    physics_debug: @import("physics.zig").DebugShown = .{},
+    /// The game's and plugins' `fixedUpdate`, set by the host around `updateWorld`; physics runs
+    /// it inside each fixed step.
+    fixed_update: ?FixedUpdate = null,
     profiling: @import("profiling.zig").Profiling = .{},
     graphics_options: graphics_control.State = .{},
     /// The motion sensors and vibrator `mobile()` has opened.
@@ -517,6 +520,7 @@ pub const App = struct {
         try self.world.insertResource(@import("generated_meshes.zig").Ref{ .meshes = &self.graphics.models.generated });
         try self.world.insertResource(@import("heightfields.zig").Ref{ .heightfields = &self.graphics.models.heightfields });
         try @import("physics.zig").install(&self.world, self.world.allocator, self.physics_precision);
+        try self.world.insertResource(@import("physics.zig").FixedStep{ .context = self, .call = runFixedUpdate });
         try @import("physics.zig").remesh(&self.world, self.graphics.models.generated.takeChanged());
         try @import("physics.zig").remesh(&self.world, self.graphics.models.heightfields.takeChanged());
         try ui_scenes.publish(&self.world, &self.ui_scenes);
@@ -533,10 +537,10 @@ pub const App = struct {
         @import("sprite_animator.zig").step(&self.world, self.time.delta_s);
         // Particles move on game time too, and are drawn where they end up.
         self.particles.step(self.time.delta_s);
-        try self.particles.draw(&self.draw2d);
+        try self.particles.draw(&self.draw2d, if (self.viewer()) |view| view.eye else null);
         // Sound sources and the listener follow where their entities ended up.
         audio_zig.step(&self.world, self.audio());
-        if (self.physics_debug) try @import("physics.zig").drawDebug(&self.world, self.world.allocator, &self.debug_draw);
+        try @import("physics.zig").drawDebug(&self.world, self.world.allocator, &self.debug_draw, self.physics_debug);
         self.world.tick();
         if (self.scene_transition.pending != null) if (self.sceneAccess()) |access| {
             if (try self.scene_transition.apply(&self.world, access, self.sceneInstances())) self.input.cancel();
@@ -546,6 +550,18 @@ pub const App = struct {
             self.scene_stream.step(self.world.allocator, &self.world, access, self.sceneInstances(), &self.scene_transition, self.resources(), &self.graphics.models, &self.graphics.textures);
         };
         try self.profiling.end(sample);
+    }
+
+    /// Code a host runs inside each fixed physics step: its plugins' `fixedUpdate`.
+    pub const FixedUpdate = struct {
+        context: *anyopaque,
+        call: *const fn (context: *anyopaque, app: *App, step_s: f32) anyerror!void,
+    };
+
+    fn runFixedUpdate(context: *anyopaque, _: *clutch.World, step_s: f32) anyerror!void {
+        const self: *App = @ptrCast(@alignCast(context));
+        const hook = self.fixed_update orelse return;
+        try hook.call(hook.context, self, step_s);
     }
 
     /// Start frame-local diagnostics before any game/editor hooks run.

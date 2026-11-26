@@ -1,0 +1,6 @@
+.{
+    .name = "vehicle_sandbox",
+    .title = "Vehicle Sandbox",
+    .version = "0.1.0",
+    .plugins = .{},
+}

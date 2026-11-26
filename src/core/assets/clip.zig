@@ -18,6 +18,10 @@ pub const Property = enum {
     position,
     rotation_deg,
     scale,
+    /// A model node turned this far more, in Euler degrees like `rotation_deg`, on top of
+    /// whatever else poses it (the graph's states and imported clips): a pose a clip adds to
+    /// rather than replaces, such as sitting over an idle. Needs a `model:` target.
+    turn_deg,
     /// A blend shape's weight (the first number of a key); needs a `model:` target.
     morph_weight,
     /// A `Camera`'s field of view in degrees (`value[0]`).
@@ -44,7 +48,7 @@ pub const Property = enum {
     /// from its first key on.
     pub fn discrete(self: Property) bool {
         return switch (self) {
-            .position, .rotation_deg, .scale, .morph_weight, .fov_deg => false,
+            .position, .rotation_deg, .scale, .turn_deg, .morph_weight, .fov_deg => false,
             .visible, .text, .sound, .event, .sprite_frame, .camera => true,
         };
     }
@@ -67,7 +71,7 @@ pub const Property = enum {
     /// Whether it can act on a model's node or blend shape (`model:` targets).
     pub fn onModel(self: Property) bool {
         return switch (self) {
-            .position, .rotation_deg, .scale, .morph_weight => true,
+            .position, .rotation_deg, .scale, .turn_deg, .morph_weight => true,
             else => false,
         };
     }
@@ -461,9 +465,9 @@ fn validTarget(track: Track) bool {
     if (track.property == .camera) return track.target.len == 0;
     switch (track.where()) {
         .model => |name| return track.property.onModel() and validName(name),
-        .scene => |path| return track.property != .morph_weight and validPath(path),
+        .scene => |path| return track.property != .morph_weight and track.property != .turn_deg and validPath(path),
         .entity => |path| {
-            if (track.property == .morph_weight) return false;
+            if (track.property == .morph_weight or track.property == .turn_deg) return false;
             return path.len == 0 or validPath(path);
         },
     }

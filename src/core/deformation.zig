@@ -210,6 +210,18 @@ fn boundsFast(corners: []const Vertex) assets.Bounds {
 }
 
 pub fn posed(arena: std.mem.Allocator, model: *const assets.Model, path: []const u8, animator: Animator, clips: ?*ClipCache, report: ?*Deformation) !assets.rig.Pose {
+    var current = try statesPosed(arena, model, path, animator, clips, report);
+    // Authored turns go on last, over whatever the clips and states posed.
+    const cache = clips orelse return current;
+    const fading = animator.isBlending();
+    const weight = animator.blendWeight();
+    if (fading) turn(report, &current, model, path, cache, animator.previous_clip.key(), animator.previous_time_s, animator.repeat, 1 - weight);
+    turn(report, &current, model, path, cache, animator.clip.key(), animator.time_s, animator.repeat, if (fading) weight else 1);
+    return current;
+}
+
+/// The pose of `animator`'s clips and states, before authored turns.
+fn statesPosed(arena: std.mem.Allocator, model: *const assets.Model, path: []const u8, animator: Animator, clips: ?*ClipCache, report: ?*Deformation) !assets.rig.Pose {
     var current = try assets.rig.Pose.init(arena, model.*);
     // A fade starts from the previous clips, then eases to the current ones.
     const fading = animator.isBlending();
@@ -283,9 +295,32 @@ fn layer(report: ?*Deformation, pose_: *assets.rig.Pose, model: *const assets.Mo
             .position => pose_.blendTranslation(node, value, weight),
             .rotation_deg => pose_.blendRotation(node, eulerQuaternion(value), weight),
             .scale => pose_.blendScale(node, value, weight),
+            // Turns go on after the states, in `turn`.
+            .turn_deg => {},
             // `validate` keeps other properties off model targets.
             else => unreachable,
         }
+    }
+}
+
+/// Turn `pose`'s nodes by authored clip `authored`'s `turn_deg` tracks at `time_s`, `weight`
+/// of the way.
+fn turn(report: ?*Deformation, pose_: *assets.rig.Pose, model: *const assets.Model, path: []const u8, clips: *ClipCache, authored: []const u8, time_s: f32, repeat: animation.Repeat, weight: f32) void {
+    if (authored.len == 0 or !(weight > 0)) return;
+    const clip = clips.authored(authored) orelse return;
+    const at = animation.clipTime(time_s, clip.duration_s, repeat);
+    for (clip.tracks) |track| {
+        if (track.property != .turn_deg) continue;
+        const target = switch (track.where()) {
+            .model => |name| name,
+            .entity, .scene => continue,
+        };
+        const value = track.valueAt(at) orelse continue;
+        const node = model.rig.node(target) orelse {
+            if (report) |found| found.reportOnce(target, "{s} has no node named {s}", .{ path, target });
+            continue;
+        };
+        pose_.turnRotation(node, eulerQuaternion(value), weight);
     }
 }
 

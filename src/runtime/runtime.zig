@@ -199,6 +199,8 @@ pub fn Runtime(comptime project: type) type {
             self.app.time.tick(sdl3.timer.getNanosecondsSinceInit());
             try self.app.advanceInput();
             try self.plugins.update(&self.app);
+            self.app.fixed_update = self.plugins.fixedUpdateHook();
+            defer self.app.fixed_update = null;
             try self.app.updateWorld();
             try self.plugins.animationEvents(&self.app);
             self.app.input.endFrame();

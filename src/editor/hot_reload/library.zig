@@ -348,7 +348,10 @@ fn update(state_ptr: *anyopaque, app_ptr: *anyopaque) callconv(.c) bool {
         report(.update, err);
         ok = false;
     }
-    // The world's systems run here, where their errors have their names.
+    // The world's systems run here, where their errors have their names, and physics calls back
+    // into this library's plugins each fixed step.
+    app.fixed_update = stateOf(state_ptr).plugins.fixedUpdateHook();
+    defer app.fixed_update = null;
     if (app.updateWorld()) recovered(.world_update) else |err| {
         report(.world_update, err);
         ok = false;

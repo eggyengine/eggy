@@ -639,7 +639,7 @@ pub const Dock = struct {
             .fov_deg, .visible, .sprite_frame => {
                 key.value = env.game.animationValue(env.app, entity, track.target, track.property) orelse return self.sayNull("Can't read that value from its entity.");
             },
-            .morph_weight, .text, .sound, .event, .camera => {
+            .turn_deg, .morph_weight, .text, .sound, .event, .camera => {
                 const held = track.keyAt(self.time_s) orelse return self.sayNull("No key before the head to hold.");
                 key.value = held.value;
                 key.text = held.text;
@@ -988,7 +988,7 @@ pub const Dock = struct {
                 key.text = target;
                 return .{ .keys = oneKey(arena, .{ .target = "", .property = .camera, .key = key }) };
             },
-            .text, .sound, .event, .morph_weight => {
+            .text, .sound, .event, .morph_weight, .turn_deg => {
                 self.target = target_index;
                 self.form_open = true;
                 for (form_properties, 0..) |offered, index| if (offered == property) {
@@ -1533,6 +1533,7 @@ fn propertyName(property: Property) []const u8 {
     return switch (property) {
         .position => "Position",
         .rotation_deg => "Rotation",
+        .turn_deg => "Turn",
         .scale => "Scale",
         .morph_weight => "Blend shape",
         .fov_deg => "Field of view",

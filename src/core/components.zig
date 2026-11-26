@@ -228,6 +228,7 @@ pub fn Registry(comptime types: []const type, comptime owners: []const [:0]const
         /// try Components.writeField(world, entity, 0, 0, &writer);
         /// ```
         pub fn writeField(world: *ecs.World, entity: ecs.EntityId, component: usize, field: usize, writer: *std.Io.Writer) (std.Io.Writer.Error || error{ NoComponent, NoSuchComponent })!void {
+            @setEvalBranchQuota(100_000);
             inline for (types, 0..) |T, i| if (i == component) {
                 const value = world.get(entity, T) orelse return error.NoComponent;
                 const info = @typeInfo(T).@"struct";
@@ -249,6 +250,8 @@ pub fn Registry(comptime types: []const type, comptime owners: []const [:0]const
         /// try Components.setField(world, entity, 0, 0, "75");
         /// ```
         pub fn setField(world: *ecs.World, entity: ecs.EntityId, component: usize, field: usize, text: [:0]const u8) error{ NoComponent, NoSuchComponent, NotEditable, ParseZon, OutOfMemory }!void {
+            // Every field of every component is unrolled here; games with many outgrow the default.
+            @setEvalBranchQuota(100_000);
             inline for (types, 0..) |T, i| if (i == component) {
                 const value = world.get(entity, T) orelse return error.NoComponent;
                 const info = @typeInfo(T).@"struct";

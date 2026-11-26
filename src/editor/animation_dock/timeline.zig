@@ -152,7 +152,7 @@ pub const Layout = struct {
 /// What kind of thing a property moves, for the color of its row.
 fn colorOf(property: Property) [3]f32 {
     return switch (property) {
-        .position, .rotation_deg, .scale, .morph_weight => .{ 0.37, 0.75, 0.66 },
+        .position, .rotation_deg, .scale, .turn_deg, .morph_weight => .{ 0.37, 0.75, 0.66 },
         .fov_deg => .{ 0.44, 0.66, 0.86 },
         .visible, .text => .{ 0.36, 0.80, 0.55 },
         .sound => .{ 0.71, 0.59, 0.88 },
@@ -275,7 +275,7 @@ pub fn keyLabel(arena: std.mem.Allocator, property: Property, key: eggy.assets.c
             if (!(key.value[0] > 0)) return shot;
             return try std.fmt.allocPrint(arena, "{s}, {d:.1} s blend", .{ shot, key.value[0] });
         },
-        .position, .rotation_deg, .scale, .morph_weight => "",
+        .position, .rotation_deg, .scale, .turn_deg, .morph_weight => "",
     };
 }
 

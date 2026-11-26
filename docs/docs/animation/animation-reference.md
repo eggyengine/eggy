@@ -55,6 +55,7 @@ scene, and `model:Head` for a node of its model. Its `property` is one of these:
 | Property | Acts on | A key holds |
 | --- | --- | --- |
 | `position`, `rotation_deg`, `scale` | `Transform`, or a model node | three numbers, blended |
+| `turn_deg` | a model node | three numbers, blended: degrees turned on top of the pose the clips and graph give it |
 | `morph_weight` | a model's blend shape | a weight, blended |
 | `fov_deg` | `Camera` | degrees, blended |
 | `visible` | the track's UI `node`, or the whole `UiScreen` or `UiBillboard` | on or off |
@@ -66,6 +67,11 @@ scene, and `model:Head` for a node of its model. Its `property` is one of these:
 The last four change at their keys rather than blending, and do nothing before their first
 key. An `Animator`'s **Takes over** field (`takes_over`: `input`, `hud` or `input_and_hud`)
 makes its clip a cutscene; see [Cutscenes](./cutscenes.md).
+
+`turn_deg` tracks are how a clip adds a pose to one an `AnimationGraph` plays, rather than
+replacing it: set the `Animator`'s `clip` to a clip of them, and they turn the bones they name
+after the graph's states have posed the body, such as bending the legs to sit over an idle.
+The graph leaves `clip` alone, so clearing it takes the turns away.
 
 ## Component motion
 

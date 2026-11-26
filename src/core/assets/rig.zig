@@ -233,6 +233,18 @@ pub const Pose = struct {
         self.rotation[node] = slerp(self.rotation[node], normalizedQuaternion(value), weight);
     }
 
+    /// Turn `node` by `turn` (x, y, z, w) more in its own frame, `weight` of the way.
+    pub fn turnRotation(self: *Pose, node: usize, turn: [4]f32, weight: f32) void {
+        const by = slerp(.{ 0, 0, 0, 1 }, normalizedQuaternion(turn), weight);
+        const q = self.rotation[node];
+        self.rotation[node] = normalizedQuaternion(.{
+            q[3] * by[0] + q[0] * by[3] + q[1] * by[2] - q[2] * by[1],
+            q[3] * by[1] - q[0] * by[2] + q[1] * by[3] + q[2] * by[0],
+            q[3] * by[2] + q[0] * by[1] - q[1] * by[0] + q[2] * by[3],
+            q[3] * by[3] - q[0] * by[0] - q[1] * by[1] - q[2] * by[2],
+        });
+    }
+
     pub fn blendScale(self: *Pose, node: usize, value: [3]f32, weight: f32) void {
         self.scale[node] = lerp3(self.scale[node], value, weight);
     }

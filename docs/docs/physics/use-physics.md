@@ -45,8 +45,8 @@ A `heightfield` grid's first corner sits at the entity, with columns along its X
 its Z; the entity's scale stretches it. A **Terrain** naming the same grid draws exactly what is
 stood on ([Procedural terrain](../rendering/procedural-terrain.md)).
 
-A collider under a moving parent goes where the parent takes it, so a door's collider can be a
-child of the door.
+A collider below an entity with a **RigidBody** joins that body, so a door's collider can be a
+child of the door, and a vehicle can be built from many ([Vehicles and joints](./vehicles-and-joints.md)).
 
 ## Bodies
 
@@ -58,6 +58,8 @@ A **RigidBody**'s **Kind** is one of:
 - `static`: never moves, like a collider alone.
 
 **Rotation** `locked` keeps a body upright however it's pushed: use it for characters.
+**Center of mass** sets where it balances, and a collider's **Mass** adds its own weight to the
+body's. **Kind** and **Enabled** can change while playing.
 **Gravity scale** multiplies gravity for this body (0 floats). **Linear damping** and **Angular
 damping** slow it down over time, like air.
 
@@ -89,6 +91,10 @@ if (jump_pressed and ground != null) body.value.y = @sqrt(2 * 9.81 * 1.2);
 
 A ray that starts inside a collider meets it straight away, so `.exclude` leaves out the one
 casting.
+
+To push a body rather than set its speed, `eggy.physics.applyForce` pushes in newtons through the
+frame, `applyImpulse` all at once, and `applyTorque` turns it; code that must run with every
+physics step goes in a `fixedUpdate` hook ([Vehicles and joints](./vehicles-and-joints.md#every-step)).
 
 ## What touched what
 
@@ -132,7 +138,8 @@ yellow a sensor.
 
 While playing, open the console with the backquote key and type `physics debug on` to draw
 every collider, and the points where they touch in red; `physics debug off` stops it, and
-`physics` alone shows what's set.
+`physics` alone shows what's set. `physics debug vehicles` draws wheels, joints, centres of
+mass and how hard things push.
 
 To draw them from code, for one frame:
 

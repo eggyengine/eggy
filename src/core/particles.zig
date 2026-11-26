@@ -1,6 +1,7 @@
 //! Particles: emitters that send out short-lived points, moved on game time and drawn each frame
-//! as camera-facing world sprites (`draw2d.zig`), fading out as they age. Bursts send out a
-//! number at once; a rate keeps sending until stopped. No collision: they fly through things.
+//! as camera-facing world sprites (`draw2d.zig`), fading out as they age and as the camera
+//! comes into them. Bursts send out a number at once; a rate keeps sending until stopped. No
+//! collision: they fly through things.
 const std = @import("std");
 const api = @import("support.zig");
 const math = @import("eggenvector");
@@ -157,14 +158,17 @@ pub const Particles = struct {
         self.emitters.shrinkRetainingCapacity(kept_emitters);
     }
 
-    /// Ask `world` to draw every particle this frame, facing the camera. Running out of memory
-    /// is an error; a particle that flew off to infinity is left undrawn.
-    pub fn draw(self: *Particles, world: *Draw2d) !void {
+    /// Ask `world` to draw every particle this frame, facing the camera at `eye` (null before
+    /// there is a view). Running out of memory is an error; a particle that flew off to infinity
+    /// is left undrawn.
+    pub fn draw(self: *Particles, world: *Draw2d, eye: ?math.Vec3) !void {
         for (self.alive.items) |particle| {
             const source = self.find(particle.emitter) orelse continue;
             const options = source.options;
             var tint = options.color;
             if (options.fade and options.lifetime_s > 0) tint[3] *= 1 - particle.age_s / options.lifetime_s;
+            if (eye) |at| tint[3] *= nearFade(particle.position_m.sub(at).length(), options.size_m);
+            if (tint[3] <= 0) continue;
             world.sprite(.{
                 .image = options.image,
                 .position = particle.position_m.xy(),
@@ -177,6 +181,14 @@ pub const Particles = struct {
                 else => continue,
             };
         }
+    }
+
+    /// How much of a particle `size_m` across shows `distance_m` from the camera: a sprite that
+    /// close is cut straight across by the near plane, so it fades out over the last size and a
+    /// half, gone by half its size, rather than showing a hard-edged slab.
+    fn nearFade(distance_m: f32, size_m: f32) f32 {
+        if (size_m <= 0) return 1;
+        return std.math.clamp((distance_m - size_m * 0.5) / (size_m * 1.5), 0, 1);
     }
 
     fn spawn(self: *Particles, source: *const Source) Particle {

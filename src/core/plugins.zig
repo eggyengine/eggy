@@ -5,6 +5,7 @@
 //!     pub fn deinit(self: *Self) void
 //!     pub fn event(self: *Self, app: *eggy.App, event: eggy.Event) !void
 //!     pub fn update(self: *Self, app: *eggy.App) !void  // in the editor, playing and not paused; `app.viewer()` is last frame's view
+//!     pub fn fixedUpdate(self: *Self, app: *eggy.App, step_s: f32) !void  // inside each fixed physics step, before it moves anything
 //!     pub fn animationEvent(self: *Self, app: *eggy.App, event: eggy.animation.Event) !void  // a clip passed an event key
 //!     pub fn gameUi(self: *Self, app: *eggy.App, ui: *eggy.ui.Context) !void
 //!     pub fn draw(self: *Self, app: *eggy.App, draw: eggy.DrawContext) !void
@@ -734,6 +735,29 @@ pub fn Set(comptime types: anytype, comptime keys: []const [:0]const u8) type {
             inline for (list, 0..) |T, i| if (@hasDecl(T, "update") and self.enabled[i]) try self.instances[i].update(app);
         }
 
+        /// Host-only: run each enabled `fixedUpdate`, game first, inside a physics step of
+        /// `step_s` seconds. First hook failure propagates.
+        pub fn fixedUpdate(self: *Self, app: *App, step_s: f32) !void {
+            inline for (list, 0..) |T, i| if (@hasDecl(T, "fixedUpdate") and self.enabled[i]) try self.instances[i].fixedUpdate(app, step_s);
+        }
+
+        /// `fixedUpdate` for `app.fixed_update`, valid while this set lives. Hosts set it before
+        /// `app.updateWorld` and clear it after.
+        ///
+        /// ```zig
+        /// app.fixed_update = plugins.fixedUpdateHook();
+        /// defer app.fixed_update = null;
+        /// try app.updateWorld();
+        /// ```
+        pub fn fixedUpdateHook(self: *Self) App.FixedUpdate {
+            return .{ .context = self, .call = struct {
+                fn call(context: *anyopaque, app: *App, step_s: f32) anyerror!void {
+                    const set: *Self = @ptrCast(@alignCast(context));
+                    try set.fixedUpdate(app, step_s);
+                }
+            }.call };
+        }
+
         /// Host-only: hand each clip event this frame's animation step passed
         /// (`app.animation_events`) to enabled `animationEvent` hooks, in the order passed and
         /// game-first. Call after `app.updateWorld`. First hook failure propagates.
@@ -787,6 +811,8 @@ pub fn Set(comptime types: anytype, comptime keys: []const [:0]const u8) type {
                     if (std.mem.eql(u8, request.key(), key ++ "/" ++ widget.key)) {
                         if (!self.enabled[i]) return false;
                         self.instances[i].uiWidget(w, .{ .canvas = request.canvas, .rect = request.area(), .value = request.value(), .scale = request.scale, .time_ms = request.time_ms }) catch |err| {
+                            // A full canvas isn't a failure: it is grown and the frame drawn again.
+                            if (request.canvas.out_of_vertices) return true;
                             if (!Reported.failed) std.log.err("UI widget {s} failed: {t}", .{ request.key(), err });
                             Reported.failed = true;
                             return false;

@@ -1,6 +1,6 @@
 ---
 title: humpty
-sidebar_position: 2
+sidebar_position: 3
 sidebar_label: humpty
 description: The physics library on its own, without Eggy, or in any clutch world.
 ---
@@ -67,7 +67,15 @@ of naming whatever reuses the slot.
 | `pose(body)`, `setPose(body, pose)` | Where a body is, or teleports it. |
 | `velocity(body)`, `setVelocity(body, .{ .linear, .angular })` | How fast it moves (m/s) and turns (rad/s). |
 | `applyImpulse(body, impulse_ns, .center_of_mass)` | Pushes it, in N·s; `.{ .at_world_point = p }` pushes off-centre and spins it. |
-| `setColliderPose(collider, pose)` | Moves a collider on its body, or in the world when it has none. |
+| `applyForce(body, force_n, at)`, `applyTorque(body, torque_nm)` | Pushes or turns it through every step of the next `update`, or from a `StepHook`, that step. |
+| `setProperties(body, properties)` | Changes its kind, mass, centre of mass, damping or whether it is on, keeping where it is. |
+| `massOf(body)`, `pointVelocity(body, point)` | Its mass and centre of mass; how fast a point on it moves. |
+| `setColliderPose(collider, pose)`, `setColliderEnabled(collider, on)` | Moves a collider on its body, or in the world when it has none; turns it on or off. |
+| `groundOf(body, up, max_slope_rad)` | What it stood on in the last step, and how fast that moves there. |
+| `addJoint(joint, a, b, data)`, `removeJoint`, `jointState` | Holds two bodies together (3D). |
+| `addVehicle(vehicle, data)`, `removeVehicle`, `vehicleOf` | Drives a body on raycast wheels (3D). |
+| `shapecast(shape, start, direction, max_m, filter)` | The first collider a convex shape meets sweeping along a line. |
+| `updateWith(frame_s, hook)` | `update`, running `hook` inside each step before it moves anything. |
 | `isSleeping(body)` | Whether it has settled; touching or pushing it wakes it. |
 | `contacts()`, `started()`, `ended()` | The last step's contact points, and the collider pairs that began and stopped touching. |
 | `raycast(ray, filter)` | The nearest collider along a ray. |
@@ -77,8 +85,10 @@ of naming whatever reuses the slot.
 
 A `Body` has a `kind`: `.dynamic` bodies are pushed by gravity, contacts and impulses;
 `.kinematic` ones move only at the velocity you give them and push dynamic ones aside;
-`.static` ones never move. Only dynamic bodies have `mass_kg`, spread over their colliders by
-volume for how they turn. `gravity_scale`, `linear_damping` and `angular_damping` tune how it
+`.static` ones never move. Only dynamic bodies have `mass_kg`, spread over their colliders
+without a `mass_kg` of their own by volume; colliders with one add it where they sit. The body
+turns about where its colliders balance, or its `center_of_mass_m`. `enabled = false` leaves it
+where it is, touching nothing. `gravity_scale`, `linear_damping` and `angular_damping` tune how it
 moves, and `rotation = .locked` keeps it from turning at all, for characters.
 
 A `Collider` has a `shape`, a `local_pose` on its body (in the world when it has none), a

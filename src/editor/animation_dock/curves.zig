@@ -24,7 +24,7 @@ const axis_names = [3][]const u8{ "X", "Y", "Z" };
 /// How many of a key's values a property uses.
 pub fn axesOf(property: Property) usize {
     return switch (property) {
-        .position, .rotation_deg, .scale => 3,
+        .position, .rotation_deg, .scale, .turn_deg => 3,
         else => 1,
     };
 }
