@@ -13,6 +13,7 @@ const vit = @import("vitellus");
 const ecs = @import("clutch");
 const math = @import("eggenvector");
 const transform = @import("transform.zig");
+const Bounds = @import("bounds.zig").Bounds;
 const shaders = @import("scene_shaders");
 const mesh = @import("mesh.zig");
 const ModelCache = @import("model_cache.zig").ModelCache;
@@ -120,6 +121,10 @@ pub const MeshRenderer = struct {
     sky: Sky = .{},
     /// This frame's blended drawables, sorted farthest first.
     blended: [max_drawables]Blended = undefined,
+    /// Each shadow caster's `worldSphere`, measured once for every map it is drawn into.
+    spheres: [max_drawables][4]f32 = undefined,
+    /// Each mesh's `runKey` while `sortIntoRuns` sorts them.
+    run_keys: [max_drawables]u64 = undefined,
     /// The posed corners of animated models, one buffer each per entity.
     deformation: Deformation,
     terrain: TerrainRenderer,
@@ -337,7 +342,7 @@ pub const MeshRenderer = struct {
 
         // Sort so each shape's, then each model file's, with the same texture are one instanced
         // draw; then upload them and the camera.
-        std.mem.sort(mesh.Drawable, sorted, {}, drawnBefore);
+        self.sortIntoRuns(sorted);
         try upload(self.instances[self.slot], std.mem.sliceAsBytes(sorted));
         try upload(self.uniforms[self.slot], std.mem.asBytes(&self.cameraUniforms(sources, view, aspect, viewport_px, srgb)));
 
@@ -368,7 +373,7 @@ pub const MeshRenderer = struct {
         var start: usize = 0;
         while (start < sorted.len) {
             var end = start + 1;
-            while (end < sorted.len and !drawnBefore({}, sorted[start], sorted[end])) end += 1;
+            while (end < sorted.len and alike(sorted[start], sorted[end])) end += 1;
             self.drawRun(cmd, sources, sorted[start], @intCast(start), @intCast(end - start), .{ .colour = .opaque_surfaces });
             start = end;
         }
@@ -494,6 +499,8 @@ pub const MeshRenderer = struct {
         if (!enabled and map.initialized) return;
         const casters = if (enabled) castersFirst(drawables) else drawables[0..0];
         if (casters.len > max_drawables) return error.TooManyShadowMeshes;
+        self.sortIntoRuns(casters);
+        for (casters, self.spheres[0..casters.len]) |drawable, *sphere| sphere.* = worldSphere(drawable, sources);
         map.slot = (map.slot + 1) % frames_in_flight;
         const slot = map.slot;
         if (enabled) {
@@ -507,10 +514,7 @@ pub const MeshRenderer = struct {
             cmd.setVertexBuffer(1, map.instances[slot], 0);
             for (map.matrices, 0..) |matrix, cascade| {
                 bindCascade(map, cmd, cascade);
-                const seen_from = math.fromArray(f32, 4, 4, matrix);
-                for (casters, 0..) |drawable, index| if (visibleThrough(drawable, sources, seen_from)) {
-                    self.drawRun(cmd, sources, drawable, @intCast(index), 1, .shadow);
-                };
+                self.drawCasters(cmd, sources, casters, frustumPlanes(matrix));
             }
             _ = try self.terrain.draw(cmd, casters, &sources.models.heightfields, .directional_shadow, slot, view.eye, .{ .shadow = .{ .cameras = map.matrices.len, .context = map, .bind = bindCascade } });
         }
@@ -527,6 +531,10 @@ pub const MeshRenderer = struct {
         if (count == 0 and local.initialized) return;
         const casters = castersFirst(drawables);
         if (casters.len > max_drawables) return error.TooManyShadowMeshes;
+        if (count > 0) {
+            self.sortIntoRuns(casters);
+            for (casters, self.spheres[0..casters.len]) |drawable, *sphere| sphere.* = worldSphere(drawable, sources);
+        }
         local.slot = (local.slot + 1) % frames_in_flight;
         const slot = local.slot;
         if (count > 0) {
@@ -540,16 +548,49 @@ pub const MeshRenderer = struct {
             cmd.setVertexBuffer(1, local.instances[slot], 0);
             for (local.matrices[0..count], 0..) |matrix, map| {
                 bindLocalMap(local, cmd, map);
-                const seen_from = math.fromArray(f32, 4, 4, matrix);
-                for (casters, 0..) |drawable, index| if (visibleThrough(drawable, sources, seen_from)) {
-                    self.drawRun(cmd, sources, drawable, @intCast(index), 1, .shadow);
-                };
+                self.drawCasters(cmd, sources, casters, frustumPlanes(matrix));
             }
             _ = try self.terrain.draw(cmd, casters, &sources.models.heightfields, .local_shadow, slot, eye, .{ .shadow = .{ .cameras = count, .context = local, .bind = bindLocalMap } });
         }
         cmd.endRenderPass();
         try cmd.barrier(&.{.{ .texture = .{ .texture = local.texture, .before = .depth_stencil_write, .after = .sampled } }});
         local.initialized = true;
+    }
+
+    /// Draw the `casters` (sorted by `sortIntoRuns`, each at its own instance, their spheres in
+    /// `spheres`) that a shadow map's `planes` hold: one instanced draw per run of alike ones.
+    fn drawCasters(self: *MeshRenderer, cmd: vit.CommandBuffer, sources: Sources, casters: []const mesh.Drawable, planes: [6][4]f32) void {
+        const spheres = self.spheres[0..casters.len];
+        var start: usize = 0;
+        while (start < casters.len) {
+            if (!sphereInside(planes, spheres[start])) {
+                start += 1;
+                continue;
+            }
+            var end = start + 1;
+            while (end < casters.len and alike(casters[start], casters[end]) and sphereInside(planes, spheres[end])) end += 1;
+            self.drawRun(cmd, sources, casters[start], @intCast(start), @intCast(end - start), .shadow);
+            start = end;
+        }
+    }
+
+    /// Sort `drawables` so those `alike` lie together, by a key worked out once for each:
+    /// comparing their files' names at every step of a sort cost more than the draws it saved.
+    fn sortIntoRuns(self: *MeshRenderer, drawables: []mesh.Drawable) void {
+        const keys = self.run_keys[0..drawables.len];
+        for (drawables, keys) |drawable, *run_key| run_key.* = runKey(drawable);
+        const Keyed = struct {
+            drawables: []mesh.Drawable,
+            keys: []u64,
+            pub fn lessThan(context: @This(), a: usize, b: usize) bool {
+                return context.keys[a] < context.keys[b];
+            }
+            pub fn swap(context: @This(), a: usize, b: usize) void {
+                std.mem.swap(mesh.Drawable, &context.drawables[a], &context.drawables[b]);
+                std.mem.swap(u64, &context.keys[a], &context.keys[b]);
+            }
+        };
+        std.sort.pdqContext(0, drawables.len, Keyed{ .drawables = drawables, .keys = keys });
     }
 
     /// Set 0 and the viewport for cascade `index` of the directional map `context`.
@@ -710,13 +751,62 @@ fn visibleThrough(drawable: mesh.Drawable, sources: Sources, matrix: math.Mat4) 
     if (drawable.material_failed) return false;
     // Terrain leaves out its own patches out of sight.
     if (drawable.terrain != null) return true;
-    const bounds = if (drawable.modelFile()) |path| block: {
-        const cached = sources.models.get(path, sources.textures) orelse return false;
-        // A posed model is measured as posed; others by the box holding every pose they reach.
-        if (drawable.deformed != 0) break :block @import("bounds.zig").Bounds{ .min = drawable.bounds_min, .max = drawable.bounds_max };
-        break :block @import("bounds.zig").Bounds{ .min = cached.bounds.min, .max = cached.bounds.max };
-    } else @import("bounds.zig").Bounds.unit;
+    const bounds = localBounds(drawable, sources) orelse return false;
     return bounds.visible(transform.columns(math.mul(f32, 4, 4, 4, matrix, math.fromArray(f32, 4, 4, drawable.model))));
+}
+
+/// The box round `drawable` in its model's space; null while its model isn't loaded.
+fn localBounds(drawable: mesh.Drawable, sources: Sources) ?Bounds {
+    const path = drawable.modelFile() orelse return Bounds.unit;
+    const cached = sources.models.get(path, sources.textures) orelse return null;
+    // A posed model is measured as posed; others by the box holding every pose they reach.
+    if (drawable.deformed != 0) return .{ .min = drawable.bounds_min, .max = drawable.bounds_max };
+    return .{ .min = cached.bounds.min, .max = cached.bounds.max };
+}
+
+/// A sphere round `drawable` in world space (centre, radius), to cull it from several views at
+/// the cost of one: infinite for terrain, which leaves out its own patches, and negative for
+/// what isn't drawn.
+fn worldSphere(drawable: mesh.Drawable, sources: Sources) [4]f32 {
+    if (drawable.material_failed) return .{ 0, 0, 0, -1 };
+    if (drawable.terrain != null) return .{ 0, 0, 0, std.math.inf(f32) };
+    const box = localBounds(drawable, sources) orelse return .{ 0, 0, 0, -1 };
+    const columns = drawable.model;
+    var centre: @Vector(4, f32) = columns[3];
+    var radius: f32 = 0;
+    for (0..3) |axis| {
+        const column: @Vector(4, f32) = columns[axis];
+        centre += column * @as(@Vector(4, f32), @splat((box.min[axis] + box.max[axis]) / 2));
+        // Each half side, scaled and sheared by its column, adds at most its length.
+        const reach = @sqrt(column[0] * column[0] + column[1] * column[1] + column[2] * column[2]);
+        radius += @abs(box.max[axis] - box.min[axis]) / 2 * reach;
+    }
+    return .{ centre[0], centre[1], centre[2], if (std.math.isFinite(radius)) radius else std.math.inf(f32) };
+}
+
+/// The six planes bounding what `clip_from_world` (columns; depth 0 to w) sees, each a unit
+/// normal pointing in and its offset.
+fn frustumPlanes(clip_from_world: [4][4]f32) [6][4]f32 {
+    const m = clip_from_world;
+    var rows: [4]@Vector(4, f32) = undefined;
+    for (&rows, 0..) |*row, i| row.* = .{ m[0][i], m[1][i], m[2][i], m[3][i] };
+    const unnormalized = [6]@Vector(4, f32){ rows[3] + rows[0], rows[3] - rows[0], rows[3] + rows[1], rows[3] - rows[1], rows[2], rows[3] - rows[2] };
+    var planes: [6][4]f32 = undefined;
+    for (&planes, unnormalized) |*plane, raw| {
+        const length = @sqrt(raw[0] * raw[0] + raw[1] * raw[1] + raw[2] * raw[2]);
+        plane.* = if (length > 0) raw / @as(@Vector(4, f32), @splat(length)) else raw;
+    }
+    return planes;
+}
+
+/// Whether `sphere` (a `worldSphere`) reaches inside all of `planes`. What can't be measured
+/// (not finite) is kept.
+fn sphereInside(planes: [6][4]f32, sphere: [4]f32) bool {
+    if (sphere[3] < 0) return false;
+    for (planes) |plane| {
+        if (plane[0] * sphere[0] + plane[1] * sphere[1] + plane[2] * sphere[2] + plane[3] < -sphere[3]) return false;
+    }
+    return true;
 }
 
 /// The order meshes are drawn in: by how they look (blended, double-sided, mirrored), as one
@@ -737,6 +827,26 @@ fn drawnBefore(_: void, a: mesh.Drawable, b: mesh.Drawable) bool {
     if (by_texture != .eq) return by_texture == .lt;
     // A posed model has its own vertices, so each is a run of its own.
     return posedKey(a) < posedKey(b);
+}
+
+/// Whether two meshes are drawn in one instanced run: neither comes before the other.
+fn alike(a: mesh.Drawable, b: mesh.Drawable) bool {
+    return !drawnBefore({}, a, b) and !drawnBefore({}, b, a);
+}
+
+/// A key putting those `alike` together: what isn't drawn last, terrain before it, then by
+/// look (one pipeline each), then a hash of the rest `drawnBefore` tells them apart by. Two
+/// unlike meshes sharing a key only split a run, as runs end where `alike` says.
+fn runKey(drawable: mesh.Drawable) u64 {
+    var hash = std.hash.Wyhash.init(0);
+    hash.update(drawable.shaderFile() orelse "");
+    hash.update(&.{0});
+    if (drawable.modelFile()) |file| hash.update(file) else hash.update(std.mem.asBytes(&drawable.shape));
+    hash.update(&.{0});
+    hash.update(drawable.textureFile() orelse "");
+    hash.update(std.mem.asBytes(&posedKey(drawable)));
+    const order = @as(u64, @intFromBool(drawable.material_failed)) << 63 | @as(u64, @intFromBool(drawable.terrain != null)) << 62 | @as(u64, @min(lookKey(drawable), 7)) << 59;
+    return order | hash.final() >> 5;
 }
 
 fn lookKey(drawable: mesh.Drawable) u32 {

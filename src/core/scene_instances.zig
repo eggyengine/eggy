@@ -46,6 +46,9 @@ pub const FolderFiles = struct {
     }
 };
 
+/// The longest `SceneInstance.scene` field as ZON (`readField`'s buffer).
+const field_len = refs.max_path_len + 8;
+
 pub const SceneInstances = struct {
     gpa: std.mem.Allocator,
     /// By the instance's entity id: what was made under it.
@@ -61,6 +64,10 @@ pub const SceneInstances = struct {
         roots: []ecs.EntityId,
         /// Its file may have changed: make it again.
         stale: bool = false,
+        /// The instance's `scene` field as ZON when last found made, so while it reads the same
+        /// `sync` skips parsing it; empty until then.
+        field: [field_len]u8 = undefined,
+        field_used: usize = 0,
         /// What the file made, to tell the instance's changes from; null when nothing was.
         base: ?*Base = null,
     };
@@ -220,12 +227,22 @@ pub const SceneInstances = struct {
             const entity = ecs.EntityId.init(@intCast(i), slot.generation);
             if (!access.has(world, entity, component)) continue;
             seen.put(self.gpa, entity.id, {}) catch return;
-            var zon_buffer: [refs.max_path_len + 8]u8 = undefined;
+            var zon_buffer: [field_len]u8 = undefined;
             var path_buffer: [refs.max_path_len + 8]u8 = undefined;
-            const path = scenePath(access.readField(world, entity, component, 0, &zon_buffer) orelse continue, &path_buffer) orelse continue;
-            if (self.made.get(entity.id)) |made| {
+            const zon = access.readField(world, entity, component, 0, &zon_buffer) orelse continue;
+            // Most frames nothing changed: the field reads as it did, and what it made is there.
+            if (self.made.getPtr(entity.id)) |made| if (made.generation == entity.generation and !made.stale and
+                std.mem.eql(u8, made.field[0..made.field_used], zon) and allUnder(world, made.roots, entity)) continue;
+            const path = scenePath(zon, &path_buffer) orelse continue;
+            if (self.made.getPtr(entity.id)) |made| {
                 const same_file = made.generation == entity.generation and std.mem.eql(u8, made.path, path);
-                if (same_file and !made.stale and allUnder(world, made.roots, entity)) continue;
+                if (same_file and !made.stale and allUnder(world, made.roots, entity)) {
+                    if (zon.len <= field_len) {
+                        @memcpy(made.field[0..zon.len], zon);
+                        made.field_used = zon.len;
+                    }
+                    continue;
+                }
                 // Made again from the same file, it keeps what it changed there.
                 if (same_file and !self.kept.contains(entity.id)) self.keepChanges(world, access, entity);
                 self.unmake(world, entity.id);

@@ -344,11 +344,46 @@ pub fn onlyBelow(gpa: std.mem.Allocator, model: Model, clip: Clip, bone: u32) !C
     return .{ .name = clip.name, .duration_s = clip.duration_s, .tracks = try tracks.toOwnedSlice(gpa) };
 }
 
+/// Moves each of `corners` by its influence (`influences`, one each) through `joints` and their
+/// normal matrices (`joint_normals`): the hottest loop of posing a skinned model. A corner no
+/// joint pulls stays where it is. The core links an optimized copy (`Deformer.skin`).
+pub fn skinVertices(corners: []Vertex, influences: []const model_zig.Influence, joints: []const Mat, joint_normals: []const [3][3]f32) void {
+    for (corners, influences) |*vertex, influence| {
+        var position: [3]f32 = @splat(0);
+        var normal: [3]f32 = @splat(0);
+        var total: f32 = 0;
+        for (influence.joints, influence.weights) |joint, weight| {
+            if (weight <= 0) continue;
+            total += weight;
+            const moved = transformPoint(joints[joint], vertex.position);
+            const turned = transformNormal(joint_normals[joint], vertex.normal);
+            for (0..3) |axis| {
+                position[axis] += moved[axis] * weight;
+                normal[axis] += turned[axis] * weight;
+            }
+        }
+        if (!(total > 1e-6)) continue;
+        vertex.position = position;
+        vertex.normal = normalized(normal, vertex.normal);
+    }
+}
+
+/// The box round `corners`' positions; inside out (infinite) when there are none.
+pub fn cornerBounds(corners: []const Vertex) Bounds {
+    var box = Bounds{ .min = @splat(std.math.inf(f32)), .max = @splat(-std.math.inf(f32)) };
+    for (corners) |corner| box.include(corner.position);
+    return box;
+}
+
+pub const SkinVertices = fn (corners: []Vertex, influences: []const model_zig.Influence, joints: []const Mat, joint_normals: []const [3][3]f32) void;
+
 /// Places a model's nodes and deforms its parts, reusing its scratch space between calls.
 pub const Deformer = struct {
     world: []Mat,
     joint: []Mat,
     joint_normal: [][3][3]f32,
+    /// Skins a part's corners; the core swaps in a copy built optimized even in Debug.
+    skin: *const SkinVertices = skinVertices,
 
     pub fn init(gpa: std.mem.Allocator, model: Model) !Deformer {
         var most_joints: usize = 0;
@@ -391,7 +426,7 @@ pub const Deformer = struct {
                 normal.* = normalMatrix(matrix.*);
             }
             const influences = model.rig.influences[part_info.first_vertex..][0..part_info.vertex_count];
-            for (out, influences) |*vertex, influence| self.skinVertex(vertex, influence);
+            self.skin(out, influences, self.joint, self.joint_normal);
         } else if (part_info.node) |node| {
             const matrix = self.world[node];
             const normal = normalMatrix(matrix);
@@ -400,26 +435,6 @@ pub const Deformer = struct {
                 vertex.normal = normalized(transformNormal(normal, vertex.normal), vertex.normal);
             }
         }
-    }
-
-    fn skinVertex(self: *const Deformer, vertex: *Vertex, influence: model_zig.Influence) void {
-        var position: [3]f32 = @splat(0);
-        var normal: [3]f32 = @splat(0);
-        var total: f32 = 0;
-        for (influence.joints, influence.weights) |joint, weight| {
-            if (weight <= 0) continue;
-            total += weight;
-            const moved = transformPoint(self.joint[joint], vertex.position);
-            const turned = transformNormal(self.joint_normal[joint], vertex.normal);
-            for (0..3) |axis| {
-                position[axis] += moved[axis] * weight;
-                normal[axis] += turned[axis] * weight;
-            }
-        }
-        // A corner no joint pulls stays where it is.
-        if (!(total > 1e-6)) return;
-        vertex.position = position;
-        vertex.normal = normalized(normal, vertex.normal);
     }
 };
 

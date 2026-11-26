@@ -656,6 +656,8 @@ fn addEngine(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.buil
     // Tools can import the formats without linking App, SDL, the renderer, or editor code.
     b.modules.put(b.allocator, "eggy_assets", assets) catch @panic("OOM");
     engine.addImport("eggy_assets", assets);
+    // Hot loops built optimized even in Debug (`src/build/fast_library.zig`).
+    engine.linkLibrary(fast_library.addEngine(b, target));
     // Weeoui's renderer compiled against Eggy's own Vitellus (its -Dvitellus would fetch a second copy).
     const weeoui_vitellus = b.createModule(.{
         .root_source_file = weeoui.path("src/vitellus.zig"),

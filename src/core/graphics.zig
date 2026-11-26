@@ -90,7 +90,7 @@ pub const Graphics = struct {
         var allowed = backend_config.mask(settings.backend);
         var last_error: ?anyerror = null;
         while (true) {
-            const validation: vit.ValidationLevel = if (builtin.mode == .debug) .core else .none;
+            const validation = validationLevel();
             // With every backend tried, the last one's own error says why, not `NoSupportedBackend`.
             const instance = vit.Instance.init(allocator, .{ .backend = allowed, .validation = validation }) catch |err| return if (err == error.NoSupportedBackend) last_error orelse err else err;
             const backend = instance.selected_backend;
@@ -588,6 +588,15 @@ fn pixelExtent(window: sdl_adapter.Sdl3Window) !?vit.Extent2D {
     const width, const height = try window.window.getSizeInPixels();
     if (width == 0 or height == 0) return null;
     return .{ .width = @intCast(width), .height = @intCast(height) };
+}
+
+/// The GPU checks asked for by `EGGY_GPU_VALIDATION` (`1` or `core`, `extended`, `gpu_based`);
+/// none otherwise, as Vulkan's layers alone cost a Debug frame several milliseconds.
+fn validationLevel() vit.ValidationLevel {
+    const environment = sdl_adapter.sdl.getEnvironment() catch return .none;
+    const asked = environment.getVariable("EGGY_GPU_VALIDATION") orelse return .none;
+    if (std.mem.eql(u8, asked, "1")) return .core;
+    return std.meta.stringToEnum(vit.ValidationLevel, asked) orelse .none;
 }
 
 fn pickPresentMode(modes: []const vit.PresentMode) vit.PresentMode {

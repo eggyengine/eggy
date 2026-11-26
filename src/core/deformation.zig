@@ -100,15 +100,21 @@ pub const Deformation = struct {
         const arena = self.scratch.allocator();
         const current = try posed(arena, model, path, animator, clips, self);
         var deformer = try assets.rig.Deformer.init(arena, model.*);
+        deformer.skin = skinFast;
 
-        // Every part's corners as the pose places them, and the box round them.
+        // Every part's corners as the pose places them, and the box round them. Each part
+        // copies its own; corners in none are never drawn (`Model` checks parts' indices).
         const corners = try arena.alloc(Vertex, model.vertices.len);
-        @memcpy(corners, model.vertices);
         deformer.place(model.*, current);
-        for (model.parts, 0..) |part, index| deformer.part(model.*, current, index, corners[part.first_vertex..][0..part.vertex_count]);
         var box = assets.Bounds{ .min = @splat(std.math.inf(f32)), .max = @splat(-std.math.inf(f32)) };
-        for (corners) |corner| box.include(corner.position);
-        if (corners.len == 0) return error.NothingToPose;
+        for (model.parts, 0..) |part, index| {
+            const posed_part = corners[part.first_vertex..][0..part.vertex_count];
+            deformer.part(model.*, current, index, posed_part);
+            const part_box = boundsFast(posed_part);
+            box.include(part_box.min);
+            box.include(part_box.max);
+        }
+        if (!(box.min[0] <= box.max[0])) return error.NothingToPose;
 
         try self.store(drawable.*, std.mem.sliceAsBytes(corners));
         drawable.deformed = 1;
@@ -182,6 +188,27 @@ pub const Deformation = struct {
 /// then its layers
 /// on their bones. Allocates in `arena`.
 /// `report`, when given, logs once each name a clip has that the model doesn't.
+/// `assets.rig.skinVertices`, the copy built optimized even in Debug (`skinning_fast.zig`).
+fn skinFast(corners: []Vertex, influences: []const assets.model.Influence, joints: []const assets.rig.Mat, joint_normals: []const [3][3]f32) void {
+    const fast = struct {
+        extern fn eggy_skin_vertices(corners: [*]Vertex, influences: [*]const assets.model.Influence, count: usize, joints: [*]const assets.rig.Mat, joint_normals: [*]const [3][3]f32, joint_count: usize) void;
+    };
+    // As `skinning_fast.zig` checks for its copy: `Influence` isn't `extern`.
+    comptime std.debug.assert(@offsetOf(assets.model.Influence, "joints") == 0 and @offsetOf(assets.model.Influence, "weights") == 16);
+    std.debug.assert(corners.len == influences.len and joints.len == joint_normals.len);
+    fast.eggy_skin_vertices(corners.ptr, influences.ptr, corners.len, joints.ptr, joint_normals.ptr, joints.len);
+}
+
+/// `assets.rig.cornerBounds`, the copy built optimized even in Debug (`skinning_fast.zig`).
+fn boundsFast(corners: []const Vertex) assets.Bounds {
+    const fast = struct {
+        extern fn eggy_corner_bounds(corners: [*]const Vertex, count: usize, min: *[3]f32, max: *[3]f32) void;
+    };
+    var box: assets.Bounds = undefined;
+    fast.eggy_corner_bounds(corners.ptr, corners.len, &box.min, &box.max);
+    return box;
+}
+
 pub fn posed(arena: std.mem.Allocator, model: *const assets.Model, path: []const u8, animator: Animator, clips: ?*ClipCache, report: ?*Deformation) !assets.rig.Pose {
     var current = try assets.rig.Pose.init(arena, model.*);
     // A fade starts from the previous clips, then eases to the current ones.

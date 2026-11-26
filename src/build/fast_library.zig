@@ -2,6 +2,7 @@
 //! generation, compiled on its own as a ReleaseFast static library and called through `export fn`.
 //! A module's own `.optimize` doesn't do it: inside a Debug compilation the module is Debug too.
 const std = @import("std");
+const models = @import("models.zig");
 
 pub const Options = struct {
     /// The library's name.
@@ -41,4 +42,19 @@ fn reaches(b: *std.Build, root: *std.Build.Module, eggy: *std.Build.Module) bool
         pending.appendSlice(b.allocator, module.import_table.values()) catch @panic("OOM");
     }
     return false;
+}
+
+/// Eggy's own fast library, linked into the `eggy` module: the skinning loop
+/// (`src/core/skinning_fast.zig`) with the asset formats it reads, built ReleaseFast.
+pub fn addEngine(b: *std.Build, target: std.Build.ResolvedTarget) *std.Build.Step.Compile {
+    const web = target.result.os.tag == .emscripten;
+    const root = b.createModule(.{
+        .root_source_file = b.path("src/core/skinning_fast.zig"),
+        .target = target,
+        .optimize = .ReleaseFast,
+        // Linked into the editor's game library, a shared one.
+        .pic = if (web) null else true,
+        .imports = &.{.{ .name = "eggy_assets", .module = models.assetsModule(b, target, .ReleaseFast) }},
+    });
+    return b.addLibrary(.{ .name = "eggy_fast", .linkage = .static, .root_module = root });
 }

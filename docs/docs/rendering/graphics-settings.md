@@ -126,3 +126,6 @@ values.
 - Window mode, size and frame rate options are hidden where the platform can't use them. The
   Project Settings form always shows them, since it sets the shipped defaults.
 - The editor opens the Graphics preferences from the menu; it has no F10 menu.
+- GPU validation (Vulkan's validation layers, D3D12's debug layer) is off unless the
+  `EGGY_GPU_VALIDATION` environment variable asks for it: `1` or `core`, `extended`, or
+  `gpu_based`. Turn it on when chasing a rendering bug; it slows every frame.
