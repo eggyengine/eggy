@@ -1,0 +1,19 @@
+src/humpty
+  s_9ce720d57eab68::t_5658ede84ed82d 1
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.6",
+  "base_commit_sha": "1819c395890f9f552bf832a0144838f25be01101",
+  "prompts": {},
+  "sessions": {
+    "s_9ce720d57eab68": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "ee173837-0751-4bac-bee8-9114a3202502",
+        "model": "unknown"
+      },
+      "human_author": "Thribhu K <me@tirbo.fish>"
+    }
+  }
+}
