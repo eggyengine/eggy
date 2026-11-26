@@ -1,0 +1,36 @@
+src/core/skinning_fast.zig
+  s_998bfe1ed6a70f::t_e357d8c7c827ea 1-17
+  s_998bfe1ed6a70f::t_edd851ca7d9620 18-24
+build.zig
+  s_998bfe1ed6a70f::t_a029a0f24afe74 659-660
+docs/docs/rendering/graphics-settings.md
+  s_998bfe1ed6a70f::t_120611413b9c22 129-131
+src/build/fast_library.zig
+  s_998bfe1ed6a70f::t_301e9223ae09e6 5,46-60
+src/core/assets/rig.zig
+  s_998bfe1ed6a70f::t_a84a002e9e481a 347-379,385-386,429
+src/core/deformation.zig
+  s_998bfe1ed6a70f::t_cda593aeeeba92 103,105-106,110-117,191-211
+src/core/graphics.zig
+  s_998bfe1ed6a70f::t_2483ca5ecf9c97 93,593-601
+src/core/mesh_renderer.zig
+  s_998bfe1ed6a70f::t_0ad2e241d12d93 16,124-127,345,376,502-503,517,534-537,551,560-595,754,758-811,832-851
+src/core/scene_instances.zig
+  s_998bfe1ed6a70f::t_02132158291a4c 49-51,67-70,230,232-237,239-245
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.6",
+  "base_commit_sha": "7e38d186c9f8205f3ccfbab9a60d1187658823cc",
+  "prompts": {},
+  "sessions": {
+    "s_998bfe1ed6a70f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "7500c0d0-b23c-423e-8069-894aa8b948d1",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Thribhu K <me@tirbo.fish>"
+    }
+  }
+}
