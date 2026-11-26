@@ -1,0 +1,29 @@
+build.zig.zon
+  s_998bfe1ed6a70f::t_7f2a14bb093231 21-22
+src/humpty
+  s_9ce720d57eab68::t_a7aff7e0f9ecc3 1
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.6",
+  "base_commit_sha": "90370da8e627fc733c1c1d8ffce6e0ec412d44b4",
+  "prompts": {},
+  "sessions": {
+    "s_998bfe1ed6a70f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "7500c0d0-b23c-423e-8069-894aa8b948d1",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Thribhu K <me@tirbo.fish>"
+    },
+    "s_9ce720d57eab68": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "ee173837-0751-4bac-bee8-9114a3202502",
+        "model": "unknown"
+      },
+      "human_author": "Thribhu K <me@tirbo.fish>"
+    }
+  }
+}
